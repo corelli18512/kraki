@@ -40,7 +40,10 @@ final class NewSessionJourneyUITests: XCTestCase {
     private func createViaPlus() {
         app.buttons["New Session"].firstMatch.tap()
         settle()
-        app.buttons["Create"].firstMatch.tap()
+        // The sheet opens with the keyboard on its composer; Return starts it.
+        let text = app.descendants(matching: .any).matching(identifier: "new-session-text").firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 3))
+        text.typeText("First task\n")
         settle(2)
     }
     private func assertChatLayout(_ reference: (back: CGRect, field: CGRect), _ label: String) {
@@ -81,7 +84,10 @@ final class NewSessionJourneyUITests: XCTestCase {
         let reference = openExistingAndMeasure()
         app.buttons["New Session"].firstMatch.tap()
         settle()
-        app.swipeDown(velocity: .fast)
+        // The sheet sits above the keyboard (its composer is focused): pull it
+        // down by its title, as a person would.
+        let title = app.staticTexts["New Session"].firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        title.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         settle()
         XCTAssertTrue(tabBarVisible)
         app.staticTexts["Existing session 3"].firstMatch.tap()

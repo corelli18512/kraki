@@ -35,7 +35,17 @@ enum IOSNewSessionScenario {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("kraki-new-session-\(UUID().uuidString)", isDirectory: true)
             let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
-            let app = AppState(testDatabase: database, loadPersistedState: false)
+            // KRAKI_SCENARIO_VOICE=1: synthetic dictation (no microphone or
+            // network) for the New Session composer's voice path.
+            let voice = ProcessInfo.processInfo.environment["KRAKI_SCENARIO_VOICE"] == "1"
+                ? IOSVoiceHoldScenarioDriver() : nil
+            scenarioVoice = voice
+            let app = AppState(testDatabase: database, loadPersistedState: false, voiceController: voice?.voice)
+            if let voice {
+                app.voiceCapability = voice.voiceCapability
+                app.deviceId = voice.voiceDeviceID
+                VoiceConsent.grant()
+            }
             app.deviceStore.devices[deviceID] = DeviceSummary(
                 id: deviceID, name: "Scenario Mac", role: .tentacle, kind: .desktop,
                 publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
@@ -78,6 +88,8 @@ enum IOSNewSessionScenario {
     }
 
     static let secondDeviceID = "scenario-server"
+    /// Kept alive for the scenario's lifetime (the controller's host).
+    static var scenarioVoice: IOSVoiceHoldScenarioDriver?
 
     /// A second computer, so the Session list offers its computer filter.
     private static func addSecondComputer(_ app: AppState) {
