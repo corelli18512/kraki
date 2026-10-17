@@ -29,6 +29,7 @@
       "src/**",
       "app/**",
       "build/icon.png",
+      "build/toast.png",
       "build/tray.png",
       "build/badge.png",
       "package.json",
