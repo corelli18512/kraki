@@ -24,6 +24,9 @@ test('online/offline toggle and needs-you items', () => {
   assert.ok(labels(base, [{ id: 'a', title: 'Fix', reason: 'Needs approval' }]).includes('Fix — Needs approval'));
   assert.equal(p.trayIcon('online', 1), 'attention');
   assert.equal(p.trayIcon('offline', 1), 'offline');
+  // MacPresence: half-dimmed while going online/offline.
+  assert.equal(p.trayIcon('goingOnline', 0), 'transition');
+  assert.equal(p.trayIcon('goingOffline', 1), 'transition');
 });
 test('status opens settings and Needs You limits entries without losing overflow count', () => {
   let opened = false;
