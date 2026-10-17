@@ -88,6 +88,9 @@ def main():
     app = glyph(LOGO['light'], 0.02)
     save_ico(app, os.path.join(BUILD, 'icon.ico'), APP_SIZES)
     app.save(os.path.join(BUILD, 'icon.png'))
+    # Toasts scale the given PNG without smoothing: hand them one already
+    # resampled near their display size (48 px at 100%, up to 2x).
+    app.resize((96, 96), Image.LANCZOS).save(os.path.join(BUILD, 'toast.png'))
     # Tray: no padding at all; the notification area already spaces icons.
     for theme, name in LOGO.items():
         g = glyph(name, 0.0)

@@ -303,6 +303,12 @@ async function quitFromTray() {
   app.quit();
 }
 
+/** Pre-resampled toast image (build/toast.png); Windows does not smooth it. */
+function toastIcon() {
+  const small = path.join(ASSETS, 'toast.png');
+  return existsSync(small) ? small : path.join(ASSETS, 'icon.png');
+}
+
 /** The first time the window closes while online, say Kraki is still there. */
 function stillOnlineHintOnce() {
   if (pref('closeHintShown') || !Notification.isSupported()) return;
@@ -311,7 +317,7 @@ function stillOnlineHintOnce() {
   const n = new Notification({
     title: 'Kraki is still online',
     body: 'Your phone can keep using this PC. Open Kraki from the tray any time; quit it there to take this PC offline.',
-    icon: path.join(ASSETS, 'icon.png'),
+    icon: toastIcon(),
   });
   n.on('click', showWindow);
   n.show();
@@ -509,7 +515,7 @@ ipcMain.on('kraki:notify', (_e, n) => {
   const note = new Notification({
     title: String(n.title),
     body: String(n.body ?? ''),
-    icon: path.join(ASSETS, 'icon.png'),
+    icon: toastIcon(),
     silent: false,
   });
   note.on('click', () => {
