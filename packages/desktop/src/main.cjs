@@ -217,12 +217,19 @@ function createWindow() {
 
 // ── Tray: is this PC online (presence.cjs) ──
 const trayImages = {};
+/** Monochrome glyph matching the taskbar (white on dark, black on light),
+ *  like a macOS template image. build/tray/*.ico from make-tray-icons.py. */
+function trayTheme() {
+  return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? 'dark' : 'light';
+}
 function trayImage(name) {
-  if (!trayImages[name]) {
-    const img = nativeImage.createFromPath(path.join(ASSETS, `tray-${name}.png`));
-    trayImages[name] = img.isEmpty() ? nativeImage.createFromPath(path.join(ASSETS, 'tray.png')) : img;
+  const key = `${name}-${trayTheme()}`;
+  if (!trayImages[key]) {
+    let img = nativeImage.createFromPath(path.join(ASSETS, 'tray', `tray-${key}.ico`));
+    if (img.isEmpty()) img = nativeImage.createFromPath(path.join(ASSETS, `tray-${name === 'transition' ? 'offline' : name}.png`));
+    trayImages[key] = img.isEmpty() ? nativeImage.createFromPath(path.join(ASSETS, 'tray.png')) : img;
   }
-  return trayImages[name];
+  return trayImages[key];
 }
 let shownIcon = '';
 let shownMenu = '';
@@ -237,7 +244,8 @@ function updateTray() {
   const managed = presence.managesPresence(s);
   lastStatus = status;
   const icon = presence.trayIcon(status, needsYou.length);
-  if (icon !== shownIcon) { shownIcon = icon; tray.setImage(trayImage(icon)); }
+  const iconKey = `${icon}-${trayTheme()}`;
+  if (iconKey !== shownIcon) { shownIcon = iconKey; tray.setImage(trayImage(icon)); }
   const tip = [presence.TITLE[status], unread > 0 ? `${unread} unread` : null].filter(Boolean).join(' · ');
   tray.setToolTip(`Kraki — ${tip}`);
   const key = JSON.stringify([status, managed, needsYou]);
@@ -316,13 +324,15 @@ ipcMain.on('kraki:needs-you', (_e, list) => {
 
 function createTray() {
   tray = new Tray(trayImage('online'));
-  shownIcon = 'online';
+  shownIcon = `online-${trayTheme()}`;
   tray.on('click', showWindow);
+  // Taskbar light/dark switched: swap the glyph colour.
+  nativeTheme.on('updated', updateTray);
   updateTray();
   setInterval(updateTray, 3000);
   if (process.env.KRAKI_DESKTOP_LOG_NOTIFY) {
     setTimeout(() => {
-      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${trayImage(shownIcon).isEmpty()}\n`); } catch { /* ignore */ }
+      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${tray.getImage?.()?.isEmpty?.() ?? 'n/a'}\n`); } catch { /* ignore */ }
     }, 3000);
   }
 }
@@ -332,8 +342,13 @@ ipcMain.on('kraki:badge', (_e, count) => {
   if (process.platform === 'darwin') app.setBadgeCount(unread);
   if (process.platform === 'linux') app.setBadgeCount(unread);
   if (process.platform === 'win32' && win) {
-    const badge = nativeImage.createFromPath(path.join(ASSETS, 'badge.png'));
-    win.setOverlayIcon(unread > 0 && !badge.isEmpty() ? badge : null, unread > 0 ? `${unread} unread` : '');
+    // The unread count on the taskbar button, like the Mac Dock badge.
+    let badge = null;
+    if (unread > 0) {
+      badge = nativeImage.createFromPath(path.join(ASSETS, 'tray', `badge-${unread > 9 ? '9plus' : unread}.ico`));
+      if (badge.isEmpty()) badge = nativeImage.createFromPath(path.join(ASSETS, 'badge.png'));
+    }
+    win.setOverlayIcon(badge && !badge.isEmpty() ? badge : null, unread > 0 ? `${unread} unread` : '');
   }
   updateTray();
 });

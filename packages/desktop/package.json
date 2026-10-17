@@ -36,7 +36,8 @@
       "build/tray-online.png",
       "build/tray-offline.png",
       "build/tray-attention.png",
-      "build/tray-problem.png"
+      "build/tray-problem.png",
+      "build/tray/*.ico"
     ],
     "asar": true,
     "protocols": [

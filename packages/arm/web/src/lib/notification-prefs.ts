@@ -1,7 +1,10 @@
-/** Per-device notification preference, independent of account-wide preferences. */
-export function notificationsEnabled(): boolean {
-  return localStorage.getItem('kraki:notifications.enabled') !== '0';
+const PREF_KEY = 'kraki:notifications.enabled';
+
+/** Per-device preference; preserve legacy false opt-outs alongside current 0/1 writes. */
+export function notificationsEnabled(storage: Pick<Storage, 'getItem'> = localStorage): boolean {
+  const stored = storage.getItem(PREF_KEY);
+  return stored !== '0' && stored !== 'false';
 }
 export function setNotificationsEnabled(enabled: boolean): void {
-  localStorage.setItem('kraki:notifications.enabled', enabled ? '1' : '0');
+  localStorage.setItem(PREF_KEY, enabled ? '1' : '0');
 }

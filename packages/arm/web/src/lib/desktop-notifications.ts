@@ -1,4 +1,5 @@
 import { desktop } from './desktop';
+import { notificationsEnabled } from './notification-prefs';
 
 const IDS_KEY = 'kraki-desktop.notifications.recentIds';
 const CAPACITY = 512;
@@ -47,7 +48,7 @@ export class DesktopNotificationPresenter {
       this.ids = [...this.ids, nid].slice(-CAPACITY);
       try { this.storage.setItem(IDS_KEY, JSON.stringify(this.ids)); } catch { /* storage unavailable */ }
     }
-    if (this.storage.getItem('kraki:notifications.enabled') === 'false') return;
+    if (!notificationsEnabled(this.storage)) return;
     const content = formatDesktopPreview(preview);
     if (!content.sessionId || this.watching(content.sessionId)) return;
     this.post(content);

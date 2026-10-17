@@ -45,9 +45,11 @@ const managesPresence = (s) => !!(s && s.available && s.owned);
 const canGoOffline = (status) => status === 'online' || status === 'goingOnline';
 const canGoOnline = (status) => status === 'offline';
 
-/** Which tray icon: dimmed while offline, a dot when sessions need you. */
+/** Which tray icon (MacPresence.image): dimmed offline, half-dimmed while
+ *  going online/offline, a dot when sessions need you. */
 function trayIcon(status, needsYou) {
-  if (status === 'offline' || status === 'goingOnline' || status === 'goingOffline') return 'offline';
+  if (status === 'offline') return 'offline';
+  if (status === 'goingOnline' || status === 'goingOffline') return 'transition';
   if (needsYou > 0) return 'attention';
   return 'online';
 }
