@@ -660,6 +660,22 @@ describe('KrakiWSClient', () => {
       expect(sent.type).toBe('deny');
     });
 
+    it('a denial that cannot be dispatched rolls back at once and reports it (reason can be restored)', async () => {
+      const client = await setupClient();
+      const permission = { type: 'permission', payload: { id: 'perm-1', toolName: 'shell', description: 'x' } };
+      useStore.getState().setCardAction('sess-1', permission as never);
+      const encryption = (client as unknown as { encryption: { encryptForTarget: () => Promise<unknown> } }).encryption;
+      vi.spyOn(encryption, 'encryptForTarget').mockResolvedValueOnce(null);
+      const undelivered = vi.fn();
+      client.resolvePermission('sess-1', 'perm-1', 'shell', 'deny', 'use the staging db', undelivered);
+      expect((useStore.getState().cards.get('sess-1')?.action?.payload as { decision?: string }).decision).toBe('deny');
+      await vi.waitFor(() => expect(undelivered).toHaveBeenCalledTimes(1));
+      const payload = useStore.getState().cards.get('sess-1')?.action?.payload as Record<string, unknown>;
+      expect(payload.decision).toBeUndefined();
+      expect(payload.localPending).toBeUndefined();
+      expect(payload.localError).toBe('Couldn’t send. Try again.');
+    });
+
     it('an answer is a message carrying answerTo', async () => {
       const client = await setupClient();
 

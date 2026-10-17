@@ -239,11 +239,14 @@ function SubagentPage({ msg, merged, steps, agent, sessionId, onOpen }: {
 }
 
 function SubagentReport({ resultRef, sessionId }: { resultRef: ContentRef; sessionId: string }) {
-  const { text } = useAttachmentText(resultRef, sessionId, pullRef, true);
+  const { status, text, error } = useAttachmentText(resultRef, sessionId, pullRef, true);
   return (
     <div className="ksub-report">
       <div className="ksub-report-label">Report</div>
-      {text === null ? <p className="ksheet-loading"><span className="kspinner" /> Loading…</p> : <Markdown text={text} />}
+      {/* A failed transfer is terminal: say so (as Mac does) instead of spinning forever. */}
+      {status === 'error'
+        ? <p className="ksub-report-error" role="alert">Couldn’t load: {error}</p>
+        : text === null ? <p className="ksheet-loading"><span className="kspinner" /> Loading…</p> : <Markdown text={text} />}
     </div>
   );
 }

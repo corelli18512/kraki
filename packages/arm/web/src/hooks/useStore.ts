@@ -211,9 +211,16 @@ export const useStore = create<Store>()(persist((set) => ({
       if (message.type === 'agent_message' || message.type === 'turn_status' || message.type === 'interrupted_turn'
         || message.type === 'system_message' || message.type === 'idle') {
         const card = state.cards.get(sessionId);
+        // A question only lands the lead-in prose: Tentacle keeps the turn
+        // (and a parallel tool's unresolved permission) open. Keep the card
+        // open with its action, as Mac landAgentMessage(isQuestion:) does.
+        const isQuestion = message.type === 'agent_message'
+          && !!(message.payload as { question?: unknown } | undefined)?.question;
         if (card && !card.closed) {
           nextCards = new Map(state.cards);
-          nextCards.set(sessionId, { text: '', action: card.action, closed: true });
+          nextCards.set(sessionId, isQuestion && card.action
+            ? { ...card, text: '' }
+            : { text: '', action: card.action, closed: true });
         }
       }
       // Dedup by [type, seq] for server-broadcast messages. The relay

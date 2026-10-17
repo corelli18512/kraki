@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { ChatView } from './ChatView';
 import { useStore } from '../../hooks/useStore';
 import { agentNavigationColors } from '../../lib/color';
+import { useOutbox } from '../../lib/chat/outbox';
 
 const viewport = vi.hoisted(() => ({ narrow: false }));
 vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
@@ -91,6 +92,47 @@ describe('ChatView pending question live-row visibility', () => {
     useStore.setState({ messages: new Map() });
     render(<ChatView sessionId="s" topInset={56} />);
     expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it.each([
+    ['sending', '1'],
+    ['failed', '0'],
+  ])('a %s pending answer: only one that can still reach the agent closes the question', (state, liveRows) => {
+    waitingCard();
+    useOutbox.setState({ entries: [{ clientId: 'c1', sessionId: 's', text: 'Amber', answerTo: 'q', state, order: 1, createdAt: 0 } as never] });
+    render(<ChatView sessionId="s" topInset={56} />);
+    // Answered → the turn resumes (typing row). Failed → the question stays
+    // open and answerable, so no typing row (Mac excludes failed answers).
+    expect(screen.getByTestId('live-rows')).toHaveTextContent(liveRows);
+    useOutbox.setState({ entries: [] });
+  });
+
+  it('a question landing keeps a parallel open permission actionable (Mac CardTurnGate)', () => {
+    const permission = { type: 'permission', payload: { id: 'p1', toolName: 'shell', description: 'rm -rf build' } };
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'active', lastSeq: 0 } as never]]),
+      messages: new Map([['s', []]]),
+      cards: new Map([['s', { text: 'Let me check something', action: permission, closed: false } as never]]),
+    });
+    useStore.getState().appendMessage('s', question as never);
+    const card = useStore.getState().cards.get('s')!;
+    expect(card.closed).toBe(false);
+    expect(card.text).toBe('');
+    expect(card.action).toEqual(permission);
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('a question with no parallel action still ends the live bubble', () => {
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'active', lastSeq: 0 } as never]]),
+      messages: new Map([['s', []]]),
+      cards: new Map([['s', { text: 'Which one?', action: null, closed: false } as never]]),
+    });
+    useStore.getState().appendMessage('s', question as never);
+    expect(useStore.getState().cards.get('s')!.closed).toBe(true);
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
   });
 
   it('resumes the typing row once the question has been answered', () => {

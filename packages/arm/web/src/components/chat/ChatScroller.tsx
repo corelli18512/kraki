@@ -36,6 +36,11 @@ interface Props<Row extends ScrollerRow> {
   /** Space covered by the floating header / composer. */
   topInset: number;
   bottomInset: number;
+  /** Extra reach below the newest edge while an overlay (the expanded
+   *  composer) covers it: it only extends how far the reader can scroll, so
+   *  covered bubbles can be lifted by hand. Follow, ↓ and at-bottom still rest
+   *  on the newest edge (docs/chat-composer-overlay.md, Mac parity). */
+  overlayReach?: number;
   header?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
   /** Near the oldest rendered row (load / reveal older). */
@@ -72,7 +77,7 @@ export function newTailKeys(before: string[], after: string[]): string[] {
 const NEAR_TOP = 900;
 
 function ChatScrollerInner<Row extends ScrollerRow>(
-  { rows, renderRow, topInset, bottomInset, header, onAtBottomChange, onNearTop, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
+  { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
   ref: React.Ref<ChatScrollerHandle>,
 ) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -112,10 +117,15 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     anchor.current = null;
   }, [topInset]);
 
+  const reach = useRef(overlayReach);
+  reach.current = overlayReach;
+  /** scrollTop at the newest edge, excluding the overlay reach. */
+  const tailTop = (el: HTMLElement) => Math.max(0, el.scrollHeight - el.clientHeight - reach.current);
+
   const reportBottom = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_THRESHOLD;
+    const atBottom = tailTop(el) - el.scrollTop <= PIN_THRESHOLD;
     if (atBottom !== lastBottom.current) {
       lastBottom.current = atBottom;
       callbacks.current.onAtBottomChange?.(atBottom);
@@ -130,7 +140,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     if (!el || unread.current === 'none' || !key) return false;
     const node = rowElement(key);
     if (!node) return false;
-    const tail = el.scrollHeight - el.clientHeight;
+    const tail = tailTop(el);
     const rowStart = el.scrollTop + node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
     const landing = unreadLanding(Math.max(0, Math.min(tail, rowStart)), tail);
     if (landing === null) {
@@ -164,10 +174,11 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     following.current = true;
     let last = performance.now();
     const step = (now: number) => {
-      const target = el.scrollHeight - el.clientHeight;
+      const target = tailTop(el);
       const remaining = target - el.scrollTop;
       if (!pinned.current || remaining <= 0.5) {
-        if (pinned.current) el.scrollTop = target;
+        // A revealed covered tail (scrolled into the overlay reach) stays revealed.
+        if (pinned.current && remaining > 0) el.scrollTop = target;
         stopFollow();
         reportBottom();
         return;
@@ -188,7 +199,11 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       // Held on the first new message.
     } else if (pinned.current) {
       const settling = performance.now() - mountedAt.current < ENTRY_SETTLE_MS;
-      if (instant || settling) { stopFollow(); el.scrollTop = el.scrollHeight; } else followBottom();
+      if (instant || settling) {
+        stopFollow();
+        // Rest on the newest edge; keep a revealed covered tail where it is.
+        if (el.scrollTop < tailTop(el)) el.scrollTop = tailTop(el);
+      } else followBottom();
     } else if (anchor.current) {
       const node = rowElement(anchor.current.key);
       if (node) {
@@ -224,7 +239,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   // Rows changed: restore before the browser paints.
   useLayoutEffect(() => { settle(); }, [rows, settle]);
   // The composer changed height: keep the bottom in place at once.
-  useLayoutEffect(() => { settle(true); }, [bottomInset, settle]);
+  useLayoutEffect(() => { settle(true); }, [bottomInset, overlayReach, settle]);
 
   // Size changes inside rows (images, fonts, highlighted code, streaming).
   useLayoutEffect(() => {
@@ -240,7 +255,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     const el = scroller.current;
     if (!el) return;
     const onScrollEvent = () => {
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const distance = tailTop(el) - el.scrollTop;
       if (!programmatic.current && !following.current) pinned.current = distance <= PIN_THRESHOLD;
       captureAnchor();
       reportBottom();
@@ -271,7 +286,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   useLayoutEffect(() => {
     pinned.current = true;
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) el.scrollTop = tailTop(el);
     settle();
   }, []);
 
@@ -293,7 +308,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       stopFollow();
       endUnreadEntry();
       pinned.current = true;
-      glide(el.scrollHeight, smooth);
+      glide(tailTop(el), smooth);
     },
     scrollToRow: (key, smooth) => {
       const el = scroller.current;
@@ -331,6 +346,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
           ))}
         </div>
       </div>
+      {overlayReach > 0 && <div className="kchat-overlay-reach" aria-hidden style={{ height: overlayReach }} />}
     </div>
   );
 }
