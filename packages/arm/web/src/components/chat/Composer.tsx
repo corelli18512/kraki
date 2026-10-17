@@ -87,7 +87,8 @@ export interface ComposerProps {
   /** Attachments are unavailable during a running or compacting turn. */
   busy: boolean;
   onSend: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => void;
-  onAbort: () => void;
+  /** Dispatch Stop. Call `onRefused` if it could not be sent. */
+  onAbort: (onRefused: () => void) => void;
   onStageVoice?: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => string;
 }
 
@@ -99,6 +100,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const setDraft = useStore((s) => s.setDraft);
   const [image, setImage] = useState<{ attachment: Attachment; preview: string } | null>(null);
   const [abortPending, setAbortPending] = useState(false);
+  const currentSession = useRef(sessionId);
+  currentSession.current = sessionId;
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
@@ -153,6 +156,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // A new session (or the turn ending) resets the pending abort.
   useEffect(() => { setAbortPending(false); }, [sessionId, canAbort]);
+  // Like native ComposerLatchSettling: going offline drops any unacked Stop
+  // (it is connection-scoped), and a new trailing error is how the Tentacle
+  // reports a failed abort while the turn stays active. Either way Stop must
+  // become actionable again instead of spinning forever.
+  const trailingError = useStore((s) => {
+    const list = s.messages.get(sessionId);
+    const last = list?.[list.length - 1];
+    return last?.type === 'error' ? last : null;
+  });
+  useEffect(() => { if (!reachable) setAbortPending(false); }, [reachable]);
+  useEffect(() => { if (trailingError) setAbortPending(false); }, [trailingError]);
   useEffect(() => { setImage(null); }, [sessionId]);
 
   useEffect(() => {
@@ -209,7 +223,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (showsStop) {
       if (abortPending || !reachable) return;
       setAbortPending(true);
-      onAbort();
+      const pendingFor = sessionId;
+      onAbort(() => { if (currentSession.current === pendingFor) setAbortPending(false); });
     } else {
       submit();
     }

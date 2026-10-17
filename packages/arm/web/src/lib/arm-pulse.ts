@@ -62,6 +62,12 @@ export class ArmPulse {
    *  the target must be recovered per DATA seq on every transmit, resends
    *  included. Control frames (hello/ack/heartbeat/reset) carry no target. */
   private targetBySeq = new Map<bigint, string>();
+  /** Live seqs whose command belongs to the current connection only (Stop).
+   *  If still unacked at disconnect they are purged, never retransmitted
+   *  after reconnect where they would hit a successor turn. Mirrors the
+   *  native PulseManager.connectionScopedLiveSeqs. */
+  private connectionScopedSeqs = new Set<bigint>();
+  private connected = false;
 
   constructor(
     private readonly host: ArmPulseHost,
@@ -75,11 +81,22 @@ export class ArmPulse {
   /** Send a reliable message (a JSON string {blob, keys}, or plaintext control
    *  JSON for HEAD_PULSE_TARGET) toward `targetDeviceId`. `durable` marks it for
    *  relay persistence while the target is offline. Returns the assigned pulse
-   *  seq so the caller can track it for rollback. */
-  send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
+   *  seq so the caller can track it for rollback.
+   *
+   *  `connectionScoped` commands are refused (null) while disconnected and
+   *  purged if unacked when this connection drops. */
+  send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint;
+  send(payloadJson: string, targetDeviceId: string, durable: boolean, opts: { connectionScoped?: boolean }): bigint | null;
+  send(payloadJson: string, targetDeviceId: string, durable: boolean, opts?: { connectionScoped?: boolean }): bigint | null {
+    const scoped = opts?.connectionScoped === true && !durable;
+    if (scoped && !this.connected) {
+      traceEvent({ comp: 'arm', evt: 'PULSE-SCOPED-REFUSED', target: targetDeviceId });
+      return null;
+    }
     const payload = enc.encode(payloadJson);
     const { seq, effects } = this.live.send(payload, { durable });
     this.targetBySeq.set(seq, targetDeviceId);
+    if (scoped) this.connectionScopedSeqs.add(seq);
     traceEvent({ comp: 'arm', evt: 'PULSE-SEND', seq: String(seq), len: payload.length, target: targetDeviceId, durable });
     this.run(effects);
     return seq;
@@ -87,11 +104,25 @@ export class ArmPulse {
 
   onConnected(): void {
     traceEvent({ comp: 'arm', evt: 'PULSE-CONNECTED' });
+    this.connected = true;
     this.run(this.streams.onConnected(this.host.now()));
   }
   onDisconnected(): void {
     traceEvent({ comp: 'arm', evt: 'PULSE-DISCONNECTED' });
+    this.connected = false;
     this.streams.onDisconnected(this.host.now());
+    if (this.connectionScopedSeqs.size > 0) {
+      const scoped = this.connectionScopedSeqs;
+      const purged = this.live.purge((e) => scoped.has(e.seq), 'connection-scoped-disconnect');
+      this.run(purged.effects);
+      // Anything not in the outbox any more was already acked.
+      this.connectionScopedSeqs.clear();
+    }
+  }
+
+  /** Test/diagnostic: unacked connection-scoped commands. */
+  get connectionScopedCount(): number {
+    return this.connectionScopedSeqs.size;
   }
   onFrame(pulseB64: string): void {
     const bytes = unb64(pulseB64);
@@ -122,7 +153,17 @@ export class ArmPulse {
           for (const s of this.targetBySeq.keys()) {
             if (s <= e.seqUpTo) this.targetBySeq.delete(s);
           }
+          for (const s of this.connectionScopedSeqs) {
+            if (s <= e.seqUpTo) this.connectionScopedSeqs.delete(s);
+          }
           this.host.onAcked(e.seqUpTo);
+          break;
+        case 'purged':
+          traceEvent({ comp: 'arm', evt: 'PULSE-PURGED', seq: e.droppedSeqs.map(String).join(','), reason: e.reason });
+          for (const s of e.droppedSeqs) {
+            this.targetBySeq.delete(s);
+            this.connectionScopedSeqs.delete(s);
+          }
           break;
         case 'reset-inbound':
           traceEvent({ comp: 'arm', evt: 'PULSE-RESET-INBOUND', seq: String(e.fromSeq) });

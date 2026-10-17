@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAccountDeletion } from './account-deletion';
-import { decodeFrame } from '@kraki/pulse';
+import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
@@ -1686,6 +1686,119 @@ describe('KrakiWSClient', () => {
       });
       await vi.advanceTimersByTimeAsync(1);
     }
+
+    const abortSends = (ws: { sentMessages: string[] } | null) => (ws?.sentMessages ?? [])
+      .filter((raw) => typeof (JSON.parse(raw) as { pulse?: unknown }).pulse === 'string')
+      .map(decodePulseSend).filter((m) => m?.type === 'abort_session');
+
+    async function reconnect(client: KrakiWSClient, old: typeof lastWsInstance) {
+      old.readyState = 3;
+      old.onclose?.({} as CloseEvent);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const next = socketOf(client)!;
+      expect(next).not.toBe(old);
+      next._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      return next;
+    }
+
+    /** A real Head pulse peer wired to the mock sockets, so retransmission
+     *  after reconnect actually happens (the bare mock never answers hello). */
+    class HeadPeer {
+      readonly streams = new StreamSet([
+        new Endpoint({ epoch: 'head:live', streamId: 0, random: () => 0.5 }),
+        new Endpoint({ epoch: 'head:bulk', streamId: 1, random: () => 0.5 }),
+      ]);
+      readonly delivered: string[] = [];
+      private cursor = new Map<object, number>();
+      constructor(private now: () => number) {}
+      private toArm(ws: typeof lastWsInstance, effects: Effect[]) {
+        for (const e of effects) {
+          if (e.t === 'transmit') {
+            let bin = ''; for (const b of e.bytes) bin += String.fromCharCode(b);
+            ws._receive({ type: 'broadcast', pulse: btoa(bin), blob: '', keys: {} });
+          } else if (e.t === 'deliver') {
+            const { blob } = JSON.parse(new TextDecoder().decode(e.payload)) as { blob: string };
+            this.delivered.push((JSON.parse(blob) as { type: string }).type);
+          }
+        }
+      }
+      connect(ws: typeof lastWsInstance) { this.toArm(ws, this.streams.onConnected(this.now())); this.pump(ws); }
+      disconnect() { this.streams.onDisconnected(this.now()); }
+      /** Feed arm→head frames; `drop` loses matching DATA frames on the wire. */
+      pump(ws: typeof lastWsInstance, drop?: (type: string) => boolean) {
+        for (;;) {
+          const from = this.cursor.get(ws) ?? 0;
+          const fresh = ws.sentMessages.slice(from);
+          this.cursor.set(ws, ws.sentMessages.length);
+          if (fresh.length === 0) return;
+          for (const raw of fresh) {
+            const env = JSON.parse(raw) as { pulse?: string };
+            if (typeof env.pulse !== 'string') continue;
+            const inner = decodePulseSend(raw);
+            if (drop && inner && drop(inner.type as string)) continue;
+            this.toArm(ws, this.streams.onBytes(Uint8Array.from(atob(env.pulse), (c) => c.charCodeAt(0)), this.now()));
+          }
+        }
+      }
+    }
+
+    it('an unacknowledged Stop is not retransmitted after reconnect (cannot abort a successor turn)', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const head = new HeadPeer(() => Date.now());
+        const first = socketOf(client)!;
+        head.connect(first);
+        client.abortSession('sess-1');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(abortSends(first)).toHaveLength(1);
+        head.pump(first, (t) => t === 'abort_session'); // lost with the socket
+        head.disconnect();
+        const next = await reconnect(client, first);
+        head.connect(next);
+        client.sendInput('sess-1', 'next prompt'); // the successor turn's input
+        for (let i = 0; i < 4; i++) { await vi.advanceTimersByTimeAsync(5_000); head.pump(next); }
+        expect(head.delivered).toContain('send_input');
+        expect(head.delivered).not.toContain('abort_session');
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a Stop whose encryption finishes after the socket dropped is refused, not sent on the new connection', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const first = socketOf(client)!;
+        const encryption = (client as unknown as { encryption: { encryptForTarget: (m: Record<string, unknown>) => Promise<unknown> } }).encryption;
+        const real = encryption.encryptForTarget.bind(encryption);
+        let release: () => void = () => {};
+        vi.spyOn(encryption, 'encryptForTarget').mockImplementationOnce((m) =>
+          new Promise((resolve) => { release = () => resolve(real(m)); }));
+        const refused = vi.fn();
+        client.abortSession('sess-1', refused);
+        const next = await reconnect(client, first);
+        release();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refused).toHaveBeenCalledTimes(1);
+        expect(abortSends(first)).toHaveLength(0);
+        expect(abortSends(next)).toHaveLength(0);
+        // A fresh Stop on the new connection goes out normally.
+        client.abortSession('sess-1');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(abortSends(next)).toHaveLength(1);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     it('a silent authenticated socket is abandoned after 22 s and replaced', async () => {
       vi.useFakeTimers();
