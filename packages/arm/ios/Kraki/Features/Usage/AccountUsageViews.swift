@@ -254,25 +254,27 @@ struct AccountUsageRow: View {
                 }
                 HStack(spacing: 6) {
                     if let plan = account.planTitle {
-                        Text(plan).scaledFont(12).foregroundStyle(.secondary)
+                        Text(plan).scaledFont(13).foregroundStyle(.secondary)
                     }
                     if account.isStale(now: now) && !account.windows.isEmpty {
-                        Text("Stale").scaledFont(9.5, weight: .semibold).foregroundStyle(.white)
+                        Text("Stale").scaledFont(10, weight: .semibold).foregroundStyle(.white)
                             .padding(.horizontal, 4).padding(.vertical, 1.5)
                             .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
                     }
                 }
-                Label(deviceText, systemImage: merged.devices.count > 1 ? "laptopcomputer.and.arrow.down" : "laptopcomputer")
-                    .scaledFont(11).foregroundStyle(.secondary)
-                    .labelStyle(.titleAndIcon)
-                    .lineLimit(1)
-                    .opacity(merged.allOffline ? 0.6 : 1)
-                AccountUsageReadStatus(account: account, offline: merged.allOffline)
+                HStack(spacing: 5) {
+                    Image(systemName: "laptopcomputer").scaledFont(11)
+                    Text(deviceText).scaledFont(13)
+                }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .opacity(merged.allOffline ? 0.6 : 1)
+                AccountUsageReadStatus(account: account, offline: merged.allOffline, fontSize: 13)
             }
             Spacer(minLength: 4)
             AccountUsageRings(account: account, size: 50, lineWidth: 5, spacing: 10, now: now, animateIn: animateIn, delay: delay)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
     }
 }
@@ -281,17 +283,18 @@ struct AccountUsageRow: View {
 struct AccountUsageReadStatus: View {
     let account: AccountUsage
     var offline = false
+    var fontSize: CGFloat = 10.5
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(account.lastUpdatedText(now: context.date))
                     .help(account.fetchedDate?.formatted(date: .abbreviated, time: .standard) ?? "No successful reading")
                 if let status = offline ? "Device offline" : account.readStatus(now: context.date) {
                     Text(status).foregroundStyle(.orange)
                 }
             }
-            .scaledFont(10.5).foregroundStyle(.secondary)
+            .scaledFont(fontSize).foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -305,14 +308,10 @@ struct AccountUsageRefreshControls: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let store = appState.deviceStore
-            let ids = store.usageRefreshTargets(deviceIds: deviceIds)
-            let connected = appState.connectionStatus == .connected
-            let busy = connected && ids.contains { store.usageRefreshes[$0]?.finished == false }
-            let ready = connected && ids.contains { store.canRefreshUsage($0, now: context.date) }
+            let model = AccountUsageRefreshModel(appState: appState, deviceIds: deviceIds, now: context.date)
             HStack(spacing: 8) {
-                if busy { ProgressView().controlSize(.small) }
-                Text(status(ids: ids, connected: connected, busy: busy, ready: ready))
+                if model.busy { ProgressView().controlSize(.small) }
+                Text(model.status)
                     .scaledFont(11).foregroundStyle(.secondary).lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
@@ -321,20 +320,176 @@ struct AccountUsageRefreshControls: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered).controlSize(.small)
-                .disabled(!ready || busy)
+                .disabled(!model.ready || model.busy)
                 .help("Refresh readings without bypassing provider rate limits")
                 .accessibilityIdentifier("account-usage-refresh")
             }
         }
     }
+}
 
-    private func status(ids: [String], connected: Bool, busy: Bool, ready: Bool) -> String {
+#if os(iOS)
+/// iOS list header: the section title with a plain Refresh action on its
+/// trailing edge (a spinner while refreshing), sized like the header text.
+struct AccountUsageSectionHeader: View {
+    @Environment(AppState.self) private var appState
+    var deviceIds: Set<String>? = nil
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let model = AccountUsageRefreshModel(appState: appState, deviceIds: deviceIds, now: context.date)
+            HStack(alignment: .center) {
+                Text("Accounts")
+                Spacer()
+                UsageRefreshButton(busy: model.busy, ready: model.ready, failed: model.isNotice) {
+                    appState.commandSender?.refreshAccountUsage(deviceIds: deviceIds)
+                }
+            }
+            .textCase(nil)
+        }
+    }
+}
+
+/// Icon-only refresh for the Accounts header: a static arrow, the system
+/// spinner while computers fetch, then a check drawn in green. The three are
+/// separate views cross-faded, so only the spinner moves and the check always
+/// appears upright. A failed refresh returns to the arrow with a wiggle (the
+/// footer says why); the cool-down dims it.
+struct UsageRefreshButton: View {
+    let busy: Bool
+    let ready: Bool
+    var failed = false
+    let action: () -> Void
+
+    enum Phase { case idle, busy, done }
+    @State private var showsDone = false
+    @State private var failures = 0
+
+    static let size: CGFloat = 30
+    static let doneDuration: Duration = .seconds(1.4)
+
+    private var phase: Phase { busy ? .busy : (showsDone ? .done : .idle) }
+    private var enabled: Bool { ready && !busy }
+    private var tint: Color {
+        switch phase {
+        case .done: return .green
+        case .busy: return .krakiPrimary
+        case .idle: return enabled ? .krakiPrimary : Color.secondary.opacity(0.55)
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Image(systemName: "arrow.clockwise")
+                    .symbolEffect(.wiggle, value: failures)
+                    .opacity(phase == .idle ? 1 : 0)
+                    .scaleEffect(phase == .idle ? 1 : 0.5)
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.krakiPrimary)
+                    .opacity(phase == .busy ? 1 : 0)
+                check
+            }
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: Self.size, height: Self.size)
+            .background(tint.opacity(phase == .idle && !enabled ? 0.08 : 0.13), in: Circle())
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .buttonStyle(UsageRefreshPressStyle())
+        .disabled(!enabled)
+        .animation(.snappy(duration: 0.28), value: phase)
+        .animation(.easeInOut(duration: 0.2), value: enabled)
+        .onChange(of: busy) { was, now in
+            if now { showsDone = false; return }
+            guard was else { return }
+            if failed {
+                failures += 1
+            } else {
+                showsDone = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: Self.doneDuration)
+                    showsDone = false
+                }
+            }
+        }
+        .padding(.trailing, -10) // align the disc with the row edge, keep the 44 pt hit area
+        .accessibilityLabel(busy ? "Refreshing accounts" : "Refresh accounts")
+        .accessibilityHint("Refreshes readings without bypassing provider rate limits")
+        .accessibilityIdentifier("account-usage-refresh")
+    }
+
+    /// Drawn on when it appears; hidden (not animated out) otherwise, so it is
+    /// fully gone before the arrow returns.
+    @ViewBuilder private var check: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            Image(systemName: "checkmark")
+                .symbolEffect(.drawOn, isActive: phase != .done)
+                .opacity(phase == .done ? 1 : 0)
+                .animation(phase == .done ? nil : .easeOut(duration: 0.12), value: phase)
+        } else {
+            Image(systemName: "checkmark").opacity(phase == .done ? 1 : 0)
+        }
+    }
+}
+
+private struct UsageRefreshPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.86 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+/// Refresh problems worth reading (not routine "rate limits apply").
+struct AccountUsageRefreshNotice: View {
+    @Environment(AppState.self) private var appState
+    var deviceIds: Set<String>? = nil
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let model = AccountUsageRefreshModel(appState: appState, deviceIds: deviceIds, now: context.date)
+            if model.isNotice {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "exclamationmark.circle")
+                    Text(model.status)
+                }
+            }
+        }
+    }
+}
+#endif
+
+/// Refresh state shared by the Mac controls and the iOS header.
+struct AccountUsageRefreshModel {
+    let busy: Bool
+    let ready: Bool
+    let status: String
+    /// Something the user should act on (error, offline, update needed).
+    let isNotice: Bool
+
+    @MainActor
+    init(appState: AppState, deviceIds: Set<String>?, now: Date) {
+        let store = appState.deviceStore
+        let ids = store.usageRefreshTargets(deviceIds: deviceIds)
+        let connected = appState.connectionStatus == .connected
+        busy = connected && ids.contains { store.usageRefreshes[$0]?.finished == false }
+        ready = connected && ids.contains { store.canRefreshUsage($0, now: now) }
+        status = Self.status(store: store, ids: ids, deviceIds: deviceIds, connected: connected, busy: busy, ready: ready)
+        // Per-account failures already show on their rows.
+        isNotice = !busy && !["Provider rate limits apply", "Just updated", "Some accounts couldn't be updated"].contains(status)
+    }
+
+    @MainActor
+    private static func status(store: DeviceStore, ids: [String], deviceIds: Set<String>?,
+                               connected: Bool, busy: Bool, ready: Bool) -> String {
         if !connected { return "Connect to refresh" }
         if busy { return "Refreshing…" }
-        let store = appState.deviceStore
         if ids.isEmpty {
             let online = store.devices.values.contains {
-                $0.role == .tentacle && $0.online && (deviceIds == nil || deviceIds!.contains($0.id))
+                $0.role == .tentacle && $0.online && (deviceIds?.contains($0.id) ?? true)
             }
             return online ? "Update or enable account usage on your device to refresh" : "No device online"
         }
