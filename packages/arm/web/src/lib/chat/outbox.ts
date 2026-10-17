@@ -55,6 +55,11 @@ interface OutboxDeps {
   isLinkBusy?: () => boolean;
   /** The session's Tentacle deduplicates inputs (`undefined`: not known yet). */
   acceptsResend?: (sessionId: string) => boolean | undefined;
+  /** The session's turn is still running (or compacting). A normal prompt
+   *  sent meanwhile is held by the Tentacle and echoed only when it
+   *  dispatches, so its missing echo is not a stall (Mac
+   *  CommandSender.waitsBehindRunningTurn). */
+  isTurnRunning?: (sessionId: string) => boolean;
 }
 
 const STORAGE_KEY = 'kraki-outbox-v1';
@@ -157,6 +162,8 @@ export function checkDeadlines(now = Date.now()): void {
     }
     const stall = stalls.get(entry.clientId);
     if (!stall || !deps?.isDeliveryPathUp(entry.sessionId) || deps.isLinkBusy?.()) continue;
+    // A steer is persisted on arrival and keeps the normal clock.
+    if (entry.delivery !== 'steer' && deps.isTurnRunning?.(entry.sessionId)) continue;
     stall.stalledMs += step;
     if (!stall.resent && stall.stalledMs >= confirmationTimeoutMs / 2 && deps.acceptsResend?.(entry.sessionId) === true) {
       // Maybe lost on the way (e.g. a socket that died with it): offer it
@@ -233,7 +240,10 @@ export const outbox = {
       state: 'sending',
     };
     update((list) => [...list, entry]);
-    transmit(entry);
+    // A transient refusal (reconnecting, the Tentacle's key not known yet)
+    // keeps it queued and dispatches when the path is back, like staged
+    // voice and Mac CommandSender (only signing out drops the outbox).
+    transmit(entry, true);
     return entry.clientId;
   },
 

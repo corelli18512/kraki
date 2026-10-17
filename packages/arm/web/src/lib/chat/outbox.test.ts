@@ -58,12 +58,42 @@ describe('outbox', () => {
     expect(payload().clientId).toBe(id);
   });
 
-  it('a transport failure marks it failed', async () => {
-    transportOk = false;
-    outbox.send('s', 'hi');
+  it('a transient send refusal keeps a typed input queued and dispatches it once, same clientId (Mac parity)', async () => {
+    transportOk = false; // e.g. the Tentacle's key is not known yet
+    const id = outbox.send('s', 'hi');
     await Promise.resolve();
     await Promise.resolve();
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(outbox.forSession('s')[0]).toMatchObject({ state: 'sending', needsDispatch: true });
+    // Key arrives: the next tick dispatches it, with the same clientId.
+    transportOk = true;
+    sent = [];
+    checkDeadlines(Date.now() + 1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toHaveLength(1);
+    expect(payload()).toEqual({ text: 'hi', clientId: id });
+    expect(outbox.forSession('s')[0].needsDispatch).toBeUndefined();
+    checkDeadlines(Date.now() + 2_000);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a normal prompt waiting behind a running turn does not accrue unconfirmed time; a steer does', () => {
+    let running = true;
+    outbox.configure({
+      send: async (msg) => { sent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      isTurnRunning: () => running,
+    });
+    outbox.send('s', 'queued prompt');
+    outbox.send('s', 'steer now', { delivery: 'steer' });
+    const t = run(Date.now(), 25);
+    const [prompt, steer] = outbox.forSession('s');
+    expect(prompt.state).toBe('sending');
+    expect(steer.state).toBe('unconfirmed');
+    // The turn ends; the prompt dispatches but its echo never comes: now it counts.
+    running = false;
+    run(t, 25);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
   });
 
   it('an echo without clientId matches by text', () => {
