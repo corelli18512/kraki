@@ -293,7 +293,7 @@ struct MessageInputView: View {
         }
     }
 
-    private static let boxShape = RoundedRectangle(cornerRadius: IOSComposerMetrics.height / 2, style: .continuous)
+    private static let boxShape = IOSComposerGlassBackground.shape
 
     /// Only the glass surface expands/collapses; the chat's clearance is fixed.
     static let expandAnimation = Animation.spring(response: 0.34, dampingFraction: 0.9)
@@ -420,89 +420,22 @@ struct MessageInputView: View {
     }
 
     private var recordingControls: some View {
-            HStack(spacing: 6) {
-                Button { withAnimation(Self.expandAnimation) { voice.cancel() } } label: {
-                    Label("Cancel", systemImage: "xmark")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 12)
-                        .frame(height: 36)
-                        .background(Color.secondary.opacity(0.12), in: Capsule())
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.primary)
-                .accessibilityIdentifier("voice-cancel")
-                .accessibilityHint("Discards what you just said")
-                VoiceLevelBars(levels: voiceController.levels)
-                    .padding(.leading, 6)
-                if let start = voice.recordingStartedAt {
-                    TimelineView(.periodic(from: start, by: 1)) { context in
-                        Text(Self.elapsed(from: start, to: context.date))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 4)
-                Button { withAnimation(Self.expandAnimation) { voice.finishToDraft() } } label: {
-                    Label("Edit", systemImage: "text.cursor")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 12)
-                        .frame(height: 36)
-                        .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.krakiPrimary)
-                .accessibilityIdentifier("voice-to-text")
-                .accessibilityHint("Stops listening and puts the text in the field to edit")
-            }
-            .padding(.leading, 8)
-            .padding(.trailing, 6)
-            .frame(height: Self.inputBoxHeight)
+        IOSVoiceRecordingControls(
+            levels: voiceController.levels,
+            startedAt: voice.recordingStartedAt,
+            onCancel: { withAnimation(Self.expandAnimation) { voice.cancel() } },
+            onEdit: { withAnimation(Self.expandAnimation) { voice.finishToDraft() } }
+        )
     }
 
     /// Speech stays high-contrast over chat. Only Edit's pending correction
     /// range is dimmed, in the real native editor.
     private var liveTranscript: some View {
-        let parts = voice.preview
-        let hasSpeech = !parts.spoken.isEmpty
-        return Group {
-            if parts.prefix.isEmpty && parts.suffix.isEmpty && !hasSpeech {
-                HStack(spacing: 7) {
-                    if voiceController.state == .waitingForConnection {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Circle().fill(.red).frame(width: 7, height: 7)
-                    }
-                    Text(voiceListeningStatus).foregroundStyle(.secondary)
-                }
-            } else {
-                Text(parts.prefix + parts.spoken + parts.suffix).foregroundStyle(.primary)
-            }
-        }
-        .font(.body)
-        .accessibilityIdentifier("voice-transcript")
-        .voiceGeometryProbe("text")
+        IOSVoiceLiveTranscript(preview: voice.preview, state: voiceController.state)
+            .voiceGeometryProbe("text")
     }
 
-    private var voiceListeningStatus: String {
-        switch voiceController.state {
-        case .waitingForConnection: return "Connecting…"
-        case .requestingPermission: return "Allow microphone access…"
-        case .recording: return "Listening…"
-        default: return "Starting…"
-        }
-    }
-
-    @ViewBuilder
-    private var inputBoxGlassBackground: some View {
-        // Plain liquid glass. Session mode lives in the chat header.
-        if #available(iOS 26.0, *) {
-            Color.clear.glassEffect(.regular, in: Self.boxShape)
-        } else {
-            Self.boxShape.fill(.ultraThinMaterial)
-        }
-    }
+    private var inputBoxGlassBackground: some View { IOSComposerGlassBackground() }
 
     // MARK: - Microphone
 

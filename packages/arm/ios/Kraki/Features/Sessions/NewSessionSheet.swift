@@ -21,6 +21,9 @@ struct NewSessionSheet: View {
     @State private var sessionTitle: String = ""
     @State private var screen: Screen = .form
     @State private var showImportSheet: Bool = false
+    @State private var headerHeight: CGFloat = 0
+    @State private var formCardHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
 
     private enum Screen: Equatable {
         case form
@@ -93,6 +96,7 @@ struct NewSessionSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 24)
                 .padding(.bottom, 12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
 
             if tentacles.isEmpty {
                 noDevicesView
@@ -101,6 +105,7 @@ struct NewSessionSheet: View {
                     switch screen {
                     case .form:
                         formCard
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formCardHeight = $0 }
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     case .devicePicker:
                         devicePickerCard
@@ -112,14 +117,28 @@ struct NewSessionSheet: View {
                 }
                 .animation(.easeInOut(duration: 0.22), value: screen)
                 .padding(.horizontal, 16)
-                .padding(.top, 16)
+                .padding(.top, Self.cardTop)
 
                 Spacer(minLength: 0)
 
-                createButton
+                IOSNewSessionComposer(
+                    canStart: canSubmit,
+                    voiceContext: {
+                        VoiceSessionContextBuilder.buildNewSession(
+                            agent: selectedAgentId, model: selectedModel.isEmpty ? nil : selectedModel,
+                            deviceName: tentacles.first { $0.id == selectedDeviceId }?.name)
+                    },
+                    onSendText: { createSession(prompt: $0) },
+                    onSendVoice: createVoiceSession
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, Self.composerGap)
+                .padding(.bottom, Self.composerBottom)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
         }
-        .presentationDetents([.height(360)])
+        .presentationDetents([.height(sheetHeight)])
+        .animation(.easeInOut(duration: 0.22), value: sheetHeight)
         .presentationDragIndicator(.hidden)
         .presentationBackground(.clear)
         .onAppear { selectDefaults() }
@@ -395,22 +414,19 @@ struct NewSessionSheet: View {
 
     // MARK: - Create / Empty
 
-    private var createButton: some View {
-        Button {
-            createSession()
-        } label: {
-            Text("Create")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(canSubmit ? Color.krakiPrimary : Color.krakiPrimary.opacity(0.4), in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(!canSubmit)
-        .padding(.horizontal, 40)
-        .padding(.bottom, 12)
-        .padding(.top, 8)
+    private static let cardTop: CGFloat = 16
+    private static let composerGap: CGFloat = 12
+    private static let composerBottom: CGFloat = 8
+    /// Device / Agent pickers scroll inside this height.
+    private static let pickerHeight: CGFloat = 280
+
+    /// The sheet hugs its content: header, the card (or a picker), and the
+    /// composer 12 pt below it; it grows with a multi-line draft or dictation.
+    private var sheetHeight: CGFloat {
+        guard !tentacles.isEmpty else { return 360 }
+        guard headerHeight > 0, composerHeight > 0 else { return 360 }
+        let middle = screen == .form ? formCardHeight : Self.pickerHeight
+        return headerHeight + Self.cardTop + middle + Self.composerGap + composerHeight
     }
 
     /// Static help URL. Both candidates are well-formed RFC 3986
@@ -517,19 +533,27 @@ struct NewSessionSheet: View {
         }
     }
 
-    private func createSession() {
-        guard canSubmit else { return }
+    private var titleForCreate: String? {
         let trimmed = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The typed first message goes out once the Session exists.
+    private func createSession(prompt: String) {
+        guard canSubmit else { return }
         appState.commandSender?.createSession(
-            targetDeviceId: selectedDeviceId,
-            agentId: selectedAgentId,
-            model: selectedModel,
-            reasoningEffort: reasoningEffort,
-            prompt: nil,
-            cwd: nil,
-            title: trimmed.isEmpty ? nil : trimmed
+            targetDeviceId: selectedDeviceId, agentId: selectedAgentId, model: selectedModel,
+            reasoningEffort: reasoningEffort, prompt: prompt, cwd: nil, title: titleForCreate
         )
         dismiss()
+    }
+
+    private func createVoiceSession() {
+        guard canSubmit else { return }
+        if NewSessionStart.withVoice(appState, device: selectedDeviceId, agent: selectedAgentId,
+                                     model: selectedModel, effort: reasoningEffort, title: titleForCreate) {
+            dismiss()
+        }
     }
 
     private func effortLabel(_ effort: ReasoningEffort) -> String {
