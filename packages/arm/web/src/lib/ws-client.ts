@@ -152,6 +152,8 @@ export class KrakiWSClient {
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
       isLinkBusy: () => Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS,
       acceptsResend: (sessionId) => this.acceptsResend(sessionId),
+      isTurnRunning: (sessionId) => getStore().sessions.get(sessionId)?.state === 'active'
+        || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting',
     });
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
