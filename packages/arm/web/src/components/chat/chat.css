@@ -1160,6 +1160,8 @@
 .ksub-report { margin-top: 12px; padding-top: 6px; border-top: 0.5px solid var(--k-border, #e2e8f0); font-size: 11px; color: var(--color-text-title); line-height: 14px; }
 .dark .ksub-report { border-top-color: rgba(255,255,255,.1); }
 .ksub-report-label { font-size: 10px; line-height: 12px; font-weight: 600; color: var(--k-text-2, #64748b); text-transform: uppercase; margin-bottom: 6px; }
+.ksub-report-error { color: #dc2626; font-size: 12px; }
+.dark .ksub-report-error { color: #f87171; }
 .ksheet-loading { display: flex; align-items: center; gap: 8px; color: var(--k-text-2, #64748b); font-size: 13px; }
 .kstep-prose { color: var(--k-text-2, #64748b); font-size: 15px; line-height: 18px; white-space: pre-wrap; }
 .kstep-note { display: flex; align-items: flex-start; gap: 8px; font-size: 15px; line-height: 18px; }

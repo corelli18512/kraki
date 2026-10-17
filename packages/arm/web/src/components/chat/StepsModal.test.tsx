@@ -5,8 +5,9 @@ import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
 import type { ChatMessage } from '../../types/store';
 
+const attachment = vi.hoisted(() => ({ result: null as null | { status: string; text: string | null; error: string | null } }));
 vi.mock('../../hooks/useAttachment', () => ({
-  useAttachmentText: () => ({ status: 'ready', text: 'First report line\nMEDIA-SUB\nLast report line', error: null }),
+  useAttachmentText: () => attachment.result ?? ({ status: 'ready', text: 'First report line\nMEDIA-SUB\nLast report line', error: null }),
 }));
 
 const message = { type: 'agent_message', seq: 2, sessionId: 's', deviceId: 'd', timestamp: '', payload: { content: 'Done' } } as ChatMessage;
@@ -43,6 +44,24 @@ describe('StepsModal — loading versus empty trace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close steps' }));
     expect(close).toHaveBeenCalledTimes(2);
   });
+});
+
+it('a failed subagent report transfer shows the error instead of loading forever (Mac parity)', () => {
+  attachment.result = { status: 'error', text: null, error: 'transfer expired' };
+  try {
+    const dispatch = { ...message, type: 'tool_complete', seq: 1, payload: {
+      toolName: 'subagent', toolCallId: 'sub', success: true,
+      subagent: { name: 'delegate', task: 'Reply', durationMs: 8000 },
+      resultRef: { type: 'content_ref', id: 'report', mimeType: 'text/plain', size: 42 },
+    } } as ChatMessage;
+    useStore.setState({ messages: new Map([['s', [dispatch, message]]]) });
+    render(<StepsModal sessionId="s" bubbleSeq={2} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open subagent delegate' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t load: transfer expired');
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+  } finally {
+    attachment.result = null;
+  }
 });
 
 it('opens the compact subagent card, preserves report source lines and returns to Steps', () => {

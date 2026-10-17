@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
 export interface ImagePreviewItem { url: string; title: string; blob?: Blob }
@@ -23,6 +23,11 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
   const [index, setIndex] = useState(selection.initialIndex);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dialog = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null | undefined>(undefined);
+  const modalKeys = useRef(new Set<string>());
+  const dismissed = useRef(false);
+  const dismiss = () => { dismissed.current = true; onClose(); };
   const canvas = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -44,19 +49,72 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
     if (next < 0 || next >= selection.items.length) return;
     setIndex(next); setZoom(1); setPan({ x: 0, y: 0 });
   };
+  useLayoutEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    // StrictMode replays layout setup after focus has already moved into the
+    // dialog. Capture once per viewer, not once per setup, to retain the opener.
+    if (opener.current === undefined) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Isolate the modal without introducing a layout wrapper around the chat/report panes.
+    const background = new Map<HTMLElement, string | null>();
+    for (let branch: HTMLElement = el; branch.parentElement; branch = branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (sibling !== branch && sibling instanceof HTMLElement) {
+          background.set(sibling, sibling.getAttribute('inert'));
+          sibling.setAttribute('inert', '');
+        }
+      }
+      if (branch.parentElement === document.body) break;
+    }
+    el.focus({ preventScroll: true });
+    const contain = (event: FocusEvent) => {
+      if (event.target instanceof Node && !el.contains(event.target)) el.focus({ preventScroll: true });
+    };
+    document.addEventListener('focusin', contain);
+    return () => {
+      document.removeEventListener('focusin', contain);
+      background.forEach((value, node) => {
+        if (value === null) node.removeAttribute('inert'); else node.setAttribute('inert', value);
+      });
+      // A session unmount is not a dismissal: its opener may still be connected
+      // during layout cleanup, but must not regain focus in the departing pane.
+      if (dismissed.current && opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+    };
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        event.preventDefault();
+      const el = dialog.current;
+      if (!el) return;
+      // Repeats can belong to a key held before the viewer opened.
+      if (!event.repeat && event.target instanceof Node && el.contains(event.target)) modalKeys.current.add(event.code || event.key);
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopImmediatePropagation(); dismiss();
+        return;
+      }
+      if (!(event.target instanceof Node) || !el.contains(event.target)) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        el.focus({ preventScroll: true });
+        return;
+      }
+      if (event.key === 'Tab') {
+        const controls = [...el.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === el)) {
+          event.preventDefault(); last?.focus({ preventScroll: true });
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === el)) {
+          event.preventDefault(); first?.focus({ preventScroll: true });
+        }
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault(); event.stopImmediatePropagation();
         const next = index + (event.key === 'ArrowLeft' ? -1 : 1);
         if (next >= 0 && next < selection.items.length) {
           setIndex(next); setZoom(1); setPan({ x: 0, y: 0 });
         }
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [index, selection.items.length, onClose]);
   useEffect(() => {
     const c = canvas.current;
@@ -67,8 +125,12 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
     // Clamp again when zoom changes as well as when the pane is resized.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
+  // Keys started in the modal stay isolated; releases of preexisting held
+  // shortcuts (e.g. Usage peek) still reach window cleanup as native events.
   return (
-    <div className="kimage-viewer" role="dialog" aria-modal="true" aria-label="Image preview">
+    <div ref={dialog} tabIndex={-1} className="kimage-viewer" role="dialog" aria-modal="true" aria-label="Image preview"
+      onKeyDown={(event) => event.stopPropagation()}
+      onKeyUp={(event) => { if (modalKeys.current.delete(event.code || event.key)) event.stopPropagation(); }}>
       <div className="kimage-toolbar">
         <span className="kimage-title">{item.title}</span>
         {selection.items.length > 1 && <span className="kimage-index">{index + 1} / {selection.items.length}</span>}
@@ -81,9 +143,9 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
         <span className="kimage-zoom">{zoom.toFixed(1)}×</span>
         <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.25)}><ZoomIn /></button>
         <button type="button" title="Fit to window" aria-label="Fit to window" onClick={() => changeZoom(1)}><Minimize2 /></button>
-        <button type="button" title="Close image preview" aria-label="Close image preview" onClick={onClose}><X /></button>
+        <button type="button" title="Close image preview" aria-label="Close image preview" onClick={dismiss}><X /></button>
       </div>
-      <div ref={canvas} className="kimage-canvas" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      <div ref={canvas} className="kimage-canvas" onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}
         onWheel={(event) => {
           if (event.ctrlKey || event.altKey || event.deltaMode !== 0) changeZoom(zoom * Math.pow(1.12, Math.max(-4, Math.min(4, -event.deltaY))));
           else if (zoom > 1) setPan((current) => clampPan(current.x - event.deltaX, current.y - event.deltaY));

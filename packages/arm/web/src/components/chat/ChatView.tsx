@@ -67,7 +67,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const lastSeq = session?.lastSeq;
   const maxSeq = highestSeq(messages);
   const atHead = lastSeq === undefined || lastSeq <= 0 ? maxSeq > 0 : maxSeq >= lastSeq;
-  const pendingAnswerTo = useMemo(() => pending.flatMap((e) => (e.answerTo ? [e.answerTo] : [])), [pending]);
+  // A locally failed answer never reached the agent: its question stays open
+  // and answerable (Mac ChatViewModel excludes failed answers too).
+  const pendingAnswerTo = useMemo(() => pending.flatMap((e) => (e.answerTo && e.state !== 'failed' ? [e.answerTo] : [])), [pending]);
   const answerKey = pendingAnswerTo.join(',');
   const spine = useMemo(
     () => spineRows(messages, pendingAnswerTo, atHead),
@@ -131,6 +133,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // Mac's floating composer grows over chat, without moving the newest edge.
   // ChatBottomObstruction: 36 capsule + 2×12 bottom padding − 6 row margin.
   const bottomClearance = narrow ? composerHeight + 8 : 54;
+  // Desktop: the dock's growth above its resting height (multiline draft,
+  // dictation, compaction status) covers the tail; give the list that much
+  // extra reach so it can be scrolled into view (Mac composerOverlayInset).
+  const restingDock = useRef<number | null>(null);
+  const overlayReach = narrow || restingDock.current === null ? 0 : Math.max(0, Math.round(composerHeight - restingDock.current));
   const [upTarget, setUpTarget] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
@@ -183,7 +190,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   useEffect(() => {
     const el = composerBox.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setComposerHeight(el.getBoundingClientRect().height));
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      // Smallest measured dock = its resting footprint.
+      if (h > 0 && (restingDock.current === null || h < restingDock.current)) restingDock.current = h;
+      setComposerHeight(h);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -248,7 +260,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const onSend = useCallback((text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => {
     if (intent === 'denyPermission' && action?.type === 'permission') {
       // Typing while a permission waits: the text is the reason for denying it.
-      wsClient.resolvePermission(sessionId, String(action.payload.id), action.payload.toolName as string | undefined, 'deny', text);
+      // If it never reaches the agent the permission comes back; so does the
+      // reason, unless something new was typed meanwhile (Mac keeps it too).
+      wsClient.resolvePermission(sessionId, String(action.payload.id), action.payload.toolName as string | undefined, 'deny', text, () => {
+        const store = useStore.getState();
+        if (!(store.drafts.get(sessionId) ?? '').trim()) store.setDraft(sessionId, text);
+      });
       return;
     }
     const answerTo = intent === 'answerQuestion' ? questions.at(-1)?.id : undefined;
@@ -292,6 +309,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
         topInset={topInset + 8}
         bottomInset={bottomClearance}
+        overlayReach={overlayReach}
         header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;

@@ -554,8 +554,10 @@ export class KrakiWSClient {
   /** Resolve the live permission: the decision shows at once (read-only,
    *  "Sending…"); Tentacle's resolved card replaces it. Without confirmation
    *  while the delivery path is up it reverts with an explanation. */
+  /** `onUndelivered` fires once if the decision could not be dispatched, or was
+   *  not confirmed in time; the permission is actionable again by then. */
   resolvePermission(sessionId: string, permissionId: string, toolName: string | undefined,
-                    decision: 'approve' | 'deny', reason?: string) {
+                    decision: 'approve' | 'deny', reason?: string, onUndelivered?: () => void) {
     const store = getStore();
     const current = store.cards.get(sessionId)?.action;
     if (current?.type === 'permission' && current.payload.id === permissionId) {
@@ -565,7 +567,25 @@ export class KrakiWSClient {
         payload: { ...current.payload, decision: shown, localPending: true, localError: undefined } as unknown as typeof current.payload,
       });
     }
-    const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg);
+    let settled = false;
+    const rollback = (localError: string) => {
+      const action = getStore().cards.get(sessionId)?.action;
+      const stillLocal = action?.type === 'permission' && action.payload.id === permissionId
+        && (action.payload as { localPending?: boolean }).localPending;
+      if (!stillLocal || settled) return;
+      settled = true;
+      const { decision: _d, localPending: _l, ...rest } = action.payload as Record<string, unknown>;
+      getStore().setCardAction(sessionId, {
+        ...action,
+        payload: { ...rest, localError } as unknown as typeof action.payload,
+      });
+      onUndelivered?.();
+    };
+    // Could not even be dispatched (no key/target): roll back at once, as
+    // Mac CommandSender does, instead of waiting for the confirmation timeout.
+    const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg, (seq) => {
+      if (seq === null) rollback('Couldn’t send. Try again.');
+    });
     if (decision === 'approve') {
       commands.approve(permissionId, sessionId, send);
     } else {
@@ -576,13 +596,9 @@ export class KrakiWSClient {
       const action = getStore().cards.get(sessionId)?.action;
       const stillLocal = action?.type === 'permission' && action.payload.id === permissionId
         && (action.payload as { localPending?: boolean }).localPending;
-      if (!stillLocal) return;
+      if (!stillLocal || settled) return;
       if (Date.now() - started < 20_000 || !this.isDeliveryPathUp(sessionId)) { setTimeout(check, 2_000); return; }
-      const { decision: _d, localPending: _l, ...rest } = action.payload as Record<string, unknown>;
-      getStore().setCardAction(sessionId, {
-        ...action,
-        payload: { ...rest, localError: 'Not confirmed by the agent. Try again.' } as unknown as typeof action.payload,
-      });
+      rollback('Not confirmed by the agent. Try again.');
     };
     setTimeout(check, 2_000);
   }

@@ -2,7 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { ArrowUp, CornerRightUp, ImagePlus, Square, X, CircleX } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
-import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
+import { enterSendsMessage, shouldAutoFocusTextInput } from '../../lib/mobile-input';
 import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from './Voice';
 import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { sessionContext } from '../../lib/voice/context';
@@ -294,7 +294,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             // Enter sends on a keyboard; Shift+Enter (or a touch keyboard's
             // return) inserts a newline. Never while an IME is composing.
             if (e.key !== 'Enter' || e.shiftKey || composing.current || e.nativeEvent.isComposing) return;
-            if (!shouldAutoFocusTextInput()) return;
+            if (!enterSendsMessage()) return;
             e.preventDefault();
             submit();
           }}
