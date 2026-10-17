@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { markNotificationEntry } from '../lib/chat/unread-entry';
 import { sessionDisplayTitle } from '../lib/session-status';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useLocation } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
 import { ChatView } from '../components/chat/ChatView';
@@ -33,6 +33,7 @@ export function SessionPage() {
     return count;
   });
   const navigate = useNavigate();
+  const location = useLocation();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ContentRef | null>(null);
   const [selectedArtifactExpanded, setSelectedArtifactExpanded] = useState(false);
@@ -48,21 +49,31 @@ export function SessionPage() {
   const narrow = useNarrow();
 
   // Opened from a notification (sw.js): mark it before ChatView's first
-  // render captures the entry, then drop the marker from the address.
+  // render captures the entry. The router effect below consumes the URL markers.
   const notifiedEntry = useRef<string | null>(null);
   if (sessionId && notifiedEntry.current !== sessionId
-      && new URLSearchParams(window.location.search).get('from') === 'notification') {
+      && new URLSearchParams(location.search).get('from') === 'notification') {
     notifiedEntry.current = sessionId;
     markNotificationEntry(sessionId);
-    window.history.replaceState(window.history.state, '', window.location.pathname);
   }
 
-  // Sidebar "Rename…" (as on Mac) opens Session Info over the selected chat.
+  // Consume entry requests in one router replacement, including same-session Rename.
   useEffect(() => {
-    if (!sessionId || new URLSearchParams(window.location.search).get('info') !== '1') return;
-    setMobileInfoOpen(true);
-    window.history.replaceState(window.history.state, '', window.location.pathname);
-  }, [sessionId]);
+    if (!sessionId) return;
+    const search = new URLSearchParams(location.search);
+    const infoRequested = search.get('info') === '1';
+    const notificationMarked = search.get('from') === 'notification' && notifiedEntry.current === sessionId;
+    if (!infoRequested && !notificationMarked) return;
+    if (infoRequested) {
+      setMobileInfoOpen(true);
+      search.delete('info');
+    }
+    if (notificationMarked) search.delete('from');
+    navigate({ pathname: location.pathname, search: search.toString(), hash: location.hash }, {
+      replace: true,
+      state: location.state,
+    });
+  }, [sessionId, location, navigate]);
 
   // Navigate home when session is deleted (removed from store while viewing)
   // but not if it's a pending session (optimistic open before session_created)

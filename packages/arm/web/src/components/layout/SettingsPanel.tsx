@@ -33,6 +33,13 @@ import {
 
 const tabs = ['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About'] as const;
 
+/** Same labels as Mac AccountPane.providerLabel: GitHub by default, otherwise
+ *  the provider id capitalized ("open" → "Open"). */
+export function providerLabel(provider: string | null | undefined): string {
+  if (!provider || provider === 'github') return 'GitHub';
+  return provider.split(/(\s+)/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+}
+
 export function SettingsPanel({
   open,
   onClose,
@@ -158,6 +165,7 @@ export function SettingsPanel({
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : ' · offline'}`]),
     ['Relay', `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
+    ...(state.deviceId ? [['Device ID', state.deviceId]] : []),
   ];
   const general = (
     <>
@@ -180,14 +188,16 @@ export function SettingsPanel({
             ))}
           </div>
         </SettingsRow>
-        <div className="kp-row kp-palette" style={{ justifyContent: 'flex-start', gap: 6 }}>
-          {['#FBBF24', '#34D399', '#22D3EE', '#F4836E', '#6366F1'].map((color) => (
-            <span key={color} style={{ width: 12, height: 12, borderRadius: '50%', background: color }} />
-          ))}
-          <span className="kp-foot" style={{ fontWeight: 500 }}>
-            Brand palette preview
-          </span>
-        </div>
+        {import.meta.env.DEV && (
+          <div className="kp-row kp-palette" style={{ justifyContent: 'flex-start', gap: 6 }}>
+            {['#FBBF24', '#34D399', '#22D3EE', '#F4836E', '#6366F1'].map((color) => (
+              <span key={color} style={{ width: 12, height: 12, borderRadius: '50%', background: color }} />
+            ))}
+            <span className="kp-foot" style={{ fontWeight: 500 }}>
+              Brand palette preview
+            </span>
+          </div>
+        )}
       </SettingsSection>
       <SettingsSection title="Account Usage">
         <SettingsRow label={`Hold ${shortcut.shortcut} to peek at account usage`}>
@@ -274,11 +284,7 @@ export function SettingsPanel({
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
               <CheckCircle size={10} color="#34D399" />
               Signed in via{' '}
-              {state.user.provider === 'github'
-                ? 'GitHub'
-                : state.user.provider === 'open'
-                  ? 'Open authentication'
-                  : state.user.provider}
+              {providerLabel(state.user.provider)}
             </p>
           </div>
         </div>
@@ -292,11 +298,6 @@ export function SettingsPanel({
             <span>{state.user.email}</span>
           </SettingsRow>
         )}
-        <SettingsRow label="Device ID">
-          <span title={state.deviceId ?? ''} className="text-text-secondary">
-            {state.deviceId?.slice(0, 12)}…
-          </span>
-        </SettingsRow>
       </SettingsSection>
       <SettingsSection>
         <div className="kp-row">
@@ -487,7 +488,7 @@ export function SettingsPanel({
         <div className="kp-title">
           {tab}
           <button type="button" className="kp-close" aria-label="Close settings" onClick={onClose}>
-            <X size={9} />
+            <X size={14} strokeWidth={1.6} />
           </button>
         </div>
         <div className="kp-tabs" role="tablist" aria-label="Settings">

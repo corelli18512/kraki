@@ -13,9 +13,9 @@ export function formatTokens(n: number): string {
   const value = n / (n < 1_000_000 ? 1000 : 1_000_000);
   return `${value.toFixed(value < 10 ? 1 : 0)}${n < 1_000_000 ? 'K' : 'M'}`;
 }
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children, grow }: { label: string; children: React.ReactNode; grow?: boolean }) {
   return (
-    <div className="ksi-row">
+    <div className={grow ? 'ksi-row ksi-row-grow' : 'ksi-row'}>
       <span>{label}</span>
       <div>{children}</div>
     </div>
@@ -92,10 +92,11 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       <div className="ksi-body">
         <section>
           <h3>Session</h3>
-          <Row label="Title">
+          <Row label="Title" grow={editing}>
             {editing ? (
               <input
                 autoFocus
+                onFocus={(e) => e.currentTarget.select()}
                 aria-label="Session title"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
@@ -107,7 +108,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                     setEditing(false);
                   }
                 }}
-                className="min-w-0 w-full bg-transparent text-right outline-none"
+                className="ksi-title-input"
                 maxLength={80}
               />
             ) : (

@@ -1,6 +1,10 @@
 .kp-window { position:fixed; z-index:50; left:50%; top:50%; transform:translate(-50%,-50%); width:540px; height:508px; max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); display:flex; flex-direction:column; background:var(--color-surface-primary); border:1px solid #c8c8c8; border-radius:16px; box-shadow:0 24px 44px #0005; color:var(--color-text-primary); overflow:hidden; }
 .kp-title { height:32px; flex-shrink:0; text-align:center; font-size:13px; font-weight:600; position:relative; padding-top:6px; }
-.kp-close { position:absolute; left:12px; top:9px; width:13px; height:13px; border-radius:50%; background:#ff6058; color:#6d0b07; display:grid; place-items:center; }
+/* Windows-style dismiss: plain glyph at the trailing edge, subtle hover. */
+.kp-close { position:absolute; right:6px; top:3px; width:32px; height:26px; border-radius:5px; color:var(--color-text-secondary); display:grid; place-items:center; }
+.kp-close:hover { background:rgba(0,0,0,.06); color:var(--color-text-primary); }
+.dark .kp-close:hover { background:rgba(255,255,255,.08); }
+.kp-close:focus-visible { outline:2px solid #007aff; outline-offset:-2px; }
 .kp-tabs { height:56px; flex-shrink:0; display:flex; justify-content:center; gap:2px; border-bottom:1px solid var(--color-border-primary); }
 .kp-tabs button { display:flex; flex-direction:column; align-items:center; gap:3px; padding:3px 7px 7px; color:#808080; font-size:11px; white-space:nowrap; border-radius:9px; margin-bottom:7px; }
 .kp-tabs svg { width:23px; height:23px; stroke-width:1.7; }

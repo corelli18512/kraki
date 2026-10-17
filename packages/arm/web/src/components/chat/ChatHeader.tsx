@@ -52,7 +52,8 @@ export function ChatHeader({
           {!!backBadge && <span className="khead-badge">{backBadge}</span>}
         </button>
       )}
-      <button type="button" className="khead-title" onClick={onTitle} title="Session details">
+      {/* As on Mac: the expanded mode segments take the title's place so they never overlap it. */}
+      <button type="button" className={`khead-title${menu && !narrow ? ' is-hidden' : ''}`} aria-hidden={menu && !narrow ? true : undefined} tabIndex={menu && !narrow ? -1 : undefined} onClick={onTitle} title="Session details">
         <span>{title}</span>
       </button>
       <div className="khead-mode" ref={menuRef} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>

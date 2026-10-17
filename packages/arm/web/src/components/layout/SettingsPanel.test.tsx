@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SettingsPanel } from './SettingsPanel';
+import { SettingsPanel, providerLabel } from './SettingsPanel';
 import { useStore } from '../../hooks/useStore';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
 import { useUsageShortcut } from '../../lib/usage-shortcut';
@@ -99,7 +99,9 @@ describe('SettingsPanel native preferences parity', () => {
   });
   it('shows open-auth identity and retains two-stage account deletion safety', () => {
     open(); tab('Account');
-    expect(screen.getByText('Signed in via Open authentication')).toBeInTheDocument();
+    expect(screen.getByText('Signed in via Open')).toBeInTheDocument();
+    // Mac parity: Device ID is not an Account row (it is in About's diagnostics).
+    expect(screen.queryByText('Device ID')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Sign Out…' }));
     expect(screen.getByRole('alertdialog', { name: 'Sign out of Kraki on this browser?' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -147,5 +149,37 @@ describe('SettingsPanel native preferences parity', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Correct Transcripts' }));
     expect(screen.getByRole('switch', { name: 'Use Conversation Context' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'Custom word' })).toBeDisabled();
+  });
+  it('adds a custom word as an inline list row like Mac, saving only once it has a word', () => {
+    useVoice.setState({ words: [], serverWords: [], outbox: [] });
+    open(); tab('Voice Input');
+    fireEvent.click(screen.getByRole('button', { name: 'Add Word' }));
+    // Header appears, empty-state text goes, no separate Cancel/Add form.
+    expect(screen.queryByText('No custom words yet. Add names and terms voice input gets wrong.')).not.toBeInTheDocument();
+    expect(screen.getByText('Word or name')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    const word = screen.getByRole('textbox', { name: 'Custom word' });
+    expect(word).toHaveFocus();
+    expect(word).toHaveAttribute('placeholder', 'e.g. PostgreSQL');
+    // Moving between the two fields of the row does not save a half-entered word.
+    fireEvent.change(word, { target: { value: 'PostgreSQL' } });
+    fireEvent.blur(word, { relatedTarget: screen.getByRole('textbox', { name: 'Often heard as' }) });
+    expect(useVoice.getState().words).toEqual([]);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Often heard as' }), { target: { value: 'post gress' } });
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Often heard as' }), { relatedTarget: null });
+    expect(useVoice.getState().words.map((w) => w.term)).toEqual(['PostgreSQL']);
+    expect(screen.queryByRole('textbox', { name: 'Custom word' })).not.toBeInTheDocument();
+    // An empty new row is never sent and can be discarded.
+    fireEvent.click(screen.getByRole('button', { name: 'Add Word' }));
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Custom word' }), { relatedTarget: null });
+    expect(useVoice.getState().outbox).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove new word' }));
+    expect(screen.queryByRole('textbox', { name: 'Custom word' })).not.toBeInTheDocument();
+  });
+  it('labels sign-in providers like Mac and lists the Device ID in About diagnostics', () => {
+    expect([undefined, 'github', 'open', 'google'].map((p) => providerLabel(p))).toEqual(['GitHub', 'GitHub', 'Open', 'Google']);
+    open(); tab('About');
+    expect(screen.getByText('DEVICE ID')).toBeInTheDocument();
+    expect(screen.getByText('self')).toBeInTheDocument();
   });
 });

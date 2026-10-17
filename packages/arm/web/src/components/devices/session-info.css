@@ -8,6 +8,12 @@
 .ksi-row { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:15px; line-height:18px; min-height:19px; }
 .ksi-row > span { color:#808080; flex-shrink:0; }
 .ksi-row > div { min-width:0; text-align:right; }
+/* Editing the title: the field takes the whole row, like Mac. Windows-native
+   TextBox look (Fluent): hairline border, 4px radius, accent underline on focus. */
+.ksi-row-grow > div { flex:1; text-align:left; }
+.ksi-title-input { width:100%; min-width:0; height:28px; padding:0 8px; font-size:14px; border-radius:4px; background:#fff; border:1px solid rgba(0,0,0,.14); border-bottom-color:rgba(0,0,0,.45); outline:none; }
+.ksi-title-input:focus { border-bottom:2px solid #007aff; padding-bottom:0; }
+.dark .ksi-title-input { background:#1c2030; border-color:rgba(255,255,255,.1); border-bottom-color:rgba(255,255,255,.5); color:inherit; }
 .ksi-row select { width:214px; max-width:250px; height:24px; font-size:13px; padding:2px 20px 2px 8px; border-radius:5px; background-color:#e5e5e5; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12'%3E%3Cpath d='m2 4 2-2 2 2M2 8l2 2 2-2' fill='none' stroke='%23262626' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-size:8px 12px; background-position:right 8px center; }
 .ksi-id { display:flex; align-items:center; gap:7px; max-width:285px; }
 .ksi-id > span { font:12.5px monospace; white-space:nowrap; }
