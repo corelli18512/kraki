@@ -326,8 +326,9 @@ function createTray() {
   tray = new Tray(trayImage('online'));
   shownIcon = `online-${trayTheme()}`;
   tray.on('click', showWindow);
-  // Taskbar light/dark switched: swap the glyph colour.
-  nativeTheme.on('updated', updateTray);
+  // Taskbar light/dark switched: swap the glyph colour. Windows rebuilds the
+  // taskbar buttons then, dropping the overlay badge, so set it again.
+  nativeTheme.on('updated', () => { updateTray(); applyBadge(); });
   updateTray();
   setInterval(updateTray, 3000);
   if (process.env.KRAKI_DESKTOP_LOG_NOTIFY) {
@@ -337,12 +338,11 @@ function createTray() {
   }
 }
 
-ipcMain.on('kraki:badge', (_e, count) => {
-  unread = Math.max(0, Number(count) || 0);
+/** The unread count on the taskbar button, like the Mac Dock badge. */
+function applyBadge() {
   if (process.platform === 'darwin') app.setBadgeCount(unread);
   if (process.platform === 'linux') app.setBadgeCount(unread);
-  if (process.platform === 'win32' && win) {
-    // The unread count on the taskbar button, like the Mac Dock badge.
+  if (process.platform === 'win32' && win && !win.isDestroyed()) {
     let badge = null;
     if (unread > 0) {
       badge = nativeImage.createFromPath(path.join(ASSETS, 'tray', `badge-${unread > 9 ? '9plus' : unread}.ico`));
@@ -350,6 +350,10 @@ ipcMain.on('kraki:badge', (_e, count) => {
     }
     win.setOverlayIcon(badge && !badge.isEmpty() ? badge : null, unread > 0 ? `${unread} unread` : '');
   }
+}
+ipcMain.on('kraki:badge', (_e, count) => {
+  unread = Math.max(0, Number(count) || 0);
+  applyBadge();
   updateTray();
 });
 
