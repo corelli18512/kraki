@@ -408,3 +408,65 @@ describe('message-provider: range-fetch protocol', () => {
     expect(useStore.getState().messages.get('s1')?.length).toBe(1);
   });
 });
+
+describe('message-provider: older paging completion', () => {
+  function start() {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 200, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((message) => sent.push(message));
+    return sent;
+  }
+
+  it('distinguishes an authoritative empty range from a busy/skipped request', async () => {
+    const sent = start();
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await expect(messageProvider.fetchRange('s1', 1, 60)).resolves.toBe(false);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it('does not advance history on a timeout, and lets a later gesture retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent = start();
+      const pending = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toBe(false);
+      const retry = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      await expect(retry).resolves.toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not treat disconnect cancellation as an empty completed range', async () => {
+    const sent = start();
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    messageProvider.clear();
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it('keeps an incomplete cache usable when no remote target is available', async () => {
+    setupSession();
+    getMessagesInRange.mockResolvedValue([
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Cached history' } },
+    ]);
+    await expect(messageProvider.fetchRange('s1', 61, 120)).resolves.toBe(false);
+    expect(useStore.getState().messages.get('s1')).toHaveLength(1);
+  });
+
+  it('retains a truncated page without declaring the entire range covered', async () => {
+    const sent = start();
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Partial history' } },
+    ], 90, 90, true);
+    await expect(pending).resolves.toBe(false);
+    expect(useStore.getState().messages.get('s1')).toHaveLength(1);
+  });
+});

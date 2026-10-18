@@ -34,7 +34,8 @@ export function hasUnreadGap(sessionId: string): boolean {
   return getStore().unreadCount.has(sessionId);
 }
 
-/** The first rendered row after the read position (rows without a seq —
+/** The first loaded, projected row after the read position, before windowing
+ *  (rows without a seq —
  *  live, pending — never qualify).
  *
  *  Usually nothing displayable is above it: Tentacle advances the read cursor

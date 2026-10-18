@@ -38,9 +38,14 @@ function isSpineCacheMessage(message: ChatMessage): boolean {
   return typeof seq === 'number' && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
 }
 
+interface RangePage {
+  messages: ChatMessage[];
+  complete: boolean;
+}
+
 interface PendingRequest {
   sessionId: string;
-  resolve: (messages: ChatMessage[]) => void;
+  resolve: (page: RangePage | null) => void;
 }
 
 class MessageProvider {
@@ -155,16 +160,17 @@ class MessageProvider {
 
   /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
-   * Puts the complete result into the store in one write.
+   * Puts the complete result into the store in one write. True means the
+   * range completed (possibly empty); false must not advance a paging cursor.
    */
-  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean; foreground?: boolean }): Promise<void> {
+  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean; foreground?: boolean }): Promise<boolean> {
     if (this.loadingSessions.has(sessionId)) {
       logger.info('fetchRange skipped (loading)', { sessionId, fromSeq, toSeq });
-      return;
+      return false;
     }
 
     const clampedFrom = Math.max(1, fromSeq);
-    if (clampedFrom > toSeq) return;
+    if (clampedFrom > toSeq) return false;
 
     logger.info('fetchRange', { sessionId, fromSeq: clampedFrom, toSeq, initial: options?.initial });
 
@@ -207,7 +213,7 @@ class MessageProvider {
       if (idbSeqs.size === expectedCount) {
         // IDB has every durable seq — put in store and done.
         this.deliverMessages(sessionId, idbMessages, options?.initial);
-        return;
+        return true;
       }
 
       // Step 3: IDB has a gap — request from the first missing seq onward.
@@ -219,7 +225,14 @@ class MessageProvider {
         else break;
       }
 
-      const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);
+      const page = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);
+      if (page === null) {
+        // An incomplete cache is still useful offline; it just cannot prove
+        // coverage of the requested range for the older paging cursor.
+        this.deliverMessages(sessionId, idbMessages, options?.initial);
+        return false;
+      }
+      const tentacleMessages = page.messages;
       
       // Merge IDB + tentacle, dedup by seq, sort
       const allMessages = [...idbMessages, ...tentacleMessages];
@@ -242,8 +255,10 @@ class MessageProvider {
       }
 
       this.deliverMessages(sessionId, deduped, options?.initial);
+      return page.complete;
     } catch (err) {
       logger.error('fetchRange failed', { sessionId, error: (err as Error).message });
+      return false;
     } finally {
       this.loadingSessions.delete(sessionId);
       this.loadingThroughSeq.delete(sessionId);
@@ -276,7 +291,7 @@ class MessageProvider {
         sessionId, firstSeq, lastSeq, count,
       });
     }
-    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[]);
+    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[], truncated);
   }
 
   /**
@@ -284,11 +299,13 @@ class MessageProvider {
    * request; otherwise falls back to a direct store write so messages aren't
    * lost on unsolicited batches.
    */
-  private deliverPending(sessionId: string, messages: ChatMessage[]): void {
+  private deliverPending(sessionId: string, messages: ChatMessage[], truncated = false): void {
     const pending = this.pendingRequests.get(sessionId);
     if (pending) {
       this.pendingRequests.delete(sessionId);
-      pending.resolve(messages);
+      // Retain a partial response, but do not call the whole requested range
+      // covered: a paging cursor must not skip its undelivered portion.
+      pending.resolve({ messages, complete: !truncated });
       return;
     }
     // No pending request — direct batch (e.g. from a concurrent path)
@@ -301,9 +318,9 @@ class MessageProvider {
 
   /** Clear all tracking (on disconnect). */
   clear(): void {
-    // Resolve any pending requests with empty results
+    // Cancel pending requests without declaring their ranges covered.
     for (const [, pending] of this.pendingRequests) {
-      pending.resolve([]);
+      pending.resolve(null);
     }
     this.pendingRequests.clear();
     this.tentacleLastSeq.clear();
@@ -481,18 +498,18 @@ class MessageProvider {
    * semantics where `idbMessages` already cover up to and including `afterSeq`).
    * `limit` is the number of messages we want past `afterSeq`.
    */
-  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<ChatMessage[]> {
+  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<RangePage | null> {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
     if (!tentacleDeviceId || !this.sendFn) {
       logger.warn('cannot request from tentacle', { sessionId, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId });
-      return Promise.resolve([]);
+      return Promise.resolve(null);
     }
 
     const fromSeq = afterSeq + 1;
     const toSeq = afterSeq + limit;
-    if (toSeq < fromSeq) return Promise.resolve([]);
+    if (toSeq < fromSeq) return Promise.resolve({ messages: [], complete: true });
 
-    return new Promise<ChatMessage[]>((resolve) => {
+    return new Promise<RangePage | null>((resolve) => {
       const pending: PendingRequest = { sessionId, resolve };
       this.pendingRequests.set(sessionId, pending);
 
@@ -505,14 +522,14 @@ class MessageProvider {
 
       logger.info('requested from tentacle (range)', { sessionId, fromSeq, toSeq });
 
-      // Safety timeout — resolve with empty if tentacle never responds
+      // A timeout is not an authoritative empty range: callers must retry it.
       setTimeout(() => {
         // A later tail reconcile may already have installed a new request for
         // this session. Only the request that armed this timer may time out.
         if (this.pendingRequests.get(sessionId) === pending) {
           logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
           this.pendingRequests.delete(sessionId);
-          resolve([]);
+          resolve(null);
         }
       }, BATCH_TIMEOUT_MS);
     });

@@ -43,8 +43,10 @@ interface Props<Row extends ScrollerRow> {
   overlayReach?: number;
   header?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
-  /** Near the oldest rendered row (load / reveal older). */
+  /** Older user intent near the oldest rendered row (load / reveal older). */
   onNearTop?: () => void;
+  /** Manual takeover also cancels a pending page-then-navigate request. */
+  onUserInteraction?: () => void;
   onScroll?: () => void;
   /** Entered with new messages: the first new row's key (see unread-entry.ts).
    *  Read on every settle until the reader scrolls, ↓ or sends. */
@@ -77,7 +79,7 @@ export function newTailKeys(before: string[], after: string[]): string[] {
 const NEAR_TOP = 900;
 
 function ChatScrollerInner<Row extends ScrollerRow>(
-  { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
+  { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onUserInteraction, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
   ref: React.Ref<ChatScrollerHandle>,
 ) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -86,8 +88,9 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const anchor = useRef<{ key: string; offset: number } | null>(null);
   const lastBottom = useRef<boolean | null>(null);
   const programmatic = useRef(false);
-  const callbacks = useRef({ onAtBottomChange, onNearTop, onScroll, onUnreadEntryEnd });
-  callbacks.current = { onAtBottomChange, onNearTop, onScroll, onUnreadEntryEnd };
+  const callbacks = useRef({ onAtBottomChange, onNearTop, onUserInteraction, onScroll, onUnreadEntryEnd });
+  callbacks.current = { onAtBottomChange, onNearTop, onUserInteraction, onScroll, onUnreadEntryEnd };
+  const olderAllowance = useRef(false);
   /** none | armed (following while it fits) | anchored (held at the top). */
   const unread = useRef<'none' | 'armed' | 'anchored'>(unreadTarget !== undefined ? 'armed' : 'none');
   const unreadTargetRef = useRef(unreadTarget ?? null);
@@ -254,30 +257,76 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    let previousTop = el.scrollTop;
+    let pointerDown = false;
+    let touchY: number | null = null;
+    const requestOlder = () => {
+      if (!olderAllowance.current || el.scrollTop >= NEAR_TOP) return;
+      olderAllowance.current = false;
+      callbacks.current.onNearTop?.();
+    };
     const onScrollEvent = () => {
+      const movedOlder = el.scrollTop < previousTop;
+      previousTop = el.scrollTop;
       const distance = tailTop(el) - el.scrollTop;
       if (!programmatic.current && !following.current) pinned.current = distance <= PIN_THRESHOLD;
       captureAnchor();
       reportBottom();
-      if (el.scrollTop < NEAR_TOP) callbacks.current.onNearTop?.();
+      // Programmatic entry, navigation and prepend compensation never arm
+      // paging. Consume at most one allowance per actual older gesture.
+      if (movedOlder) {
+        if (pointerDown && !programmatic.current) olderAllowance.current = true;
+        requestOlder();
+      }
       callbacks.current.onScroll?.();
     };
     // A user gesture always takes over from a programmatic glide, and from
     // the unread-entry landing.
-    const onUser = () => { programmatic.current = false; stopFollow(); endUnreadEntry(); };
+    const onUser = () => {
+      programmatic.current = false;
+      stopFollow();
+      endUnreadEntry();
+      callbacks.current.onUserInteraction?.();
+    };
+    const olderGesture = (older: boolean) => {
+      olderAllowance.current = older;
+      // At the clamped edge, wheel/key/touch intent produces no scroll event.
+      // It must still be able to cross a metadata-only or empty older range.
+      if (older) requestOlder();
+    };
+    const onWheel = (e: WheelEvent) => { onUser(); olderGesture(e.deltaY < 0); };
+    const onPointerDown = (e: PointerEvent) => {
+      // Only a scrollbar drag derives direction from scroll offsets; clicks
+      // inside rows are not permission for geometry corrections to page.
+      pointerDown = e.target === el && e.pointerType !== 'touch';
+      onUser();
+    };
+    const onPointerUp = () => { pointerDown = false; };
+    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? null; onUser(); };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? null;
+      if (y !== null && touchY !== null) olderGesture(y > touchY);
+      touchY = y;
+    };
     const onKey = (e: KeyboardEvent) => {
-      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) onUser();
+      if (!['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) return;
+      onUser();
+      olderGesture(['PageUp', 'ArrowUp', 'Home'].includes(e.key) || (e.key === ' ' && e.shiftKey));
     };
     el.addEventListener('scroll', onScrollEvent, { passive: true });
-    el.addEventListener('wheel', onUser, { passive: true });
-    el.addEventListener('touchstart', onUser, { passive: true });
-    el.addEventListener('pointerdown', onUser, { passive: true });
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointerup', onPointerUp, { passive: true });
     el.addEventListener('keydown', onKey);
     return () => {
       el.removeEventListener('scroll', onScrollEvent);
-      el.removeEventListener('wheel', onUser);
-      el.removeEventListener('touchstart', onUser);
-      el.removeEventListener('pointerdown', onUser);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('keydown', onKey);
     };
   }, [captureAnchor, reportBottom]);
@@ -293,6 +342,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const glide = (top: number, smooth: boolean) => {
     const el = scroller.current;
     if (!el) return;
+    olderAllowance.current = false;
     if (!smooth) { el.scrollTop = top; return; }
     programmatic.current = true;
     el.scrollTo({ top, behavior: 'smooth' });
