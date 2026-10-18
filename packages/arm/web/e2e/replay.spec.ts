@@ -7,6 +7,7 @@ const DEVICE_ID = 'tentacle-1';
 
 const TEST_SESSION = {
   id: SESSION_ID,
+  title: 'Replay test',
   deviceId: DEVICE_ID,
   deviceName: 'Test Tentacle',
   agent: 'copilot',
@@ -76,7 +77,7 @@ async function setupAndOpenSession(
   await gotoWithRelay(page, server);
   const ws = await authenticateClient(server, options);
   // Wait for session card to appear in sidebar (session_list processed)
-  const sessionCard = page.getByText('Copilot').first();
+  const sessionCard = page.getByRole('list').getByRole('button', { name: /Replay test/ }).first();
   await expect(sessionCard).toBeVisible({ timeout: 5000 });
   // Click session card to navigate to session page (SPA navigation, no reconnect)
   await sessionCard.click();

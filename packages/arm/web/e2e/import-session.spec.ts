@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { MockRelayServer } from './helpers/mock-ws-server';
+import { MockTentaclePeer } from './helpers/mock-tentacle-peer';
 import type { WebSocket } from 'ws';
 
 const DEVICE_ID = 'tentacle-1';
@@ -51,16 +52,17 @@ const MOCK_LOCAL_SESSIONS = [
   },
 ];
 
-async function setup(page: Page, server: MockRelayServer): Promise<WebSocket> {
+async function setup(page: Page, server: MockRelayServer): Promise<{ ws: WebSocket; peer: MockTentaclePeer }> {
+  const connection = server.waitForConnection();
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.goto(`/?relay=${encodeURIComponent(server.url)}`);
+  await page.goto(`/?relay=${encodeURIComponent(server.url)}&token=e2e-test`);
 
-  const ws = await server.waitForConnection();
-  await server.waitForMessage(ws);
-  server.sendAuthOk(ws, { devices: [TEST_DEVICE] } as Record<string, unknown>);
-  await server.waitForMessage(ws);
+  const ws = await connection;
+  const auth = await server.waitForMessage(ws);
+  expect(auth).toMatchObject({ type: 'auth', device: { encryptionKey: expect.any(String) } });
+  const peer = await MockTentaclePeer.create(ws, DEVICE_ID);
+  server.sendAuthOk(ws, { devices: [{ ...TEST_DEVICE, encryptionKey: peer.encryptionKey }] });
+  peer.connect();
 
   // Seed one native session so sidebar shows session list header with import button
   server.sendMessage(ws, {
@@ -75,23 +77,19 @@ async function setup(page: Page, server: MockRelayServer): Promise<WebSocket> {
   });
 
   await expect(page.getByRole('button', { name: 'New session' }).first()).toBeVisible({ timeout: 8000 });
-  return ws;
+  return { ws, peer };
 }
 
-/**
- * Open the import dialog and push sessions from the server.
- *
- * The client sends request_local_sessions encrypted (which the mock relay
- * can't decode), so we push local_sessions_list proactively after a
- * short delay to simulate the tentacle responding.
- */
-async function openImportAndLoad(page: Page, ws: WebSocket, server: MockRelayServer): Promise<void> {
-  // Import lives in the sidebar's + menu (as on the Mac).
-  await page.getByRole('button', { name: 'New session' }).first().click();
+/** Open the import dialog and answer its real encrypted scan request. */
+async function openImportAndLoad(page: Page, ws: WebSocket, peer: MockTentaclePeer, server: MockRelayServer): Promise<void> {
+  // Mac parity: left-click focuses the idle composer; right-click opens the + menu.
+  await page.getByRole('button', { name: 'New session' }).first().click({ button: 'right' });
   await page.getByRole('menuitem', { name: /Import Session/ }).click();
   await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3000 });
 
-  // Push sessions from server (simulates tentacle response)
+  expect(await peer.waitForMessage('request_local_sessions')).toMatchObject({
+    payload: { targetDeviceId: DEVICE_ID },
+  });
   server.sendMessage(ws, {
     type: 'local_sessions_list',
     payload: { sessions: MOCK_LOCAL_SESSIONS },
@@ -106,15 +104,17 @@ test.describe('Import Session Feature', () => {
   test.afterEach(async () => { await server.close(); });
 
   test('shows import button, opens dialog with loading, renders tree', async ({ page }) => {
-    const ws = await setup(page, server);
+    const { ws, peer } = await setup(page, server);
 
     // Open dialog (sidebar + menu) — shows loading
-    await page.getByRole('button', { name: 'New session' }).first().click();
+    await page.getByRole('button', { name: 'New session' }).first().click({ button: 'right' });
     await page.getByRole('menuitem', { name: /Import Session/ }).click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3000 });
     await expect(page.getByRole('dialog').getByText('Scanning local sessions')).toBeVisible({ timeout: 2000 });
 
-    // Push sessions from server
+    expect(await peer.waitForMessage('request_local_sessions')).toMatchObject({
+      payload: { targetDeviceId: DEVICE_ID },
+    });
     server.sendMessage(ws, {
       type: 'local_sessions_list',
       payload: { sessions: MOCK_LOCAL_SESSIONS },
@@ -132,35 +132,48 @@ test.describe('Import Session Feature', () => {
   });
 
   test('search filters sessions across folders', async ({ page }) => {
-    const ws = await setup(page, server);
-    await openImportAndLoad(page, ws, server);
+    const { ws, peer } = await setup(page, server);
+    await openImportAndLoad(page, ws, peer, server);
 
     // Type search
     await page.getByPlaceholder('Search sessions…').fill('kraki');
     await expect(page.getByRole('dialog').getByText('2 of 6')).toBeVisible({ timeout: 3000 });
   });
 
-  test('import session: spinner then success', async ({ page }) => {
-    const ws = await setup(page, server);
-    await openImportAndLoad(page, ws, server);
+  test('import session: dismisses dialog, opens pending session, then shows imported chat', async ({ page }) => {
+    const { ws, peer } = await setup(page, server);
+    await openImportAndLoad(page, ws, peer, server);
 
     // Expand hermit and click import
     await page.getByRole('dialog').getByText('hermit').first().click();
     await expect(page.getByRole('dialog').getByText('Set Up Playwright E2E Tests')).toBeVisible({ timeout: 3000 });
-    await page.getByRole('dialog').locator('button[title="Import session"]').first().click();
+    await page.getByRole('dialog').getByTitle('Import session', { exact: true }).first().click();
 
-    // Simulate session_created from tentacle (broadcast, no encryption)
+    // Current Mac flow dismisses immediately and navigates to the pending chat.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/session\/abc-hermit/);
+    await expect(page.getByText('Starting session…')).toBeVisible();
+    const request = await peer.waitForMessage('import_session');
+    expect(request).toMatchObject({
+      payload: {
+        localSessionId: 'abc-hermit',
+        targetDeviceId: DEVICE_ID,
+        meta: { cwd: '/Users/test/Repos/hermit', summary: 'Set Up Playwright E2E Tests' },
+      },
+    });
+
     server.sendMessage(ws, {
       type: 'session_created',
       sessionId: 'abc-hermit',
-      payload: { agent: 'copilot', model: 'claude-sonnet-4', lastSeq: 47 },
+      payload: {
+        requestId: (request.payload as { requestId: string }).requestId,
+        agent: 'copilot', model: 'claude-sonnet-4', lastSeq: 47,
+      },
     });
 
-    // Wait for session to appear in store → checkmark replaces spinner
-    await page.waitForTimeout(600);
-
-    // Close dialog
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(300);
+    await expect(page.getByText('Starting session…')).toHaveCount(0);
+    await expect(page.locator('[data-chat-scroll]')).toBeVisible();
+    await expect(page.locator('main').getByRole('button', { name: 'New Session', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
   });
 });
