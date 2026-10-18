@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../hooks/useStore';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';

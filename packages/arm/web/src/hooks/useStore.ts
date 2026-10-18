@@ -7,6 +7,8 @@ import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
 import { isActivePhase } from '../lib/device-update';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 import { outbox } from '../lib/chat/outbox';
+import { messageProvider } from '../lib/message-provider';
+import { beginSessionDeletion, captureMessageGeneration } from '../lib/message-persistence-generation';
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -126,8 +128,15 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   removeSession: (sessionId) => {
-    // Clean up IndexedDB
-    import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId)).catch((e) => { console.error('[Kraki:idb]', e); });
+    // Reserve the lifecycle synchronously, before either the lazy import or
+    // provider listeners can enqueue more work. No store access occurs during
+    // message-provider module initialization (its store adapter is lazy).
+    const deletion = beginSessionDeletion(sessionId);
+    messageProvider.invalidateSession(sessionId);
+    import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId, deletion)).catch((e) => {
+      deletion.reject(e);
+      console.error('[Kraki:idb]', e);
+    });
     set((state) => {
       const sessions = new Map(state.sessions);
       sessions.delete(sessionId);
@@ -196,7 +205,8 @@ export const useStore = create<Store>()(persist((set) => ({
       || message.type === 'compacting';
     if (!isTransient) {
       // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
-      import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
+      const generation = captureMessageGeneration(sessionId);
+      import('../lib/message-db').then(db => db.putMessage(sessionId, message, generation)).catch((e) => { console.error('[Kraki:idb]', e); });
     }
     set((state) => {
       const nextMsgs = new Map(state.messages);
@@ -509,7 +519,8 @@ export const useStore = create<Store>()(persist((set) => ({
     // Range batches are authoritative for their session seqs. Besides normal
     // deduplication, they must replace stale rows written by older clients
     // (for example a transient `active` row occupying an agent reply's seq).
-    import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
+    const generation = captureMessageGeneration(sessionId);
+    import('../lib/message-db').then(db => db.putMessages(sessionId, older, generation)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const existing = state.messages.get(sessionId) ?? [];
       const incomingSeqs = new Set<number>();
