@@ -156,6 +156,7 @@ export interface AppActions {
   appendMessage: (sessionId: string, message: ChatMessage) => void;
   applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;
   setCardAction: (sessionId: string, action: CardActionState | null) => void;
+  revertLocalPermission: (sessionId: string, permissionId: string, localError: string) => void;
   setRuntimeStatus: (sessionId: string, status: SessionRuntimeStatus | null) => void;
   clearCard: (sessionId: string) => void;
   togglePin: (sessionId: string) => void;

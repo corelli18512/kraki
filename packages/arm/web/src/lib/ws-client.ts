@@ -587,11 +587,7 @@ export class KrakiWSClient {
         && (action.payload as { localPending?: boolean }).localPending;
       if (!stillLocal || settled) return;
       settled = true;
-      const { decision: _d, localPending: _l, ...rest } = action.payload as Record<string, unknown>;
-      getStore().setCardAction(sessionId, {
-        ...action,
-        payload: { ...rest, localError } as unknown as typeof action.payload,
-      });
+      getStore().revertLocalPermission(sessionId, permissionId, localError);
       onUndelivered?.();
     };
     // Could not even be dispatched (no key/target): roll back at once, as

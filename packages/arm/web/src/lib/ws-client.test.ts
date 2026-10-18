@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAccountDeletion } from './account-deletion';
 import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
+import type { CardActionState } from '@kraki/protocol';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
@@ -563,6 +564,101 @@ describe('KrakiWSClient', () => {
       const action = useStore.getState().cards.get('sess-1')?.action;
       expect(action?.type).toBe('permission');
       expect(action?.type === 'permission' ? action.payload.id : undefined).toBe('perm-abc');
+    });
+
+    describe('permission confirmation', () => {
+      const permission = {
+        type: 'permission' as const,
+        payload: { id: 'perm-1', toolName: 'shell', args: { command: 'ls' }, description: 'List files' },
+      };
+      let client: KrakiWSClient;
+
+      function receiveAction(action: CardActionState | null) {
+        receiveInner({
+          type: 'card_action', deviceId: 'dev-1', seq: 3, timestamp: '',
+          sessionId: 'sess-1', payload: { action },
+        });
+      }
+
+      // Keep the transport live so a missing confirmation really can time out.
+      async function advanceWithLivePath(ms: number) {
+        for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          lastWsInstance._receive({ type: 'pong' });
+        }
+      }
+
+      beforeEach(async () => {
+        vi.useFakeTimers();
+        client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        receiveAction(permission);
+      });
+
+      afterEach(() => {
+        client.disconnect();
+        vi.useRealTimers();
+      });
+
+      it.each(['approve', 'deny'] as const)('keeps optimistic %s through a stale unresolved update until Tentacle resolves it', async (decision) => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', decision, undefined, undelivered);
+        const pending = useStore.getState().cards.get('sess-1')?.action;
+        expect(pending?.payload).toMatchObject({ id: 'perm-1', decision, localPending: true });
+
+        receiveAction(permission);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(pending);
+
+        // The Tentacle's decision is authoritative, even if another device won.
+        const serverDecision = decision === 'approve' ? 'deny' : 'approve';
+        const resolved = { ...permission, payload: { ...permission.payload, decision: serverDecision } };
+        receiveAction(resolved);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(resolved);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(resolved);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
+
+      it('lets a genuinely new permission id replace a pending decision', async () => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', 'approve', undefined, undelivered);
+        const nextPermission = { ...permission, payload: { ...permission.payload, id: 'perm-2' } };
+        receiveAction(nextPermission);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(nextPermission);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(nextPermission);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
+
+      it.each(['approve', 'deny'] as const)('rolls back an unconfirmed %s after a stale unresolved update and reports it once', async (decision) => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', decision, undefined, undelivered);
+        receiveAction(permission);
+        await advanceWithLivePath(18_000);
+        expect(undelivered).not.toHaveBeenCalled();
+        await advanceWithLivePath(2_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual({
+          ...permission,
+          payload: { ...permission.payload, localError: 'Not confirmed by the agent. Try again.' },
+        });
+        expect(undelivered).toHaveBeenCalledTimes(1);
+        await advanceWithLivePath(4_000);
+        expect(undelivered).toHaveBeenCalledTimes(1);
+      });
+
+      it('treats a cleared slot as confirmation of the pending decision', async () => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', 'approve', undefined, undelivered);
+        receiveAction(null);
+        const confirmed = {
+          ...permission,
+          payload: { ...permission.payload, decision: 'approve', retained: true },
+        };
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(confirmed);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(confirmed);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
     });
 
     it('routes a question as a spine agent_message (never card state)', async () => {
