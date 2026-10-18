@@ -97,10 +97,13 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
 }) {
   const live = bubbleSeq === null;
   const body = useRef<HTMLDivElement>(null);
-  // Like Mac's StepsTarget, capture the opened turn once. Live refreshes must
-  // keep reading/requesting that turn, not the latest prompt in the session.
-  const [openedSeq] = useState(() => bubbleSeq ?? latestTurnStartSeq(useStore.getState().messages.get(sessionId)));
-  const { steps, targetSeq } = useTurnSteps(sessionId, false, openedSeq);
+  // Like Mac's StepsTarget, capture the opened turn once its prompt is known
+  // (history can hydrate after the live card). Later turns must not retarget it.
+  const [openedSeq, setOpenedSeq] = useState(() => bubbleSeq ?? latestTurnStartSeq(useStore.getState().messages.get(sessionId)));
+  const { steps, targetSeq } = useTurnSteps(sessionId, live && openedSeq < 0, openedSeq);
+  useEffect(() => {
+    if (openedSeq < 0 && targetSeq >= 0) setOpenedSeq(targetSeq);
+  }, [openedSeq, targetSeq]);
 
   const loaded = useSyncExternalStore(messageProvider.subscribeTurnTraces,
     () => messageProvider.isTurnTraceLoaded(sessionId, targetSeq));
