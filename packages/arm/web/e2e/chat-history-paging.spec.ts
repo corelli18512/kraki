@@ -166,6 +166,56 @@ for (const arrival of ['loaded', 'during polling'] as const) {
   });
 }
 
+test('F4: previous reply lands on an incremental truncated page while its continuation is pending', async ({ page }) => {
+  const { server, ws, peer } = await fixture(page, range(121, 130));
+  try {
+    peer.onRequest = () => {};
+    await page.getByRole('button', { name: 'Previous reply' }).click();
+    await expect.poll(() => peer.requests.length).toBe(1);
+    expect(peer.requests[0]).toMatchObject({ fromSeq: 61, toSeq: 120 });
+    server.sendMessage(ws, { type: 'session_messages_range_batch', payload: {
+      sessionId: SID, messages: [row(90, 'agent_message', 'Incrementally delivered preceding reply')],
+      firstSeq: 90, lastSeq: 90, truncated: true,
+    } });
+    await expect.poll(() => peer.requests.length).toBe(2);
+    expect(peer.requests[1]).toMatchObject({ fromSeq: 61, toSeq: 89 });
+    await expect(node(page, 90)).toBeAttached();
+    // Navigation must not wait for the withheld continuation's 10s timeout.
+    await expect.poll(() => y(page, 90), { timeout: 2000 }).toBeCloseTo(72, 0);
+    await expect(page.getByRole('button', { name: 'Loading history' })).toBeDisabled();
+    expect(peer.requests).toHaveLength(2);
+  } finally { await server.close(); }
+});
+
+test('F4: previous reply lands on an incremental IDB cache hit while network history is pending', async ({ page }) => {
+  const { server, peer } = await fixture(page, range(121, 170));
+  try {
+    peer.onRequest = () => {};
+    // Seed disk only, after session entry: the reply is absent from memory
+    // until this click's real provider range read delivers its cached rows.
+    await page.evaluate((message) => new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('kraki-messages');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction('messages', 'readwrite');
+        transaction.objectStore('messages').put({ sessionId: message.sessionId, seq: message.seq, data: message });
+        transaction.oncomplete = () => { db.close(); resolve(); };
+        transaction.onerror = () => { db.close(); reject(transaction.error); };
+      };
+    }), row(90, 'agent_message', 'Cached preceding reply'));
+    await expect(list(page).locator('[data-scroll-key]')).toHaveCount(50);
+    await expect(node(page, 90)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Previous reply' }).click();
+    await expect.poll(() => peer.requests.length).toBe(1);
+    expect(peer.requests[0]).toMatchObject({ fromSeq: 61, toSeq: 120 });
+    await expect(node(page, 90)).toBeAttached();
+    await expect.poll(() => y(page, 90), { timeout: 2000 }).toBeCloseTo(72, 0);
+    await expect(page.getByRole('button', { name: 'Loading history' })).toBeDisabled();
+    expect(peer.requests).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
 test('F11: a late timed-out tail response cannot complete a different older range', async ({ page }) => {
   const { server, ws, peer } = await fixture(page, range(121, 140));
   try {

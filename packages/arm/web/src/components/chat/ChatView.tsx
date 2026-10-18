@@ -377,14 +377,15 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     if (navigation.current.active) return;
     const generation = ++navigation.current.generation;
     navigation.current.active = true;
+    let pageCompleted: boolean | undefined = true;
     // Like Mac's navigation load: keep looking across pages without replies,
     // but bound a single click and cancel it on manual input, ↓ or unmount.
     for (let pages = 0; pages <= 8; pages++) {
       const waitingSince = performance.now();
       while (true) {
         if (navigation.current.generation !== generation) return;
-        // Loaded replies win immediately, also when one appears during a
-        // different pending fetch (Mac previousReplyTarget before polling).
+        // Loaded replies win immediately, including incremental cache/page
+        // delivery during this click's own fetch, before range completion.
         const above = new Set(listRef.current?.rowsAbove() ?? []);
         const target = [...rowsRef.current].reverse().find((row) => above.has(row.key) && rowSide(row) === 'agent');
         if (target) {
@@ -392,14 +393,18 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           listRef.current?.scrollToRow(target.key, true);
           return;
         }
-        if (!messageProvider.isLoading(sessionId)) break;
+        if (!messageProvider.isLoading(sessionId) && pageCompleted !== undefined) break;
         if (performance.now() - waitingSince >= 3000) {
           navigation.current.active = false;
           return;
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 50));
       }
-      if (pages === 8 || !await loadOlderRef.current()) break;
+      if (pages === 8 || !pageCompleted) break;
+      pageCompleted = undefined;
+      // Keep polling targets/cancellation while loadOlder independently waits
+      // for full coverage before advancing its cursor and growing the window.
+      void loadOlderRef.current().then((completed) => { pageCompleted = completed; });
       // Store delivery and window expansion must commit before measuring the
       // newly prepended replies (including a page that only changed the cursor).
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
