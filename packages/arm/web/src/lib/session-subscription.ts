@@ -132,9 +132,15 @@ export class SessionSubscriptionController {
       this.confirmedSessionId = null;
       this.confirmedTentacleId = null;
     } else {
-      this.host.applySnapshot(msg);
-      this.confirmedSessionId = msg.payload.sessionId;
+      // The matching ACK establishes remote ownership even if navigation has
+      // moved on: drive() still needs to replace it or release this Tentacle.
+      // Only the currently desired session may restore local live authority.
       this.confirmedTentacleId = msg.deviceId;
+      this.confirmedSessionId = null;
+      if (msg.payload.sessionId === this.desiredSessionId) {
+        this.host.applySnapshot(msg);
+        this.confirmedSessionId = msg.payload.sessionId;
+      }
     }
     this.drive();
   }

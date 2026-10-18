@@ -108,7 +108,7 @@ export interface LocalLinkHost {
   sign(message: string): Promise<string>;
   onLinkChange(tentacleId: string, linked: boolean, unacked: Array<{ payload: string; target: string }>): void;
   /** A Pulse-delivered payload from the linked Tentacle (`src` stamped). */
-  onDelivered(payloadJson: string): void;
+  onDelivered(payloadJson: string, streamId?: number): void;
   createSocket?(url: string): WebSocket;
 }
 
@@ -264,13 +264,13 @@ export class LocalLinkClient {
     this.pulse = new ArmPulse({
       now: () => Date.now(),
       sendPulseFrame: (frame) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pulse', pulse: frame })); },
-      onDelivered: (payloadJson) => {
+      onDelivered: (payloadJson, streamId) => {
         let parsed: Record<string, unknown>;
         try { parsed = JSON.parse(payloadJson) as Record<string, unknown>; } catch { return; }
         if (parsed.from !== undefined) return; // never Head control from a Tentacle
         parsed.src = tentacleId;
         this.stats.payloadsIn++;
-        this.host.onDelivered(JSON.stringify(parsed));
+        this.host.onDelivered(JSON.stringify(parsed), streamId ?? 0);
       },
       onAcked: (seqUpTo) => { this.replayable = this.replayable.filter((r) => r.seq > seqUpTo); },
     }, `arm-local:${tentacleId}:${Date.now()}`);

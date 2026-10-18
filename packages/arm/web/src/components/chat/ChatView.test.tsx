@@ -207,7 +207,9 @@ describe('ChatView subscription snapshot catch-up', () => {
 
     await act(async () => {
       messageProvider.handleRangeBatch('s', Array.from({ length: 50 }, (_, i) => userMessage(51 + i)), 51, 100, false);
-      await vi.waitFor(() => expect(messageProvider.isLoading('s')).toBe(false));
+      // The tail completes the catch-up; the bounded bridge repair (11–50)
+      // may still be loading afterwards and must not hold the card.
+      await vi.waitFor(() => expect(useStore.getState().historyCaughtUpThrough.get('s')).toBe(100));
     });
     expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
     expect(screen.getByTestId('live-text')).toHaveTextContent('Snapshot draft and newer words');

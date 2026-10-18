@@ -18,6 +18,7 @@ vi.mock('./message-db', () => ({
 
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
+import type { ChatMessage } from '../types/store';
 
 vi.mock('./ws-client', () => ({
   wsClient: {
@@ -189,6 +190,71 @@ describe('message-provider: ensureLoaded', () => {
     await vi.waitFor(() => {
       expect(messageProvider.isLoading('s1')).toBe(false);
     });
+  });
+});
+
+describe('message-provider: authoritative bridge tombstones', () => {
+  function rows(from: number, to: number): ChatMessage[] {
+    return Array.from({ length: to - from + 1 }, (_, index) => ({
+      type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: from + index,
+      timestamp: '', payload: { content: `message ${from + index}` },
+    }));
+  }
+
+  function bridgeFixture(sparse: boolean) {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    useStore.getState().prependMessages('s1', rows(20, 30));
+    const requests: Array<[number, number]> = [];
+    messageProvider.setSend(message => {
+      const { fromSeq, toSeq } = message.payload as { fromSeq: number; toSeq: number };
+      requests.push([fromSeq, toSeq]);
+      const response = fromSeq === 31 ? (sparse ? [...rows(35, 35), ...rows(42, 42)] : []) : rows(fromSeq, toSeq);
+      queueMicrotask(() => messageProvider.handleRangeBatch('s1', response, response[0]?.seq ?? 0, response.at(-1)?.seq ?? 0, false));
+    });
+    return requests;
+  }
+
+  it.each([false, true])('settles an authoritative bridge and preserves older pagination (sparse=%s)', async sparse => {
+    const requests = bridgeFixture(sparse);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[51, 100], [31, 50]]);
+    // Another foreground reconciliation must not rediscover the confirmed holes.
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toHaveLength(2);
+    await messageProvider.fetchRange('s1', 1, 19);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[51, 100], [31, 50], [1, 19]]);
+    expect(useStore.getState().messages.get('s1')?.find(message => message.seq === 1)).toBeDefined();
+  });
+
+  it.each([false, true])('continues past a settled authoritative bridge across bounded retries (sparse=%s)', async sparse => {
+    const requests = bridgeFixture(sparse);
+    messageProvider.setTentacleInfo('s1', 200, 'd1');
+    await messageProvider.fetchRange('s1', 151, 200, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'incomplete', remaining: [[81, 150]] });
+    messageProvider.retryRange('s1');
+    await vi.waitFor(() => expect(messageProvider.isLoading('s1')).toBe(false));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'incomplete', remaining: [[131, 150]] });
+    messageProvider.retryRange('s1');
+    await vi.waitFor(() => expect(messageProvider.isLoading('s1')).toBe(false));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[151, 200], [31, 80], [81, 130], [131, 150]]);
+  });
+
+  it.each(['clear', 'invalidateSession'] as const)('revokes bridge tombstones on %s', async reset => {
+    const requests = bridgeFixture(false);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    if (reset === 'clear') messageProvider.clear();
+    else messageProvider.invalidateSession('s1');
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(requests).toEqual([[51, 100], [31, 50], [31, 50]]);
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
   });
 });
 
@@ -387,7 +453,7 @@ describe('message-provider: range-fetch protocol', () => {
     expect(messageProvider.isLoading('s1')).toBe(false);
   });
 
-  it('handleRangeBatch warns but still delivers when truncated=true', async () => {
+  it('continues the producer-capped newer suffix with the missing older interval', async () => {
     setupSession();
     messageProvider.setTentacleInfo('s1', 1000, 'd1');
     const sent: Record<string, unknown>[] = [];
@@ -398,13 +464,19 @@ describe('message-provider: range-fetch protocol', () => {
       expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
     });
 
-    messageProvider.handleRangeBatch('s1', [
-      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 501, timestamp: '',
-        payload: { content: 'newer end' } },
-    ], 501, 501, true);
-
+    // Real producer contract: a >500 request keeps its newest 500 rows.
+    const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => ({
+      type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: from + index, timestamp: '',
+      payload: { content: `row ${from + index}` },
+    }));
+    messageProvider.handleRangeBatch('s1', rows(501, 1000), 501, 1000, true);
+    await vi.waitFor(() => { expect(sent).toHaveLength(2); });
+    expect(sent[1].payload).toMatchObject({ fromSeq: 1, toSeq: 500 });
+    messageProvider.handleRangeBatch('s1', rows(1, 500), 1, 500, false);
     await pending;
 
-    expect(useStore.getState().messages.get('s1')?.length).toBe(1);
+    expect(useStore.getState().messages.get('s1')?.map(message => 'seq' in message ? message.seq : 0))
+      .toEqual(Array.from({ length: 1000 }, (_, index) => index + 1));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
   });
 });

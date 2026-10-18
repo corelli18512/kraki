@@ -18,6 +18,7 @@ import { CommandState } from './commands';
 import { allowAutoRead, isAutoReadSuppressed, suppressAutoRead } from './read-visibility';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
+import { OrderedCrypto } from './ordered-crypto';
 import { ArmPulse } from './arm-pulse';
 import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
 import { diag } from './diag';
@@ -58,6 +59,14 @@ function localHighestSeq(sessionId: string): number {
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
+  private inboundCrypto = new OrderedCrypto();
+  private outboundCrypto = new OrderedCrypto();
+  private identityEpoch = 0;
+  private headEpoch = 0;
+  private routeEpochs = new Map<string, number>();
+  private routeChanges = 0;
+  private encryptedQueue: Array<Parameters<EncryptionHandler['handleEncrypted']>[0]> = [];
+  private peerEpochs = new Map<string, number>();
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
@@ -186,7 +195,7 @@ export class KrakiWSClient {
       {
         now: () => Date.now(),
         sendPulseFrame: (pulseB64, to) => this.sendPulseEnvelope(pulseB64, to),
-        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64, 'head'),
+        onDelivered: (blobB64, streamId) => this.handlePulseDelivered(blobB64, 'head', undefined, streamId),
         onAcked: (seqUpTo) => this.cmdState.resolvePulseAcked(seqUpTo),
         onResetInbound: () => this.assembler.clear(),
       },
@@ -202,7 +211,7 @@ export class KrakiWSClient {
       },
       sign: (message) => this.encryption.keyStore.signChallenge(message),
       onLinkChange: (tentacleId, linked, unacked) => this.onLocalLinkChange(tentacleId, linked, unacked),
-      onDelivered: (payloadJson) => this.handlePulseDelivered(payloadJson),
+      onDelivered: (payloadJson, streamId) => this.handlePulseDelivered(payloadJson, 'link', undefined, streamId),
     }) : null;
 
     // Visibility change listener removed — replay is now handled by tentacle,
@@ -216,8 +225,12 @@ export class KrakiWSClient {
         },
         onClose: () => {
           this.connectionEpoch++;
-          this.clearReplayTracking();
+          this.headEpoch++;
+          this.encryptedQueue = [];
+          this.inboundCrypto.clear((domain) => domain.startsWith('head:'));
           this.subscription.onDisconnected();
+          this.outboundCrypto.clear((domain) => !this.localLink?.isLinked(JSON.parse(domain)[0]));
+          this.clearReplayTracking();
           this.attachmentPulls.disconnect();
           this.pulse.onDisconnected();
         },
@@ -237,9 +250,19 @@ export class KrakiWSClient {
   }
 
   disconnect() {
-    this.clearReplayTracking();
-    // Sign-out / identity change: the link belongs to the old identity.
+    this.identityEpoch++;
+    this.encryptedQueue = [];
+    this.inboundCrypto.clear();
+    // stop() synchronously removes linked authority through onLocalLinkChange.
+    // Explicit transport.disconnect suppresses onClose, so revoke the remaining
+    // controller flight here before settling canceled send promises.
     this.localLink?.stop();
+    this.subscription.onDisconnected();
+    this.outboundCrypto.clear();
+    this.peerEpochs.clear();
+    this.routeEpochs.clear();
+    this.routeChanges = 0;
+    this.clearReplayTracking();
     this.transport.disconnect();
   }
 
@@ -268,10 +291,60 @@ export class KrakiWSClient {
       timestamp: new Date().toISOString(),
       payload: { sessionId, ...(requestId && { requestId }) },
     };
-    const encrypted = await this.encryption.encryptForDevice(msg, tentacleId);
-    if (!encrypted) return false;
-    this.route(JSON.stringify({ blob: encrypted.blob, keys: encrypted.keys }), encrypted.to, false, false);
-    return true;
+    return new Promise((resolve) => this.encryptOrdered(msg, tentacleId,
+      () => this.encryption.encryptForDevice(msg, tentacleId), (encrypted) => {
+        if (!encrypted) { resolve(false); return; }
+        this.route(JSON.stringify({ blob: encrypted.blob, keys: encrypted.keys }), encrypted.to, false, false);
+        resolve(true);
+      }));
+  }
+
+  /** Snapshot identity and peer authority at admission, re-check at delivery.
+   * Head connection loss invalidates pending sends, not Pulse's retained outbox.
+   * Link route generations are filtered by message type after decrypt: ordinary
+   * link loss is not identity/peer revocation for already-delivered responses. */
+  private cryptoGuard(peer?: string, route?: 'head' | 'link'): (resolvedPeer?: string) => boolean {
+    const epoch = this.identityEpoch;
+    const headEpoch = this.headEpoch;
+    const deviceId = getStore().deviceId;
+    const userId = getStore().user?.id;
+    const keyStore = this.encryption.keyStore;
+    // Legacy envelopes may omit src: resolve their peer only AFTER decrypt,
+    // comparing against admission-time authority rather than current identity.
+    const epochs = peer ? null : new Map(this.peerEpochs);
+    const keys = peer ? null : new Map([...getStore().devices].map(([id, device]) => [id, device.encryptionKey ?? device.publicKey]));
+    const peerEpoch = peer ? this.peerEpochs.get(peer) : undefined;
+    const key = peer ? getStore().devices.get(peer) : undefined;
+    const publicKey = key?.encryptionKey ?? key?.publicKey;
+    return (resolvedPeer) => {
+      const target = peer ?? resolvedPeer;
+      return epoch === this.identityEpoch && deviceId === getStore().deviceId
+        && userId === getStore().user?.id && keyStore === this.encryption.keyStore && keyStore.isReady()
+        && (route !== 'head' || headEpoch === this.headEpoch)
+        && (!target || ((peer ? peerEpoch : epochs?.get(target)) === this.peerEpochs.get(target)
+          && (peer ? publicKey : keys?.get(target)) === (getStore().devices.get(target)?.encryptionKey ?? getStore().devices.get(target)?.publicKey)));
+    };
+  }
+
+  private targetFor(msg: Record<string, unknown>): string | undefined {
+    return (msg.payload as { targetDeviceId?: string } | undefined)?.targetDeviceId
+      ?? getStore().sessions.get(msg.sessionId as string)?.deviceId;
+  }
+
+  private encryptOrdered(
+    msg: Record<string, unknown>, target: string | undefined,
+    work: () => ReturnType<EncryptionHandler['encryptForTarget']>,
+    deliver: (encrypted: Awaited<ReturnType<EncryptionHandler['encryptForTarget']>>) => void,
+    canceled: () => void = () => deliver(null),
+  ): void {
+    const valid = this.cryptoGuard(target, this.localLink?.isLinked(target) ? 'link' : 'head');
+    const linked = this.localLink?.isLinked(target) === true;
+    this.outboundCrypto.run(JSON.stringify([target ?? null]), work, (encrypted) => {
+      const sessionTarget = this.targetFor(msg);
+      if (!valid() || linked !== (this.localLink?.isLinked(target) === true)
+        || (sessionTarget && sessionTarget !== target)) { canceled(); return; }
+      deliver(encrypted);
+    }, canceled);
   }
 
   private applySubscriptionSnapshot(msg: SessionSubscriptionSetMessage): void {
@@ -328,7 +401,7 @@ export class KrakiWSClient {
     const epoch = this.connectionEpoch;
     const clientId = (msg.payload as { clientId?: string } | undefined)?.clientId;
     traceEvent({ comp: 'arm', evt: 'APP-SEND-ENCRYPTED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId, clientId });
-    void this.encryption.encryptForTarget(msg).then((enc) => {
+    this.encryptOrdered(msg, this.targetFor(msg), () => this.encryption.encryptForTarget(msg), (enc) => {
       if (!enc) {
         traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-FAIL', type: msg.type as string, clientId });
         getStore().setLastError('Cannot send: no target device for this session. Try reconnecting.');
@@ -340,7 +413,7 @@ export class KrakiWSClient {
         REPLAYABLE_ACROSS_ROUTES.has(msg.type as string), scoped ? epoch : undefined);
       if (seq === null) traceEvent({ comp: 'arm', evt: 'APP-SCOPED-DROPPED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId });
       onSeq?.(seq);
-    });
+    }, () => onSeq?.(null));
   }
 
   /** The Tentacle on this machine is reached over the local link; everything
@@ -360,8 +433,14 @@ export class KrakiWSClient {
    *  the dead link accepted but never confirmed go out over the Head. The
    *  Tentacle's greeting on the new route re-sends unconfirmed inputs. */
   private onLocalLinkChange(tentacleId: string, linked: boolean, unacked: Array<{ payload: string; target: string }>): void {
-    traceEvent({ comp: 'arm', evt: 'LOCAL-LINK', tentacleId, linked, replay: unacked.length });
+    this.routeEpochs.set(tentacleId, (this.routeEpochs.get(tentacleId) ?? 0) + 1);
+    this.routeChanges++;
     this.subscription.onTentacleAuthorityReset(tentacleId);
+    this.outboundCrypto.clear((domain) => domain === JSON.stringify([tentacleId]));
+    // Already-Pulse-delivered responses still own their old generation slots.
+    // Fresh generations progress independently; completion filters stale live
+    // types, while identity/peer revocation still cancels all affected work.
+    traceEvent({ comp: 'arm', evt: 'LOCAL-LINK', tentacleId, linked, replay: unacked.length });
     this.attachmentPulls.disconnect();
     this.attachmentPulls.resume();
     for (const { payload, target } of unacked) this.pulse.send(payload, target, false);
@@ -381,7 +460,7 @@ export class KrakiWSClient {
    *    preferences_updated, voice). Head↔device has no E2E, so dispatch `msg`
    *    directly, no decrypt.
    *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch. */
-  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', fragmentSender?: string) {
+  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', fragmentSender?: string, streamId = 0) {
     this.lastDeliveryAt = Date.now();
     let parsed: { from?: string; src?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
     try {
@@ -391,7 +470,7 @@ export class KrakiWSClient {
     }
     if (isPayloadFragment(parsed)) {
       const whole = this.assembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole, route, (parsed as { src?: string }).src);
+      if (whole !== null) this.handlePulseDelivered(whole, route, (parsed as { src?: string }).src, streamId);
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
@@ -407,16 +486,19 @@ export class KrakiWSClient {
       // switch. Its live, connection-scoped state would land after the link's
       // fresh snapshot and duplicate or revert it; the rest still applies.
       const sender = parsed.src ?? fragmentSender;
-      const staleRoute = route === 'head' && this.localLink?.isLinked(sender) === true;
-      void this.encryption.decryptBlob(parsed.blob, parsed.keys).then((inner) => {
-        if (inner && staleRoute && STALE_ROUTE_DROPPED.has((inner as { type?: string }).type ?? '')) {
+      const valid = this.cryptoGuard(sender, route);
+      const routeEpoch = sender ? this.routeEpochs.get(sender) : this.routeChanges;
+      const domain = `${route}:${JSON.stringify(sender ?? null)}:${streamId}:${routeEpoch ?? 0}`;
+      this.inboundCrypto.run(domain, () => this.encryption.decryptBlob(parsed.blob!, parsed.keys!), (inner) => {
+        if (!inner || !valid(inner.deviceId)) return;
+        const changedRoute = routeEpoch !== (sender ? this.routeEpochs.get(sender) : this.routeChanges);
+        const staleRoute = changedRoute || (route === 'head' && this.localLink?.isLinked(sender ?? inner.deviceId) === true);
+        if (staleRoute && STALE_ROUTE_DROPPED.has(inner.type)) {
           if (this.localLink) this.localLink.stats.staleHeadFrames++;
           return;
         }
-        if (inner) {
-          traceEvent({ comp: 'arm', evt: 'APP-DECRYPT', type: (inner as { type?: string }).type, sessionId: (inner as { sessionId?: string }).sessionId, clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId, decryptMs: performance.now() - decryptStart });
-          this.dispatchInner(inner);
-        }
+        traceEvent({ comp: 'arm', evt: 'APP-DECRYPT', type: inner.type, sessionId: (inner as { sessionId?: string }).sessionId, clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId, decryptMs: performance.now() - decryptStart });
+        this.dispatchInner(inner);
       });
     }
   }
@@ -486,7 +568,7 @@ export class KrakiWSClient {
    *  non-durable). Used for targetless-but-per-device fan-out (client_log). */
   private sendEncryptedTo(targetDeviceId: string, msg: Record<string, unknown>) {
     const stamped = { ...msg, payload: { ...(msg.payload as Record<string, unknown> ?? {}), targetDeviceId } };
-    void this.encryption.encryptForTarget(stamped).then((enc) => {
+    this.encryptOrdered(stamped, targetDeviceId, () => this.encryption.encryptForTarget(stamped), (enc) => {
       if (enc) this.pulse.send(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, false);
     });
   }
@@ -1062,6 +1144,14 @@ export class KrakiWSClient {
     logger.info('warm-up scheduled', { eager: eager.length, budgetFill: budgetFilled, skipped: rest.length - budgetFilled, totalMsgs: used, budget: WARMUP_BUDGET });
   }
 
+  private invalidatePeerCrypto(peer: string): void {
+    this.peerEpochs.set(peer, (this.peerEpochs.get(peer) ?? 0) + 1);
+    this.subscription.onTentacleAuthorityReset(peer);
+    this.inboundCrypto.clear((domain) => domain.startsWith(`head:${JSON.stringify(peer)}:`)
+      || domain.startsWith(`link:${JSON.stringify(peer)}:`));
+    this.outboundCrypto.clear((domain) => domain === JSON.stringify([peer]));
+  }
+
   /** Clear all in-progress tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
     this.foregroundActivity.stop();
@@ -1110,11 +1200,35 @@ export class KrakiWSClient {
     }
   }
 
-  private encryptionCallbacks() {
-    return {
-      handleDataMessage: (msg: InnerMessage) => this.dispatchInner(msg),
-      getHandlers: () => [],
-    };
+  /** Legacy non-Pulse envelopes have only the live domain. Keep their pre-auth
+   * queue here so disconnect owns both queued and already-decrypting work. */
+  private receiveEncrypted(msg: Parameters<EncryptionHandler['handleEncrypted']>[0]): void {
+    if (!getStore().deviceId || !this.encryption.keyStore.isReady()) {
+      this.encryptedQueue.push(msg);
+      return;
+    }
+    const sender = typeof msg.src === 'string' ? msg.src : typeof msg.from === 'string' ? msg.from : undefined;
+    const valid = this.cryptoGuard(sender, 'head');
+    const routeEpoch = sender ? this.routeEpochs.get(sender) : this.routeChanges;
+    const complete = this.inboundCrypto.admit<InnerMessage>(`head:${JSON.stringify(sender ?? null)}:0:${routeEpoch ?? 0}`, (inner) => {
+      if (!inner || !valid(inner.deviceId)) return;
+      if (STALE_ROUTE_DROPPED.has(inner.type)
+        && (routeEpoch !== (sender ? this.routeEpochs.get(sender) : this.routeChanges)
+          || this.localLink?.isLinked(sender ?? inner.deviceId))) {
+        if (this.localLink) this.localLink.stats.staleHeadFrames++;
+        return;
+      }
+      this.dispatchInner(inner);
+    });
+    try {
+      void this.encryption.handleEncrypted(msg, { handleDataMessage: complete, getHandlers: () => [] })
+        .then(() => complete(null), () => complete(null));
+    } catch { complete(null); }
+  }
+
+  private drainEncryptedQueue(): void {
+    if (!this.encryption.keyStore.isReady()) return;
+    for (const msg of this.encryptedQueue.splice(0)) this.receiveEncrypted(msg);
   }
 
   private handleMessage(msg: Message) {
@@ -1141,7 +1255,7 @@ export class KrakiWSClient {
           this.pulse.onFrame(env.pulse as string);
           return;
         }
-        this.encryption.handleEncrypted(msg as unknown as Parameters<EncryptionHandler['handleEncrypted']>[0], this.encryptionCallbacks());
+        this.receiveEncrypted(msg as unknown as Parameters<EncryptionHandler['handleEncrypted']>[0]);
         return;
       }
 
@@ -1158,7 +1272,7 @@ export class KrakiWSClient {
         this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
-          drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
+          drainEncryptedQueue: () => this.drainEncryptedQueue(),
         });
         // Performance data: signed with this device's own key (native
         // KrakiDiag.configure), then the opening/outage clocks move on.
@@ -1256,7 +1370,7 @@ export class KrakiWSClient {
           // A linked Tentacle reconnecting to the Head keeps the link's
           // subscription (it only rebuilds Head-routed authority).
           if (joined.device.role === 'tentacle' && !this.localLink?.isLinked(joined.device.id)) {
-            this.subscription.onTentacleAuthorityReset(joined.device.id);
+            this.invalidatePeerCrypto(joined.device.id);
             if (this.deviceFeatures.get(joined.device.id)?.has(PAYLOAD_FRAGMENT_FEATURE)) {
               this.declareClientFeatures(joined.device.id);
             }
@@ -1271,7 +1385,7 @@ export class KrakiWSClient {
         // Still reachable over the local link: nothing changes for this App.
         if (left.deviceId && this.localLink?.isLinked(left.deviceId)) break;
         if (left.deviceId) {
-          this.subscription.onTentacleAuthorityReset(left.deviceId);
+          this.invalidatePeerCrypto(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
@@ -1281,6 +1395,7 @@ export class KrakiWSClient {
       case 'device_removed': {
         const removed = msg as { deviceId: string };
         if (removed.deviceId) {
+          this.invalidatePeerCrypto(removed.deviceId);
           getStore().clearDeviceAgents(removed.deviceId);
           getStore().removeDevice(removed.deviceId);
         }

@@ -53,26 +53,47 @@ export function rowSide(row: ChatRow): 'user' | 'agent' | 'system' {
 export const Bubble = memo(function Bubble({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const side = rowSide(row);
   if (side === 'user') return <UserRow row={row} ctx={ctx} />;
-  if (side === 'system') {
-    // A steps-only turn (the agent ended on tool calls without closing prose,
-    // system_message kind no_reply): just its Steps control, no invented text.
-    if (row.kind === 'spine' && payloadOf(row.item.message).kind === 'no_reply' && !contentOf(row.item.message)) {
-      const seq = seqOf(row.item.message);
-      return (
-        <div className="krow krow-agent" data-testid="steps-only-turn">
-          <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>
-        </div>
-      );
-    }
-    const text = row.kind === 'spine' ? contentOf(row.item.message) || 'System notice' : '';
+  if (side === 'system') return <SystemRow row={row} ctx={ctx} />;
+  return <AgentRow row={row} ctx={ctx} />;
+});
+
+function SystemRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
+  if (row.kind !== 'spine') return null;
+  const message = row.item.message;
+  const attachments = attachmentsOf(message);
+  const images = attachments.filter(isImage);
+  const reports = htmlArtifacts(attachments);
+  const hasMedia = images.length > 0 || reports.length > 0;
+  const content = contentOf(message);
+  const seq = seqOf(message);
+  // Blank no_reply anchors Steps even in historical records without a count.
+  // Media changes its presentation, not that existing Steps eligibility.
+  const anchorsSteps = payloadOf(message).kind === 'no_reply' && !content.trim();
+  if (anchorsSteps && !hasMedia) {
     return (
-      <div className="krow krow-agent">
-        <MessageBubble className="kbubble kbubble-system"><Markdown text={text} /></MessageBubble>
+      <div className="krow krow-agent" data-row-key={row.key} data-testid="steps-only-turn">
+        <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>
       </div>
     );
   }
-  return <AgentRow row={row} ctx={ctx} />;
-});
+  const text = content.trim() ? content : hasMedia ? '' : 'System notice';
+  const steps = payloadOf(message).steps;
+  const hasSteps = anchorsSteps || (typeof steps === 'number' && steps > 0);
+  return (
+    <div className="krow krow-agent" data-row-key={row.key}>
+      <div className="kagent-stack">
+        {(text || reports.length > 0) && (
+          <MessageBubble className="kbubble kbubble-system" onShowSteps={hasSteps && ctx.onOpenSteps ? () => ctx.onOpenSteps?.(seq) : undefined}>
+            {text && <Markdown text={text} />}
+            {reports.length > 0 && <HtmlArtifactCards artifacts={reports} onOpen={ctx.onOpenArtifact} />}
+          </MessageBubble>
+        )}
+        {images.length > 0 && <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>}
+        {hasSteps && <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>}
+      </div>
+    </div>
+  );
+}
 
 function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const text = row.kind === 'pending' ? row.entry.text : row.kind === 'spine' ? contentOf(row.item.message) : '';
@@ -199,7 +220,7 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
         {images.length > 0 && (
           <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
         )}
-        {steps > 0 && (hasBody || action) && (
+        {steps > 0 && (
           <button
             type="button"
             className="ksteps"

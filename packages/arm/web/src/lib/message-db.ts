@@ -7,6 +7,7 @@
 
 import { openDB, type IDBPDatabase } from 'idb';
 import type { ChatMessage } from '../types/store';
+import { beginSessionDeletion, captureMessageGeneration, isMessageGenerationCurrent, type MessageGeneration, type SessionDeletion } from './message-persistence-generation';
 
 const DB_NAME = 'kraki-messages';
 const DB_VERSION = 5;
@@ -165,9 +166,15 @@ function sweepTransientRows(): Promise<{ before: number; deleted: number }> {
  * Messages with seq=0 (e.g. pending_input conversions) are stored but
  * may be overwritten when the real seq arrives.
  */
-export async function putMessages(sessionId: string, messages: ChatMessage[]): Promise<void> {
+// Revalidate after the LAST await, immediately before starting a transaction.
+// An async guard helper would introduce a new microtask gap after its check.
+export async function putMessages(sessionId: string, messages: ChatMessage[], generation = captureMessageGeneration(sessionId)): Promise<void> {
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
   const tx = db.transaction(STORE_NAME, 'readwrite');
+  void tx.done.catch(() => {});
   const store = tx.objectStore(STORE_NAME);
   for (const msg of messages) {
     // Never persist transient trace/pending rows or any synthetic fractional
@@ -185,33 +192,48 @@ export async function putMessages(sessionId: string, messages: ChatMessage[]): P
  * from this device's own record instead of fetching history it already has.
  * Never touches a fork that already has rows. Returns how many were copied.
  */
-export async function seedFork(forkId: string, sourceId: string, fromSeq: number, throughSeq: number): Promise<number> {
+export async function seedFork(forkId: string, sourceId: string, fromSeq: number, throughSeq: number, generation = captureMessageGeneration(forkId)): Promise<number> {
+  if (generation.ready) await generation.ready;
+  if (!isMessageGenerationCurrent(forkId, generation)) return 0;
   if (throughSeq <= 0 || (await getLastSeq(forkId)) > 0) return 0;
   const rows = (await getMessagesInRange(sourceId, Math.max(1, fromSeq), throughSeq))
     .map((m) => ({ ...m, sessionId: forkId }) as ChatMessage);
   if (rows.length === 0) return 0;
-  await putMessages(forkId, rows);
-  return rows.length;
+  await putMessages(forkId, rows, generation);
+  return isMessageGenerationCurrent(forkId, generation) ? rows.length : 0;
 }
 
 /**
  * Store a single message. Filters out transient types (the caller in useStore
  * already gates on isTransient, but this is the authoritative guard).
  */
-export async function putMessage(sessionId: string, message: ChatMessage): Promise<void> {
+export async function putMessage(sessionId: string, message: ChatMessage, generation = captureMessageGeneration(sessionId)): Promise<void> {
   const seq = messageSeq(message);
   if (isTransientMessage(message) || !Number.isInteger(seq)) return;
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
   await db.put(STORE_NAME, { sessionId, seq, data: message } satisfies StoredMessage);
+}
+
+// Cache delivery can become a new-generation write. Session reads therefore
+// wait for deletion and validate ownership after both open and request awaits.
+function assertReadGeneration(sessionId: string, generation: MessageGeneration): void {
+  if (!isMessageGenerationCurrent(sessionId, generation)) throw new Error('Message cache read invalidated');
 }
 
 /**
  * Get all messages for a session, ordered by seq.
  */
 export async function getMessages(sessionId: string): Promise<ChatMessage[]> {
+  const generation = captureMessageGeneration(sessionId);
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  assertReadGeneration(sessionId, generation);
   const index = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).index('sessionId');
   const records = await index.getAll(sessionId) as StoredMessage[];
+  assertReadGeneration(sessionId, generation);
   records.sort((a, b) => a.seq - b.seq);
   // Defense-in-depth: old builds may have leaked both known transient types
   // and synthetic fractional rows whose type is no longer recognized.
@@ -246,24 +268,41 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
  * Get the highest seq for a session.
  */
 export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<number> {
+  const generation = captureMessageGeneration(sessionId);
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  assertReadGeneration(sessionId, generation);
   const range = IDBKeyRange.bound([sessionId, 0], [sessionId, maxSeq ?? Number.MAX_SAFE_INTEGER]);
-  let cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
+  const tx = db.transaction(STORE_NAME, 'readonly');
+  // Request failure may precede the final await. Observe both rejection paths
+  // without turning an aborted cache read into an authoritative empty result.
+  void tx.done.catch(() => {});
+  let cursor = await tx.objectStore(STORE_NAME).openCursor(range, 'prev');
+  let lastSeq = 0;
   while (cursor) {
     const row = cursor.value as StoredMessage;
-    if (isSpineCacheRow(row)) return row.seq;
+    if (isSpineCacheRow(row)) {
+      lastSeq = row.seq;
+      break;
+    }
     cursor = await cursor.continue();
   }
-  return 0;
+  await tx.done;
+  assertReadGeneration(sessionId, generation);
+  return lastSeq;
 }
 
 /**
  * Get messages for a session within a seq range [fromSeq, toSeq], ordered by seq.
  */
 export async function getMessagesInRange(sessionId: string, fromSeq: number, toSeq: number): Promise<ChatMessage[]> {
+  const generation = captureMessageGeneration(sessionId);
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  assertReadGeneration(sessionId, generation);
   const range = IDBKeyRange.bound([sessionId, fromSeq], [sessionId, toSeq]);
   const records = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(range) as StoredMessage[];
+  assertReadGeneration(sessionId, generation);
   records.sort((a, b) => a.seq - b.seq);
   return records.filter(isSpineCacheRow).map(r => r.data);
 }
@@ -271,31 +310,48 @@ export async function getMessagesInRange(sessionId: string, fromSeq: number, toS
 /**
  * Delete all messages for a session.
  */
-export async function deleteSessionMessages(sessionId: string): Promise<void> {
-  const db = await getDB();
-  const tx = db.transaction(STORE_NAME, 'readwrite');
-  const index = tx.objectStore(STORE_NAME).index('sessionId');
-  let cursor = await index.openCursor(sessionId);
-  while (cursor) {
-    cursor.delete();
-    cursor = await cursor.continue();
+export async function deleteSessionMessages(sessionId: string, deletion: SessionDeletion = beginSessionDeletion(sessionId)): Promise<void> {
+  try {
+    if (deletion.sessionId !== sessionId) throw new Error('Session deletion ownership mismatch');
+    await deletion.previous;
+    const db = await getDB();
+    // IndexedDB orders readwrite transactions on this store. Writes that had
+    // already started finish BEFORE this deletion; stale delayed writers fail
+    // the generation check, and new writers wait for this deletion's barrier.
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    // A failed cursor request can reject before the final await of tx.done.
+    void tx.done.catch(() => {});
+    const index = tx.objectStore(STORE_NAME).index('sessionId');
+    let cursor = await index.openCursor(sessionId);
+    while (cursor) {
+      await cursor.delete();
+      cursor = await cursor.continue();
+    }
+    await tx.done;
+    deletion.resolve();
+  } catch (error) {
+    deletion.reject(error);
+    throw error;
   }
-  await tx.done;
 }
 
 /**
  * Update messages in place for a session (used for tool_complete merge, permission resolution).
  */
-export async function updateSessionMessages(sessionId: string, messages: ChatMessage[]): Promise<void> {
+export async function updateSessionMessages(sessionId: string, messages: ChatMessage[], generation = captureMessageGeneration(sessionId)): Promise<void> {
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
+  if (generation.ready) await generation.ready;
   const db = await getDB();
+  if (!isMessageGenerationCurrent(sessionId, generation)) return;
   const tx = db.transaction(STORE_NAME, 'readwrite');
+  void tx.done.catch(() => {});
   const store = tx.objectStore(STORE_NAME);
 
   // Delete existing messages for this session
   const index = store.index('sessionId');
   let cursor = await index.openCursor(sessionId);
   while (cursor) {
-    cursor.delete();
+    await cursor.delete();
     cursor = await cursor.continue();
   }
 

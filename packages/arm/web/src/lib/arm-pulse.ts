@@ -22,8 +22,9 @@ const logger = createLogger('pulse');
 export interface ArmPulseHost {
   /** Send a pulse frame to the relay (unicast envelope, `pulse` field). */
   sendPulseFrame(pulseB64: string, targetDeviceId: string): void;
-  /** A reliable payload was delivered in order — the JSON string {blob, keys}. */
-  onDelivered(payloadJson: string): void;
+  /** A reliable payload was delivered in order — the JSON string {blob, keys}.
+   * Missing stream metadata on legacy frames means live stream 0. */
+  onDelivered(payloadJson: string, streamId?: number): void;
   /** The relay confirmed receipt of every send with seq ≤ seqUpTo. */
   onAcked(seqUpTo: bigint): void;
   /** The relay restarted the inbound stream: partial payloads are gone. */
@@ -146,7 +147,7 @@ export class ArmPulse {
         }
         case 'deliver':
           traceEvent({ comp: 'arm', evt: 'PULSE-DELIVER', seq: String(e.seq), len: e.payload.length });
-          this.host.onDelivered(dec.decode(e.payload));
+          this.host.onDelivered(dec.decode(e.payload), e.streamId ?? 0);
           break;
         case 'acked':
           traceEvent({ comp: 'arm', evt: 'PULSE-ACKED', seq: String(e.seqUpTo) });

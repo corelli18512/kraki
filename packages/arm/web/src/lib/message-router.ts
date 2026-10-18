@@ -5,6 +5,7 @@ import { isViewingSession } from './replay';
 import { createLogger } from './logger';
 import type { CommandState } from './commands';
 import { messageProvider } from './message-provider';
+import { captureMessageGeneration, isMessageGenerationCurrent } from './message-persistence-generation';
 import { ingestChunk } from './attachments';
 import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
@@ -275,10 +276,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         // Our own fork: seed it from our copy of the source first (as on Mac/iOS),
         // so the load finds it locally; anything missing is still fetched.
         if (forkSource) {
+          const generation = captureMessageGeneration(sid);
           void import('./message-db')
-            .then((db) => db.seedFork(sid, forkSource, fromSeq, lastSeq))
+            .then((db) => db.seedFork(sid, forkSource, fromSeq, lastSeq, generation))
             .catch(() => 0)
-            .finally(load);
+            .finally(() => {
+              if (isMessageGenerationCurrent(sid, generation) && getStore().sessions.has(sid)) load();
+            });
         } else {
           load();
         }
