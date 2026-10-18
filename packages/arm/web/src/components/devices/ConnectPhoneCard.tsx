@@ -40,6 +40,7 @@ function Card({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [connected, setConnected] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const onlineApps = useMemo(
     () => [...devices.values()].filter((d) => d.role === 'app' && d.online && d.id !== myDeviceId),
@@ -88,14 +89,57 @@ function Card({ onClose }: { onClose: () => void }) {
   }, [payload, connected, load]);
 
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
+    const card = cardRef.current;
+    if (!card) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const focusFirst = () => (card.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? card).focus();
+    focusFirst();
+    // Pairing is a sibling of Settings. Capture its keys before the underlying
+    // Settings window, and contain focus even while loading/replacing controls.
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      } else if (event.key === 'Tab') {
+        event.stopImmediatePropagation();
+        const controls = card.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        const outside = !card.contains(document.activeElement) || document.activeElement === card;
+        if (event.shiftKey ? outside || document.activeElement === first : outside || document.activeElement === last) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+      }
+    };
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !card.contains(event.target)) focusFirst();
+    };
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('focusin', containFocus, true);
+    return () => {
+      window.removeEventListener('keydown', key, true);
+      window.removeEventListener('focusin', containFocus, true);
+      if (previous?.isConnected) previous.focus();
+    };
   }, [onClose]);
 
+  useEffect(() => {
+    // Removing the focused Retry/Copy button can leave focus on document.body
+    // without a focusin event. Keep the foreground sheet's remaining Close reachable.
+    const card = cardRef.current;
+    if (card && !card.contains(document.activeElement)) card.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  }, [loading, error, connected]);
+
   return (
-    <div className="cp-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cp-card" role="dialog" aria-modal="true" aria-label="Connect your phone" data-testid="connect-phone">
+    <div className="cp-backdrop" onMouseDown={(e) => {
+      if (e.target === e.currentTarget) {
+        e.preventDefault(); // Do not let backdrop mouse focus undo the restored opener.
+        onClose();
+      }
+    }}>
+      <div ref={cardRef} tabIndex={-1} className="cp-card" role="dialog" aria-modal="true" aria-label="Connect your phone" data-testid="connect-phone">
         <button type="button" className="cp-close" onClick={onClose} title="Close (Esc)" aria-label="Close"><X strokeWidth={3.2} /></button>
         {connected ? (
           <div className="cp-success">

@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { CheckCircle, Smartphone, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, CheckCircle, ChevronRight, Smartphone, X } from 'lucide-react';
+import { KrakiLogo } from '../KrakiLogo';
 import { VoiceSettings } from './VoiceSettings';
 import { DeleteAccountSection } from './DeleteAccount';
 import { SettingsAlert, SettingsRow, SettingsSection, SettingsSwitch } from './SettingsControls';
@@ -32,6 +33,15 @@ import {
 } from '../../lib/notification-prefs';
 
 const tabs = ['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About'] as const;
+const tabDescriptions: Record<string, string> = {
+  General: 'Appearance, shortcuts, and everyday behavior.',
+  Account: 'Your account and identity on this PC.',
+  'Voice Input': 'Transcription, conversation context, and custom words.',
+  Notifications: 'Choose when Kraki gets your attention.',
+  'This PC': 'Choose how Kraki works on this computer.',
+  Devices: 'Your connected computers and apps.',
+  About: 'App versions, diagnostics, and support.',
+};
 
 /** Same labels as Mac AccountPane.providerLabel: GitHub by default, otherwise
  *  the provider id capitalized ("open" → "Open"). */
@@ -68,6 +78,36 @@ export function SettingsPanel({
   const shortcut = useUsageShortcut();
   const bridge = desktop?.settings;
   const isBeta = getCurrentChannel() === 'beta';
+  const isWindows = desktop?.platform === 'win32';
+  const windowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open || inline || !isWindows) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const panel = windowRef.current;
+    panel?.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')?.focus();
+    const key = (event: KeyboardEvent) => {
+      // Foreground confirmation/agent sheets own their keyboard handling.
+      if (event.key !== 'Tab' || event.defaultPrevented ||
+        (event.target instanceof Element && event.target.closest('[role=dialog], [role=alertdialog]') !== panel)) return;
+      const controls = [...(panel?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? [])]
+        .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], fieldset:disabled'));
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('keydown', key);
+      previous?.focus();
+    };
+  }, [open, inline, isWindows]);
 
   useEffect(() => {
     if (!open) return;
@@ -171,19 +211,32 @@ export function SettingsPanel({
     <>
       <SettingsSection title="Appearance">
         <SettingsRow label="Theme">
-          <div className="kp-segment" role="radiogroup" aria-label="Theme">
-            {(['system', 'light', 'dark'] as const).map((option) => (
+          <div className={isWindows ? 'kp-theme-grid' : 'kp-segment'} role="radiogroup" aria-label="Theme">
+            {(isWindows ? ['light', 'dark', 'system'] as const : ['system', 'light', 'dark'] as const).map((option) => (
               <button
                 type="button"
                 role="radio"
                 aria-checked={theme === option}
+                tabIndex={isWindows && theme !== option ? -1 : 0}
+                onKeyDown={isWindows ? (e) => {
+                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                  e.preventDefault();
+                  const buttons = [...e.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role=radio]')];
+                  const index = buttons.indexOf(e.currentTarget);
+                  const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1
+                    : (index + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+                  buttons[next].focus();
+                  buttons[next].click();
+                } : undefined}
                 key={option}
                 onClick={() => {
                   setTheme(option);
                   wsClient.updatePreferences({ theme: option });
                 }}
               >
-                {option[0].toUpperCase() + option.slice(1)}
+                {isWindows && <span className={`kp-theme-preview kp-theme-preview-${option}`} aria-hidden="true"><span /><span><i /><i /><i /></span></span>}
+                <span>{isWindows && option === 'system' ? 'Use system' : option[0].toUpperCase() + option.slice(1)}</span>
+                {isWindows && <Check size={15} aria-hidden="true" />}
               </button>
             ))}
           </div>
@@ -212,8 +265,8 @@ export function SettingsPanel({
         <SettingsRow label="Shortcut">
           <button
             type="button"
-            className={`kp-button${shortcut.recording ? ' is-recording' : ''}`}
-            style={{ width: 230, height: 26 }}
+            className={`kp-button kp-shortcut${shortcut.recording ? ' is-recording' : ''}`}
+            style={isWindows ? undefined : { width: 230, height: 26 }}
             onClick={() => useUsageShortcut.setState({ recording: true })}
             onBlur={() => useUsageShortcut.setState({ recording: false })}
             onKeyDown={(e) => {
@@ -478,52 +531,68 @@ export function SettingsPanel({
   );
   if (!open) return null;
   return (
-    <div className={className}>
+    <div className={className} style={isWindows && inline ? { height: '100%', minHeight: 0 } : undefined}>
+      {isWindows && !inline && <div className="kp-windows-backdrop" aria-hidden="true" />}
       <div
-        className={inline ? 'kp-inline' : 'kp-window'}
+        ref={windowRef}
+        className={`${inline ? 'kp-inline' : 'kp-window'}${isWindows ? ' kp-windows' : ''}`}
         role="dialog"
+        aria-modal={isWindows && !inline ? true : undefined}
         aria-label="Settings"
         data-testid="settings-window"
       >
         <div className="kp-title">
-          {tab}
+          {isWindows ? <><h2>{tab}</h2><p className="kp-page-description">{tabDescriptions[tab]}</p></> : tab}
           <button type="button" className="kp-close" aria-label="Close settings" onClick={onClose}>
-            <X size={14} strokeWidth={1.6} />
+            <X size={isWindows ? 16 : 14} strokeWidth={1.6} />
           </button>
         </div>
-        <div className="kp-tabs" role="tablist" aria-label="Settings">
-          {tabs.map((name) => (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === name}
-              tabIndex={tab === name ? 0 : -1}
-              onKeyDown={(e) => {
-                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-                e.preventDefault();
-                const buttons = [...e.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role=tab]')];
-                const index = buttons.indexOf(e.currentTarget);
-                const next =
-                  e.key === 'Home'
-                    ? 0
-                    : e.key === 'End'
-                      ? buttons.length - 1
-                      : (index + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
-                setTab(tabs[next]);
-                buttons[next].focus();
-              }}
-              aria-controls="settings-pane"
-              key={name}
-              onClick={() => setTab(name)}
-            >
-              <SettingsTabIcon name={name} />
-              {name}
-            </button>
-          ))}
+        <div className={isWindows ? 'kp-navigation' : undefined} style={isWindows ? undefined : { display: 'contents' }}>
+          {isWindows && <><div className="kp-nav-brand"><KrakiLogo className="kp-nav-logo" /><span>Kraki</span></div><p className="kp-nav-label">Settings</p></>}
+          <div className="kp-tabs" role="tablist" aria-label="Settings" aria-orientation={isWindows ? 'vertical' : undefined}>
+            {tabs.map((name) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === name}
+                tabIndex={tab === name ? 0 : -1}
+                onKeyDown={(e) => {
+                  const previousKey = isWindows ? 'ArrowUp' : 'ArrowLeft';
+                  const nextKey = isWindows ? 'ArrowDown' : 'ArrowRight';
+                  if (![previousKey, nextKey, 'Home', 'End'].includes(e.key)) return;
+                  e.preventDefault();
+                  const buttons = [...e.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+                  const index = buttons.indexOf(e.currentTarget);
+                  const next =
+                    e.key === 'Home'
+                      ? 0
+                      : e.key === 'End'
+                        ? buttons.length - 1
+                        : (index + (e.key === nextKey ? 1 : -1) + buttons.length) % buttons.length;
+                  setTab(tabs[next]);
+                  buttons[next].focus();
+                }}
+                aria-controls="settings-pane"
+                aria-label={isWindows ? name : undefined}
+                title={isWindows ? name : undefined}
+                key={name}
+                onClick={() => setTab(name)}
+              >
+                <SettingsTabIcon name={name} windows={isWindows} />
+                <span>{name}</span>
+              </button>
+            ))}
+          </div>
+          {isWindows && <button type="button" className="kp-nav-profile" aria-label="Account details" onClick={() => setTab('Account')}>
+            <span className="kp-nav-avatar" aria-hidden="true">{(state.user?.email ?? state.user?.login ?? '?').slice(0, 2).toUpperCase()}</span>
+            <span className="kp-nav-identity"><strong>{state.user?.email ?? state.user?.login ?? 'Not signed in'}</strong><small>{state.status === 'connected' ? 'Connected' : 'Disconnected'}</small></span>
+            <ChevronRight size={14} aria-hidden="true" />
+          </button>}
         </div>
         <div
           id="settings-pane"
           role="tabpanel"
+          tabIndex={isWindows ? 0 : undefined}
           aria-label={tab}
           className={`kp-pane${tab === 'About' ? ' kp-pane-about' : ''}`}
           data-testid="settings-scroll"

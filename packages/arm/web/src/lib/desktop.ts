@@ -107,6 +107,8 @@ export interface KrakiDesktopBridge {
   /** Export a self-contained report to the system browser; never accepts a path. */
   exportHtmlReport?: (html: string, name: string) => Promise<{ ok: boolean; error?: string }>;
   platform: string;
+  /** Windows native caption overlay; absent in browsers, Linux and older shells. */
+  titleBarOverlay?: { setTheme: (theme: 'light' | 'dark') => void };
   /** Device name shown to other devices ("Kraki Windows"). */
   deviceName: string;
   builtIn?: BuiltInBridge;
@@ -133,6 +135,7 @@ export const desktop: KrakiDesktopBridge | undefined =
   typeof window !== 'undefined' ? window.krakiDesktop : undefined;
 
 export const isDesktop = !!desktop;
+export const hasWindowsTitleBar = desktop?.platform === 'win32' && !!desktop.titleBarOverlay;
 
 const SIGNED_OUT_KEY = 'kraki-desktop.signedOut';
 
