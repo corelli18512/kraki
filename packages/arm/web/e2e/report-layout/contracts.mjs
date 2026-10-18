@@ -96,14 +96,20 @@ export async function layoutContract(page, variant, control, record) {
     const restored = await sample('split-restored-1200x900');
     assert.deepEqual(restored.boxes.iframe, wide.boxes.iframe);
   } else {
-    // Exact original order and strict width200/height100 contract. No retries/delay.
+    // Keep the original action order and exact per-context geometry. No retries/delay.
     await page.getByRole('button', { name: 'Expand Report', exact: true }).click();
     assert.ok((await page.locator('.kreport-panel').getAttribute('class')).includes('is-expanded'));
     await page.setViewportSize({ width: 1200, height: 900 });
     const resized = await sample('expanded-resized-1200x900');
     // Record both deltas even if the retained Windows bare height assertion fails.
     record.originalDelta = { width: resized.boxes.iframe.width - initial.boxes.iframe.width, height: resized.boxes.iframe.height - initial.boxes.iframe.height };
-    assert.equal(record.originalDelta.width, 200);
+    assert.equal(initial.boxes.panel.styles.borderLeftWidth, '1px');
+    assert.equal(resized.boxes.panel.styles.borderLeftWidth, '0px');
+    // Intentional border removal, not rounding: processed preflight uses border-box,
+    // so the initial 1000px panel leaves a 999px iframe. Expanded width is 1200px
+    // with no border: iframe growth is exactly 201px. Bare content-box starts with
+    // a 1000px iframe, so that context still requires exactly 200px growth.
+    assert.equal(record.originalDelta.width, variant === 'processed' ? 201 : 200);
     assert.equal(record.originalDelta.height, 100);
     await page.getByRole('button', { name: 'Restore Split View', exact: true }).click();
     await page.setViewportSize({ width: 1000, height: 800 });
