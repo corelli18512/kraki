@@ -27,6 +27,11 @@ export function updateComposerScrollFade(el: HTMLTextAreaElement): void {
 const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 
+/** Only Pi's ask_user takes images with the answer (Mac ComposerAnswerImages). */
+export function answerImagesAllowed(agent: string | undefined): boolean {
+  return agent?.toLowerCase() === 'pi';
+}
+
 export type ComposerIntent = 'prompt' | 'steer' | 'answerQuestion' | 'denyPermission';
 
 /** iOS/Mac `MessageComposerPolicy`: a waiting permission turns the composer
@@ -86,6 +91,8 @@ export interface ComposerProps {
   reachable: boolean;
   /** Attachments are unavailable during a running or compacting turn. */
   busy: boolean;
+  /** The session's agent: decides whether an answer may carry an image. */
+  agent?: string;
   onSend: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => void;
   /** Dispatch Stop. Call `onRefused` if it could not be sent. */
   onAbort: (onRefused: () => void) => void;
@@ -93,12 +100,19 @@ export interface ComposerProps {
 }
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { sessionId, intent, canAbort, reachable, busy, onSend, onAbort, onStageVoice },
+  { sessionId, intent, canAbort, reachable, busy, agent, onSend, onAbort, onStageVoice },
   ref,
 ) {
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const [image, setImage] = useState<{ attachment: Attachment; preview: string } | null>(null);
+  // Images in an answer (Mac ComposerAnswerImages): only Pi's questions take
+  // them, image-only answers included. For other agents attach is off while
+  // answering and a staged image stays in the composer for a later message.
+  const answering = intent === 'answerQuestion';
+  const answerTakesImage = answering && answerImagesAllowed(agent);
+  const canAttach = answering ? answerTakesImage : intent !== 'denyPermission' && !busy;
+  const carriesImage = intent === 'denyPermission' ? false : answering ? answerTakesImage : true;
   const [abortPending, setAbortPending] = useState(false);
   const currentSession = useRef(sessionId);
   currentSession.current = sessionId;
@@ -130,11 +144,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     );
   }, onVoiceFinal, onStageVoice && intent !== 'denyPermission' ? (raw) => {
     const base = useStore.getState().drafts.get(sessionId) ?? '';
-    const id = onStageVoice(mergeVoiceDraft(base, raw), image ? [image.attachment] : undefined, intent);
+    const sent = carriesImage ? image : null;
+    const id = onStageVoice(mergeVoiceDraft(base, raw), sent ? [sent.attachment] : undefined, intent);
     setDraft(sessionId, '');
-    setImage(null);
+    if (sent) setImage(null);
     setTimeout(() => fieldRef.current?.focus(), 0);
-    return stagedVoice(id, base, !!image, (original) => {
+    return stagedVoice(id, base, !!sent, (original) => {
       const current = useStore.getState().drafts.get(sessionId) ?? '';
       setDraft(sessionId, current.trim() ? `${original}\n${current}` : original);
     });
@@ -206,17 +221,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [text, image, multiline, dictation.active]);
 
   const hasText = text.trim().length > 0;
-  const structured = intent === 'answerQuestion' || intent === 'denyPermission';
-  const canSend = structured ? hasText : hasText || !!image;
+  const canSend = hasText || (!!image && carriesImage);
   const showsStop = canAbort && !hasText && !image;
 
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = text.trim();
-    onSend(trimmed || '[image]', image ? [image.attachment] : undefined, intent);
+    const sent = carriesImage ? image : null;
+    onSend(trimmed || '[image]', sent ? [sent.attachment] : undefined, intent);
     setDraft(sessionId, '');
-    setImage(null);
-  }, [canSend, text, image, intent, onSend, setDraft, sessionId]);
+    if (sent) setImage(null);
+  }, [canSend, text, image, carriesImage, intent, onSend, setDraft, sessionId]);
 
   const primary = () => {
     if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation(intent === 'denyPermission' ? 'edit' : 'send'); return; }
@@ -231,7 +246,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   };
 
   const pickImage = async (file: File | undefined) => {
-    if (busy || !file || !file.type.startsWith('image/')) return;
+    if (!canAttach || !file || !file.type.startsWith('image/')) return;
     const result = await compressImage(file);
     if (result) setImage(result);
     else useStore.getState().setLastError('Image is too large (max 3 MB after compression).');
@@ -258,13 +273,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           type="button"
           className={`kcomposer-attach ${image ? 'has-image' : ''}`}
           aria-label={image ? 'Replace image' : 'Attach image'}
-          disabled={busy}
+          disabled={!canAttach}
           onClick={() => fileRef.current?.click()}
         >
           {image ? <img src={image.preview} alt="Attached" /> : <ImagePlus aria-hidden />}
         </button>
         {image && (
-          <button type="button" className="kcomposer-unattach" disabled={busy} aria-label="Remove image" onClick={() => setImage(null)}>
+          <button type="button" className="kcomposer-unattach" disabled={!canAttach} aria-label="Remove image" onClick={() => setImage(null)}>
             <X aria-hidden />
           </button>
         )}
