@@ -21,6 +21,12 @@ function batch(server: MockRelayServer, ws: WebSocket, messages: Record<string, 
   } });
 }
 
+function reconcileTail(server: MockRelayServer, ws: WebSocket) {
+  server.sendMessage(ws, { type: 'session_list', payload: { sessions: [
+    { ...session(), lastSeq: 200, readSeq: 200 }, { ...session('other-session'), lastSeq: 0, readSeq: 0 },
+  ] } });
+}
+
 async function fixture(page: Page, initial: Record<string, unknown>[], boundary = 0) {
   const server = await MockRelayServer.create();
   await page.setViewportSize({ width: 1240, height: 720 });
@@ -30,7 +36,9 @@ async function fixture(page: Page, initial: Record<string, unknown>[], boundary 
   const auth = await server.waitForMessage(ws);
   expect((auth.device as { encryptionKey?: string })?.encryptionKey).toBeTruthy();
   const peer = await RangePeer.create(ws);
-  peer.onRequest = () => batch(server, ws, initial);
+  peer.onRequest = (request) => batch(server, ws, initial.filter((message) =>
+    Number(message.seq) >= request.fromSeq && Number(message.seq) <= request.toSeq,
+  ));
   const lastSeq = boundary ? Number(initial.at(-1)?.seq) : 0;
   server.sendAuthOk(ws, { devices: [{ ...DEVICE, encryptionKey: peer.publicKey }], sessions: [
     { ...session(), lastSeq, readSeq: boundary }, session('other-session'),
@@ -117,14 +125,69 @@ test('F8: entry and programmatic navigation do not page; real older input still 
     await page.waitForTimeout(1100);
     expect(await list(page).locator('[data-scroll-key]').count()).toBe(60);
     expect(peer.requests).toHaveLength(0);
+    // An older gesture above the trigger band must not leave permission for
+    // a later geometry-only correction to reveal history.
+    await wheelOlder(page, -100);
+    expect(await top(page)).toBeGreaterThan(900);
+    expect(await list(page).locator('[data-scroll-key]').count()).toBe(60);
     // Geometry-only scroll (the same event path as anchor compensation) is
     // not older intent, even if it crosses the top band.
     await list(page).evaluate((el) => { el.scrollTop = 0; });
     await page.waitForTimeout(200);
     expect(await list(page).locator('[data-scroll-key]').count()).toBe(60);
     expect(peer.requests).toHaveLength(0);
-    await wheelOlder(page, -100);
+    // Actual native older movement crossing the trigger band still pages.
+    await list(page).evaluate((el) => { el.scrollTop = 1000; });
+    await page.waitForTimeout(100);
+    await wheelOlder(page, -300);
     await expect(node(page, 61)).toBeAttached();
+  } finally { await server.close(); }
+});
+
+for (const arrival of ['loaded', 'during polling'] as const) {
+  test(`F4: a ${arrival} preceding reply navigates without waiting for unrelated network history`, async ({ page }) => {
+    const initial = range(101, 140);
+    if (arrival === 'loaded') initial[19] = row(120, 'agent_message', 'Loaded preceding reply');
+    const { server, ws, peer } = await fixture(page, initial);
+    try {
+      peer.onRequest = () => {};
+      reconcileTail(server, ws);
+      await expect.poll(() => peer.requests.length).toBe(1);
+      expect(peer.requests[0]).toMatchObject({ fromSeq: 151, toSeq: 200 });
+      await page.getByRole('button', { name: 'Previous reply' }).click();
+      if (arrival === 'during polling') {
+        await page.waitForTimeout(100);
+        batch(server, ws, [row(120, 'agent_message', 'Reply discovered during polling')]);
+      }
+      await expect.poll(() => y(page, 120), { timeout: 2000 }).toBeCloseTo(72, 0);
+      expect(peer.requests).toHaveLength(1);
+      // The unrelated tail request is still unresolved throughout navigation.
+    } finally { await server.close(); }
+  });
+}
+
+test('F11: a late timed-out tail response cannot complete a different older range', async ({ page }) => {
+  const { server, ws, peer } = await fixture(page, range(121, 140));
+  try {
+    peer.onRequest = () => {};
+    reconcileTail(server, ws);
+    await expect.poll(() => peer.requests.length).toBe(1);
+    await page.waitForTimeout(10_100);
+    await list(page).evaluate((el) => { el.scrollTop = 0; });
+    await wheelOlder(page, -100);
+    await expect.poll(() => peer.requests.length).toBe(2);
+    expect(peer.requests[1]).toMatchObject({ fromSeq: 61, toSeq: 120 });
+    batch(server, ws, range(151, 200));
+    await page.waitForTimeout(200);
+    await list(page).evaluate((el) => { el.scrollTop = 0; });
+    await wheelOlder(page, -100);
+    expect(peer.requests).toHaveLength(2);
+    batch(server, ws, [row(120)]);
+    await expect(node(page, 120)).toBeAttached();
+    await list(page).evaluate((el) => { el.scrollTop = 0; });
+    await wheelOlder(page, -100);
+    await expect.poll(() => peer.requests.length).toBe(3);
+    expect(peer.requests[2]).toMatchObject({ fromSeq: 1, toSeq: 60 });
   } finally { await server.close(); }
 });
 

@@ -196,6 +196,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
 
   /** Re-apply pin / anchor after anything changed geometry. */
   const settle = useCallback((instant = false) => {
+    // Geometry corrections cannot spend an older-input paging allowance.
+    olderAllowance.current = false;
     const el = scroller.current;
     if (!el) return;
     if (applyUnreadEntry()) {
@@ -260,39 +262,50 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     let previousTop = el.scrollTop;
     let pointerDown = false;
     let touchY: number | null = null;
-    const requestOlder = () => {
-      if (!olderAllowance.current || el.scrollTop >= NEAR_TOP) return;
+    let allowanceFrame = 0;
+    olderAllowance.current = false;
+    const armOlderMovement = () => {
+      olderAllowance.current = true;
+      if (allowanceFrame) cancelAnimationFrame(allowanceFrame);
+      // Permission belongs to this input's next native scroll, not an
+      // indefinite future decrease after layout or an external correction.
+      allowanceFrame = requestAnimationFrame(() => { olderAllowance.current = false; allowanceFrame = 0; });
+    };
+    const requestOlder = (authorized: boolean) => {
+      if (!authorized || el.scrollTop >= NEAR_TOP) return;
       olderAllowance.current = false;
       callbacks.current.onNearTop?.();
     };
     const onScrollEvent = () => {
+      const userOwned = olderAllowance.current && !programmatic.current && !following.current;
+      olderAllowance.current = false;
       const movedOlder = el.scrollTop < previousTop;
       previousTop = el.scrollTop;
       const distance = tailTop(el) - el.scrollTop;
       if (!programmatic.current && !following.current) pinned.current = distance <= PIN_THRESHOLD;
       captureAnchor();
       reportBottom();
-      // Programmatic entry, navigation and prepend compensation never arm
-      // paging. Consume at most one allowance per actual older gesture.
-      if (movedOlder) {
-        if (pointerDown && !programmatic.current) olderAllowance.current = true;
-        requestOlder();
-      }
+      // Consume this input's allowance even outside the top band: a later
+      // geometry-only decrease must not reuse it to initiate paging.
+      if (movedOlder) requestOlder(userOwned);
       callbacks.current.onScroll?.();
     };
     // A user gesture always takes over from a programmatic glide, and from
     // the unread-entry landing.
     const onUser = () => {
+      olderAllowance.current = false;
       programmatic.current = false;
       stopFollow();
       endUnreadEntry();
       callbacks.current.onUserInteraction?.();
     };
     const olderGesture = (older: boolean) => {
-      olderAllowance.current = older;
+      olderAllowance.current = false;
+      if (!older) return;
+      armOlderMovement();
       // At the clamped edge, wheel/key/touch intent produces no scroll event.
       // It must still be able to cross a metadata-only or empty older range.
-      if (older) requestOlder();
+      requestOlder(true);
     };
     const onWheel = (e: WheelEvent) => { onUser(); olderGesture(e.deltaY < 0); };
     const onPointerDown = (e: PointerEvent) => {
@@ -300,8 +313,10 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       // inside rows are not permission for geometry corrections to page.
       pointerDown = e.target === el && e.pointerType !== 'touch';
       onUser();
+      if (pointerDown) armOlderMovement();
     };
-    const onPointerUp = () => { pointerDown = false; };
+    const onPointerMove = () => { if (pointerDown) armOlderMovement(); };
+    const onPointerUp = () => { pointerDown = false; olderAllowance.current = false; };
     const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? null; onUser(); };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? null;
@@ -318,6 +333,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
     el.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('pointerup', onPointerUp, { passive: true });
     el.addEventListener('keydown', onKey);
     return () => {
@@ -326,8 +342,11 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('keydown', onKey);
+      if (allowanceFrame) cancelAnimationFrame(allowanceFrame);
+      olderAllowance.current = false;
     };
   }, [captureAnchor, reportBottom]);
 

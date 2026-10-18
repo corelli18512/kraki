@@ -302,21 +302,23 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     // but bound a single click and cancel it on manual input, ↓ or unmount.
     for (let pages = 0; pages <= 8; pages++) {
       const waitingSince = performance.now();
-      while (messageProvider.isLoading(sessionId)) {
+      while (true) {
         if (navigation.current.generation !== generation) return;
+        // Loaded replies win immediately, also when one appears during a
+        // different pending fetch (Mac previousReplyTarget before polling).
+        const above = new Set(listRef.current?.rowsAbove() ?? []);
+        const target = [...rowsRef.current].reverse().find((row) => above.has(row.key) && rowSide(row) === 'agent');
+        if (target) {
+          navigation.current.active = false;
+          listRef.current?.scrollToRow(target.key, true);
+          return;
+        }
+        if (!messageProvider.isLoading(sessionId)) break;
         if (performance.now() - waitingSince >= 3000) {
           navigation.current.active = false;
           return;
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 50));
-      }
-      if (navigation.current.generation !== generation) return;
-      const above = new Set(listRef.current?.rowsAbove() ?? []);
-      const target = [...rowsRef.current].reverse().find((row) => above.has(row.key) && rowSide(row) === 'agent');
-      if (target) {
-        navigation.current.active = false;
-        listRef.current?.scrollToRow(target.key, true);
-        return;
       }
       if (pages === 8 || !await loadOlderRef.current()) break;
       // Store delivery and window expansion must commit before measuring the

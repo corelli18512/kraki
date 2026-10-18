@@ -45,6 +45,11 @@ interface RangePage {
 
 interface PendingRequest {
   sessionId: string;
+  fromSeq: number;
+  toSeq: number;
+  retriedEmpty: boolean;
+  timeout: ReturnType<typeof setTimeout> | null;
+  send: () => void;
   resolve: (page: RangePage | null) => void;
 }
 
@@ -57,6 +62,8 @@ class MessageProvider {
   private sendFn: ((msg: Record<string, unknown>) => void) | null = null;
   /** Pending tentacle range-fetch requests awaiting handleRangeBatch */
   private pendingRequests = new Map<string, PendingRequest>();
+  /** A previous unanswered timeout makes the next empty answer ambiguous. */
+  private uncertainEmptySessions = new Set<string>();
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
   /** Highest seq covered by each in-flight fetch. */
@@ -291,7 +298,7 @@ class MessageProvider {
         sessionId, firstSeq, lastSeq, count,
       });
     }
-    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[], truncated);
+    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[], firstSeq, lastSeq, truncated);
   }
 
   /**
@@ -299,10 +306,36 @@ class MessageProvider {
    * request; otherwise falls back to a direct store write so messages aren't
    * lost on unsolicited batches.
    */
-  private deliverPending(sessionId: string, messages: ChatMessage[], truncated = false): void {
+  private deliverPending(sessionId: string, messages: ChatMessage[], firstSeq: number, lastSeq: number, truncated: boolean): void {
     const pending = this.pendingRequests.get(sessionId);
     if (pending) {
+      // The wire carries actual row extrema, not request IDs. Bounds reject
+      // a late different range, but overlapping subset ranges remain ambiguous.
+      const matches = messages.length === 0
+        ? firstSeq === 0 && lastSeq === 0
+        : firstSeq >= pending.fromSeq && lastSeq <= pending.toSeq && firstSeq <= lastSeq
+          && messages.every((message) => {
+            const seq = 'seq' in message ? message.seq : undefined;
+            return typeof seq === 'number' && Number.isInteger(seq) && seq >= pending.fromSeq && seq <= pending.toSeq;
+          });
+      if (!matches) {
+        logger.warn('range batch does not match pending bounds', {
+          sessionId, firstSeq, lastSeq, fromSeq: pending.fromSeq, toSeq: pending.toSeq,
+        });
+        // Preserve unsolicited rows without completing or unlocking this pull.
+        this.deliverMessages(sessionId, messages);
+        return;
+      }
+      if (messages.length === 0 && this.uncertainEmptySessions.has(sessionId) && !pending.retriedEmpty) {
+        // An empty late response has no bounds to correlate. Confirm once,
+        // rather than advancing history on it or permanently fencing paging.
+        pending.retriedEmpty = true;
+        pending.send();
+        return;
+      }
+      if (messages.length === 0) this.uncertainEmptySessions.delete(sessionId);
       this.pendingRequests.delete(sessionId);
+      if (pending.timeout) clearTimeout(pending.timeout);
       // Retain a partial response, but do not call the whole requested range
       // covered: a paging cursor must not skip its undelivered portion.
       pending.resolve({ messages, complete: !truncated });
@@ -320,9 +353,11 @@ class MessageProvider {
   clear(): void {
     // Cancel pending requests without declaring their ranges covered.
     for (const [, pending] of this.pendingRequests) {
+      if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve(null);
     }
     this.pendingRequests.clear();
+    this.uncertainEmptySessions.clear();
     this.tentacleLastSeq.clear();
     this.tentacleDeviceMap.clear();
     this.loadingSessions.clear();
@@ -510,28 +545,30 @@ class MessageProvider {
     if (toSeq < fromSeq) return Promise.resolve({ messages: [], complete: true });
 
     return new Promise<RangePage | null>((resolve) => {
-      const pending: PendingRequest = { sessionId, resolve };
+      const pending: PendingRequest = {
+        sessionId, fromSeq, toSeq, resolve, retriedEmpty: false, timeout: null,
+        send: () => {
+          if (pending.timeout) clearTimeout(pending.timeout);
+          pending.timeout = setTimeout(() => {
+            // Only this request (including its one empty-confirmation retry)
+            // may time out, never a subsequent request for the same session.
+            if (this.pendingRequests.get(sessionId) === pending) {
+              logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
+              this.pendingRequests.delete(sessionId);
+              this.uncertainEmptySessions.add(sessionId);
+              resolve(null);
+            }
+          }, BATCH_TIMEOUT_MS);
+          this.sendFn!({
+            type: 'request_session_messages_range',
+            deviceId: getStore().deviceId ?? '',
+            payload: { sessionId, fromSeq, toSeq, targetDeviceId: tentacleDeviceId },
+          });
+          logger.info('requested from tentacle (range)', { sessionId, fromSeq, toSeq });
+        },
+      };
       this.pendingRequests.set(sessionId, pending);
-
-      const store = getStore();
-      this.sendFn!({
-        type: 'request_session_messages_range',
-        deviceId: store.deviceId ?? '',
-        payload: { sessionId, fromSeq, toSeq, targetDeviceId: tentacleDeviceId },
-      });
-
-      logger.info('requested from tentacle (range)', { sessionId, fromSeq, toSeq });
-
-      // A timeout is not an authoritative empty range: callers must retry it.
-      setTimeout(() => {
-        // A later tail reconcile may already have installed a new request for
-        // this session. Only the request that armed this timer may time out.
-        if (this.pendingRequests.get(sessionId) === pending) {
-          logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
-          this.pendingRequests.delete(sessionId);
-          resolve(null);
-        }
-      }, BATCH_TIMEOUT_MS);
+      pending.send();
     });
   }
 
