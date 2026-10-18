@@ -261,6 +261,7 @@ test.describe('active session tail reconciliation', () => {
       devices: [{ ...DEVICE, encryptionKey: tentaclePublicKey }],
       sessions: [{
         id: SESSION_ID,
+        title: 'Active tail',
         deviceId: TENTACLE_ID,
         deviceName: DEVICE.name,
         agent: 'copilot',
@@ -278,8 +279,8 @@ test.describe('active session tail reconciliation', () => {
     const firstRequest = await peer.waitForRequest(1);
     expect(firstRequest).toMatchObject({ sessionId: SESSION_ID, fromSeq: 269, toSeq: 318 });
 
-    await expect(page.getByText('Copilot').first()).toBeVisible({ timeout: 5_000 });
-    await page.getByText('Copilot').first().click();
+    await expect(page.getByRole('list').getByRole('button', { name: /Active tail/ }).first()).toBeVisible({ timeout: 5_000 });
+    await page.getByRole('list').getByRole('button', { name: /Active tail/ }).first().click();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 5_000 });
 
     // The detail page now asks for the same authoritative tail while the
@@ -308,6 +309,7 @@ test.describe('active session tail reconciliation', () => {
       devices: [{ ...DEVICE, encryptionKey: tentaclePublicKey }],
       sessions: [{
         id: SESSION_ID,
+        title: 'Active tail',
         deviceId: TENTACLE_ID,
         deviceName: DEVICE.name,
         agent: 'copilot',

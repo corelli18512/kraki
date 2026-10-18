@@ -21,6 +21,7 @@ const DEVICE_ID = 'tentacle-pulse';
 
 const TEST_SESSION = {
   id: SESSION_ID,
+  title: 'Pulse test',
   deviceId: DEVICE_ID,
   deviceName: 'Pulse Tentacle',
   agent: 'copilot',
@@ -60,7 +61,7 @@ test.describe('pulse-enabled build', () => {
 
     // Session appears in the sidebar (session_list processed through the real
     // arm pipeline while pulse is active).
-    const sessionCard = page.getByText('Copilot').first();
+    const sessionCard = page.getByRole('list').getByRole('button', { name: /Pulse test/ }).first();
     await expect(sessionCard).toBeVisible({ timeout: 5000 });
     await sessionCard.click();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 3000 });
