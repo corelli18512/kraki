@@ -7,7 +7,7 @@ import { useNarrow } from '../../hooks/useNarrow';
 import { agentNavigationColors } from '../../lib/color';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
 import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
-import { messageProvider } from '../../lib/message-provider';
+import { isSpineMessage, messageProvider } from '../../lib/message-provider';
 import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
 import { Bubble, LIVE_KEY, rowSide, type BubbleContext, type ChatRow } from './Bubble';
@@ -53,7 +53,8 @@ export interface ChatViewProps {
 export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArtifact }: ChatViewProps) {
   const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
   const session = useStore((s) => s.sessions.get(sessionId));
-  const card = useStore((s) => s.cards.get(sessionId));
+  const rawCard = useStore((s) => s.cards.get(sessionId));
+  const cardHoldUntil = useStore((s) => s.cardHoldUntil.get(sessionId)) ?? 0;
   const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
   const connected = useStore((s) => s.status === 'connected');
   const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
@@ -67,6 +68,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // ── Rows ──
   const lastSeq = session?.lastSeq;
   const maxSeq = highestSeq(messages);
+  // Live deltas keep updating a subscription card while its preceding spine
+  // catches up. Do not draw it beneath an older cached conversation tail.
+  const cardCaughtUp = cardHoldUntil <= 0
+    || messages.some((m) => isSpineMessage(m) && seqOf(m) >= cardHoldUntil);
+  const card = cardCaughtUp ? rawCard : undefined;
   // Performance data (open.summary / ready.summary): what is on screen now.
   useEffect(() => {
     if (diag.stability.wantsConversationUpdates) diag.stability.conversationRendered(sessionId, maxSeq, lastSeq ?? 0, messages.length > 0);

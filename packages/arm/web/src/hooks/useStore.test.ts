@@ -309,6 +309,31 @@ describe('useStore', () => {
       expect(useStore.getState().cards.has('sess-1')).toBe(false);
     });
 
+    it('keeps a subscription hold across card updates and replacement until a new snapshot releases it', () => {
+      const store = useStore.getState();
+      store.holdCard('sess-1', 100);
+      store.applyCardMessage('sess-1', 'draft');
+      store.setCardAction('sess-1', mockToolAction);
+      store.clearCard('sess-1');
+      store.applyCardMessage('sess-1', 'new draft');
+      expect(useStore.getState().cardHoldUntil.get('sess-1')).toBe(100);
+      store.holdCard('sess-1', 0);
+      expect(useStore.getState().cardHoldUntil.has('sess-1')).toBe(false);
+    });
+
+    it.each(['removeSession', 'clearTransientState', 'reset'] as const)('%s clears subscription card holds', (action) => {
+      useStore.getState().holdCard('sess-1', 100);
+      if (action === 'removeSession') useStore.getState().removeSession('sess-1');
+      else useStore.getState()[action]();
+      expect(useStore.getState().cardHoldUntil.has('sess-1')).toBe(false);
+    });
+
+    it('does not persist subscription card holds', () => {
+      useStore.getState().holdCard('sess-1', 100);
+      const persisted = JSON.parse(localStorage.getItem('kraki-store')!);
+      expect(persisted.state).not.toHaveProperty('cardHoldUntil');
+    });
+
     it('clearCard is safe for non-existing session', () => {
       useStore.getState().clearCard('sess-nonexistent');
       expect(useStore.getState().cards.has('sess-nonexistent')).toBe(false);

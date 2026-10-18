@@ -33,7 +33,7 @@ const NON_SPINE_CACHE_TYPES = new Set([
   'question_resolved',
 ]);
 
-function isSpineCacheMessage(message: ChatMessage): boolean {
+export function isSpineMessage(message: ChatMessage): boolean {
   const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
   return typeof seq === 'number' && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
 }
@@ -181,7 +181,7 @@ class MessageProvider {
       try {
         const db = await import('./message-db');
         const cached = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
-        idbMessages = cached.filter(isSpineCacheMessage);
+        idbMessages = cached.filter(isSpineMessage);
         logger.info('IDB range query', {
           sessionId,
           fromSeq: clampedFrom,

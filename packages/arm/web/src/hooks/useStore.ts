@@ -53,6 +53,7 @@ const initialState = {
   devices: new Map<string, DeviceSummary>(),
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
+  cardHoldUntil: new Map<string, number>(),
   runtimeStatuses: new Map<string, import('../types/store').SessionRuntimeStatus>(),
   pinnedSessions: new Set<string>(),
   unreadCount: new Map<string, number>(),
@@ -135,6 +136,8 @@ export const useStore = create<Store>()(persist((set) => ({
       messages.delete(sessionId);
       const cards = new Map(state.cards);
       cards.delete(sessionId);
+      const cardHoldUntil = new Map(state.cardHoldUntil);
+      cardHoldUntil.delete(sessionId);
       const runtimeStatuses = new Map(state.runtimeStatuses);
       runtimeStatuses.delete(sessionId);
       const unreadCount = new Map(state.unreadCount);
@@ -149,7 +152,7 @@ export const useStore = create<Store>()(persist((set) => ({
       sessionUsage.delete(sessionId);
       const sessionPreviews = new Map(state.sessionPreviews);
       sessionPreviews.delete(sessionId);
-      return { sessions, messages, cards, runtimeStatuses, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
+      return { sessions, messages, cards, cardHoldUntil, runtimeStatuses, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
     });
   },
 
@@ -298,6 +301,13 @@ export const useStore = create<Store>()(persist((set) => ({
       return { cards: next };
     });
   },
+
+  holdCard: (sessionId, untilSeq) => set((state) => {
+    const cardHoldUntil = new Map(state.cardHoldUntil);
+    if (untilSeq > 0) cardHoldUntil.set(sessionId, untilSeq);
+    else cardHoldUntil.delete(sessionId);
+    return { cardHoldUntil };
+  }),
 
   togglePin: (sessionId) =>
     set((state) => {
@@ -645,6 +655,7 @@ export const useStore = create<Store>()(persist((set) => ({
   clearTransientState: () => set({
     lastError: null,
     cards: new Map(),
+    cardHoldUntil: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
     loadingSessions: new Set(),
@@ -664,6 +675,7 @@ export const useStore = create<Store>()(persist((set) => ({
     devices: new Map(),
     messages: new Map(),
     cards: new Map(),
+    cardHoldUntil: new Map(),
     runtimeStatuses: new Map(),
     pinnedSessions: new Set(),
     unreadCount: new Map(),

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import type { SessionLiveSnapshot } from '@kraki/protocol';
 import { useAccountDeletion } from './account-deletion';
 import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
@@ -239,7 +240,7 @@ describe('KrakiWSClient', () => {
   });
 
   describe('message routing', () => {
-    async function connectAndAuth(client: KrakiWSClient) {
+    async function connectAndAuth(client: KrakiWSClient, snapshot?: SessionLiveSnapshot) {
       client.connect();
       await vi.waitFor(() => {
         expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
@@ -262,7 +263,7 @@ describe('KrakiWSClient', () => {
         type: 'session_subscription_set', deviceId: 'dev-1', seq: 2, timestamp: '',
         payload: {
           accepted: true, sessionId: 'sess-1',
-          snapshot: {
+          snapshot: snapshot ?? {
             digest: { id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' },
             spineHeadSeq: 0,
             card: { draft: '', action: null },
@@ -270,6 +271,58 @@ describe('KrakiWSClient', () => {
         },
       });
     }
+
+    it('keeps authoritative subscription snapshot cursors and uses its head for implicit markRead', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      const reconcile = vi.spyOn(messageProvider, 'reconcileTail').mockImplementation(() => {});
+      useStore.getState().appendMessage('sess-1', {
+        type: 'user_message', sessionId: 'sess-1', deviceId: 'dev-1', seq: 10, timestamp: '',
+        payload: { content: 'Cached history' },
+      });
+      await connectAndAuth(client, {
+        digest: { id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 100, readSeq: 75, messageCount: 100, createdAt: '' },
+        spineHeadSeq: 100,
+        card: { draft: 'Current draft', action: null },
+      });
+
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 75 });
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(useStore.getState().cardHoldUntil.get('sess-1')).toBe(100);
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('Current draft');
+      expect(reconcile).toHaveBeenCalledWith('sess-1', 100);
+
+      const send = vi.spyOn(client, 'sendEncrypted').mockImplementation(() => {});
+      client.markRead('sess-1');
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'mark_read', payload: { seq: 100 } }));
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 100 });
+      expect(useStore.getState().unreadCount.has('sess-1')).toBe(false);
+      client.disconnect();
+    });
+
+    it('keeps a subscription snapshot manual-unread rollback authoritative', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      vi.spyOn(messageProvider, 'reconcileTail').mockImplementation(() => {});
+      await connectAndAuth(client, {
+        digest: { id: 'sess-1', agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 100, readSeq: 99, messageCount: 100, createdAt: '' },
+        spineHeadSeq: 100,
+        card: { draft: '', action: null },
+      });
+      useStore.getState().upsertSession({ ...useStore.getState().sessions.get('sess-1')!, readSeq: 100 });
+      client.setDesiredSession(null);
+      receiveInner({ type: 'session_subscription_set', deviceId: 'dev-1', seq: 3, timestamp: '',
+        payload: { accepted: true, sessionId: null, snapshot: null } });
+      client.setDesiredSession('sess-1');
+      receiveInner({ type: 'session_subscription_set', deviceId: 'dev-1', seq: 4, timestamp: '',
+        payload: { accepted: true, sessionId: 'sess-1', snapshot: {
+          digest: { id: 'sess-1', agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 100, readSeq: 99, messageCount: 100, createdAt: '' },
+          spineHeadSeq: 100, card: { draft: '', action: null },
+        } } });
+
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 99 });
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(isAutoReadSuppressed('sess-1')).toBe(true);
+      client.disconnect();
+    });
 
     it('routes agent_message to store', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
