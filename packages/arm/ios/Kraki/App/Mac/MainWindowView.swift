@@ -363,6 +363,8 @@ struct MainWindowView: View {
                 )
             }
         )
+        // Optional last step of first-run setup (shown at most once).
+        .overlay { MacConnectPhoneStep() }
         .overlay(alignment: .top) { PairingFeedbackToast() }
         .sheet(isPresented: $pairingPresented) {
             PairingSheet()

@@ -368,6 +368,7 @@ targets:
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
+      - path: Kraki/Features/Pairing/MacConnectPhoneStep.swift
       - path: Kraki/Features/Pairing/PairingLink.swift
       # Asset catalog (iOS universal icon + macOS icon sizes).
       - path: Kraki/Resources/Assets.xcassets
