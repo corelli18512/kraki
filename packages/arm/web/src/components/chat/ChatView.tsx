@@ -120,13 +120,31 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     });
     rowCache.current = nextCache;
     const landed = new Set(spine.map((i) => payloadOf(i.message).clientId).filter(Boolean));
-    for (const entry of pending) {
-      if (landed.has(entry.clientId)) continue;
-      out.push({ kind: 'pending', key: `pending:${entry.clientId}`, entry });
+    // Failed inputs stay where they were written, but only within the loaded
+    // spine window (Mac ChatViewModel.place). Retrying puts them at the tail.
+    const windowStart = spine.find((item) => seqOf(item.message) > 0);
+    const startSeq = windowStart ? seqOf(windowStart.message) : Infinity;
+    const remaining = pending.filter((entry) => !landed.has(entry.clientId));
+    const anchored = remaining.filter((entry) => entry.state === 'failed'
+      && entry.afterSeq !== undefined && entry.afterSeq >= startSeq)
+      .sort((a, b) => a.afterSeq! - b.afterSeq! || a.order - b.order);
+    for (const entry of anchored) {
+      const index = out.findIndex((row) => row.kind === 'spine' && seqOf(row.item.message) > entry.afterSeq!);
+      out.splice(index < 0 ? out.length : index, 0, { kind: 'pending', key: `pending:${entry.clientId}`, entry });
     }
-    if (showLive && card) out.push({ kind: 'live', key: LIVE_KEY, card });
+    const anchoredIds = new Set(anchored.map((entry) => entry.clientId));
+    for (const entry of remaining) {
+      if (!anchoredIds.has(entry.clientId)) out.push({ kind: 'pending', key: `pending:${entry.clientId}`, entry });
+    }
+    if (showLive && card) {
+      const anchor = card.steer?.anchor;
+      const index = anchor ? out.findIndex((row) => row.kind === 'pending' ? row.entry.clientId === anchor
+        : row.kind === 'spine' && row.item.message.type === 'user_message'
+          && (payloadOf(row.item.message).clientId === anchor || `${sessionId}:${seqOf(row.item.message)}` === anchor)) : -1;
+      out.splice(index < 0 ? out.length : index, 0, { kind: 'live', key: LIVE_KEY, card });
+    }
     return out;
-  }, [spine, pending, showLive, card]);
+  }, [spine, pending, showLive, card, sessionId]);
 
   // ── List state ──
   const listRef = useRef<ChatScrollerHandle>(null);

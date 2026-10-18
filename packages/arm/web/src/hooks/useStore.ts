@@ -8,6 +8,8 @@ import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
 import { isActivePhase } from '../lib/device-update';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 import { outbox } from '../lib/chat/outbox';
+import { aboveSteer, followSteer } from '../lib/chat/card-steer';
+import { payloadOf, seqOf } from '../lib/chat/spine';
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -202,43 +204,40 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const nextMsgs = new Map(state.messages);
       const existing = nextMsgs.get(sessionId) ?? [];
-      // A landing agent_message is the turn's permanent reply — it graduates the
-      // live draft. Clear the card's draft text in the SAME store update so the
-      // bubble replaces the draft in place, with no frame gap (the old flicker
-      // was a separate clear-then-re-add). The action slot is left as the server
-      // sent it — its VISIBILITY is gated on liveness in ChatView (a resolved
-      // action no longer pins the card), so no local mutation of server state.
+      // Land prose and retire the turn in the same update as the spine row.
+      // Questions land only a segment; late incremental state after a true
+      // conclusion must never resurrect a second assistant bubble.
       let nextCards = state.cards;
-      if (message.type === 'agent_message' || message.type === 'turn_status' || message.type === 'interrupted_turn'
-        || message.type === 'system_message' || message.type === 'idle') {
-        const card = state.cards.get(sessionId);
-        // A question only lands the lead-in prose: Tentacle keeps the turn
-        // (and a parallel tool's unresolved permission) open. Keep the card
-        // open with its action, as Mac landAgentMessage(isQuestion:) does.
-        const isQuestion = message.type === 'agent_message'
-          && !!(message.payload as { question?: unknown } | undefined)?.question;
-        if (card && !card.closed) {
+      const card = state.cards.get(sessionId);
+      const payload = payloadOf(message);
+      const dupIdx = seqOf(message) > 0
+        ? existing.findIndex((m) => m.type === message.type && seqOf(m) === seqOf(message)) : -1;
+      if (message.type === 'user_message' && dupIdx < 0) {
+        nextCards = new Map(state.cards);
+        nextCards.set(sessionId, payload.delivery === 'steer'
+          ? aboveSteer({ ...card, text: card?.text ?? '', action: card?.action ?? null, turnConcluded: false },
+            typeof payload.clientId === 'string' ? payload.clientId : `${sessionId}:${seqOf(message)}`)
+          : { text: '', action: null });
+      } else if (dupIdx < 0 && (message.type === 'agent_message' || message.type === 'turn_status' || message.type === 'interrupted_turn'
+        || message.type === 'system_message' || message.type === 'idle' || message.type === 'session_ended')) {
+        const isQuestion = message.type === 'agent_message' && !!payload.question;
+        if (!isQuestion) {
           nextCards = new Map(state.cards);
-          nextCards.set(sessionId, isQuestion && card.action
-            ? { ...card, text: '' }
-            : { text: '', action: card.action, closed: true });
+          nextCards.set(sessionId, { text: '', action: null, closed: true, turnConcluded: true });
+        } else if (card && !card.turnConcluded) {
+          nextCards = new Map(state.cards);
+          nextCards.set(sessionId, { ...card, text: '', closed: !card.action, steer: followSteer(card) });
         }
       }
       // Dedup by [type, seq] for server-broadcast messages. The relay
       // can re-broadcast on reconnect (or in edge cases like a
       // user_message echoed twice when the resolve path also fired),
       // and silently duplicating bubbles is the visible failure mode.
-      const hasRealSeq = 'seq' in message && typeof message.seq === 'number' && message.seq > 0;
-      if (hasRealSeq) {
-        const dupIdx = existing.findIndex(
-          (m) => m.type === message.type && 'seq' in m && (m as { seq?: number }).seq === message.seq,
-        );
-        if (dupIdx >= 0) {
-          const replaced = [...existing];
-          replaced[dupIdx] = message;
-          nextMsgs.set(sessionId, replaced);
-          return { messages: nextMsgs, cards: nextCards };
-        }
+      if (dupIdx >= 0) {
+        const replaced = [...existing];
+        replaced[dupIdx] = message;
+        nextMsgs.set(sessionId, replaced);
+        return { messages: nextMsgs, cards: nextCards };
       }
       const list = [...existing, message];
       nextMsgs.set(sessionId, list);
@@ -250,16 +249,19 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.cards);
       const existing = next.get(sessionId) ?? { text: '', action: null };
+      if (existing.turnConcluded) return state;
       // Narration resumed: a retained resolved permission is superseded, as
       // Tentacle intended when it cleared the slot.
       const retained = (existing.action?.payload as { retained?: boolean } | undefined)?.retained === true;
       next.set(sessionId, {
+        ...existing,
+        steer: reset || (!existing.text && content) ? followSteer(existing) : existing.steer,
         // Draft bubble: a reset starts a fresh segment (keep-last); otherwise
         // the streaming delta appends. The action slot is untouched — it lives
         // in parallel (tool activity while the draft streams).
         text: reset ? content : existing.text + content,
         action: retained && content ? null : existing.action,
-        // New words reopen a concluded card (the next segment of the turn).
+        // New words reopen a landed question's segment, not a concluded turn.
         closed: existing.closed && !content,
       });
       return { cards: next };
@@ -269,6 +271,7 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.cards);
       const existing = next.get(sessionId) ?? { text: '', action: null };
+      if (existing.turnConcluded) return state;
       const current = existing.action;
       if (action === null && current?.type === 'permission' && current.payload.decision) {
         // Tentacle retires a resolved permission just before the next delta.
@@ -277,7 +280,7 @@ export const useStore = create<Store>()(persist((set) => ({
         // replaces it (iOS/Mac `MessageStore.setCardAction`). The clear is
         // itself confirmation that the decision arrived.
         const { localPending: _pending, ...rest } = current.payload as Record<string, unknown>;
-        next.set(sessionId, { text: existing.text, action: { ...current, payload: { ...rest, retained: true } } as unknown as typeof current });
+        next.set(sessionId, { ...existing, action: { ...current, payload: { ...rest, retained: true } } as unknown as typeof current });
         return { cards: next };
       }
       if (current?.type === 'permission' && (current.payload as { localPending?: boolean }).localPending
@@ -286,7 +289,7 @@ export const useStore = create<Store>()(persist((set) => ({
         // decision until Tentacle confirms it or the local timeout reverts it.
         return state;
       }
-      next.set(sessionId, { text: existing.closed ? '' : existing.text, action, closed: existing.closed && !action });
+      next.set(sessionId, { ...existing, text: existing.closed ? '' : existing.text, action, closed: existing.closed && !action });
       return { cards: next };
     }),
 
@@ -306,6 +309,23 @@ export const useStore = create<Store>()(persist((set) => ({
       });
       return { cards: next };
     }),
+
+  placeCardAboveSteer: (sessionId, anchor) => set((state) => {
+    const card = state.cards.get(sessionId);
+    if (!card) return state;
+    const placed = aboveSteer(card, anchor);
+    if (placed === card) return state;
+    const cards = new Map(state.cards);
+    cards.set(sessionId, placed);
+    return { cards };
+  }),
+
+  replaceCardFromSubscription: (sessionId, card, live) => set((state) => {
+    const cards = new Map(state.cards);
+    cards.set(sessionId, live ? { text: card.text, action: card.action }
+      : { text: '', action: null, closed: true, turnConcluded: true });
+    return { cards };
+  }),
 
   setRuntimeStatus: (sessionId, status) =>
     set((state) => {
