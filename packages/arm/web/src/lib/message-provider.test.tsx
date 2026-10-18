@@ -387,7 +387,7 @@ describe('message-provider: range-fetch protocol', () => {
     expect(messageProvider.isLoading('s1')).toBe(false);
   });
 
-  it('handleRangeBatch warns but still delivers when truncated=true', async () => {
+  it('continues the producer-capped newer suffix with the missing older interval', async () => {
     setupSession();
     messageProvider.setTentacleInfo('s1', 1000, 'd1');
     const sent: Record<string, unknown>[] = [];
@@ -398,13 +398,19 @@ describe('message-provider: range-fetch protocol', () => {
       expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
     });
 
-    messageProvider.handleRangeBatch('s1', [
-      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 501, timestamp: '',
-        payload: { content: 'newer end' } },
-    ], 501, 501, true);
-
+    // Real producer contract: a >500 request keeps its newest 500 rows.
+    const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => ({
+      type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: from + index, timestamp: '',
+      payload: { content: `row ${from + index}` },
+    }));
+    messageProvider.handleRangeBatch('s1', rows(501, 1000), 501, 1000, true);
+    await vi.waitFor(() => { expect(sent).toHaveLength(2); });
+    expect(sent[1].payload).toMatchObject({ fromSeq: 1, toSeq: 500 });
+    messageProvider.handleRangeBatch('s1', rows(1, 500), 1, 500, false);
     await pending;
 
-    expect(useStore.getState().messages.get('s1')?.length).toBe(1);
+    expect(useStore.getState().messages.get('s1')?.map(message => 'seq' in message ? message.seq : 0))
+      .toEqual(Array.from({ length: 1000 }, (_, index) => index + 1));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
   });
 });
