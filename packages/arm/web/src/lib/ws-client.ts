@@ -163,6 +163,9 @@ export class KrakiWSClient {
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
       isLinkBusy: () => Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS,
       acceptsResend: (sessionId) => this.acceptsResend(sessionId),
+      getSpineHead: (sessionId) => (getStore().messages.get(sessionId) ?? []).reduce(
+        (head, m) => Math.max(head, 'seq' in m ? m.seq ?? 0 : 0), getStore().sessions.get(sessionId)?.lastSeq ?? 0),
+      placeCardAboveSteer: (sessionId, clientId) => getStore().placeCardAboveSteer(sessionId, clientId),
       isTurnRunning: (sessionId) => getStore().sessions.get(sessionId)?.state === 'active'
         || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting',
     });
@@ -291,9 +294,8 @@ export class KrakiWSClient {
     store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
     if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
-    store.clearCard(digest.id);
-    store.applyCardMessage(digest.id, card.draft, true);
-    store.setCardAction(digest.id, card.action);
+    store.replaceCardFromSubscription(digest.id, { text: card.draft, action: card.action },
+      digest.state === 'active' || digest.state === 'compacting');
     messageProvider.setTentacleInfo(digest.id, spineHeadSeq, msg.deviceId);
     messageProvider.reconcileTail(digest.id, spineHeadSeq);
   }

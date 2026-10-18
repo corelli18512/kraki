@@ -29,11 +29,13 @@ export interface SessionCard {
   /** The single action slot (tool / tool batch / permission) of the live
    *  bubble. Questions are spine messages, never card state. */
   action: CardActionState | null;
-  /** A spine bubble concluded the live segment (a reply, a question, a
-   *  terminal status, idle). The live bubble stays hidden until the next
-   *  delta/action reopens it — between segments it would otherwise flash
-   *  away for a few frames whenever Tentacle clears the slot. */
+  /** The current segment landed; a question can still continue the turn. */
   closed?: boolean;
+  /** A true conclusion rejects incremental draft/actions until an accepted
+   *  user input or authoritative subscription snapshot opens the next turn. */
+  turnConcluded?: boolean;
+  /** Client-only segment placement; snapshots intentionally start at the tail. */
+  steer?: { anchor?: string; passed: string[] };
 }
 
 export interface SessionRuntimeStatus {
@@ -156,6 +158,8 @@ export interface AppActions {
   appendMessage: (sessionId: string, message: ChatMessage) => void;
   applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;
   setCardAction: (sessionId: string, action: CardActionState | null) => void;
+  placeCardAboveSteer: (sessionId: string, anchor: string) => void;
+  replaceCardFromSubscription: (sessionId: string, card: SessionCard, live: boolean) => void;
   setRuntimeStatus: (sessionId: string, status: SessionRuntimeStatus | null) => void;
   clearCard: (sessionId: string) => void;
   togglePin: (sessionId: string) => void;

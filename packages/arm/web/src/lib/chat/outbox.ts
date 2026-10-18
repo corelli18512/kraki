@@ -36,6 +36,8 @@ export interface PendingInput {
   answerTo?: string;
   timestamp: string;
   order: number;
+  /** Write-time spine head: only failed inputs are held at this position. */
+  afterSeq?: number;
   state: PendingState;
   /** Unknown fate: send again once the Tentacle is known to deduplicate. */
   needsResend?: boolean;
@@ -61,6 +63,8 @@ interface OutboxDeps {
    *  dispatches, so its missing echo is not a stall (Mac
    *  CommandSender.waitsBehindRunningTurn). */
   isTurnRunning?: (sessionId: string) => boolean;
+  getSpineHead?: (sessionId: string) => number;
+  placeCardAboveSteer?: (sessionId: string, clientId: string) => void;
 }
 
 const STORAGE_KEY = 'kraki-outbox-v1';
@@ -261,7 +265,9 @@ export const outbox = {
       timestamp: new Date().toISOString(),
       order: entries.reduce((n, e) => Math.max(n, e.order), 0) + 1,
       state: 'sending',
+      afterSeq: deps?.getSpineHead?.(sessionId),
     };
+    if (entry.delivery === 'steer') deps?.placeCardAboveSteer?.(sessionId, entry.clientId);
     update((list) => [...list, entry]);
     diag.sends.created(entry.clientId, kindOf(entry), text.length, entry.attachments?.length ?? 0, deps?.isDeliveryPathUp(sessionId) ?? false);
     diag.record('cmd.input', sessionId, { clientId: entry.clientId, answerTo: entry.answerTo, textLength: text.length, attachments: entry.attachments?.length ?? 0, source: 'web/outbox' });
@@ -282,7 +288,9 @@ export const outbox = {
       ...opts, delivery: opts.answerTo ? undefined : opts.delivery === 'steer' ? 'steer' : undefined,
       timestamp: new Date().toISOString(),
       order: entries.reduce((n, e) => Math.max(n, e.order), 0) + 1, state: 'correcting',
+      afterSeq: deps?.getSpineHead?.(sessionId),
     };
+    if (entry.delivery === 'steer') deps?.placeCardAboveSteer?.(sessionId, entry.clientId);
     update((list) => [...list, entry]);
     diag.sends.created(entry.clientId, kindOf(entry, true), text.length, entry.attachments?.length ?? 0, deps?.isDeliveryPathUp(sessionId) ?? false);
     phase(entry, 'correcting');
