@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { flushSync } from 'react-dom';
 import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
@@ -15,6 +16,7 @@ import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } fr
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import { HistoryLoadStatus } from './HistoryLoadStatus';
 import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/chat/unread-entry';
 import './chat.css';
 
@@ -57,7 +59,16 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
   const connected = useStore((s) => s.status === 'connected');
   const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
-  const loading = useStore((s) => s.loadingSessions.has(sessionId));
+  const getRangeStatus = useCallback(() => messageProvider.getRangeStatus(sessionId), [sessionId]);
+  const rangeStatus = useSyncExternalStore(messageProvider.subscribeRangeStatus, getRangeStatus, getRangeStatus);
+  const loading = !!session && rangeStatus.state === 'loading';
+  const showHistoryStatus = !!session && (loading || rangeStatus.state === 'error' || rangeStatus.state === 'incomplete');
+  const retryHistory = useCallback(() => {
+    // Check again at admission: stale events and repeated clicks cannot start work.
+    if (!useStore.getState().sessions.has(sessionId) || messageProvider.isLoading(sessionId)) return;
+    const status = messageProvider.getRangeStatus(sessionId);
+    if (status.state === 'error' || status.state === 'incomplete') messageProvider.retryRange(sessionId);
+  }, [sessionId]);
   const allPending = useOutbox((s) => s.entries);
   const pending = useMemo(
     () => allPending.filter((e) => e.sessionId === sessionId).sort((a, b) => a.order - b.order),
@@ -134,6 +145,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const atBottomRef = useRef(true);
   const [unseen, setUnseen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(72);
+  const measuredComposerHeight = useRef(72);
   const narrow = useNarrow();
   // Mac's floating composer grows over chat, without moving the newest edge.
   // ChatBottomObstruction: 36 capsule + 2×12 bottom padding − 6 row margin.
@@ -143,6 +155,28 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // extra reach so it can be scrolled into view (Mac composerOverlayInset).
   const restingDock = useRef<number | null>(null);
   const overlayReach = narrow || restingDock.current === null ? 0 : Math.max(0, Math.round(composerHeight - restingDock.current));
+  const historyBox = useRef<HTMLDivElement>(null);
+  const [historyHeight, setHistoryHeight] = useState(0);
+  const measuredHistoryHeight = useRef(0);
+  // Measurements reserve transcript space only. The status itself is positioned
+  // by its dock containing block, so child-only draft growth cannot overlap it
+  // while ResizeObserver delivery or the resulting React commit is pending.
+  const statusClearance = Math.max(bottomClearance, composerHeight + historyHeight + 8);
+  useLayoutEffect(() => {
+    const box = historyBox.current;
+    if (!box) return;
+    const measure = (synchronous: boolean) => {
+      const height = box.getBoundingClientRect().height;
+      if (height === measuredHistoryHeight.current) return;
+      measuredHistoryHeight.current = height;
+      if (synchronous) flushSync(() => setHistoryHeight(height));
+      else setHistoryHeight(height);
+    };
+    measure(false);
+    const observer = new ResizeObserver(() => measure(true));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [showHistoryStatus, sessionId]);
   const [upTarget, setUpTarget] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
@@ -192,18 +226,38 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     seenAgentKey.current = lastAgentKey;
   }, [lastAgentKey]);
 
-  useEffect(() => {
+  const measureComposer = useCallback((synchronous: boolean) => {
+    const height = composerBox.current?.getBoundingClientRect().height;
+    // An unlaid-out/hidden dock has no usable clearance; retain its last size.
+    if (!height) return;
+    // Preserve desktop overlay reach when no history strip is present.
+    if (restingDock.current === null || height < restingDock.current) restingDock.current = height;
+    if (height === measuredComposerHeight.current) return;
+    // Set the guard before publishing: the resulting commit/observer delivery
+    // must not feed the same measurement back into another synchronous commit.
+    measuredComposerHeight.current = height;
+    if (synchronous) flushSync(() => setComposerHeight(height));
+    else setComposerHeight(height);
+  }, []);
+  // Parent commits (including compaction/session changes) settle before paint.
+  // Do not flushSync from a React lifecycle.
+  useLayoutEffect(() => { measureComposer(false); });
+  useLayoutEffect(() => {
     const el = composerBox.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const h = el.getBoundingClientRect().height;
-      // Smallest measured dock = its resting footprint.
-      if (h > 0 && (restingDock.current === null || h < restingDock.current)) restingDock.current = h;
-      setComposerHeight(h);
+    // Composer owns its draft and can commit without rendering ChatView. Observe
+    // only dock mutations outside the out-of-flow history subtree; transcript
+    // padding is outside this subtree too, so reserving space cannot feed back.
+    const mutations = new MutationObserver((records) => {
+      if (records.some(record => !historyBox.current?.contains(record.target))) measureComposer(true);
     });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    mutations.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
+    // Intrinsic/font/viewport changes need no DOM mutation. Commit their measured
+    // clearance in this before-paint callback, not a later React render.
+    const resize = new ResizeObserver(() => measureComposer(true));
+    resize.observe(el);
+    return () => { mutations.disconnect(); resize.disconnect(); };
+  }, [measureComposer]);
 
   const scrollToBottom = useCallback((smooth: boolean) => {
     listRef.current?.scrollToBottom(smooth);
@@ -230,11 +284,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       setWindowSize((n) => n + WINDOW_PAGE);
       return;
     }
-    if (!hasOlder || messageProvider.isLoading(sessionId)) return;
+    if (!hasOlder || messageProvider.isLoading(sessionId)
+      || rangeStatus.state === 'error' || rangeStatus.state === 'incomplete') return;
     const toSeq = lowSeq - 1;
     setWindowSize((n) => n + WINDOW_PAGE);
     void messageProvider.fetchRange(sessionId, Math.max(1, toSeq - OLDER_PAGE + 1), toSeq);
-  }, [hiddenAbove, hasOlder, lowSeq, sessionId]);
+  }, [hiddenAbove, hasOlder, lowSeq, sessionId, rangeStatus]);
 
   // ── ↑: the start of the nearest reply whose top is above the view ──
   const rowsRef = useRef(rows);
@@ -313,9 +368,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         rows={visibleRows}
         renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
         topInset={topInset + 8}
-        bottomInset={bottomClearance}
-        overlayReach={overlayReach}
-        header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
+        bottomInset={showHistoryStatus ? statusClearance : bottomClearance}
+        overlayReach={showHistoryStatus ? 0 : overlayReach}
+        header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader">{loading && <span className="kspinner" />}</div> : null}
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;
           setAtBottom(bottom);
@@ -332,12 +387,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
         entranceSide={entranceSide}
       />
-      {rows.length === 0 && (
+      {session && rows.length === 0 && !showHistoryStatus && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>
-          {loading ? <span className="kspinner" /> : <p>Send a message to start.</p>}
+          <p>Send a message to start.</p>
         </div>
       )}
-
       <div className="kjump" style={{
         // MacComposerMetrics: bottomPadding12 + control36 + stackGap9.
         bottom: narrow ? composerHeight + 8 : 57,
@@ -364,6 +418,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       </div>
 
       <div className="kcomposer-dock" ref={composerBox}>
+        <div ref={historyBox} className="khistory-position">
+          {showHistoryStatus && <HistoryLoadStatus status={rangeStatus} onRetry={retryHistory} />}
+        </div>
         {isCompacting && (
           <div className="kcompacting" role="status" aria-label="Compacting context">
             <Loader className="kcompacting-spinner" aria-hidden />
