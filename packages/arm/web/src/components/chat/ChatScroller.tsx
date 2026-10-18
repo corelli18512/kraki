@@ -4,7 +4,7 @@ import {
 } from 'react';
 
 /**
- * The chat's scroll container. Native browser scrolling (the platform's own
+ * The chat's scroll container. Native browser user scrolling (the platform's own
  * physics on every OS), with the two guarantees the iOS/Mac lists make:
  *
  * - Pinned: a reader at the newest edge stays exactly there while the tail
@@ -60,19 +60,25 @@ const PIN_THRESHOLD = 4;
 const ENTRY_SETTLE_MS = 400;
 /** Bottom-follow time constant: ~95 % of a new line / bubble in ~0.24 s. */
 const FOLLOW_TAU_MS = 80;
+/** Mac animateScroll's cubic arrival glide, with a live target each frame. */
+const NAVIGATION_MS = 280;
 
 /** Fraction of the remaining distance to close after `dt` ms. */
 export function followProgress(dt: number): number {
   return 1 - Math.exp(-Math.max(0, Math.min(dt, 64)) / FOLLOW_TAU_MS);
 }
 
-/** Keys newly added at the end: as many as the list grew by (a same-length
- *  change at the tail is a row changing identity, not a new row). */
+/** Arrivals after the previous tail still enter when the front of a capped
+ *  window was evicted. If the tail itself disappeared, only net growth enters:
+ *  pending → sent and live → landed are identity replacements, not arrivals. */
 export function newTailKeys(before: string[], after: string[]): string[] {
+  const tail = before.length ? after.indexOf(before[before.length - 1]) : -1;
   const grew = after.length - before.length;
-  if (grew <= 0) return [];
+  if (tail < 0 && grew <= 0) return [];
   const known = new Set(before);
-  return after.slice(after.length - grew).filter((key) => !known.has(key));
+  const added = after.slice(tail >= 0 ? tail + 1 : after.length - grew).filter((key) => !known.has(key));
+  // Like Mac recordEntrances: a catch-up burst is not a conversation beat.
+  return added.length <= 2 ? added : [];
 }
 const NEAR_TOP = 900;
 
@@ -125,7 +131,9 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const reportBottom = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
-    const atBottom = tailTop(el) - el.scrollTop <= PIN_THRESHOLD;
+    // Following / returning to the tail is a semantic bottom state even while
+    // the animation is catching up with new geometry.
+    const atBottom = pinned.current || tailTop(el) - el.scrollTop <= PIN_THRESHOLD;
     if (atBottom !== lastBottom.current) {
       lastBottom.current = atBottom;
       callbacks.current.onAtBottomChange?.(atBottom);
@@ -163,14 +171,17 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const following = useRef(false);
   const followFrame = useRef(0);
   const mountedAt = useRef(performance.now());
-  const stopFollow = () => {
+  // Navigation and follow share a single frame owner. A growing tail must
+  // never start direct writes alongside a browser-owned smooth navigation.
+  const stopMotion = () => {
     if (followFrame.current) cancelAnimationFrame(followFrame.current);
     followFrame.current = 0;
     following.current = false;
+    programmatic.current = false;
   };
   const followBottom = useCallback(() => {
     const el = scroller.current;
-    if (!el || following.current) return;
+    if (!el || following.current || programmatic.current) return;
     following.current = true;
     let last = performance.now();
     const step = (now: number) => {
@@ -179,7 +190,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       if (!pinned.current || remaining <= 0.5) {
         // A revealed covered tail (scrolled into the overlay reach) stays revealed.
         if (pinned.current && remaining > 0) el.scrollTop = target;
-        stopFollow();
+        stopMotion();
         reportBottom();
         return;
       }
@@ -189,18 +200,24 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     };
     followFrame.current = requestAnimationFrame(step);
   }, [reportBottom]);
-  useEffect(() => () => stopFollow(), []);
+  useEffect(() => () => stopMotion(), []);
 
   /** Re-apply pin / anchor after anything changed geometry. */
   const settle = useCallback((instant = false) => {
     const el = scroller.current;
     if (!el) return;
+    if (programmatic.current) {
+      // The navigation re-measures its target each frame; settling cannot
+      // take over its offset, even for composer / viewport changes.
+      reportBottom();
+      return;
+    }
     if (applyUnreadEntry()) {
       // Held on the first new message.
     } else if (pinned.current) {
       const settling = performance.now() - mountedAt.current < ENTRY_SETTLE_MS;
       if (instant || settling) {
-        stopFollow();
+        stopMotion();
         // Rest on the newest edge; keep a revealed covered tail where it is.
         if (el.scrollTop < tailTop(el)) el.scrollTop = tailTop(el);
       } else followBottom();
@@ -254,9 +271,23 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    let previousTop = el.scrollTop;
+    let previousMax = el.scrollHeight - el.clientHeight;
+    let olderIntent = false;
     const onScrollEvent = () => {
       const distance = tailTop(el) - el.scrollTop;
-      if (!programmatic.current && !following.current) pinned.current = distance <= PIN_THRESHOLD;
+      const max = el.scrollHeight - el.clientHeight;
+      // Giving back collapsed overlay reach is a browser clamp, not older
+      // intent. It must not disengage a reader who had revealed the tail.
+      const clamped = max < previousMax && el.scrollTop >= max - 1;
+      if (!programmatic.current && !following.current) {
+        // Older movement overrides proximity. Only actual newer movement
+        // back into the tail band re-arms follow (not a later settle).
+        if (el.scrollTop < previousTop && !clamped) pinned.current = false;
+        else if (el.scrollTop > previousTop && !olderIntent) pinned.current = distance <= PIN_THRESHOLD;
+      }
+      previousTop = el.scrollTop;
+      previousMax = max;
       captureAnchor();
       reportBottom();
       if (el.scrollTop < NEAR_TOP) callbacks.current.onNearTop?.();
@@ -264,20 +295,36 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     };
     // A user gesture always takes over from a programmatic glide, and from
     // the unread-entry landing.
-    const onUser = () => { programmatic.current = false; stopFollow(); endUnreadEntry(); };
+    const onUser = (older = false, newer = false) => {
+      stopMotion();
+      endUnreadEntry();
+      previousTop = el.scrollTop;
+      // A queued scroll from the cancelled animation is not renewed newer
+      // intent. Keep an older wheel/key packet authoritative until new input.
+      olderIntent = older;
+      if (older) pinned.current = false;
+      else if (newer && tailTop(el) - el.scrollTop <= PIN_THRESHOLD) pinned.current = true;
+      captureAnchor();
+      reportBottom();
+    };
+    const onWheel = (e: WheelEvent) => { onUser(e.deltaY < 0, e.deltaY > 0); };
+    const onPointer = () => { onUser(); };
     const onKey = (e: KeyboardEvent) => {
-      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) onUser();
+      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) {
+        const older = ['PageUp', 'ArrowUp', 'Home'].includes(e.key) || (e.key === ' ' && e.shiftKey);
+        onUser(older, !older);
+      }
     };
     el.addEventListener('scroll', onScrollEvent, { passive: true });
-    el.addEventListener('wheel', onUser, { passive: true });
-    el.addEventListener('touchstart', onUser, { passive: true });
-    el.addEventListener('pointerdown', onUser, { passive: true });
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onPointer, { passive: true });
+    el.addEventListener('pointerdown', onPointer, { passive: true });
     el.addEventListener('keydown', onKey);
     return () => {
       el.removeEventListener('scroll', onScrollEvent);
-      el.removeEventListener('wheel', onUser);
-      el.removeEventListener('touchstart', onUser);
-      el.removeEventListener('pointerdown', onUser);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onPointer);
+      el.removeEventListener('pointerdown', onPointer);
       el.removeEventListener('keydown', onKey);
     };
   }, [captureAnchor, reportBottom]);
@@ -290,35 +337,52 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     settle();
   }, []);
 
-  const glide = (top: number, smooth: boolean) => {
+  const glide = (target: () => number, smooth: boolean) => {
     const el = scroller.current;
     if (!el) return;
-    if (!smooth) { el.scrollTop = top; return; }
+    reportBottom();
+    if (!smooth) { el.scrollTop = target(); captureAnchor(); reportBottom(); return; }
     programmatic.current = true;
-    el.scrollTo({ top, behavior: 'smooth' });
-    const done = () => { programmatic.current = false; el.removeEventListener('scrollend', done); captureAnchor(); };
-    el.addEventListener('scrollend', done);
-    setTimeout(done, 900);
+    const from = el.scrollTop;
+    const start = performance.now();
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - start) / NAVIGATION_MS);
+      const top = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, target()));
+      el.scrollTop = from + (top - from) * (1 - Math.pow(1 - progress, 3));
+      if (progress < 1) followFrame.current = requestAnimationFrame(step);
+      else {
+        stopMotion();
+        captureAnchor();
+        reportBottom();
+      }
+    };
+    followFrame.current = requestAnimationFrame(step);
   };
 
   useImperativeHandle(ref, () => ({
     scrollToBottom: (smooth) => {
       const el = scroller.current;
       if (!el) return;
-      stopFollow();
+      stopMotion();
       endUnreadEntry();
       pinned.current = true;
-      glide(tailTop(el), smooth);
+      glide(() => tailTop(el), smooth);
     },
     scrollToRow: (key, smooth) => {
       const el = scroller.current;
       const node = rowElement(key);
       if (!el || !node) return;
-      stopFollow();
+      stopMotion();
       endUnreadEntry();
       pinned.current = false;
-      const delta = node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
-      glide(el.scrollTop + delta, smooth);
+      const measureTarget = () => el.scrollTop + node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
+      let target = measureTarget();
+      glide(() => {
+        // A live reply can land under a new key mid-glide. Its detached node
+        // has no geometry; keep the last valid content-space destination.
+        if (node.isConnected) target = measureTarget();
+        return target;
+      }, smooth);
       anchor.current = { key, offset: 8 };
     },
     rowsAbove: () => {
