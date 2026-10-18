@@ -18,6 +18,7 @@ vi.mock('./message-db', () => ({
 
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
+import type { ChatMessage } from '../types/store';
 
 vi.mock('./ws-client', () => ({
   wsClient: {
@@ -189,6 +190,71 @@ describe('message-provider: ensureLoaded', () => {
     await vi.waitFor(() => {
       expect(messageProvider.isLoading('s1')).toBe(false);
     });
+  });
+});
+
+describe('message-provider: authoritative bridge tombstones', () => {
+  function rows(from: number, to: number): ChatMessage[] {
+    return Array.from({ length: to - from + 1 }, (_, index) => ({
+      type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: from + index,
+      timestamp: '', payload: { content: `message ${from + index}` },
+    }));
+  }
+
+  function bridgeFixture(sparse: boolean) {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    useStore.getState().prependMessages('s1', rows(20, 30));
+    const requests: Array<[number, number]> = [];
+    messageProvider.setSend(message => {
+      const { fromSeq, toSeq } = message.payload as { fromSeq: number; toSeq: number };
+      requests.push([fromSeq, toSeq]);
+      const response = fromSeq === 31 ? (sparse ? [...rows(35, 35), ...rows(42, 42)] : []) : rows(fromSeq, toSeq);
+      queueMicrotask(() => messageProvider.handleRangeBatch('s1', response, response[0]?.seq ?? 0, response.at(-1)?.seq ?? 0, false));
+    });
+    return requests;
+  }
+
+  it.each([false, true])('settles an authoritative bridge and preserves older pagination (sparse=%s)', async sparse => {
+    const requests = bridgeFixture(sparse);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[51, 100], [31, 50]]);
+    // Another foreground reconciliation must not rediscover the confirmed holes.
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toHaveLength(2);
+    await messageProvider.fetchRange('s1', 1, 19);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[51, 100], [31, 50], [1, 19]]);
+    expect(useStore.getState().messages.get('s1')?.find(message => message.seq === 1)).toBeDefined();
+  });
+
+  it.each([false, true])('continues past a settled authoritative bridge across bounded retries (sparse=%s)', async sparse => {
+    const requests = bridgeFixture(sparse);
+    messageProvider.setTentacleInfo('s1', 200, 'd1');
+    await messageProvider.fetchRange('s1', 151, 200, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'incomplete', remaining: [[81, 150]] });
+    messageProvider.retryRange('s1');
+    await vi.waitFor(() => expect(messageProvider.isLoading('s1')).toBe(false));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'incomplete', remaining: [[131, 150]] });
+    messageProvider.retryRange('s1');
+    await vi.waitFor(() => expect(messageProvider.isLoading('s1')).toBe(false));
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    expect(requests).toEqual([[151, 200], [31, 80], [81, 130], [131, 150]]);
+  });
+
+  it.each(['clear', 'invalidateSession'] as const)('revokes bridge tombstones on %s', async reset => {
+    const requests = bridgeFixture(false);
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    if (reset === 'clear') messageProvider.clear();
+    else messageProvider.invalidateSession('s1');
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    await messageProvider.fetchRange('s1', 51, 100, { foreground: true });
+    expect(requests).toEqual([[51, 100], [31, 50], [31, 50]]);
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
   });
 });
 

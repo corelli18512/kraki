@@ -69,6 +69,8 @@ class MessageProvider {
   private epoch = 0;
   private operations = new Map<string, RangeOperation>();
   private rangeStatuses = new Map<string, RangeStatus>();
+  /** Legacy seq holes confirmed by conclusive range responses; reset with authority. */
+  private rangeTombstones = new Map<string, Array<[number, number]>>();
   private rangeListeners = new Set<() => void>();
   private retryRanges = new Map<string, { from: number; to: number; options?: { initial?: boolean; foreground?: boolean } }>();
 
@@ -107,6 +109,7 @@ class MessageProvider {
     this.tentacleDeviceMap.delete(sessionId);
     this.retryRanges.delete(sessionId);
     this.rangeStatuses.delete(sessionId);
+    this.rangeTombstones.delete(sessionId);
     getStore().setSessionLoading(sessionId, false);
     for (const listener of this.rangeListeners) listener();
   }
@@ -274,7 +277,22 @@ class MessageProvider {
   private bridgeGaps(sessionId: string, tailFrom: number): Array<[number, number]> {
     const messages = (getStore().messages.get(sessionId) ?? []).filter(isSpineCacheMessage);
     const minimum = messages.reduce((min, message) => Math.min(min, (message as { seq: number }).seq), tailFrom);
-    return missingIntervals(messages, minimum, tailFrom - 1);
+    return (this.rangeTombstones.get(sessionId) ?? []).reduce(
+      (gaps, [from, to]) => excludeInterval(gaps, from, to),
+      missingIntervals(messages, minimum, tailFrom - 1),
+    );
+  }
+
+  private recordRangeTombstones(sessionId: string, messages: ChatMessage[], from: number, to: number): void {
+    const ranges = [...(this.rangeTombstones.get(sessionId) ?? []), ...missingIntervals(messages, from, to)]
+      .sort(([a], [b]) => a - b);
+    const merged: Array<[number, number]> = [];
+    for (const [lo, hi] of ranges) {
+      const previous = merged.at(-1);
+      if (previous && lo <= previous[1] + 1) previous[1] = Math.max(previous[1], hi);
+      else merged.push([lo, hi]);
+    }
+    this.rangeTombstones.set(sessionId, merged);
   }
 
   private async loadRange(sessionId: string, from: number, to: number, operation: RangeOperation): Promise<void> {
@@ -319,6 +337,9 @@ class MessageProvider {
         // Authoritative empty settles only this request; other holes left by
         // an earlier truncated middle page still require their own answer.
         missing = excludeInterval(missing, requestFrom, requestTo);
+        // Like PendingTailBuffer's legacy tombstones, absence is authoritative
+        // coverage too. Keep it across bridge calculations and explicit retries.
+        this.recordRangeTombstones(sessionId, incoming, requestFrom, requestTo);
       }
       if (this.pendingTailReconciles.has(sessionId)) return; // Newest foreground tail takes precedence.
       request = missing[0];
@@ -375,6 +396,7 @@ class MessageProvider {
     this.tentacleDeviceMap.clear();
     this.retryRanges.clear();
     this.rangeStatuses.clear();
+    this.rangeTombstones.clear();
     for (const listener of this.rangeListeners) listener();
     this.tracePulled.clear();
     this.traceLoaded.clear();

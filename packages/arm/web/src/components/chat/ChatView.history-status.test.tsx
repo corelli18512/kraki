@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ChatView } from './ChatView';
 import { messageProvider } from '../../lib/message-provider';
 import { useStore } from '../../hooks/useStore';
-import { requests, respond, setup, snapshot } from '../../lib/__tests__/ChatView.history-status.fixture';
+import { requests, respond, rows, setup, snapshot } from '../../lib/__tests__/ChatView.history-status.fixture';
 
 // jsdom has no CSS.escape; fixture row keys contain no quotes or escapes.
 if (!CSS.escape) CSS.escape = (value) => value;
@@ -102,6 +102,32 @@ describe('ChatView range status with the real provider', () => {
     expect(requests.map(r => [r.fromSeq, r.toSeq])).toEqual([[171, 220], [11, 60], [61, 110], [111, 160], [161, 170]]);
     expect(snapshot(id).seqs).toEqual(Array.from({ length: 220 }, (_, i) => i + 1));
     expect(screen.queryByRole('status', { name: 'Conversation history' })).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])('allows older pagination after an authoritative bridge response (sparse=%s)', async sparse => {
+    const { id, container } = await mount();
+    // jsdom lacks native scrolling; this test checks page admission, not geometry.
+    container.querySelector<HTMLElement>('[data-chat-scroll]')!.scrollTo = vi.fn();
+    act(() => useStore.getState().prependMessages(id, rows(id, 20, 30)));
+    await start(id); await answer();
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ fromSeq: 31, toSeq: 50 });
+    await act(async () => {
+      const response = sparse ? [...rows(id, 35, 35), ...rows(id, 42, 42)] : [];
+      messageProvider.handleRangeBatch(id, response, sparse ? 35 : 0, sparse ? 42 : 0, false);
+    });
+    await waitFor(() => expect(messageProvider.isLoading(id)).toBe(false));
+    // First reveal the cached row outside the initial 60-row rendered window,
+    // then page below its seq. A stuck incomplete status blocks this admission.
+    fireEvent.click(screen.getByRole('button', { name: 'Previous reply' }));
+    expect(screen.getByText('History row 20')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous reply' }));
+    await waitFor(() => expect(requests.at(-1)).toMatchObject({ fromSeq: 1, toSeq: 19 }));
+    await answer();
+    await waitFor(() => expect(snapshot(id).status.state).toBe('loaded'));
+    expect(requests.map(request => [request.fromSeq, request.toSeq])).toEqual([[51, 100], [31, 50], [1, 19]]);
+    expect(screen.getByText('History row 1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue loading history' })).not.toBeInTheDocument();
   });
 
   it('does not reinterpret a current question at the head after an unrelated older-load error', async () => {
