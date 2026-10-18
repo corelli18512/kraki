@@ -18,6 +18,11 @@ struct SessionListView: View {
     @State private var showToolIconGallery = false
     #endif
 
+    init(navigationPath: Binding<NavigationPath>, startsSearching: Bool = false) {
+        _navigationPath = navigationPath
+        _isSearching = State(initialValue: startsSearching)
+    }
+
     private var sessionStore: SessionStore { appState.sessionStore }
     private var deviceStore: DeviceStore { appState.deviceStore }
 
@@ -41,7 +46,10 @@ struct SessionListView: View {
     }
 
     var body: some View {
-        Group {
+        // ZStack, not Group: Group would apply the header modifier to each
+        // branch, so switching between results and "no results" rebuilt the
+        // header and its search field mid-typing (breaking IME composition).
+        ZStack {
             if filteredSessions.isEmpty && archivedCount == 0 {
                 emptyState
             } else {

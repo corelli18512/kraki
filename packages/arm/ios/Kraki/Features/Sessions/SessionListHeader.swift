@@ -18,8 +18,6 @@ struct SessionListHeader: View {
     /// DEBUG-only developer gallery.
     var onWordmarkLongPress: (() -> Void)?
 
-    @FocusState private var fieldFocused: Bool
-
     static let controlSize: CGFloat = 44
     static let wordmarkSize: CGFloat = 28
 
@@ -98,12 +96,10 @@ struct SessionListHeader: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("Search Sessions", text: $query)
-                    .focused($fieldFocused)
-                    .submitLabel(.search)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .accessibilityIdentifier("session-list-search-field")
+                // IME-safe: pinyin being composed is not a search query.
+                IMESearchField(placeholder: "Search Sessions", text: $query,
+                               accessibilityIdentifier: "session-list-search-field")
+                    .frame(maxWidth: .infinity)
                 if !query.isEmpty {
                     Button { query = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
@@ -124,7 +120,6 @@ struct SessionListHeader: View {
             .accessibilityIdentifier("session-list-search-close")
         }
         .transition(.opacity)
-        .onAppear { fieldFocused = true }
     }
 
     private func beginSearch() {
@@ -132,7 +127,6 @@ struct SessionListHeader: View {
     }
 
     private func endSearch() {
-        fieldFocused = false
         query = ""
         isSearching = false
     }
