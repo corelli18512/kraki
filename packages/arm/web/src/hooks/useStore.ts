@@ -279,7 +279,30 @@ export const useStore = create<Store>()(persist((set) => ({
         next.set(sessionId, { text: existing.text, action: { ...current, payload: { ...rest, retained: true } } as unknown as typeof current });
         return { cards: next };
       }
+      if (current?.type === 'permission' && (current.payload as { localPending?: boolean }).localPending
+        && action?.type === 'permission' && action.payload.id === current.payload.id && !action.payload.decision) {
+        // An unresolved update can predate the click. Keep the optimistic
+        // decision until Tentacle confirms it or the local timeout reverts it.
+        return state;
+      }
       next.set(sessionId, { text: existing.closed ? '' : existing.text, action, closed: existing.closed && !action });
+      return { cards: next };
+    }),
+
+  revertLocalPermission: (sessionId, permissionId, localError) =>
+    set((state) => {
+      const card = state.cards.get(sessionId);
+      if (!card) return state;
+      const action = card.action;
+      if (action?.type !== 'permission' || action.payload.id !== permissionId
+        || !(action.payload as { localPending?: boolean }).localPending) return state;
+      // Local failure is not a stale Tentacle update: bypass the merge guard.
+      const { decision: _decision, localPending: _pending, ...rest } = action.payload as Record<string, unknown>;
+      const next = new Map(state.cards);
+      next.set(sessionId, {
+        ...card,
+        action: { ...action, payload: { ...rest, localError } } as unknown as typeof action,
+      });
       return { cards: next };
     }),
 
