@@ -15,13 +15,21 @@ const isTrace = (t: string) =>
 const isTurnStart = (message: ChatMessage) =>
   message.type === 'user_message' && message.payload.delivery !== 'steer';
 
+function latestTurnStartSeq(messages: ChatMessage[] | undefined): number {
+  if (!messages) return -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isTurnStart(messages[i])) return (messages[i] as { seq?: number }).seq ?? -1;
+  }
+  return -1;
+}
+
 /**
  * Collect the TRACE steps (narration + tool chips) belonging to one turn,
  * keyed by a `targetSeq`:
  *  - Concluded turn: `targetSeq` is the concluding agent_message's seq — steps
  *    are the trace entries between the PRIOR user_message and that bubble.
  *  - In-progress turn: `targetSeq` is the turn's leading user_message seq —
- *    steps are the trace entries AFTER it through the current tail.
+ *    steps are the trace entries AFTER it up to the next prompt (or the tail).
  * Mirrors the region logic in store.setTurnSteps so a live pull and this reader
  * agree on the same slice.
  */
@@ -36,8 +44,11 @@ export function collectTurnSteps(messages: ChatMessage[] | undefined, targetSeq:
   let start: number;
   let end: number;
   if (inProgress) {
-    start = targetIdx;            // steps live after the user_message
-    end = messages.length;        // …through the current tail
+    start = targetIdx;
+    end = messages.length;
+    for (let i = targetIdx + 1; i < messages.length; i++) {
+      if (isTurnStart(messages[i]) || messages[i].type === 'send_input') { end = i; break; }
+    }
   } else {
     let turnStartIdx = -1;
     for (let i = targetIdx - 1; i >= 0; i--) {
@@ -68,16 +79,7 @@ export function useTurnSteps(
   const messages = useStore((s) => s.messages.get(sessionId));
   // For a live turn the target is the current turn's leading user_message; for a
   // concluded turn it is the passed-in bubble seq.
-  const targetSeq = useMemo(() => {
-    if (!live) return bubbleSeq ?? -1;
-    if (!messages) return -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (isTurnStart(messages[i])) {
-        return 'seq' in messages[i] ? (messages[i] as { seq?: number }).seq ?? -1 : -1;
-      }
-    }
-    return -1;
-  }, [live, bubbleSeq, messages]);
+  const targetSeq = useMemo(() => live ? latestTurnStartSeq(messages) : bubbleSeq ?? -1, [live, bubbleSeq, messages]);
   const steps = useMemo(() => collectTurnSteps(messages, targetSeq), [messages, targetSeq]);
   return { steps, targetSeq };
 }
@@ -95,7 +97,10 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
 }) {
   const live = bubbleSeq === null;
   const body = useRef<HTMLDivElement>(null);
-  const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq ?? undefined);
+  // Like Mac's StepsTarget, capture the opened turn once. Live refreshes must
+  // keep reading/requesting that turn, not the latest prompt in the session.
+  const [openedSeq] = useState(() => bubbleSeq ?? latestTurnStartSeq(useStore.getState().messages.get(sessionId)));
+  const { steps, targetSeq } = useTurnSteps(sessionId, false, openedSeq);
 
   const loaded = useSyncExternalStore(messageProvider.subscribeTurnTraces,
     () => messageProvider.isTurnTraceLoaded(sessionId, targetSeq));

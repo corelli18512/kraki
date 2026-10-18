@@ -580,9 +580,9 @@ export const useStore = create<Store>()(persist((set) => ({
         t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
         t === 'permission' || (replaceErrors && t === 'error');
 
-      // The target bubble is either the concluding agent_message (a concluded
-      // turn — steps go BEFORE it) or the leading user_message of an in-progress
-      // turn (no conclusion yet — steps go AFTER it, at the tail).
+      // The target is either a concluding bubble (steps go BEFORE it) or the
+      // leading user_message used by a live pull (steps go AFTER it). That live
+      // response may arrive after the turn has concluded and another has begun.
       const inProgress = existing[bubbleIdx].type === 'user_message'
         && existing[bubbleIdx].payload.delivery !== 'steer';
 
@@ -591,8 +591,15 @@ export const useStore = create<Store>()(persist((set) => ({
       let regionStart: number;
       let regionEnd: number;
       if (inProgress) {
-        regionStart = bubbleIdx;         // steps live after the user_message
-        regionEnd = existing.length;     // …through the current tail
+        regionStart = bubbleIdx;
+        regionEnd = existing.length;
+        for (let i = bubbleIdx + 1; i < existing.length; i++) {
+          const next = existing[i];
+          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') {
+            regionEnd = i; // never replace another prompt's trace, even on a late live response
+            break;
+          }
+        }
       } else {
         let turnStartIdx = -1;
         for (let i = bubbleIdx - 1; i >= 0; i--) {
