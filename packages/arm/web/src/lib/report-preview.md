@@ -1,10 +1,8 @@
 # Report preview helper contract
 
 `prepareReportPreview(original: string): Promise<string>` from `./report-preview` is a
-browser-only, preview-only transformation. `HtmlArtifactPanel` is intentionally not
-changed by this commit.
-
-Panel integration must independently prepare:
+browser-only, preview-only transformation. `HtmlArtifactPanel` independently
+prepares preview and explicit export documents:
 
 ```ts
 const previewHtml = await prepareReportPreview(original);
@@ -55,9 +53,8 @@ semantics (including original self-rendering reports) are unchanged.
 
 ## Dependency provenance
 
-Explicit stable dependency: **dompurify 3.4.17**, exact version. Official metadata
-queried with `pnpm view dompurify dist-tags.latest version dist.tarball
-dist.integrity --registry=https://registry.npmjs.org` on 2026-10-15:
+Explicit dependency: **dompurify 3.4.17**, the exact version pinned by the
+reviewed historical branch, installed offline for this port:
 
 - `https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz`
 - `sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==`
@@ -65,9 +62,8 @@ dist.integrity --registry=https://registry.npmjs.org` on 2026-10-15:
 - `dompurify` is used directly for document sanitation; its official packaged
   `dist/purify.min.js?raw` is bundled for generated Mermaid SVG sanitation inside
   the opaque sandbox. No CDN or report-provided sanitizer is loaded at runtime.
-- Initial frozen install, explicit scoped dependency addition and final frozen
-  install are recorded outside the repository. Lock changes add only DOMPurify
-  and its optional `@types/trusted-types` dependency.
+- Lock changes add only DOMPurify and its optional `@types/trusted-types`
+  dependency. This dependency addition was explicitly approved for the port.
 
 ## Checks and limits
 
@@ -90,7 +86,7 @@ HTTP canary control, intercepts all non-exact-origin external traffic/sockets,
 then closes only its owned browser and server. Canary requests and frame commits
 are recorded independently. Originals are retained without execution as exports.
 
-Evidence is host Chromium 145.0.7632.6 / Playwright 1.58.2 on macOS arm64 only:
-not Windows guest, Electron guard, native Mac or installed-app evidence. Negative
+The helper and `e2e/report-panel/run.mjs` exercise host Chromium only, not
+Windows guest, Electron guard, native Mac or installed-app behavior. Negative
 network observations last one second after each action, not indefinitely.
-Independent security review and panel integration testing remain required.
+Independent review remains required.
