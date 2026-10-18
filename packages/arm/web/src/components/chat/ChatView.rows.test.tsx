@@ -201,6 +201,27 @@ describe('ChatView steer segment placement', () => {
     expect(liveKeys()).toHaveLength(1);
   });
 
+  it.each([false, true])('both late local steer echoes stay above the new segment (reverse echoes %s)', (reverse) => {
+    delta('One.');
+    const a = outbox.send('s', 'A', { delivery: 'steer' });
+    const b = outbox.send('s', 'B', { delivery: 'steer' });
+    delta(' Two.');
+    render(<ChatView sessionId="s" topInset={40} />);
+    expect(shown()).toEqual(['Refactor it', 'live: One. Two.', 'A', 'B']);
+    act(() => delta('Doing both.', true));
+    const expected = ['Refactor it', 'A', 'B', 'live: Doing both.'];
+    expect(shown()).toEqual(expected);
+    const echoes = reverse ? [[b, 'B'], [a, 'A']] : [[a, 'A'], [b, 'B']];
+    const users = reverse ? ['B', 'A'] : ['A', 'B'];
+    for (const [clientId, content] of echoes) {
+      act(() => echo(clientId, content));
+      // Echo order owns the persisted row order, but neither echo may move
+      // this segment back above a steer it already followed.
+      expect(shown()).toEqual(['Refactor it', ...users, 'live: Doing both.']);
+      expect(liveKeys()).toHaveLength(1);
+    }
+  });
+
   it.each([true, false])('remote steers anchor by clientId or row identity (clientId %s)', (withId) => {
     delta('Reading.');
     route('user_message', { content: 'Faster', delivery: 'steer', ...(withId && { clientId: 'remote' }) });

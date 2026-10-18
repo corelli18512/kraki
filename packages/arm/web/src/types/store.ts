@@ -35,7 +35,12 @@ export interface SessionCard {
    *  user input or authoritative subscription snapshot opens the next turn. */
   turnConcluded?: boolean;
   /** Client-only segment placement; snapshots intentionally start at the tail. */
-  steer?: { anchor?: string; passed: string[] };
+  steer?: {
+    anchor?: string;
+    /** Every steer seen in this segment, including those after the anchor. */
+    unread: string[];
+    passed: string[];
+  };
 }
 
 export interface SessionRuntimeStatus {

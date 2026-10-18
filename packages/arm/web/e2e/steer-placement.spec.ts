@@ -14,9 +14,9 @@ async function delta(page: Page, text: string, reset = false) {
   }, { sessionId: SESSION, text, reset });
 }
 
-async function expectOrder(page: Page, liveFirst: boolean) {
+async function expectOrder(page: Page, liveFirst: boolean, steerText = 'Use the new API') {
   const live = page.locator('[data-scroll-key="__live__"]');
-  const steer = page.locator('[data-scroll-key]').filter({ hasText: 'Use the new API' });
+  const steer = page.locator('[data-scroll-key]').filter({ hasText: steerText });
   await expect(live).toHaveCount(1);
   await expect(steer).toHaveCount(1);
   await expect.poll(async () => {
@@ -27,8 +27,9 @@ async function expectOrder(page: Page, liveFirst: boolean) {
   }).toBe(true);
 }
 
-for (const echoAfterReset of [false, true]) {
-  test(`steer keeps streamed segment above it, then follows reset (echo ${echoAfterReset ? 'after' : 'before'} reset)`, async ({ page }) => {
+for (const [echoAfterReset, multipleSteers] of [[false, false], [true, false], [true, true]]) {
+  test(multipleSteers ? 'both local steer echoes stay above the new segment after reset'
+    : `steer keeps streamed segment above it, then follows reset (echo ${echoAfterReset ? 'after' : 'before'} reset)`, async ({ page }) => {
     const server = await MockRelayServer.create();
     try {
       await page.setViewportSize({ width: 1240, height: 720 });
@@ -53,6 +54,17 @@ for (const echoAfterReset of [false, true]) {
       await page.locator('textarea').fill('Use the new API');
       await page.locator('textarea').press('Enter');
       await expectOrder(page, true);
+      let secondClientId: string | undefined;
+      if (multipleSteers) {
+        await page.locator('textarea').fill('Add regression tests');
+        await page.locator('textarea').press('Enter');
+        await expectOrder(page, true, 'Add regression tests');
+        secondClientId = await page.evaluate(() => {
+          const entries = JSON.parse(localStorage.getItem('kraki-outbox-v1') ?? '[]') as { text: string; clientId: string }[];
+          return entries.find((entry) => entry.text === 'Add regression tests')?.clientId;
+        });
+        expect(secondClientId).toBeTruthy();
+      }
       // Isolate placement from chat-scroll F6 (smooth send navigation racing
       // streaming follow), owned by the scroll-follow lane. The glide has a
       // 900ms completion fallback; wait for that ownership to end first.
@@ -71,10 +83,17 @@ for (const echoAfterReset of [false, true]) {
       }
       await delta(page, 'Switching to the new API.', true);
       await expectOrder(page, false);
+      if (multipleSteers) await expectOrder(page, false, 'Add regression tests');
       if (echoAfterReset) {
         echo();
         await expect(page.locator('[data-scroll-key="26"]')).toBeAttached();
         await expectOrder(page, false);
+        if (multipleSteers) {
+          server.sendMessage(ws, { type: 'user_message', sessionId: SESSION, seq: 27,
+            payload: { content: 'Add regression tests', delivery: 'steer', clientId: secondClientId } });
+          await expect(page.locator('[data-scroll-key="27"]')).toBeAttached();
+          await expectOrder(page, false, 'Add regression tests');
+        }
       }
       await expect(live).toHaveAttribute('data-identity', 'original-live-row');
       // Growth after the move is still followed at the conversation tail.
@@ -84,6 +103,7 @@ for (const echoAfterReset of [false, true]) {
         return el.scrollHeight - el.clientHeight - reach - el.scrollTop;
       })).toBeLessThan(2);
       await expectOrder(page, false);
+      if (multipleSteers) await expectOrder(page, false, 'Add regression tests');
     } finally {
       await server.close();
     }
