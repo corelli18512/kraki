@@ -372,6 +372,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           canAbort={canAbort}
           reachable={reachable}
           busy={sessionActive}
+          agent={session?.agent}
           onSend={onSend}
           onStageVoice={(text, attachments, voiceIntent) => {
             const id = outbox.stage(sessionId, text, {
