@@ -55,7 +55,7 @@ test('preload capability is opt-in Windows only and exposes no caption command I
       process: { platform, argv: [`--kraki-titlebar-overlay=${enabled}`] },
       require: () => ({
         contextBridge: { exposeInMainWorld: (_name, value) => { exposed = value; } },
-        ipcRenderer: { send: (...args) => sent.push(args) },
+        ipcRenderer: { send: (...args) => sent.push(args), sendSync: () => ({}) },
       }),
     });
     return { exposed, sent };

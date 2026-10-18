@@ -17,6 +17,12 @@ describe('ChatHeader Windows native titlebar', () => {
     expect(HEADER_HEIGHT).toEqual({ wide: 56, narrow: 64 });
   });
 
+  it('keeps the title visible while the Windows mode dropdown is open', () => {
+    render(<ChatHeader title="A long session title" mode="auto" narrow={false} onMode={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    expect(screen.getByTitle('Session details')).not.toHaveClass('is-hidden');
+  });
+
   it('opens a persistent dropdown, uses the real mode callback and restores focus on selection', () => {
     vi.useFakeTimers();
     const onMode = vi.fn();

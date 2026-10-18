@@ -75,6 +75,7 @@ export function ChatHeader({
     return () => { observer.disconnect(); window.removeEventListener('resize', position); };
   }, [popupHost]);
 
+  const segmentsOpen = menu && !narrow && !hasWindowsTitleBar;
   const dropdown = menu && (narrow || hasWindowsTitleBar) && (
     <div className="khead-menu" role="menu" aria-label="Session mode picker">
       {MODES.map((m) => (
@@ -114,8 +115,9 @@ export function ChatHeader({
           {!!backBadge && <span className="khead-badge">{backBadge}</span>}
         </button>
       )}
-      {/* As on Mac: the expanded mode segments take the title's place so they never overlap it. */}
-      <button type="button" className={`khead-title${menu && !narrow ? ' is-hidden' : ''}`} aria-hidden={menu && !narrow ? true : undefined} tabIndex={menu && !narrow ? -1 : undefined} onClick={onTitle} title="Session details">
+      {/* As on Mac: the expanded mode segments take the title's place so they
+          never overlap it. Windows uses a dropdown next to the title instead. */}
+      <button type="button" className={`khead-title${segmentsOpen ? ' is-hidden' : ''}`} aria-hidden={segmentsOpen ? true : undefined} tabIndex={segmentsOpen ? -1 : undefined} onClick={onTitle} title="Session details">
         <span>{title}</span>
       </button>
       {hasWindowsTitleBar && <span className="khead-separator" aria-hidden="true" />}

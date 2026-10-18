@@ -82,7 +82,7 @@ describe('SettingsPanel Windows-scoped rounded design', () => {
     fireEvent.keyDown(screen.getByRole('tab', { name: 'About' }), { key: 'Home' });
     expect(general).toHaveFocus();
     fireEvent.click(screen.getByRole('button', { name: 'Account details' }));
-    expect(screen.getByRole('tabpanel', { name: 'Account' })).toHaveTextContent('Signed in via Open authentication');
+    expect(screen.getByRole('tabpanel', { name: 'Account' })).toHaveTextContent('Signed in via Open');
     fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
     expect(onClose).toHaveBeenCalledTimes(1);
     view.rerender(<SettingsPanel open={false} onClose={onClose} />);
