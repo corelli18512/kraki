@@ -34,7 +34,7 @@ vi.mock('./Composer', () => ({
 
 beforeEach(() => {
   viewport.narrow = false;
-  useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map(), cardHoldUntil: new Map() });
+  useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map(), cardHoldUntil: new Map(), historyCaughtUpThrough: new Map() });
 });
 
 describe('ChatView history navigation', () => {
@@ -224,6 +224,89 @@ describe('ChatView subscription snapshot catch-up', () => {
     await act(async () => { await messageProvider.fetchRange('s', 51, 100); });
     expect(send).not.toHaveBeenCalled();
     expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it.each(['sparse', 'empty'] as const)('releases a legacy head 9 hold after a successful %s tail response ending at persistent row 2', async (response) => {
+    heldSnapshot(9);
+    const persistent = [userMessage(1), { ...userMessage(2), type: 'agent_message' as const }];
+    useStore.setState({ messages: new Map([['s', persistent]]) });
+    if (response === 'empty') getMessagesInRange.mockResolvedValue(persistent);
+    const send = vi.fn();
+    messageProvider.setSend(send);
+    render(<ChatView sessionId="s" topInset={56} />);
+    act(() => { messageProvider.reconcileTail('s', 9); });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'request_session_messages_range' })));
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    await act(async () => {
+      messageProvider.handleRangeBatch('s', response === 'sparse' ? persistent : [], response === 'sparse' ? 1 : 0, response === 'sparse' ? 2 : 0, false);
+      await vi.waitFor(() => expect(messageProvider.isLoading('s')).toBe(false));
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+    expect(useStore.getState().historyCaughtUpThrough.get('s')).toBe(9);
+    expect(useStore.getState().cardHoldUntil.get('s')).toBe(9);
+    expect(Math.max(...useStore.getState().messages.get('s')!.map((m) => m.seq))).toBe(2);
+  });
+
+  it('releases a waiting permission after the bounded range timeout without claiming coverage', async () => {
+    vi.useFakeTimers();
+    try {
+      heldSnapshot();
+      useStore.getState().setCardAction('s', { type: 'permission', payload: { id: 'p', toolName: 'bash', args: {}, description: 'Run command' } });
+      let requestedAt = 0;
+      const send = vi.fn(() => { requestedAt = Date.now(); });
+      messageProvider.setSend(send);
+      render(<ChatView sessionId="s" topInset={56} />);
+      act(() => { messageProvider.reconcileTail('s', 100); });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      await act(async () => { await vi.advanceTimersByTimeAsync(requestedAt + 9_999 - Date.now()); });
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(messageProvider.isLoading('s')).toBe(false);
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+      expect(useStore.getState().cards.get('s')?.action?.type).toBe('permission');
+      expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
+      expect(useStore.getState().cardHoldUntil.has('s')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not release a newer snapshot hold when an older catch-up times out', async () => {
+    vi.useFakeTimers();
+    try {
+      heldSnapshot();
+      const send = vi.fn();
+      messageProvider.setSend(send);
+      render(<ChatView sessionId="s" topInset={56} />);
+      act(() => { messageProvider.reconcileTail('s', 100); });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      act(() => { useStore.getState().holdCard('s', 200); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+      expect(useStore.getState().cardHoldUntil.get('s')).toBe(200);
+      expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count a cancelled fetch response as coverage for a replacement snapshot', async () => {
+    heldSnapshot();
+    const send = vi.fn();
+    messageProvider.setSend(send);
+    render(<ChatView sessionId="s" topInset={56} />);
+    let fetch!: Promise<void>;
+    act(() => { fetch = messageProvider.fetchRange('s', 51, 100, { foreground: true }); });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    await act(async () => {
+      messageProvider.handleRangeBatch('s', [], 0, 0, false);
+      messageProvider.clear();
+      expect(useStore.getState().cardHoldUntil.has('s')).toBe(false);
+      useStore.getState().holdCard('s', 100);
+      await fetch;
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
   });
 
   it('does not release a snapshot hold for a partial range, another session, or transient seqs', () => {

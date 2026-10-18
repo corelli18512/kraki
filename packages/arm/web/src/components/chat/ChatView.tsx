@@ -55,6 +55,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const session = useStore((s) => s.sessions.get(sessionId));
   const rawCard = useStore((s) => s.cards.get(sessionId));
   const cardHoldUntil = useStore((s) => s.cardHoldUntil.get(sessionId)) ?? 0;
+  const historyCaughtUpThrough = useStore((s) => s.historyCaughtUpThrough.get(sessionId)) ?? 0;
   const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
   const connected = useStore((s) => s.status === 'connected');
   const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
@@ -70,7 +71,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const maxSeq = highestSeq(messages);
   // Live deltas keep updating a subscription card while its preceding spine
   // catches up. Do not draw it beneath an older cached conversation tail.
-  const cardCaughtUp = cardHoldUntil <= 0
+  const cardCaughtUp = historyCaughtUpThrough >= cardHoldUntil
     || messages.some((m) => isSpineMessage(m) && seqOf(m) >= cardHoldUntil);
   const card = cardCaughtUp ? rawCard : undefined;
   // Performance data (open.summary / ready.summary): what is on screen now.

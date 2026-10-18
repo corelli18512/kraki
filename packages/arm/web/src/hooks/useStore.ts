@@ -54,6 +54,7 @@ const initialState = {
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
   cardHoldUntil: new Map<string, number>(),
+  historyCaughtUpThrough: new Map<string, number>(),
   runtimeStatuses: new Map<string, import('../types/store').SessionRuntimeStatus>(),
   pinnedSessions: new Set<string>(),
   unreadCount: new Map<string, number>(),
@@ -138,6 +139,8 @@ export const useStore = create<Store>()(persist((set) => ({
       cards.delete(sessionId);
       const cardHoldUntil = new Map(state.cardHoldUntil);
       cardHoldUntil.delete(sessionId);
+      const historyCaughtUpThrough = new Map(state.historyCaughtUpThrough);
+      historyCaughtUpThrough.delete(sessionId);
       const runtimeStatuses = new Map(state.runtimeStatuses);
       runtimeStatuses.delete(sessionId);
       const unreadCount = new Map(state.unreadCount);
@@ -152,7 +155,7 @@ export const useStore = create<Store>()(persist((set) => ({
       sessionUsage.delete(sessionId);
       const sessionPreviews = new Map(state.sessionPreviews);
       sessionPreviews.delete(sessionId);
-      return { sessions, messages, cards, cardHoldUntil, runtimeStatuses, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
+      return { sessions, messages, cards, cardHoldUntil, historyCaughtUpThrough, runtimeStatuses, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
     });
   },
 
@@ -307,6 +310,13 @@ export const useStore = create<Store>()(persist((set) => ({
     if (untilSeq > 0) cardHoldUntil.set(sessionId, untilSeq);
     else cardHoldUntil.delete(sessionId);
     return { cardHoldUntil };
+  }),
+
+  markHistoryCaughtUp: (sessionId, throughSeq) => set((state) => {
+    if (throughSeq <= (state.historyCaughtUpThrough.get(sessionId) ?? 0)) return state;
+    const historyCaughtUpThrough = new Map(state.historyCaughtUpThrough);
+    historyCaughtUpThrough.set(sessionId, throughSeq);
+    return { historyCaughtUpThrough };
   }),
 
   togglePin: (sessionId) =>
@@ -656,6 +666,7 @@ export const useStore = create<Store>()(persist((set) => ({
     lastError: null,
     cards: new Map(),
     cardHoldUntil: new Map(),
+    historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
     loadingSessions: new Set(),
@@ -676,6 +687,7 @@ export const useStore = create<Store>()(persist((set) => ({
     messages: new Map(),
     cards: new Map(),
     cardHoldUntil: new Map(),
+    historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     pinnedSessions: new Set(),
     unreadCount: new Map(),
