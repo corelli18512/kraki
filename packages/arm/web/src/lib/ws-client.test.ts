@@ -5,6 +5,7 @@ import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
+import { diag } from './diag';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -2104,5 +2105,50 @@ describe('desktop local link routing (fake link)', () => {
       const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean);
       expect(sent.some((m) => m?.type === 'approve')).toBe(true);
     });
+  });
+});
+
+describe('diagnostic session_list and message batch application', () => {
+  afterEach(() => { diag.replies.onSummary = undefined; diag.replies.backgrounded(); });
+
+  const session = (id: string, deviceId = 'tentacle') => ({
+    id, deviceId, deviceName: 'Test', agent: 'pi' as const, state: 'active' as const,
+    messageCount: 0, lastSeq: 0, readSeq: 0,
+  });
+
+  it('abandons only idle/removed tracked replies owned by the listing tentacle', () => {
+    const client = new KrakiWSClient('ws://localhost:9999');
+    const summary = vi.fn();
+    diag.replies.onSummary = summary;
+    for (const id of ['idle', 'removed', 'active']) {
+      useStore.getState().upsertSession(session(id));
+      diag.replies.started(id, 'typed');
+    }
+    useStore.getState().upsertSession(session('other', 'other-tentacle'));
+    diag.replies.started('other', 'answer');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [
+        { ...session('idle'), state: 'idle' }, session('active'),
+      ] },
+    });
+    expect(summary).toHaveBeenCalledTimes(2);
+    expect(summary.mock.calls.map(([s]) => s.outcome)).toEqual(['abandoned', 'abandoned']);
+    expect(diag.replies.openSessions.sort()).toEqual(['active', 'other']);
+  });
+
+  it('measures synchronous session_list and actual store message batch apply with fixed source tags', () => {
+    const work = vi.spyOn(diag, 'work');
+    const client = new KrakiWSClient('ws://localhost:9999');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [session('s')] },
+    });
+    useStore.getState().prependMessages('s', [{
+      type: 'agent_message', sessionId: 's', deviceId: 'tentacle', seq: 1,
+      timestamp: new Date().toISOString(), payload: { content: 'private reply' },
+    }]);
+    expect(work.mock.calls.map(([source, sid]) => [source, sid])).toEqual([
+      ['web/session_list', undefined], ['web/message_batch', 's'],
+    ]);
+    expect(useStore.getState().messages.get('s')).toHaveLength(1);
   });
 });

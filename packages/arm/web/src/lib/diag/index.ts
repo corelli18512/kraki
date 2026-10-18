@@ -7,16 +7,22 @@ import { DiagClient, type DiagHttp } from './client';
 import { DiagRecorder, type DiagEventName, type DiagField, type DiagValue } from './recorder';
 import { IdbSpoolStore } from './spool';
 import { SendTracker, StabilityTracker, sendFalseAlarm } from './stability';
+import { ReplyTracker, VoiceTracker } from './experience';
+import { BusyTracker } from './busy';
 
 type Fields = Partial<Record<DiagField, DiagValue | undefined>>;
 
 const RUNNING_KEY = 'kraki.diag.running';
 /** Events that are worth writing to disk soon (native KrakiDiag.record). */
-const FLUSH_SOON = new Set<DiagEventName>(['cmd.answer', 'cmd.input', 'outbox.state', 'echo.input', 'app.phase', 'ready.summary', 'outage.summary', 'open.summary', 'send.summary']);
+const FLUSH_SOON = new Set<DiagEventName>(['cmd.answer', 'cmd.input', 'outbox.state', 'echo.input', 'app.phase', 'ready.summary', 'outage.summary', 'open.summary', 'send.summary', 'voice.summary', 'ui.busy']);
 
-class Diag {
+export class Diag {
   readonly stability = new StabilityTracker();
   readonly sends = new SendTracker();
+  readonly voices = new VoiceTracker();
+  readonly replies = new ReplyTracker();
+  private readonly busy = new BusyTracker();
+  private answers = new Map<string, number>();
   private recorder: DiagRecorder | null = null;
   private client: DiagClient | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,6 +61,15 @@ class Diag {
       offline: s.offlineAtSend, attachments: s.attachments, textLength: s.textLength, background: s.failedInBackground,
       confirmMs: s.confirmMs, correctionMs: s.correctionMs, cause: s.cause,
     });
+    this.voices.onSummary = (v) => this.record('voice.summary', undefined, {
+      outcome: v.outcome, stage: v.stage, cause: v.cause, confirmed: v.correctionConfirmed,
+      correctionOn: v.correctionEnabled, textLength: v.textLength, warm: v.warm, count: v.leaseRollovers,
+      startMs: v.startMs, recordMs: v.recordMs, finalizeMs: v.finalizeMs,
+    });
+    this.replies.onSummary = (r) => this.record('reply.summary', undefined, { ...r });
+    this.busy.onBusy = (durationMs) => this.record('ui.busy', undefined, { durationMs });
+    this.busy.setActive(document.visibilityState === 'visible');
+    this.busy.start(() => this.recorder?.isEnabled ?? false);
     const path = () => {
       const type = (navigator as { connection?: { type?: string } }).connection?.type;
       if (!navigator.onLine) return 'none';
@@ -90,9 +105,40 @@ class Diag {
 
   phase(phase: string, pending = 0): void {
     this.record('app.phase', undefined, { phase, pending });
-    if (phase === 'active') this.client?.setForeground(true);
-    if (phase === 'background') this.client?.setForeground(false);
+    if (phase === 'active') { this.client?.setForeground(true); this.busy.setActive(true); }
+    if (phase === 'background' || phase === 'inactive') {
+      this.client?.setForeground(false);
+      this.busy.setActive(false);
+      this.replies.backgrounded();
+    }
     if (phase === 'logout') this.client?.logout();
+  }
+
+  /** Like KrakiDiag.endWork: synchronous work taking at least 8 ms. */
+  work<T>(source: string, sessionId: string | undefined, body: () => T): T {
+    const start = this.recorder?.isEnabled ? performance.now() : null;
+    try { return body(); }
+    finally {
+      if (start !== null) {
+        const durationMs = performance.now() - start;
+        if (durationMs >= 8) this.record('work.slow', sessionId, { source, durationMs });
+      }
+    }
+  }
+
+  /** Diagnostics detects repeated answer calls; it never rejects an answer. */
+  answer(sessionId: string, questionId: string, textLength: number, pending: number, source: string): void {
+    if (!this.recorder?.isEnabled) return;
+    const now = performance.now();
+    const key = `${sessionId}:${questionId}`;
+    const duplicate = this.answers.has(key);
+    if (this.answers.size >= 1024) {
+      for (const [id, at] of this.answers) if (now - at >= 300_000) this.answers.delete(id);
+      if (this.answers.size >= 1024) this.answers.clear();
+    }
+    this.answers.set(key, now);
+    this.record('cmd.answer', sessionId, { questionId, textLength, pending, duplicate, source });
+    this.userActivity();
   }
 
   userActivity(): void { this.client?.userActivity(); }

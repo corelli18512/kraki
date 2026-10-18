@@ -22,6 +22,10 @@ export const DIAG_EVENTS = {
   outage: 'outage.summary',
   open: 'open.summary',
   send: 'send.summary',
+  voice: 'voice.summary',
+  reply: 'reply.summary',
+  busy: 'ui.busy',
+  slowWork: 'work.slow',
 } as const;
 export type DiagEventName = (typeof DIAG_EVENTS)[keyof typeof DIAG_EVENTS];
 
@@ -34,6 +38,8 @@ export const DIAG_FIELDS = [
   'listFreshMs', 'viewCurrentMs', 'code', 'detectMs', 'reconnectMs', 'catchupMs', 'impactMs', 'visibleMs',
   'pathChanged', 'afterWake', 'previousExit',
   'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'offline', 'background', 'confirmMs', 'correctionMs', 'cause',
+  'stage', 'confirmed', 'warm', 'startMs', 'recordMs', 'finalizeMs', 'correctionOn',
+  'durationMs', 'firstActivityMs', 'firstTextMs', 'deltas', 'maxGapMs', 'stalls',
 ] as const;
 export type DiagField = (typeof DIAG_FIELDS)[number];
 export type DiagValue = string | number | boolean;

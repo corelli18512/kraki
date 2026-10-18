@@ -10,8 +10,38 @@ import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
 import { allowAutoRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
+import { diag } from './diag';
 
 const logger = createLogger('msg-router');
+
+/** MessageRouter+Replies.swift: live progress only, never range/history batches. */
+function noteReplyProgress(msg: InnerMessage): void {
+  const sid = msg.sessionId;
+  if (!sid) return;
+  const p = msg.payload as Record<string, unknown>;
+  diag.replies.expire();
+  switch (msg.type) {
+    case 'user_message':
+      if (typeof p.clientId === 'string' && p.delivery !== 'steer' && document.visibilityState === 'visible'
+        && outbox.forSession(sid).some((e) => e.clientId === p.clientId && e.delivery !== 'steer')) {
+        diag.replies.started(sid, typeof p.answerTo === 'string' ? 'answer' : 'typed');
+      }
+      break;
+    case 'agent_message_delta':
+      if (typeof p.content === 'string') diag.replies.delta(sid, p.reset === true, p.content.length === 0);
+      break;
+    case 'card_action':
+      if (p.action && typeof p.action === 'object') diag.replies.activity(sid);
+      break;
+    case 'tool_start': diag.replies.activity(sid); break;
+    case 'agent_message': diag.replies.message(sid); break;
+    case 'idle': diag.replies.finish(sid, p.reason === 'aborted' ? 'stopped' : p.reason === 'failed' ? 'failed' : 'completed'); break;
+    case 'turn_status':
+      diag.replies.finish(sid, (p.action as { type?: string } | undefined)?.type === 'failed' ? 'failed' : 'stopped');
+      break;
+    case 'interrupted_turn': case 'session_ended': case 'session_deleted': diag.replies.finish(sid, 'stopped'); break;
+  }
+}
 
 const PREVIEW_MAX = 80;
 function truncPreview(s: string): string {
@@ -65,6 +95,8 @@ export interface RouterContext {
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
+  // Before echo application clears the outbox proof that this device sent it.
+  if ('sessionId' in msg && msg.sessionId) noteReplyProgress(msg);
 
   // Handle session_list — tentacle's authoritative session metadata
   if (msg.type === 'session_list') {
