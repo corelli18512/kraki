@@ -341,7 +341,7 @@ struct AccountUsageSectionHeader: View {
             HStack(alignment: .center) {
                 Text("Accounts")
                 Spacer()
-                UsageRefreshButton(busy: model.busy, ready: model.ready, failed: model.isNotice) {
+                UsageRefreshButton(busy: model.busy, ready: model.ready, available: model.available, failed: model.isNotice) {
                     appState.commandSender?.refreshAccountUsage(deviceIds: deviceIds)
                 }
             }
@@ -354,35 +354,47 @@ struct AccountUsageSectionHeader: View {
 /// spinner while computers fetch, then a check drawn in green. The three are
 /// separate views cross-faded, so only the spinner moves and the check always
 /// appears upright. A failed refresh returns to the arrow with a wiggle (the
-/// footer says why); the cool-down dims it.
+/// footer says why).
+///
+/// The page refreshes automatically when it appears, so the 60 s cool-down is
+/// the usual state: during it the button looks normal and a tap only wiggles
+/// (no request; the status already reads "Just updated"). It is shown disabled
+/// only when nothing can refresh (disconnected, no capable computer), and even
+/// then stays clearly visible.
 struct UsageRefreshButton: View {
     let busy: Bool
+    /// A request may be sent now.
     let ready: Bool
+    /// Refresh is possible at all (cool-down included). Defaults to `ready`.
+    var available: Bool? = nil
     var failed = false
     let action: () -> Void
 
     enum Phase { case idle, busy, done }
     @State private var showsDone = false
     @State private var failures = 0
+    @State private var nudges = 0
 
     static let size: CGFloat = 30
     static let doneDuration: Duration = .seconds(1.4)
 
     private var phase: Phase { busy ? .busy : (showsDone ? .done : .idle) }
-    private var enabled: Bool { ready && !busy }
+    private var enabled: Bool { (available ?? ready) && !busy }
     private var tint: Color {
         switch phase {
         case .done: return .green
-        case .busy: return .krakiPrimary
-        case .idle: return enabled ? .krakiPrimary : Color.secondary.opacity(0.55)
+        case .busy, .idle: return .krakiPrimary
         }
     }
+    static let disabledOpacity: Double = 0.62
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            if ready { action() } else { nudges += 1 }
+        } label: {
             ZStack {
                 Image(systemName: "arrow.clockwise")
-                    .symbolEffect(.wiggle, value: failures)
+                    .symbolEffect(.wiggle, value: failures + nudges)
                     .opacity(phase == .idle ? 1 : 0)
                     .scaleEffect(phase == .idle ? 1 : 0.5)
                 ProgressView()
@@ -394,7 +406,8 @@ struct UsageRefreshButton: View {
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(tint)
             .frame(width: Self.size, height: Self.size)
-            .background(tint.opacity(phase == .idle && !enabled ? 0.08 : 0.13), in: Circle())
+            .background(tint.opacity(0.13), in: Circle())
+            .opacity(phase == .idle && !enabled ? Self.disabledOpacity : 1)
             .frame(width: 44, height: 44)
             .contentShape(Circle())
         }
@@ -465,7 +478,11 @@ struct AccountUsageRefreshNotice: View {
 /// Refresh state shared by the Mac controls and the iOS header.
 struct AccountUsageRefreshModel {
     let busy: Bool
+    /// A request may be sent now (not cooling down).
     let ready: Bool
+    /// Connected with at least one computer able to refresh; cooling down
+    /// still counts. Only an unavailable control is shown disabled.
+    let available: Bool
     let status: String
     /// Something the user should act on (error, offline, update needed).
     let isNotice: Bool
@@ -477,6 +494,7 @@ struct AccountUsageRefreshModel {
         let connected = appState.connectionStatus == .connected
         busy = connected && ids.contains { store.usageRefreshes[$0]?.finished == false }
         ready = connected && ids.contains { store.canRefreshUsage($0, now: now) }
+        available = connected && !ids.isEmpty
         status = Self.status(store: store, ids: ids, deviceIds: deviceIds, connected: connected, busy: busy, ready: ready)
         // Per-account failures already show on their rows.
         isNotice = !busy && !["Provider rate limits apply", "Just updated", "Some accounts couldn't be updated"].contains(status)
