@@ -279,6 +279,12 @@ export class KrakiWSClient {
     const { digest, spineHeadSeq, card } = msg.payload.snapshot;
     const store = getStore();
     const device = store.devices.get(msg.deviceId);
+    const previousReadSeq = store.sessions.get(digest.id)?.readSeq;
+    if (previousReadSeq !== undefined && digest.readSeq < previousReadSeq && digest.readSeq < digest.lastSeq) {
+      suppressAutoRead(digest.id);
+    } else if (digest.readSeq >= digest.lastSeq) {
+      allowAutoRead(digest.id);
+    }
     store.upsertSession({
       id: digest.id,
       deviceId: msg.deviceId,
@@ -291,10 +297,13 @@ export class KrakiWSClient {
       autoTitle: digest.autoTitle,
       state: digest.state,
       messageCount: digest.messageCount,
+      lastSeq: digest.lastSeq,
+      readSeq: digest.readSeq,
     });
     store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
     if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
+    store.holdCard(digest.id, spineHeadSeq);
     store.replaceCardFromSubscription(digest.id, { text: card.draft, action: card.action },
       digest.state === 'active' || digest.state === 'compacting');
     messageProvider.setTentacleInfo(digest.id, spineHeadSeq, msg.deviceId);

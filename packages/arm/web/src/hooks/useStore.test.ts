@@ -309,6 +309,44 @@ describe('useStore', () => {
       expect(useStore.getState().cards.has('sess-1')).toBe(false);
     });
 
+    it('keeps a subscription hold across card updates and replacement until a new snapshot releases it', () => {
+      const store = useStore.getState();
+      store.holdCard('sess-1', 100);
+      store.applyCardMessage('sess-1', 'draft');
+      store.setCardAction('sess-1', mockToolAction);
+      store.clearCard('sess-1');
+      store.applyCardMessage('sess-1', 'new draft');
+      expect(useStore.getState().cardHoldUntil.get('sess-1')).toBe(100);
+      store.holdCard('sess-1', 0);
+      expect(useStore.getState().cardHoldUntil.has('sess-1')).toBe(false);
+    });
+
+    it('tracks authoritative history coverage monotonically without changing unread cursors', () => {
+      const store = useStore.getState();
+      store.upsertSession({ ...mockSession, lastSeq: 9, readSeq: 2 });
+      store.markHistoryCaughtUp('sess-1', 9);
+      store.markHistoryCaughtUp('sess-1', 2);
+      expect(useStore.getState().historyCaughtUpThrough.get('sess-1')).toBe(9);
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 9, readSeq: 2 });
+    });
+
+    it.each(['removeSession', 'clearTransientState', 'reset'] as const)('%s clears subscription card holds', (action) => {
+      useStore.getState().holdCard('sess-1', 100);
+      useStore.getState().markHistoryCaughtUp('sess-1', 9);
+      if (action === 'removeSession') useStore.getState().removeSession('sess-1');
+      else useStore.getState()[action]();
+      expect(useStore.getState().cardHoldUntil.has('sess-1')).toBe(false);
+      expect(useStore.getState().historyCaughtUpThrough.has('sess-1')).toBe(false);
+    });
+
+    it('does not persist subscription card holds', () => {
+      useStore.getState().holdCard('sess-1', 100);
+      useStore.getState().markHistoryCaughtUp('sess-1', 9);
+      const persisted = JSON.parse(localStorage.getItem('kraki-store')!);
+      expect(persisted.state).not.toHaveProperty('cardHoldUntil');
+      expect(persisted.state).not.toHaveProperty('historyCaughtUpThrough');
+    });
+
     it('clearCard is safe for non-existing session', () => {
       useStore.getState().clearCard('sess-nonexistent');
       expect(useStore.getState().cards.has('sess-nonexistent')).toBe(false);

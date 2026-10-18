@@ -1,15 +1,31 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import { ChatView } from './ChatView';
 import { useStore } from '../../hooks/useStore';
 import { agentNavigationColors } from '../../lib/color';
 import { useOutbox } from '../../lib/chat/outbox';
+import { messageProvider } from '../../lib/message-provider';
+import { wsClient } from '../../lib/ws-client';
+import type { ChatMessage } from '../../types/store';
 
 const viewport = vi.hoisted(() => ({ narrow: false }));
 vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
 
 vi.mock('./ChatScroller', () => ({
-  ChatScroller: ({ rows }: { rows: { kind: string }[] }) => <div data-testid="live-rows">{rows.filter((r) => r.kind === 'live').length}</div>,
+  ChatScroller: ({ rows }: { rows: { kind: string; card?: { text: string } }[] }) => <>
+    <div data-testid="live-rows">{rows.filter((r) => r.kind === 'live').length}</div>
+    <div data-testid="live-text">{rows.find((r) => r.kind === 'live')?.card?.text}</div>
+  </>,
+}));
+
+const { getMessagesInRange } = vi.hoisted(() => ({
+  getMessagesInRange: vi.fn(async () => [] as ChatMessage[]),
+}));
+vi.mock('../../lib/message-db', () => ({
+  putMessage: async () => {},
+  putMessages: async () => {},
+  deleteSessionMessages: async () => {},
+  getMessagesInRange,
 }));
 vi.mock('./Composer', () => ({
   composerIntent: () => 'steer',
@@ -18,7 +34,7 @@ vi.mock('./Composer', () => ({
 
 beforeEach(() => {
   viewport.narrow = false;
-  useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map() });
+  useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map(), cardHoldUntil: new Map(), historyCaughtUpThrough: new Map() });
 });
 
 describe('ChatView history navigation', () => {
@@ -142,6 +158,186 @@ describe('ChatView pending question live-row visibility', () => {
       messages: new Map([['s', [question, { type: 'user_message', seq: 2, sessionId: 's',
         payload: { content: 'Amber', answerTo: 'q' } }] as never]]),
     });
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+});
+
+describe('ChatView subscription snapshot catch-up', () => {
+  function userMessage(seq: number): ChatMessage {
+    return { type: 'user_message', seq, sessionId: 's', deviceId: 'd', timestamp: '', payload: { content: `Prompt ${seq}` } };
+  }
+
+  function heldSnapshot(head = 100) {
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', deviceId: 'd', deviceName: 'Mac', agent: 'pi', state: 'active', messageCount: head, lastSeq: head, readSeq: Math.min(10, head) }]]),
+      messages: new Map([['s', [userMessage(10)]]]),
+      cards: new Map([['s', { text: 'Snapshot draft', action: null }]]),
+      cardHoldUntil: new Map([['s', head]]),
+    });
+    messageProvider.setTentacleInfo('s', head, 'd');
+  }
+
+  beforeEach(() => {
+    messageProvider.clear();
+    getMessagesInRange.mockReset();
+    getMessagesInRange.mockResolvedValue([]);
+  });
+  afterEach(async () => {
+    messageProvider.clear();
+    await vi.dynamicImportSettled();
+    messageProvider.setSend((msg) => wsClient.sendEncrypted(msg));
+  });
+
+  it('holds the current draft and live updates while range delivery is delayed at cached seq 10', async () => {
+    heldSnapshot();
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((msg) => sent.push(msg));
+    render(<ChatView sessionId="s" topInset={56} />);
+    act(() => { messageProvider.reconcileTail('s', 100); });
+    await vi.waitFor(() => expect(sent[0]?.payload).toMatchObject({ fromSeq: 51, toSeq: 100 }));
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+
+    act(() => {
+      useStore.getState().applyCardMessage('s', ' and newer words');
+      useStore.getState().setCardAction('s', { type: 'permission', payload: { id: 'p', toolName: 'bash', args: {}, description: 'Run command' } });
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    expect(useStore.getState().cards.get('s')?.text).toBe('Snapshot draft and newer words');
+
+    await act(async () => {
+      messageProvider.handleRangeBatch('s', Array.from({ length: 50 }, (_, i) => userMessage(51 + i)), 51, 100, false);
+      await vi.waitFor(() => expect(messageProvider.isLoading('s')).toBe(false));
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+    expect(screen.getByTestId('live-text')).toHaveTextContent('Snapshot draft and newer words');
+    expect(useStore.getState().sessions.get('s')).toMatchObject({ lastSeq: 100, readSeq: 10 });
+  });
+
+  it('releases the hold when the authoritative tail is delivered from IDB', async () => {
+    heldSnapshot();
+    getMessagesInRange.mockResolvedValue(Array.from({ length: 50 }, (_, i) => userMessage(51 + i)));
+    const send = vi.fn();
+    messageProvider.setSend(send);
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    await act(async () => { await messageProvider.fetchRange('s', 51, 100); });
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it.each(['sparse', 'empty'] as const)('releases a legacy head 9 hold after a successful %s tail response ending at persistent row 2', async (response) => {
+    heldSnapshot(9);
+    const persistent = [userMessage(1), { ...userMessage(2), type: 'agent_message' as const }];
+    useStore.setState({ messages: new Map([['s', persistent]]) });
+    if (response === 'empty') getMessagesInRange.mockResolvedValue(persistent);
+    const send = vi.fn();
+    messageProvider.setSend(send);
+    render(<ChatView sessionId="s" topInset={56} />);
+    act(() => { messageProvider.reconcileTail('s', 9); });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'request_session_messages_range' })));
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    await act(async () => {
+      messageProvider.handleRangeBatch('s', response === 'sparse' ? persistent : [], response === 'sparse' ? 1 : 0, response === 'sparse' ? 2 : 0, false);
+      await vi.waitFor(() => expect(messageProvider.isLoading('s')).toBe(false));
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+    expect(useStore.getState().historyCaughtUpThrough.get('s')).toBe(9);
+    expect(useStore.getState().cardHoldUntil.get('s')).toBe(9);
+    expect(Math.max(...useStore.getState().messages.get('s')!.map((m) => m.seq))).toBe(2);
+  });
+
+  it('releases a waiting permission after the bounded range timeout without claiming coverage', async () => {
+    vi.useFakeTimers();
+    try {
+      heldSnapshot();
+      useStore.getState().setCardAction('s', { type: 'permission', payload: { id: 'p', toolName: 'bash', args: {}, description: 'Run command' } });
+      let requestedAt = 0;
+      const send = vi.fn(() => { requestedAt = Date.now(); });
+      messageProvider.setSend(send);
+      render(<ChatView sessionId="s" topInset={56} />);
+      act(() => { messageProvider.reconcileTail('s', 100); });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      await act(async () => { await vi.advanceTimersByTimeAsync(requestedAt + 9_999 - Date.now()); });
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(messageProvider.isLoading('s')).toBe(false);
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+      expect(useStore.getState().cards.get('s')?.action?.type).toBe('permission');
+      expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
+      expect(useStore.getState().cardHoldUntil.has('s')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not release a newer snapshot hold when an older catch-up times out', async () => {
+    vi.useFakeTimers();
+    try {
+      heldSnapshot();
+      const send = vi.fn();
+      messageProvider.setSend(send);
+      render(<ChatView sessionId="s" topInset={56} />);
+      act(() => { messageProvider.reconcileTail('s', 100); });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      act(() => { useStore.getState().holdCard('s', 200); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+      expect(useStore.getState().cardHoldUntil.get('s')).toBe(200);
+      expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count a cancelled fetch response as coverage for a replacement snapshot', async () => {
+    heldSnapshot();
+    const send = vi.fn();
+    messageProvider.setSend(send);
+    render(<ChatView sessionId="s" topInset={56} />);
+    let fetch!: Promise<void>;
+    act(() => { fetch = messageProvider.fetchRange('s', 51, 100, { foreground: true }); });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    await act(async () => {
+      messageProvider.handleRangeBatch('s', [], 0, 0, false);
+      messageProvider.clear();
+      expect(useStore.getState().cardHoldUntil.has('s')).toBe(false);
+      useStore.getState().holdCard('s', 100);
+      await fetch;
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    expect(useStore.getState().historyCaughtUpThrough.has('s')).toBe(false);
+  });
+
+  it('does not release a snapshot hold for a partial range, another session, or transient seqs', () => {
+    heldSnapshot();
+    render(<ChatView sessionId="s" topInset={56} />);
+    act(() => {
+      messageProvider.handleRangeBatch('s', [userMessage(90)], 90, 90, true);
+      messageProvider.handleRangeBatch('other', [{ ...userMessage(100), sessionId: 'other' }], 100, 100, false);
+      useStore.getState().appendMessage('s', { type: 'active', seq: 100, sessionId: 's', deviceId: 'd', timestamp: '', payload: {} });
+      useStore.getState().appendMessage('s', { ...userMessage(100.5) });
+      const session = useStore.getState().sessions.get('s')!;
+      useStore.getState().upsertSession({ ...session, lastSeq: 90 });
+    });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    act(() => { messageProvider.handleRangeBatch('s', [userMessage(100)], 100, 100, false); });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('keeps later live actions behind an initially empty subscription snapshot hold', () => {
+    heldSnapshot();
+    useStore.setState({ cards: new Map() });
+    render(<ChatView sessionId="s" topInset={56} />);
+    act(() => { useStore.getState().setCardAction('s', { type: 'tool_start', payload: { toolName: 'bash', toolCallId: 't' } }); });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+    act(() => { useStore.getState().appendMessage('s', userMessage(100)); });
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('shows a zero-head snapshot immediately without history', () => {
+    heldSnapshot(0);
+    useStore.setState({ messages: new Map() });
     render(<ChatView sessionId="s" topInset={56} />);
     expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
   });

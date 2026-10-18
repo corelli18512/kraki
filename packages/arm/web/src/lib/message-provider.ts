@@ -33,7 +33,7 @@ const NON_SPINE_CACHE_TYPES = new Set([
   'question_resolved',
 ]);
 
-function isSpineCacheMessage(message: ChatMessage): boolean {
+export function isSpineMessage(message: ChatMessage): boolean {
   const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
   return typeof seq === 'number' && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
 }
@@ -41,6 +41,7 @@ function isSpineCacheMessage(message: ChatMessage): boolean {
 interface PendingRequest {
   sessionId: string;
   resolve: (messages: ChatMessage[]) => void;
+  onResponse: () => void;
 }
 
 class MessageProvider {
@@ -52,6 +53,8 @@ class MessageProvider {
   private sendFn: ((msg: Record<string, unknown>) => void) | null = null;
   /** Pending tentacle range-fetch requests awaiting handleRangeBatch */
   private pendingRequests = new Map<string, PendingRequest>();
+  /** Discard catch-up outcomes from fetches cancelled by a disconnect. */
+  private rangeEpoch = 0;
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
   /** Highest seq covered by each in-flight fetch. */
@@ -175,13 +178,16 @@ class MessageProvider {
       getStore().setSessionLoading(sessionId, true);
     }
 
+    const epoch = this.rangeEpoch;
+    const coversHead = options?.foreground || toSeq >= (this.tentacleLastSeq.get(sessionId) ?? Infinity);
+    let rangeCovered = false;
     try {
       // Step 1: Check IDB for the requested range
       let idbMessages: ChatMessage[] = [];
       try {
         const db = await import('./message-db');
         const cached = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
-        idbMessages = cached.filter(isSpineCacheMessage);
+        idbMessages = cached.filter(isSpineMessage);
         logger.info('IDB range query', {
           sessionId,
           fromSeq: clampedFrom,
@@ -207,6 +213,7 @@ class MessageProvider {
       if (idbSeqs.size === expectedCount) {
         // IDB has every durable seq — put in store and done.
         this.deliverMessages(sessionId, idbMessages, options?.initial);
+        rangeCovered = true;
         return;
       }
 
@@ -219,7 +226,10 @@ class MessageProvider {
         else break;
       }
 
-      const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);
+      let receivedResponse = false;
+      const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq, () => {
+        receivedResponse = true;
+      });
       
       // Merge IDB + tentacle, dedup by seq, sort
       const allMessages = [...idbMessages, ...tentacleMessages];
@@ -242,9 +252,11 @@ class MessageProvider {
       }
 
       this.deliverMessages(sessionId, deduped, options?.initial);
+      rangeCovered = receivedResponse;
     } catch (err) {
       logger.error('fetchRange failed', { sessionId, error: (err as Error).message });
     } finally {
+      if (epoch === this.rangeEpoch && coversHead) this.finishTailCatchUp(sessionId, toSeq, rangeCovered);
       this.loadingSessions.delete(sessionId);
       this.loadingThroughSeq.delete(sessionId);
       this.loadingForeground.delete(sessionId);
@@ -288,6 +300,9 @@ class MessageProvider {
     const pending = this.pendingRequests.get(sessionId);
     if (pending) {
       this.pendingRequests.delete(sessionId);
+      // The requested upper bound is covered even when legacy transient rows
+      // were filtered out, leaving the last returned row below that bound.
+      pending.onResponse();
       pending.resolve(messages);
       return;
     }
@@ -299,8 +314,23 @@ class MessageProvider {
     getStore().setSessionLoading(sessionId, false);
   }
 
+  /** Record coverage only for an actual response/cache hit, never a timeout's
+   *  empty fallback. Terminal failure must not strand a waiting permission. */
+  private finishTailCatchUp(sessionId: string, throughSeq: number, covered: boolean): void {
+    const store = getStore();
+    if (covered) {
+      store.markHistoryCaughtUp(sessionId, throughSeq);
+    } else if ((store.cardHoldUntil.get(sessionId) ?? Infinity) <= throughSeq) {
+      store.holdCard(sessionId, 0);
+    }
+  }
+
   /** Clear all tracking (on disconnect). */
   clear(): void {
+    this.rangeEpoch++;
+    for (const [sessionId, throughSeq] of this.loadingThroughSeq) {
+      this.finishTailCatchUp(sessionId, throughSeq, false);
+    }
     // Resolve any pending requests with empty results
     for (const [, pending] of this.pendingRequests) {
       pending.resolve([]);
@@ -481,7 +511,7 @@ class MessageProvider {
    * semantics where `idbMessages` already cover up to and including `afterSeq`).
    * `limit` is the number of messages we want past `afterSeq`.
    */
-  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<ChatMessage[]> {
+  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number, onResponse: () => void): Promise<ChatMessage[]> {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
     if (!tentacleDeviceId || !this.sendFn) {
       logger.warn('cannot request from tentacle', { sessionId, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId });
@@ -493,7 +523,7 @@ class MessageProvider {
     if (toSeq < fromSeq) return Promise.resolve([]);
 
     return new Promise<ChatMessage[]>((resolve) => {
-      const pending: PendingRequest = { sessionId, resolve };
+      const pending: PendingRequest = { sessionId, resolve, onResponse };
       this.pendingRequests.set(sessionId, pending);
 
       const store = getStore();
