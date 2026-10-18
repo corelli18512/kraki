@@ -813,6 +813,28 @@ describe('KrakiWSClient', () => {
       useAccountDeletion.getState().setNotice(false);
     });
 
+    it.each(['account_deleted', 'auth_error'] as const)('%s discards all pending diagnostics before account cleanup', async (type) => {
+      await connected();
+      const reply = vi.fn(), voice = vi.fn(), send = vi.fn();
+      diag.replies.onSummary = reply; diag.voices.onSummary = voice; diag.sends.onSummary = send;
+      diag.replies.started('account-a', 'typed');
+      diag.voices.begin(false); diag.voices.stateChanged('recording');
+      diag.sends.created('send-a', 'typed', 10, 0, true);
+      try {
+        lastWsInstance._receive({ type, ...(type === 'auth_error' ? { code: 'account_deleted' } : {}) });
+        expect(diag.replies.inFlight).toBe(0);
+        expect(diag.sends.inFlight).toBe(0);
+        diag.phase('background');
+        expect(reply).not.toHaveBeenCalled();
+        expect(voice).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        diag.replies.onSummary = diag.voices.onSummary = diag.sends.onSummary = undefined;
+        diag.replies.backgrounded(); diag.voices.stateChanged('idle'); diag.sends.finished('send-a', 'cleared');
+        useAccountDeletion.getState().setNotice(false);
+      }
+    });
+
     it('cannot delete while disconnected', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       useStore.getState().setStatus('disconnected');
@@ -888,6 +910,18 @@ describe('KrakiWSClient', () => {
       });
 
       expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
+    });
+
+    it.each(['invalid_signature', 'auth_unavailable'])('%s discards diagnostics only when stored identity is invalid', async (code) => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      diag.replies.started('account-a', 'typed');
+      try {
+        lastWsInstance._receive({ type: 'auth_error', code });
+        expect(diag.replies.inFlight).toBe(code === 'invalid_signature' ? 0 : 1);
+      } finally { diag.replies.backgrounded(); }
     });
 
     it('saves relay URL and triggers reload on wrong_region', async () => {

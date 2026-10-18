@@ -3,7 +3,7 @@
  * shell, which provides the HTTP bridge; in a browser every call is a no-op.
  */
 import { desktop } from '../desktop';
-import { DiagClient, type DiagHttp } from './client';
+import { DiagClient, diagBase, type DiagHttp } from './client';
 import { DiagRecorder, type DiagEventName, type DiagField, type DiagValue } from './recorder';
 import { IdbSpoolStore } from './spool';
 import { SendTracker, StabilityTracker, sendFalseAlarm } from './stability';
@@ -23,6 +23,7 @@ export class Diag {
   readonly replies = new ReplyTracker();
   private readonly busy = new BusyTracker();
   private answers = new Map<string, number>();
+  private realm: string | null = null;
   private recorder: DiagRecorder | null = null;
   private client: DiagClient | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -99,8 +100,28 @@ export class Diag {
   }
 
   configure(relay: string, device: string, sign: (message: string) => Promise<string>): void {
+    const base = diagBase(relay);
+    if (!base) return;
+    // Compare the same origin/device key as DiagClient, before its async setup.
+    const realm = `${base}\n${device}`;
+    if (this.realm !== null && this.realm !== realm) this.discardIdentityState();
+    this.realm = realm;
     void this.client?.configure(relay, device, sign);
     this.phase('authenticated');
+  }
+
+  /** No old attempt, timer or duplicate marker may finish into a new account. */
+  private discardIdentityState(): void {
+    this.replies.reset();
+    this.voices.reset();
+    this.sends.reset();
+    this.stability.reset();
+    this.answers.clear();
+    this.realm = null;
+    this.busy.setActive(document.visibilityState === 'visible');
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.recorder?.drain();
   }
 
   phase(phase: string, pending = 0): void {
@@ -111,7 +132,10 @@ export class Diag {
       this.busy.setActive(false);
       this.replies.backgrounded();
     }
-    if (phase === 'logout') this.client?.logout();
+    if (phase === 'logout') {
+      this.discardIdentityState();
+      this.client?.logout();
+    }
   }
 
   /** Like KrakiDiag.endWork: synchronous work taking at least 8 ms. */

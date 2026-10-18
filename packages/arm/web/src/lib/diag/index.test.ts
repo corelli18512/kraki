@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiagRecorder } from './recorder';
 
 const { recorders } = vi.hoisted(() => ({ recorders: [] as DiagRecorder[] }));
-vi.mock('./client', () => ({
+vi.mock('./client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./client')>(),
   DiagClient: class {
     enabled = true;
     constructor(private options: { recorder: DiagRecorder }) { recorders.push(options.recorder); }
     start() {}
     async flush() {}
+    async configure() { this.options.recorder.setEnabled(this.enabled); }
+    logout() { this.options.recorder.setEnabled(false); this.options.recorder.drain(); }
     setForeground() {}
     userActivity() {}
     async setEnabled(value: boolean) { this.options.recorder.setEnabled(value); this.enabled = value; }
@@ -108,5 +111,126 @@ describe('Diag experience summary wiring', () => {
     d.answer('s', 'extra', 0, 0, 'web/outbox');
     d.answer('s', 'q0', 0, 0, 'web/outbox');
     expect(recorder.drain().events.at(-1)?.d.duplicate).toBe(false);
+  });
+});
+
+describe('diagnostic identity isolation', () => {
+  const sign = async () => 'signature';
+  const accountA = (d: Diag) => d.configure('wss://a.example/ws', 'device-a', sign);
+  const accountB = (d: Diag) => d.configure('wss://a.example/ws', 'device-b', sign);
+
+  it('logout discards A\'s pending reply before configuring B and backgrounding', () => {
+    const { d, recorder } = harness();
+    accountA(d);
+    d.replies.started('session-a', 'typed');
+    d.phase('logout');
+    expect(d.replies.inFlight).toBe(0);
+    accountB(d);
+    d.phase('background');
+    expect(recorder.drain().events.filter((e) => e.ev === 'reply.summary')).toEqual([]);
+    expect(d.replies.inFlight).toBe(0);
+    d.replies.started('session-b', 'answer');
+    d.replies.finish('session-b', 'completed');
+    expect(recorder.drain().events.filter((e) => e.ev === 'reply.summary').map((e) => e.d.kind)).toEqual(['answer']);
+  });
+
+  it.each(['logout', 'device', 'relay'] as const)('%s discards pending send, voice, reply, open and answer-duplicate state without summaries', (transition) => {
+    const { d, recorder } = harness();
+    accountA(d);
+    d.stability.authenticated(); d.stability.sessionListApplied(null);
+    d.stability.conversationOpened('session-a', 5, 0, true);
+    d.sends.created('send-a', 'typed', 10, 0, true);
+    d.voices.begin(false); d.voices.stateChanged('recording');
+    d.replies.started('session-a', 'typed');
+    d.answer('session-a', 'question', 10, 0, 'web/outbox');
+    recorder.drain();
+
+    if (transition === 'logout') { d.phase('logout'); accountA(d); }
+    else if (transition === 'device') accountB(d);
+    else d.configure('wss://b.example/ws', 'device-a', sign);
+
+    expect(d.sends.inFlight).toBe(0);
+    expect(d.replies.inFlight).toBe(0);
+    expect(d.stability.wantsConversationUpdates).toBe(false);
+    d.sends.finished('send-a', 'delivered');
+    d.voices.finalReceived(10, true); d.voices.stateChanged('idle');
+    d.replies.finish('session-a', 'completed');
+    d.stability.conversationRendered('session-a', 5, 5, true);
+    d.phase('background');
+    expect(recorder.drain().events.filter((e) => e.ev.endsWith('.summary'))).toEqual([]);
+    d.answer('session-a', 'question', 10, 0, 'web/outbox');
+    expect(recorder.drain().events.find((e) => e.ev === 'cmd.answer')?.d.duplicate).toBe(false);
+
+    d.sends.created('send-b', 'typed', 10, 0, true); d.sends.finished('send-b', 'delivered');
+    d.voices.begin(false); d.voices.finalReceived(10, false); d.voices.stateChanged('idle');
+    expect(recorder.drain().events.map((e) => e.ev)).toEqual(['send.summary', 'voice.summary']);
+  });
+
+  it.each(['ready', 'open', 'outage'] as const)('realm change discards pending %s summaries and their scheduled callbacks', (kind) => {
+    const { d, recorder } = harness();
+    accountA(d);
+    if (kind !== 'ready') {
+      d.stability.authenticated(); d.stability.sessionListApplied(null);
+      if (kind === 'open') d.stability.conversationOpened('session-a', 5, 0, true);
+      else d.stability.transportLost('peer_closed', 1006, 100);
+    }
+    recorder.drain();
+    accountB(d);
+    // No authentication for B yet: A's everAuthenticated flag must not survive.
+    d.stability.transportLost('peer_closed', 1006, 100);
+    vi.advanceTimersByTime(600_000);
+    d.stability.appHidden();
+    expect(d.stability.wantsConversationUpdates).toBe(false);
+    expect(recorder.drain().events.filter((e) => e.ev.endsWith('.summary'))).toEqual([]);
+  });
+
+  it('old readiness timeout cannot finish B\'s new opening; process launch metadata and callbacks survive', () => {
+    const { d, recorder } = harness();
+    d.stability.previousExit = () => 'clean';
+    accountA(d);
+    vi.advanceTimersByTime(5000);
+    accountB(d);
+    d.stability.appVisible(false, false);
+    recorder.drain();
+    vi.advanceTimersByTime(25_000);
+    expect(recorder.drain().events.filter((e) => e.ev === 'ready.summary')).toEqual([]);
+    expect(d.stability.wantsConversationUpdates).toBe(true);
+    vi.advanceTimersByTime(5000);
+    expect(recorder.drain().events.filter((e) => e.ev === 'ready.summary').map((e) => e.d)).toEqual([
+      expect.objectContaining({ kind: 'cold', outcome: 'timeout', previousExit: 'clean' }),
+    ]);
+  });
+
+  it('realm change immediately drains already-recorded A events and ignores A long tasks delivered later', () => {
+    let observed!: PerformanceObserverCallback;
+    vi.stubGlobal('PerformanceObserver', class {
+      static supportedEntryTypes = ['longtask'];
+      constructor(callback: PerformanceObserverCallback) { observed = callback; }
+      observe() {}
+    });
+    const { d, recorder } = harness();
+    accountA(d);
+    d.answer('session-a', 'question', 10, 0, 'web/outbox');
+    vi.advanceTimersByTime(100);
+    accountB(d);
+    observed({ getEntries: () => [{ startTime: 0, duration: 60 }] } as PerformanceObserverEntryList, {} as PerformanceObserver);
+    expect(recorder.drain().events.map((e) => e.ev)).toEqual(['app.phase']);
+  });
+
+  it('first authentication and reconnects to the same normalized realm preserve pending state', () => {
+    const { d, recorder } = harness();
+    accountA(d);
+    expect(d.stability.wantsConversationUpdates).toBe(true);
+    d.replies.started('session-a', 'typed');
+    d.answer('session-a', 'question', 10, 0, 'web/outbox');
+    recorder.drain();
+    d.configure('wss://a.example/other?route=1', 'device-a', sign);
+    d.configure('not a relay', 'device-b', sign);
+    expect(d.replies.inFlight).toBe(1);
+    d.answer('session-a', 'question', 10, 0, 'web/outbox');
+    d.phase('background');
+    const events = recorder.drain().events;
+    expect(events.find((e) => e.ev === 'cmd.answer')?.d.duplicate).toBe(true);
+    expect(events.find((e) => e.ev === 'reply.summary')?.d.outcome).toBe('backgrounded');
   });
 });

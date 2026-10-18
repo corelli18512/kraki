@@ -121,6 +121,7 @@ export class KrakiWSClient {
 
   /** The relay deleted this account (asked from here or another device): sign out for good. */
   private accountWasDeleted(): void {
+    diag.phase('logout');
     const savedClientId = getStore().githubClientId;
     localStorage.removeItem(STORAGE_KEY);
     this.transport.storedDeviceId = undefined;
@@ -1186,7 +1187,7 @@ export class KrakiWSClient {
       case 'auth_error':
         if ((msg as { code?: string }).code === 'account_deleted') { this.accountWasDeleted(); break; }
         processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
-          clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
+          clearStoredDeviceId: () => { diag.phase('logout'); this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),

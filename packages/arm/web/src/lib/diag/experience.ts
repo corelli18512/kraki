@@ -22,6 +22,14 @@ export class VoiceTracker {
   private finishingAt: number | null = null;
   private pendingOutcome: VoiceSummary['outcome'] | null = null;
 
+  /** Identity reset discards an attempt, never emits its summary. */
+  reset(): void {
+    this.current = null;
+    this.began = 0;
+    this.recordingAt = this.finishingAt = null;
+    this.pendingOutcome = null;
+  }
+
   begin(warm: boolean, correctionEnabled = true): void {
     this.current = { outcome: 'ended', stage: 'preflight', correctionConfirmed: false,
       correctionEnabled, textLength: 0, warm, leaseRollovers: 0 };
@@ -110,6 +118,8 @@ export class ReplyTracker {
   now: () => number = () => performance.now();
   onSummary?: (s: ReplySummary) => void;
   private entries = new Map<string, { summary: ReplySummary; startedAt: number; lastDeltaAt: number | null }>();
+
+  reset(): void { this.entries.clear(); }
 
   started(sessionId: string, kind: ReplySummary['kind']): void {
     this.expire();
