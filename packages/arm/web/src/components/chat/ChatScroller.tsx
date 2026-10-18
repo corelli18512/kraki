@@ -76,7 +76,9 @@ export function newTailKeys(before: string[], after: string[]): string[] {
   const grew = after.length - before.length;
   if (tail < 0 && grew <= 0) return [];
   const known = new Set(before);
-  return after.slice(tail >= 0 ? tail + 1 : after.length - grew).filter((key) => !known.has(key));
+  const added = after.slice(tail >= 0 ? tail + 1 : after.length - grew).filter((key) => !known.has(key));
+  // Like Mac recordEntrances: a catch-up burst is not a conversation beat.
+  return added.length <= 2 ? added : [];
 }
 const NEAR_TOP = 900;
 
@@ -373,7 +375,14 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       stopMotion();
       endUnreadEntry();
       pinned.current = false;
-      glide(() => el.scrollTop + node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8), smooth);
+      const measureTarget = () => el.scrollTop + node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
+      let target = measureTarget();
+      glide(() => {
+        // A live reply can land under a new key mid-glide. Its detached node
+        // has no geometry; keep the last valid content-space destination.
+        if (node.isConnected) target = measureTarget();
+        return target;
+      }, smooth);
       anchor.current = { key, offset: 8 };
     },
     rowsAbove: () => {

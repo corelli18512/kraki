@@ -34,6 +34,12 @@ describe('entrances', () => {
     expect(newTailKeys(['a', 'b', 'pending'], ['b', 'pending', 'live'])).toEqual(['live']);
   });
 
+  it('suppresses catch-up bursts larger than two even when the capped window evicts its front', () => {
+    expect(newTailKeys(['a', 'b', 'c', 'd'], ['d', 'user', 'reply', 'next-user'])).toEqual([]);
+    expect(newTailKeys(['a'], ['a', 'user', 'reply', 'next-user'])).toEqual([]);
+    expect(newTailKeys(['a', 'b', 'c'], ['c', 'user', 'reply'])).toEqual(['user', 'reply']);
+  });
+
   it('does not animate a capped replacement, prepend or reorder', () => {
     expect(newTailKeys(['a', 'b', 'live'], ['b', 'user', 'landed'])).toEqual([]);
     expect(newTailKeys(['b', 'c'], ['older', 'b', 'c'])).toEqual([]);

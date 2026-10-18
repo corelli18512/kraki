@@ -160,6 +160,43 @@ test('F6: manual older input cancels a bottom navigation during streaming', asyn
   }
 });
 
+test('F6: previous-reply glide keeps its target when identical streamed text lands', async ({ page }) => {
+  const server = await MockRelayServer.create();
+  try {
+    const ws = await open(page, server);
+    await startStream(page, server, ws);
+    const continuation = Array.from({ length: 45 }, (_, i) => `Tall streamed paragraph ${i}.\n\n`).join('');
+    const text = `Streaming start.\n\n${continuation}`;
+    delta(server, ws, continuation);
+    await expect.poll(() => gap(page)).toBeLessThan(2);
+    const live = page.locator('[data-scroll-key="__live__"]');
+    const before = await live.evaluate((node) => {
+      const el = document.querySelector<HTMLElement>('[data-chat-scroll]')!;
+      const inset = parseFloat(getComputedStyle(document.querySelector('.kchat-scroll-content')!).paddingTop);
+      const readingLine = el.getBoundingClientRect().top + inset + 8;
+      return { from: el.scrollTop, target: el.scrollTop + node.getBoundingClientRect().top - readingLine, readingLine };
+    });
+    expect(before.from - before.target).toBeGreaterThan(800);
+    await page.getByRole('button', { name: 'Previous reply' }).click();
+    // Land only after the glide has moved, and while it is still far from its
+    // target. The identical text preserves geometry; only the row key changes.
+    await page.waitForFunction(({ from, target }) => {
+      const top = document.querySelector('[data-chat-scroll]')!.scrollTop;
+      return top < from - 10 && top > target + 100;
+    }, before);
+    server.sendMessage(ws, { type: 'agent_message', sessionId: SESSION.id, payload: { content: text, steps: 1 } });
+    await expect(live).toHaveCount(0);
+    const landed = page.locator('[data-scroll-key]').filter({ has: page.getByText('Tall streamed paragraph 0.', { exact: true }) });
+    await expect(landed).toHaveCount(1);
+    await page.waitForTimeout(400);
+    const after = await landed.evaluate((node) => ({ top: node.getBoundingClientRect().top, scrollTop: document.querySelector('[data-chat-scroll]')!.scrollTop }));
+    expect(Math.abs(after.scrollTop - before.target)).toBeLessThan(2);
+    expect(Math.abs(after.top - before.readingLine)).toBeLessThan(2);
+  } finally {
+    await server.close();
+  }
+});
+
 test('F7: a two-pixel older movement disengages follow until newer intent returns to tail', async ({ page }) => {
   const server = await MockRelayServer.create();
   try {
@@ -212,6 +249,43 @@ test('F9: arrivals enter from their side after the rendered window is full', asy
     await expect(page.getByText('Landed reply')).toBeVisible();
     await page.waitForTimeout(400);
     expect(await page.evaluate(() => (window as unknown as { tailEntrances: string[] }).tailEntrances.length)).toBe(beforeLanding);
+  } finally {
+    await server.close();
+  }
+});
+
+test('F9: capped catch-up batches do not enter, but an ordinary arrival still does', async ({ page }) => {
+  const server = await MockRelayServer.create();
+  try {
+    const ws = await open(page, server, 70);
+    await expect(page.locator('[data-scroll-key]')).toHaveCount(60);
+    await page.evaluate(() => {
+      const entrances: string[] = [];
+      Object.assign(window, { catchUpEntrances: entrances });
+      document.addEventListener('animationstart', (event) => {
+        if ((event.target as HTMLElement).matches('[data-scroll-key]')) entrances.push((event as AnimationEvent).animationName);
+      });
+    });
+    const firstSeq = server.seq;
+    const messages = Array.from({ length: 4 }, (_, i) => ({
+      type: i % 2 ? 'agent_message' : 'user_message', sessionId: SESSION.id,
+      deviceId: DEVICE.id, seq: firstSeq + i, timestamp: new Date().toISOString(),
+      payload: { content: `Catch-up row ${i}` },
+    }));
+    // A range batch updates the store atomically, as on reconnect / catch-up.
+    server.sendMessage(ws, {
+      type: 'session_messages_range_batch',
+      payload: { sessionId: SESSION.id, messages, firstSeq, lastSeq: firstSeq + 3, truncated: false },
+    });
+    server.resetSeq(firstSeq + 4);
+    await expect(list(page).getByText('Catch-up row 3')).toBeVisible();
+    await expect(page.locator('[data-scroll-key]')).toHaveCount(60);
+    await page.waitForTimeout(400);
+    expect(await page.evaluate(() => (window as unknown as { catchUpEntrances: string[] }).catchUpEntrances)).toEqual([]);
+
+    server.sendMessage(ws, { type: 'user_message', sessionId: SESSION.id, payload: { content: 'Ordinary arrival after catch-up' } });
+    await expect(list(page).getByText('Ordinary arrival after catch-up')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { catchUpEntrances: string[] }).catchUpEntrances)).toEqual(['kenter-right']);
   } finally {
     await server.close();
   }
