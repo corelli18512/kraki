@@ -17,6 +17,7 @@
  * automatically; an older one would run a duplicate, so they keep awaiting
  * the echo and become `unconfirmed` after the stalled window.
  */
+import { diag } from '../diag';
 import { create } from 'zustand';
 import type { Attachment } from '@kraki/protocol';
 import { traceEvent } from '../trace';
@@ -80,6 +81,15 @@ interface OutboxState {
   entries: PendingInput[];
 }
 
+// ── Performance data (native SendTracker + outbox.state/cmd.input/echo.input) ──
+function kindOf(e: Pick<PendingInput, 'answerTo' | 'delivery' | 'originalText'>, voice = false): 'typed' | 'voice' | 'answer' | 'steer' {
+  return e.answerTo ? 'answer' : e.delivery === 'steer' ? 'steer' : voice || e.originalText !== undefined ? 'voice' : 'typed';
+}
+function phase(e: Pick<PendingInput, 'clientId' | 'sessionId' | 'answerTo'>, value: string): void {
+  diag.record('outbox.state', e.sessionId, { clientId: e.clientId, answerTo: e.answerTo, phase: value });
+}
+const hidden = () => typeof document !== 'undefined' && document.visibilityState !== 'visible';
+
 export const useOutbox = create<OutboxState>(() => ({ entries: restore() }));
 
 function restore(): PendingInput[] {
@@ -90,6 +100,11 @@ function restore(): PendingInput[] {
     if (!Array.isArray(stored)) return [];
     const restored = stored.map((e) => (e.state === 'failed' || e.state === 'correcting' ? { ...e, state: 'failed' as const, text: e.originalText ?? e.text } : { ...e, state: 'sending' as const, needsResend: true }));
     if (restored.some((e) => e.needsResend)) ensureTicker();
+    for (const e of restored) {
+      const at = Date.parse(e.timestamp);
+      diag.sends.restored(e.clientId, kindOf(e), Number.isNaN(at) ? undefined : at, e.state === 'failed');
+      phase(e, 'restored');
+    }
     return restored;
   } catch {
     return [];
@@ -116,8 +131,12 @@ function update(fn: (entries: PendingInput[]) => PendingInput[]): void {
   persist(next);
 }
 
-function setState(clientId: string, state: PendingState): void {
+function setState(clientId: string, state: PendingState, cause?: string): void {
+  const before = useOutbox.getState().entries.find((e) => e.clientId === clientId);
   update((entries) => entries.map((e) => (e.clientId === clientId && e.state !== state ? { ...e, state } : e)));
+  if (!before || before.state === state) return;
+  diag.sends.state(clientId, state, cause, state === 'failed' && hidden());
+  phase(before, state);
 }
 
 function wirePayload(entry: PendingInput): Record<string, unknown> {
@@ -152,6 +171,8 @@ export function checkDeadlines(now = Date.now()): void {
       traceEvent({ comp: 'arm', evt: 'OUTBOX-RESEND-DECISION', clientId: entry.clientId, accepts });
       if (accepts) {
         setState(entry.clientId, 'sending');
+        diag.sends.retried(entry.clientId, false);
+        phase(entry, 'resend_greeting');
         transmit(clearResend(entry), true);
       } else {
         clearResend(entry);
@@ -170,12 +191,14 @@ export function checkDeadlines(now = Date.now()): void {
       // once more; the Tentacle drops a duplicate by clientId.
       stall.resent = true;
       traceEvent({ comp: 'arm', evt: 'OUTBOX-HALF-RESEND', clientId: entry.clientId });
+      diag.sends.retried(entry.clientId, false);
+      phase(entry, 'resend_stalled');
       void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) });
     }
     if (stall.stalledMs >= confirmationTimeoutMs) {
       traceEvent({ comp: 'arm', evt: 'OUTBOX-UNCONFIRMED', clientId: entry.clientId, stalledMs: stall.stalledMs });
       stalls.delete(entry.clientId);
-      setState(entry.clientId, 'unconfirmed');
+      setState(entry.clientId, 'unconfirmed', 'stalled');
     }
   }
 }
@@ -190,13 +213,13 @@ function transmit(entry: PendingInput, queueOnRefusal = false): void {
   lastTickAt ??= Date.now();
   ensureTicker();
   const send = deps?.send;
-  if (!send) { setState(entry.clientId, 'failed'); return; }
+  if (!send) { setState(entry.clientId, 'failed', 'refused'); return; }
   void send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }).then((ok) => {
     traceEvent({ comp: 'arm', evt: 'OUTBOX-TRANSMIT', clientId: entry.clientId, ok });
     if (!useOutbox.getState().entries.some((e) => e.clientId === entry.clientId)) return;
     if (queueOnRefusal) {
       update((entries) => entries.map((e) => e.clientId === entry.clientId ? { ...e, needsDispatch: !ok || undefined } : e));
-    } else if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed'); }
+    } else if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed', 'refused'); }
   });
 }
 
@@ -240,6 +263,10 @@ export const outbox = {
       state: 'sending',
     };
     update((list) => [...list, entry]);
+    diag.sends.created(entry.clientId, kindOf(entry), text.length, entry.attachments?.length ?? 0, deps?.isDeliveryPathUp(sessionId) ?? false);
+    diag.record('cmd.input', sessionId, { clientId: entry.clientId, answerTo: entry.answerTo, textLength: text.length, attachments: entry.attachments?.length ?? 0, source: 'web/outbox' });
+    phase(entry, 'created');
+    diag.userActivity();
     // A transient refusal (reconnecting, the Tentacle's key not known yet)
     // keeps it queued and dispatches when the path is back, like staged
     // voice and Mac CommandSender (only signing out drops the outbox).
@@ -257,6 +284,8 @@ export const outbox = {
       order: entries.reduce((n, e) => Math.max(n, e.order), 0) + 1, state: 'correcting',
     };
     update((list) => [...list, entry]);
+    diag.sends.created(entry.clientId, kindOf(entry, true), text.length, entry.attachments?.length ?? 0, deps?.isDeliveryPathUp(sessionId) ?? false);
+    phase(entry, 'correcting');
     return entry.clientId;
   },
 
@@ -274,11 +303,17 @@ export const outbox = {
     if (!entry) return false; // deleted / sent original: late speech events cannot resurrect it
     const sending = { ...entry, text, state: 'sending' as const };
     update((list) => list.map((e) => e.clientId === clientId ? sending : e));
+    diag.sends.dispatched(clientId);
+    diag.sends.state(clientId, 'sending');
+    diag.record('cmd.input', entry.sessionId, { clientId, answerTo: entry.answerTo, textLength: text.length, attachments: entry.attachments?.length ?? 0, source: 'web/voice' });
+    phase(entry, 'sending');
     transmit(sending, true);
     return true;
   },
 
   failStaged(clientId: string, text: string): void {
+    const staged = useOutbox.getState().entries.find((e) => e.clientId === clientId && e.state === 'correcting');
+    if (staged) { diag.sends.state(clientId, 'failed', 'correction', hidden()); phase(staged, 'failed'); }
     update((list) => list.map((e) => e.clientId === clientId && e.state === 'correcting'
       ? { ...e, text, originalText: text, state: 'failed' as const } : e));
   },
@@ -287,6 +322,8 @@ export const outbox = {
   retry(clientId: string): void {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);
     if (!entry) return;
+    diag.sends.retried(clientId, true);
+    phase(entry, 'retry');
     if (entry.state === 'correcting') { this.dispatchStaged(clientId, entry.originalText ?? entry.text); return; }
     setState(clientId, 'sending');
     transmit({ ...entry, state: 'sending' });
@@ -311,6 +348,7 @@ export const outbox = {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);
     stalls.delete(clientId);
     update((list) => list.filter((e) => e.clientId !== clientId));
+    if (entry) { diag.sends.finished(clientId, 'deleted'); phase(entry, 'cleared'); }
     return entry?.text;
   },
 
@@ -325,9 +363,11 @@ export const outbox = {
         ? entries.find((e) => e.sessionId === sessionId && e.text === content)
         : undefined;
     traceEvent({ comp: 'arm', evt: 'OUTBOX-CONFIRM', clientId, matched: match?.clientId ?? null });
+    diag.record('echo.input', sessionId, { clientId: match?.clientId ?? clientId, answerTo: match?.answerTo, matched: !!match });
     if (!match) return false;
     stalls.delete(match.clientId);
     update((list) => list.filter((e) => e.clientId !== match.clientId));
+    diag.sends.finished(match.clientId, 'delivered');
     return true;
   },
 
@@ -337,6 +377,7 @@ export const outbox = {
 
   /** Drop a deleted session's entries. */
   clearSession(sessionId: string): void {
+    for (const e of useOutbox.getState().entries) if (e.sessionId === sessionId) diag.sends.finished(e.clientId, 'cleared');
     update((list) => list.filter((e) => e.sessionId !== sessionId));
   },
 

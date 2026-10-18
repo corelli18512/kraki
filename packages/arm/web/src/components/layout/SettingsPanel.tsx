@@ -1,3 +1,4 @@
+import { diag } from '../../lib/diag';
 import { useEffect, useRef, useState } from 'react';
 import { Check, CheckCircle, ChevronRight, Smartphone, X } from 'lucide-react';
 import { KrakiLogo } from '../KrakiLogo';
@@ -45,6 +46,25 @@ const tabDescriptions: Record<string, string> = {
 
 /** Same labels as Mac AccountPane.providerLabel: GitHub by default, otherwise
  *  the provider id capitalized ("open" → "Open"). */
+/** Same section, copy and default (on) as Mac DiagSettingsSection. */
+export const PERFORMANCE_DATA_FOOTER = 'Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find problems and make Kraki better. '
+  + 'Never message text, drafts, voice, attachments or file names. '
+  + 'Turning this off stops performance uploads and deletes unsent performance data. Basic daily account activity counts are separate.';
+
+function PerformanceDataSection() {
+  const [on, setOn] = useState(diag.enabled);
+  return (
+    <SettingsSection title="Privacy" footer={PERFORMANCE_DATA_FOOTER}>
+      <SettingsRow label="Share Performance Data">
+        <SettingsSwitch label="Share Performance Data" on={on} onChange={(next) => { setOn(next); void diag.setEnabled(next); }} />
+      </SettingsRow>
+      <div className="kp-row">
+        <a href="https://app.kraki.chat/privacy/" target="_blank" rel="noreferrer" className="text-kraki-500">Privacy Policy</a>
+      </div>
+    </SettingsSection>
+  );
+}
+
 export function providerLabel(provider: string | null | undefined): string {
   if (!provider || provider === 'github') return 'GitHub';
   return provider.split(/(\s+)/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
@@ -323,6 +343,7 @@ export function SettingsPanel({
           )}
         </SettingsSection>
       )}
+      {diag.active && <PerformanceDataSection />}
     </>
   );
   const account = state.user ? (

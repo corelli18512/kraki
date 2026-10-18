@@ -418,6 +418,13 @@ const safely = (fn) => async (...args) => {
 };
 
 ipcMain.handle('kraki:local-link-discovery', () => readLocalLinkDiscovery());
+// Performance data (Settings › Share Performance Data): fixed collector
+// paths only; main-window callers only.
+const diagHttp = require('./diag-http.cjs');
+ipcMain.handle('kraki:diag-request', (event, req) => {
+  if (!win || event.sender !== win.webContents) return { status: 0, body: '' };
+  return diagHttp.request((url, init) => net.fetch(url, init), req);
+});
 ipcMain.handle('kraki:builtin-state', () => builtIn?.state() ?? null);
 ipcMain.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => send('kraki:builtin-agent-event', e)));
 ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({

@@ -1,3 +1,4 @@
+import { diag } from '../../lib/diag';
 import { SettingsAlert } from './SettingsControls';
 import { resetVoice } from '../../lib/voice/voice';
 import { desktop, setDesktopSignedOut } from '../../lib/desktop';
@@ -25,6 +26,7 @@ function SignOutIcon({ className }: { className?: string }) {
 
 /** Sign out only this app; computers retain their session storage. */
 export function signOut() {
+    diag.phase('logout');
     const savedClientId = useStore.getState().githubClientId;
     localStorage.removeItem(STORAGE_KEY);
     setDesktopSignedOut(true);

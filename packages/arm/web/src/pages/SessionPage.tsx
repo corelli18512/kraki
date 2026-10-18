@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { markNotificationEntry } from '../lib/chat/unread-entry';
 import { sessionDisplayTitle } from '../lib/session-status';
 import { useParams, useNavigate, useLocation } from 'react-router';
+import { diag } from '../lib/diag';
 import { useStore } from '../hooks/useStore';
 import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
 import { ChatView } from '../components/chat/ChatView';
@@ -83,7 +84,18 @@ export function SessionPage() {
 
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
-    if (sessionId) setActiveSessionId(sessionId);
+    if (sessionId) {
+      setActiveSessionId(sessionId);
+      // Performance data (open.summary): opened while online.
+      const st = useStore.getState();
+      const session = st.sessions.get(sessionId);
+      const local = (st.messages.get(sessionId) ?? []).reduce((n, m) => {
+        const seq = (m as { seq?: unknown }).seq;
+        return typeof seq === 'number' && Number.isInteger(seq) && seq > n ? seq : n;
+      }, 0);
+      const online = st.status === 'connected' && !!session && st.devices.get(session.deviceId)?.online === true;
+      diag.stability.conversationOpened(sessionId, session?.lastSeq ?? 0, local, online);
+    }
     setSelectedArtifact(null);
     setSelectedArtifactExpanded(false);
     return () => setActiveSessionId(null);

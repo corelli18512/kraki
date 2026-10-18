@@ -1,0 +1,17 @@
+/* Windows-native (Fluent) take on the Mac desktop card: bottom-right,
+   non-modal, rounded surface, accent primary button. */
+.kperf-notice { position: fixed; right: 20px; bottom: 20px; z-index: 55; width: min(400px, calc(100vw - 40px));
+  padding: 18px; border-radius: 12px; background: var(--color-surface-primary); color: var(--color-text-primary);
+  border: 1px solid rgba(0, 0, 0, .08); box-shadow: 0 8px 32px rgba(0, 0, 0, .18); font-size: 13px; line-height: 18px; }
+.dark .kperf-notice { border-color: rgba(255, 255, 255, .1); background: #1c2030; }
+.kperf-notice h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+.kperf-notice h2 svg { width: 16px; height: 16px; color: #007aff; }
+.kperf-notice p { margin: 0; color: var(--color-text-secondary); }
+.kperf-notice .kperf-hint { margin-top: 8px; font-size: 12px; color: var(--color-text-muted); }
+.kperf-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.kperf-actions button { min-width: 96px; height: 32px; padding: 0 14px; border-radius: 4px; font-weight: 500; }
+.kperf-secondary { background: rgba(0, 0, 0, .05); border: 1px solid rgba(0, 0, 0, .08); }
+.dark .kperf-secondary { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .1); }
+.kperf-primary { background: #007aff; color: #fff; }
+.kperf-primary:hover { filter: brightness(1.06); }
+.kperf-actions button:focus-visible { outline: 2px solid #007aff; outline-offset: 2px; }

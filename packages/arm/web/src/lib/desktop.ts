@@ -125,6 +125,9 @@ export interface KrakiDesktopBridge {
   /** Contents of `<KRAKI_HOME>/local-link.json` (the Tentacle on this
    *  machine), or null. Absent in shells without local-link support. */
   localLinkDiscovery?: () => Promise<string | null>;
+  /** Performance data upload (Settings › Share Performance Data). The shell
+   *  only sends to `<relay origin>/api/diag/v1/{config,batch}`, no redirects. */
+  diag?: { request: (req: import('./diag/client').DiagHttpRequest) => Promise<{ status: number; body: string }> };
 }
 
 declare global {

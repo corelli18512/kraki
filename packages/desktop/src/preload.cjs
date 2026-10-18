@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
   },
   setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),
   localLinkDiscovery: () => ipcRenderer.invoke('kraki:local-link-discovery'),
+  diag: { request: (req) => ipcRenderer.invoke('kraki:diag-request', req) },
   /** Tray › Account Usage / Settings… */
   onOpen: (what, handler) => {
     const channel = what === 'usage' ? 'kraki:open-usage' : 'kraki:open-settings';

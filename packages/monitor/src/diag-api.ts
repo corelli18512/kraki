@@ -114,7 +114,7 @@ export function sanitizeDiagBatch(value: unknown, batchId: string): { batch: Rec
   };
   const batch = strip(value, k => BATCH_KEYS.includes(k));
   if (batch.schema !== 1 || batch.batchId !== batchId || !uuid(batch.processId)) return null;
-  if (!['ios', 'mac', 'test'].includes(String(batch.platform))) return null;
+  if (!['ios', 'mac', 'windows', 'test'].includes(String(batch.platform))) return null;
   if (typeof batch.version !== 'string' || !/^[\d.]{1,32}$/.test(batch.version)) return null;
   if (typeof batch.build !== 'string' || !/^\d{1,16}$/.test(batch.build)) return null;
   if (batch.image !== undefined) {

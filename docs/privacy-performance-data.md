@@ -2,8 +2,10 @@
 
 Public privacy policy: https://app.kraki.chat/privacy/ (source:
 `packages/arm/web/public/privacy/index.html`). This file describes the performance
-data the iOS and Mac apps send (Settings →
-Privacy → Share Performance Data, on by default). Technical reference:
+data the iOS, Mac and Windows apps send (Settings →
+Privacy → Share Performance Data, on by default). Windows uses the Web client's
+`lib/diag` (same wire format, signature and vocabulary; platform `windows`;
+the browser Web app sends nothing). Technical reference:
 `docs/stability-metrics.md` (events) and `docs/client-diagnostics-design.md`
 (transport, limits, collector). Keep them in sync.
 

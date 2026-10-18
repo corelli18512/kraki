@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from './useStore';
+import { diag } from '../lib/diag';
 
 /** A reconnect that finishes within this long is not shown (same as the
  *  native apps): a flash of "Reconnecting…" on a blip only alarms the user. */
@@ -15,5 +16,7 @@ export function useShowsReconnecting(): boolean {
     const timer = setTimeout(() => setShown(true), RECONNECTING_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [reconnecting]);
+  // Performance data: time "Reconnecting…" was actually on screen (idempotent).
+  useEffect(() => { diag.stability.reconnectingShown(reconnecting && shown); }, [reconnecting, shown]);
   return reconnecting && shown;
 }
