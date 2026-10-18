@@ -20,6 +20,7 @@ import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
 import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
+import { diag } from './diag';
 import { traceEvent } from './trace';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
@@ -43,6 +44,16 @@ const DELIVERY_FLOWING_MS = 30_000;
  *  connection rather than be retransmitted after reconnect, where it would
  *  abort a successor turn. Same contract as native `connectionScoped`. */
 export const CONNECTION_SCOPED = new Set(['abort_session']);
+
+/** Highest durable seq held locally for a session (performance data only). */
+function localHighestSeq(sessionId: string): number {
+  let max = 0;
+  for (const m of getStore().messages.get(sessionId) ?? []) {
+    const seq = (m as { seq?: unknown }).seq;
+    if (typeof seq === 'number' && Number.isInteger(seq) && seq > max) max = seq;
+  }
+  return max;
+}
 
 export class KrakiWSClient {
   private transport: KrakiTransport;
@@ -940,6 +951,12 @@ export class KrakiWSClient {
 
     // Tier 1: Budget warm-up — pre-fetch messages for likely-needed sessions
     this.runWarmup(tentacleSessions, pinnedFromTentacle);
+    // Performance data: the list is fresh; is the open conversation current?
+    const viewedId = getStore().activeSessionId;
+    const viewed = viewedId ? getStore().sessions.get(viewedId) : undefined;
+    diag.stability.sessionListApplied(viewedId && viewed?.lastSeq !== undefined
+      ? { sessionId: viewedId, lastSeq: viewed.lastSeq, localSeq: localHighestSeq(viewedId) }
+      : null);
   }
 
   // ── Budget warm-up constants ────────────────────────────
@@ -1125,6 +1142,13 @@ export class KrakiWSClient {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
         });
+        // Performance data: signed with this device's own key (native
+        // KrakiDiag.configure), then the opening/outage clocks move on.
+        if (getStore().deviceId) {
+          diag.configure(this.transport.url, getStore().deviceId!, (m) => this.encryption.keyStore.signChallenge(m));
+        }
+        diag.record('ws.state', undefined, { state: 'connected' });
+        diag.stability.authenticated();
         // Bring up the pulse endpoint + start the tick loop.
         this.pulse.onConnected();
         this.startPulseTick();

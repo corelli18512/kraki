@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SettingsPanel, providerLabel } from './SettingsPanel';
+import { SettingsPanel, providerLabel, PERFORMANCE_DATA_FOOTER } from './SettingsPanel';
+import { diag } from '../../lib/diag';
 import { useStore } from '../../hooks/useStore';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
 import { useUsageShortcut } from '../../lib/usage-shortcut';
@@ -181,5 +182,21 @@ describe('SettingsPanel native preferences parity', () => {
     open(); tab('About');
     expect(screen.getByText('DEVICE ID')).toBeInTheDocument();
     expect(screen.getByText('self')).toBeInTheDocument();
+  });
+  it('Share Performance Data: shown only where diagnostics run (Windows shell), Mac copy, toggles the client', () => {
+    open();
+    expect(screen.queryByRole('switch', { name: 'Share Performance Data' })).not.toBeInTheDocument();
+    const active = vi.spyOn(diag, 'active', 'get').mockReturnValue(true);
+    vi.spyOn(diag, 'enabled', 'get').mockReturnValue(true);
+    const set = vi.spyOn(diag, 'setEnabled').mockResolvedValue();
+    try {
+      open();
+      const toggle = screen.getAllByRole('switch', { name: 'Share Performance Data' }).at(-1)!;
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getAllByText(PERFORMANCE_DATA_FOOTER).length).toBeGreaterThan(0);
+      expect(PERFORMANCE_DATA_FOOTER).toContain('Never message text, drafts, voice, attachments or file names.');
+      fireEvent.click(toggle);
+      expect(set).toHaveBeenCalledWith(false);
+    } finally { active.mockRestore(); }
   });
 });

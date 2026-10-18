@@ -1,4 +1,5 @@
 import { desktopCredentials } from './desktop';
+import { diag } from './diag';
 import type { Message } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { createLogger } from './logger';
@@ -300,6 +301,8 @@ export class KrakiTransport {
     }
     this.intentionalClose = false;
     this.installWakeListeners();
+    diag.stability.connecting();
+    diag.record('ws.state', undefined, { state: 'connecting', attempt: this.reconnectAttempts });
 
     let ws: WebSocket;
     try {
@@ -316,7 +319,7 @@ export class KrakiTransport {
       this.connectTimer = null;
       if (this.ws === ws && ws.readyState === WebSocket.CONNECTING) {
         logger.warn('WebSocket handshake timed out');
-        this.abandon(ws);
+        this.abandon(ws, 'connect_timeout');
       }
     }, CONNECT_TIMEOUT);
 
@@ -325,6 +328,7 @@ export class KrakiTransport {
       // Backoff resets on successful auth, not on open: a relay that accepts
       // and drops connections must not be hammered every 0.5 s.
       this.lastRxAt = Date.now();
+      diag.stability.socketOpen();
       await this.callbacks.onOpen();
       this.startPing();
     };
@@ -356,7 +360,7 @@ export class KrakiTransport {
         this.handleReplaced();
         return;
       }
-      this.handleClosed();
+      this.handleClosed('peer_closed', event?.code);
     };
 
     ws.onerror = () => {
@@ -370,7 +374,11 @@ export class KrakiTransport {
     };
   }
 
-  private handleClosed() {
+  private handleClosed(reason: string, code?: number) {
+    // Performance data (native outage.summary): how it dropped and how long
+    // the link had been quiet. Never the close reason text.
+    diag.stability.transportLost(reason, code, this.lastRxAt ? Date.now() - this.lastRxAt : undefined);
+    diag.record('ws.state', undefined, { state: 'disconnected', source: reason, attempt: this.reconnectAttempts });
     this.cleanup();
     this.callbacks.onClose?.();
     if (!this.intentionalClose) {
@@ -414,7 +422,7 @@ export class KrakiTransport {
 
   /** Stop using a socket that is dead but has not closed (half-open, stuck
    *  handshake). The browser may take minutes to fire onclose on its own. */
-  private abandon(ws: WebSocket) {
+  private abandon(ws: WebSocket, reason = 'transport_silent') {
     if (this.ws !== ws) return;
     this.ws = null;
     ws.onopen = null;
@@ -422,7 +430,7 @@ export class KrakiTransport {
     ws.onclose = null;
     ws.onerror = null;
     try { ws.close(); } catch { /* already closing */ }
-    this.handleClosed();
+    this.handleClosed(reason);
   }
 
   /** Browser signals that the network may be back: retry now instead of

@@ -17,6 +17,7 @@ import { UsagePanel } from './components/usage/UsagePanel';
 import { VoiceConsentHost } from './components/chat/Voice';
 import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
 import { WindowsTitleBar } from './components/desktop/WindowsTitleBar';
+import { PerformanceNoticeHost } from './components/diag/PerformanceNotice';
 
 function RelayBlockingOverlay({
   status,
@@ -159,6 +160,7 @@ export function App() {
       <UsagePanel />
       <VoiceConsentHost />
       <OwnerChoiceHost />
+      {!showBlockingOverlay && <PerformanceNoticeHost />}
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}

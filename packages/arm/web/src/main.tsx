@@ -7,10 +7,14 @@ import { SessionPage } from './pages/SessionPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
 import { trackVisualViewport } from './lib/visual-viewport';
+import { desktop } from './lib/desktop';
+import { desktopBuildNumber, desktopDiagHttp, diag } from './lib/diag';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 
 trackVisualViewport();
+// Performance data (Settings › Share Performance Data): Windows shell only.
+diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktopBuildNumber() });
 
 function Root() {
   useTheme();

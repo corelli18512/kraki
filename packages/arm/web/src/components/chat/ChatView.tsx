@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
+import { diag } from '../../lib/diag';
 import { useNarrow } from '../../hooks/useNarrow';
 import { agentNavigationColors } from '../../lib/color';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
@@ -66,6 +67,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // ── Rows ──
   const lastSeq = session?.lastSeq;
   const maxSeq = highestSeq(messages);
+  // Performance data (open.summary / ready.summary): what is on screen now.
+  useEffect(() => {
+    if (diag.stability.wantsConversationUpdates) diag.stability.conversationRendered(sessionId, maxSeq, lastSeq ?? 0, messages.length > 0);
+  }, [sessionId, maxSeq, lastSeq, messages.length]);
   const atHead = lastSeq === undefined || lastSeq <= 0 ? maxSeq > 0 : maxSeq >= lastSeq;
   // A locally failed answer never reached the agent: its question stays open
   // and answerable (Mac ChatViewModel excludes failed answers too).
