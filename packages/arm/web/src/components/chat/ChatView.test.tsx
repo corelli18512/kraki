@@ -231,8 +231,12 @@ describe('ChatView subscription snapshot catch-up', () => {
   it.each(['sparse', 'empty'] as const)('releases a legacy head 9 hold after a successful %s tail response ending at persistent row 2', async (response) => {
     heldSnapshot(9);
     const persistent = [userMessage(1), { ...userMessage(2), type: 'agent_message' as const }];
-    useStore.setState({ messages: new Map([['s', persistent]]) });
-    if (response === 'empty') getMessagesInRange.mockResolvedValue(persistent);
+    // Sparse rows arrive from the server; only the empty-response variant
+    // already has them cached (so its actual request starts at seq 3).
+    if (response === 'empty') {
+      useStore.setState({ messages: new Map([['s', persistent]]) });
+      getMessagesInRange.mockResolvedValue(persistent);
+    } else useStore.setState({ messages: new Map([['s', []]]) });
     const send = vi.fn();
     messageProvider.setSend(send);
     render(<ChatView sessionId="s" topInset={56} />);

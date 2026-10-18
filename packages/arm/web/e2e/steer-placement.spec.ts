@@ -65,10 +65,7 @@ for (const [echoAfterReset, multipleSteers] of [[false, false], [true, false], [
         });
         expect(secondClientId).toBeTruthy();
       }
-      // Isolate placement from chat-scroll F6 (smooth send navigation racing
-      // streaming follow), owned by the scroll-follow lane. The glide has a
-      // 900ms completion fallback; wait for that ownership to end first.
-      await page.waitForTimeout(1000);
+      // Stream immediately after send: navigation and follow share ownership.
       await delta(page, ' Then the lexer.');
       await expectOrder(page, true);
       const clientId = await page.evaluate((sessionId) =>

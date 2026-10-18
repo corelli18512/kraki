@@ -171,7 +171,7 @@ export async function truncatedNoProgress(kind: 'empty' | 'duplicate' | 'outside
     const p = m.payload as { fromSeq: number; toSeq: number };
     ranges.push({ fromSeq: p.fromSeq, toSeq: p.toSeq });
     const list = kind === 'empty' ? [] : [message(kind === 'outside' ? 100 : 2)];
-    queueMicrotask(() => messageProvider.handleRangeBatch(sessionId, list, 0, 0, true));
+    queueMicrotask(() => messageProvider.handleRangeBatch(sessionId, list, list[0]?.seq ?? 0, list.at(-1)?.seq ?? 0, true));
   });
   await messageProvider.fetchRange(sessionId, 1, 3);
   return { requests, ranges, status: status(), rows: snapshot() };
@@ -189,8 +189,11 @@ export async function timeout(wait = () => new Promise<void>(r => setTimeout(r, 
   const retry = messageProvider.fetchRange(sessionId, 1, 1, { initial: true });
   await until(() => requests === 2, 'explicit range retry');
   messageProvider.handleRangeBatch(sessionId, [], 0, 0, false);
+  await until(() => requests === 3, 'ambiguous empty confirmation');
+  const confirming = status();
+  messageProvider.handleRangeBatch(sessionId, [], 0, 0, false);
   await retry;
-  return { failed, recovered: status(), requests };
+  return { failed, confirming, recovered: status(), requests };
 }
 
 export async function invalidateDuringRead() {
@@ -409,7 +412,7 @@ export async function middlePage(emptyOlder = false) {
     requests.push({ fromSeq: p.fromSeq, toSeq: p.toSeq });
     const page = pages[requests.length - 1];
     if (!page) throw new Error('Middle-page fixture exhausted');
-    queueMicrotask(() => messageProvider.handleRangeBatch(sessionId, page.messages, 0, 0, page.truncated));
+    queueMicrotask(() => messageProvider.handleRangeBatch(sessionId, page.messages, page.messages[0]?.seq ?? 0, page.messages.at(-1)?.seq ?? 0, page.truncated));
   });
   await messageProvider.fetchRange(sessionId, 1, 3);
   return { requests, status: status(), seqs: snapshot().map(m => m.seq) };
@@ -513,7 +516,7 @@ export function invariant(name: string, result: any): boolean {
     && JSON.stringify(result.requests) === JSON.stringify([{ fromSeq: 2, toSeq: 3 }])
     && result.rows.find((m: any) => m.seq === 1)?.payload.content === 'memory-new'
     && result.rows.find((m: any) => m.seq === 3)?.payload.content === 'server-three';
-  if (name === 'F3-producer-duplicate-suffix-control') return result.status.error === 'no-progress'
+  if (name === 'F3-producer-duplicate-suffix-control') return result.status.error === 'timeout'
     && result.count === 500 && result.missing.length === 500
     && JSON.stringify(result.requests) === JSON.stringify([{ fromSeq: 1, toSeq: 1000 }, { fromSeq: 1, toSeq: 500 }]);
   if (name === 'F3-producer-suffix' || name === 'F3-producer-multiple-suffix') {
@@ -532,7 +535,7 @@ export function invariant(name: string, result: any): boolean {
   if (name === 'F10-request-clear-control') return result.retained && result.count === 1 && result.status.state === 'loaded';
   if (name === 'F10-store-write-boundary') return result.persisted === 0;
   if (name === 'F2-idempotence-control') return result.withoutClient === 1 && result.mismatchedRow === 1 && result.remaining === 0 && result.persisted === 0;
-  if (name === 'F3-duplicate-truncated') return result.requests.length === 2 && result.status.error === 'no-progress' && result.count === 1 && result.requests[1].fromSeq === 2;
+  if (name === 'F3-duplicate-truncated') return result.requests.length === 2 && result.status.error === 'timeout' && result.count === 1 && result.requests[1].fromSeq === 2;
   if (name === 'F3-page-limit') return result.first.requests === 50 && result.first.status.error === 'page-limit' && result.count === 60 && result.requests[50].fromSeq === 51;
   if (name === 'F3-newer-tail-control') return result.requests.length === 2 && result.requests[1].toSeq === 120 && result.requests[1].fromSeq === 101 && result.count === 70;
   if (name === 'F9-status-control') return result.stable && result.unsubscribed && result.cleared === 'idle' && result.states.join(',') === 'loading,loaded';
@@ -542,12 +545,14 @@ export function invariant(name: string, result: any): boolean {
     && result.stages[1].missing.length < result.stages[0].missing.length
     && result.stages.at(-1).missing.length === 0;
   if (name === 'F3-authoritative-replacement') return result.rows.find((m: any) => m.seq === 3)?.payload.content === 'authoritative';
-  if (name === 'F3-nonprefix-truncated') return result.requests === 2 && result.status.error === 'no-progress'
+  if (name === 'F3-nonprefix-truncated') return result.requests === 2 && result.status.error === 'timeout'
     && JSON.stringify(result.ranges) === JSON.stringify([{ fromSeq: 1, toSeq: 3 }, { fromSeq: 1, toSeq: 1 }])
     && JSON.stringify(result.rows.map((m: any) => m.seq)) === '[2]';
+  if (name === 'F3-outside-truncated') return result.requests === 1 && result.status.error === 'timeout'
+    && result.rows.length === 1 && result.rows[0].seq === 100; // Retain unsolicited rows, never cover the pull.
   if (name.includes('truncated') && !['F3-truncated'].includes(name)) return result.requests === 1 && result.status.state === 'error' && result.rows.every((m: any) => m.seq <= 3);
   if (name.startsWith('F3-')) return result.stages.at(-1).missing.length === 0;
-  if (name === 'F9-timeout') return result.failed.state === 'error' && result.failed.error === 'timeout' && result.recovered.state === 'loaded';
+  if (name === 'F9-timeout') return result.failed.state === 'error' && result.failed.error === 'timeout' && result.confirming.state === 'loading' && result.requests === 3 && result.recovered.state === 'loaded';
   if (name === 'F10-invalidate') return result.count === 0 && result.persisted === 0;
   return result.invariant && (name !== 'F10-overlap' || result.oldRows === undefined || result.oldRows === 0);
 }

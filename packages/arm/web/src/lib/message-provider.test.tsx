@@ -173,7 +173,7 @@ describe('message-provider: ensureLoaded', () => {
     });
 
     messageProvider.reconcileTail('s1', 318);
-    messageProvider.handleRangeBatch('s1', [], 269, 318, false);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
     await warmup;
 
     await vi.waitFor(() => {
@@ -186,7 +186,7 @@ describe('message-provider: ensureLoaded', () => {
       targetDeviceId: 'd1',
     });
 
-    messageProvider.handleRangeBatch('s1', [], 269, 318, false);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
     await vi.waitFor(() => {
       expect(messageProvider.isLoading('s1')).toBe(false);
     });
@@ -478,5 +478,221 @@ describe('message-provider: range-fetch protocol', () => {
     expect(useStore.getState().messages.get('s1')?.map(message => 'seq' in message ? message.seq : 0))
       .toEqual(Array.from({ length: 1000 }, (_, index) => index + 1));
     expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+  });
+});
+
+describe('message-provider: older paging completion', () => {
+  function start() {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 200, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((message) => sent.push(message));
+    return sent;
+  }
+
+  it('distinguishes an authoritative empty range from a busy/skipped request', async () => {
+    const sent = start();
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await expect(messageProvider.fetchRange('s1', 1, 60)).resolves.toBe(false);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it('does not advance history on a timeout, and lets a later gesture retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent = start();
+      const pending = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toBe(false);
+      const retry = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+      expect(sent).toHaveLength(3);
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      await expect(retry).resolves.toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not advance an older cursor when a timed-out different range replies late', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent = start();
+      const tail = messageProvider.fetchRange('s1', 151, 200);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(tail).resolves.toBe(false);
+
+      let olderCursor = 121;
+      const older = messageProvider.fetchRange('s1', 61, 120).then((complete) => {
+        if (complete) olderCursor = 61;
+        return complete;
+      });
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 200, timestamp: '', payload: { content: 'Late tail' } },
+      ], 200, 200, false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(olderCursor).toBe(121);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+      // Unsolicited late rows are retained without completing the older pull.
+      expect(useStore.getState().messages.get('s1')?.some((message) => 'seq' in message && message.seq === 200)).toBe(true);
+
+      // Bounds must also be checked on every row, not just batch metadata.
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 199, timestamp: '', payload: { content: 'Mismatched row' } },
+      ], 61, 120, false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(olderCursor).toBe(121);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Mismatched metadata' } },
+      ], 151, 200, false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(olderCursor).toBe(121);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Requested older history' } },
+      ], 90, 90, false);
+      await expect(older).resolves.toBe(true);
+      expect(olderCursor).toBe(61);
+    } finally {
+      messageProvider.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  it('rechecks an ambiguous empty answer once after a previous range timed out', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent = start();
+      const tail = messageProvider.fetchRange('s1', 151, 200);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(tail).resolves.toBe(false);
+      const older = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      await vi.advanceTimersByTimeAsync(9000);
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+      expect(sent).toHaveLength(3);
+      expect(sent[2]?.payload).toMatchObject({ fromSeq: 61, toSeq: 120 });
+      // The retry gets its own timeout, rather than inheriting the old deadline.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(messageProvider.isLoading('s1')).toBe(true);
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      await expect(older).resolves.toBe(true);
+      expect(sent).toHaveLength(3);
+    } finally {
+      messageProvider.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat disconnect cancellation as an empty completed range', async () => {
+    const sent = start();
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    messageProvider.clear();
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it('keeps an incomplete cache usable when no remote target is available', async () => {
+    setupSession();
+    getMessagesInRange.mockResolvedValue([
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Cached history' } },
+    ]);
+    await expect(messageProvider.fetchRange('s1', 61, 120)).resolves.toBe(false);
+    expect(useStore.getState().messages.get('s1')).toHaveLength(1);
+  });
+
+  it('keeps a truncated page pending until its missing intervals complete', async () => {
+    const sent = start();
+    let olderCursor = 121;
+    let settled = false;
+    const pending = messageProvider.fetchRange('s1', 61, 120).then((complete) => {
+      settled = true;
+      if (complete) olderCursor = 61;
+      return complete;
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Partial history' } },
+    ], 90, 90, true);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1].payload).toMatchObject({ fromSeq: 61, toSeq: 89 });
+    expect(settled).toBe(false);
+    expect(olderCursor).toBe(121);
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loading' });
+    expect(useStore.getState().messages.get('s1')).toHaveLength(1);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(sent[2].payload).toMatchObject({ fromSeq: 91, toSeq: 120 });
+    expect(olderCursor).toBe(121);
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+    await expect(pending).resolves.toBe(true);
+    expect(olderCursor).toBe(61);
+    expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+  });
+
+  it('rejects an in-bounds truncated page that only repeats cached rows as no progress', async () => {
+    const sent = start();
+    getMessagesInRange.mockResolvedValue([
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Cached row' } },
+    ]);
+    const pending = messageProvider.fetchRange('s1', 61, 120);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].payload).toMatchObject({ fromSeq: 61, toSeq: 120 });
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 90, timestamp: '', payload: { content: 'Repeated row' } },
+    ], 90, 90, true);
+    await vi.waitFor(() => expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'error', error: 'no-progress' }));
+    await expect(pending).resolves.toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(useStore.getState().messages.get('s1')).toHaveLength(1);
+  });
+
+  it('retains a failed tail and its retry target across successful older paging', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent = start();
+      const tail = messageProvider.fetchRange('s1', 151, 200, { initial: true, foreground: true });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(tail).resolves.toBe(false);
+      const failure = messageProvider.getRangeStatus('s1');
+      expect(failure).toEqual({ state: 'error', error: 'timeout' });
+      const older = messageProvider.fetchRange('s1', 61, 120);
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      expect(messageProvider.getRangeStatus('s1')).toBe(failure);
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 120, timestamp: '', payload: { content: 'Older history' } },
+      ], 120, 120, false);
+      await expect(older).resolves.toBe(true);
+      expect(messageProvider.getRangeStatus('s1')).toBe(failure);
+      messageProvider.retryRange('s1');
+      await vi.waitFor(() => expect(sent).toHaveLength(3));
+      expect(sent[2].payload).toMatchObject({ fromSeq: 151, toSeq: 200 });
+      expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loading' });
+      messageProvider.handleRangeBatch('s1', [
+        { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 200, timestamp: '', payload: { content: 'Newest history' } },
+      ], 200, 200, false);
+      await vi.waitFor(() => expect(sent).toHaveLength(4));
+      expect(sent[3].payload).toMatchObject({ fromSeq: 121, toSeq: 150 });
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      expect(sent).toHaveLength(5); // Confirm the ambiguous empty after timeout.
+      messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+      await vi.waitFor(() => expect(messageProvider.isLoading('s1')).toBe(false));
+      expect(messageProvider.getRangeStatus('s1')).toEqual({ state: 'loaded' });
+    } finally {
+      messageProvider.clear();
+      vi.useRealTimers();
+    }
   });
 });

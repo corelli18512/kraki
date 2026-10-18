@@ -38,7 +38,7 @@ export async function setup(head = 100, initial = 0, available = true) {
 export function respond(index = requests.length - 1, empty = false) {
   const request = requests[index];
   if (!request) throw new Error(`Missing request ${index}`);
-  messageProvider.handleRangeBatch(request.sessionId, empty ? [] : rows(request.sessionId, request.fromSeq, request.toSeq), request.fromSeq, request.toSeq, false);
+  messageProvider.handleRangeBatch(request.sessionId, empty ? [] : rows(request.sessionId, request.fromSeq, request.toSeq), empty ? 0 : request.fromSeq, empty ? 0 : request.toSeq, false);
 }
 export function snapshot(sessionId: string) {
   return { requests: [...requests], status: messageProvider.getRangeStatus(sessionId),

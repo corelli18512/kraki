@@ -206,8 +206,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
   const [windowSize, setWindowSize] = useState(WINDOW_START);
-  const visibleRows = useMemo(() => rows.slice(Math.max(0, rows.length - windowSize)), [rows, windowSize]);
-  const hiddenAbove = rows.length - visibleRows.length;
+  const retainedStart = useRef<string | null>(null);
+  const navigation = useRef({ generation: 0, active: false });
+  const cancelNavigation = useCallback(() => {
+    navigation.current.generation++;
+    navigation.current.active = false;
+  }, []);
 
   // Entered with new messages: the read position, captured on this entry's
   // first render — before SessionPage's effect marks the Session read.
@@ -222,12 +226,27 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // reach the head, or a stale cached tail would land on an old reply.
   const entryHadGap = entry.current.hadGap && atHead;
   const unreadTarget = useMemo(() => (entryBoundary === null ? null : firstUnreadKey(
-    visibleRows.map((r) => r.kind === 'spine'
+    rows.map((r) => r.kind === 'spine'
       ? { key: r.key, seq: seqOf(r.item.message) || undefined, isUser: r.item.message.type === 'user_message' }
       : { key: r.key }),
     entryBoundary,
     entryHadGap,
-  )), [visibleRows, entryBoundary, entryHadGap]);
+  )), [rows, entryBoundary, entryHadGap]);
+
+  // Keep the loaded first-unread row and the reading window mounted. Tail
+  // arrivals may grow this window; only returning to the tail may trim it.
+  let windowStart = Math.max(0, rows.length - windowSize);
+  if (!atBottomRef.current && retainedStart.current) {
+    const retained = rows.findIndex((row) => row.key === retainedStart.current);
+    if (retained >= 0) windowStart = Math.min(windowStart, retained);
+  }
+  if (unreadTarget) {
+    const unreadIndex = rows.findIndex((row) => row.key === unreadTarget);
+    if (unreadIndex >= 0) windowStart = Math.min(windowStart, unreadIndex);
+  }
+  const visibleRows = useMemo(() => rows.slice(windowStart), [rows, windowStart]);
+  retainedStart.current = visibleRows[0]?.key ?? null;
+  const hiddenAbove = windowStart;
 
   // New session: fresh index space. Where it opens (the newest edge, or the
   // first new message) is reported by its own scroller, which is recreated
@@ -236,7 +255,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   useEffect(() => {
     setWindowSize(WINDOW_START);
     setUnseen(false);
-  }, [sessionId]);
+    return cancelNavigation;
+  }, [sessionId, cancelNavigation]);
 
   // A reply that lands while the reader is away marks ↓ with a dot.
   const lastAgentKey = useMemo(() => {
@@ -285,9 +305,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   }, [measureComposer]);
 
   const scrollToBottom = useCallback((smooth: boolean) => {
+    cancelNavigation();
     listRef.current?.scrollToBottom(smooth);
     setUnseen(false);
-  }, []);
+  }, [cancelNavigation]);
 
   // Sending (a message, an answer, a choice) returns to the newest edge.
   const afterSubmit = useCallback(() => {
@@ -303,18 +324,38 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
 
   // ── Older pages ──
   const lowSeq = lowestSeq(messages);
-  const hasOlder = lowSeq > 1;
-  const loadOlder = useCallback(() => {
+  // A successful empty/sparse range still advances history. Do not derive
+  // the next request solely from rows: a whole page may have no visible row.
+  const [olderCursor, setOlderCursor] = useState<number | null>(null);
+  const olderBefore = olderCursor === null ? lowSeq : Math.min(lowSeq, olderCursor);
+  const hasOlder = olderBefore > 1;
+  const olderInFlight = useRef(false);
+  const loadOlder = useCallback(async (): Promise<boolean> => {
     if (hiddenAbove > 0) {
-      setWindowSize((n) => n + WINDOW_PAGE);
-      return;
+      flushSync(() => setWindowSize(rows.length - hiddenAbove + WINDOW_PAGE));
+      return true;
     }
-    if (!hasOlder || messageProvider.isLoading(sessionId)
-      || rangeStatus.state === 'error' || rangeStatus.state === 'incomplete') return;
-    const toSeq = lowSeq - 1;
-    setWindowSize((n) => n + WINDOW_PAGE);
-    void messageProvider.fetchRange(sessionId, Math.max(1, toSeq - OLDER_PAGE + 1), toSeq);
-  }, [hiddenAbove, hasOlder, lowSeq, sessionId, rangeStatus]);
+    if (!hasOlder || olderInFlight.current || messageProvider.isLoading(sessionId)
+      || rangeStatus.state === 'incomplete') return false;
+    const toSeq = olderBefore - 1;
+    const fromSeq = Math.max(1, toSeq - OLDER_PAGE + 1);
+    olderInFlight.current = true;
+    try {
+      const completed = await messageProvider.fetchRange(sessionId, fromSeq, toSeq);
+      if (!completed) return false;
+      // Commit the page window AND loader removal before ↑ measures a row.
+      // Store delivery can have rendered first, before this await resumed.
+      flushSync(() => {
+        setOlderCursor(fromSeq);
+        setWindowSize((n) => n + OLDER_PAGE);
+      });
+      return true;
+    } finally {
+      olderInFlight.current = false;
+    }
+  }, [hiddenAbove, hasOlder, olderBefore, rows.length, sessionId, rangeStatus]);
+  const loadOlderRef = useRef(loadOlder);
+  loadOlderRef.current = loadOlder;
 
   // ── ↑: the start of the nearest reply whose top is above the view ──
   const rowsRef = useRef(rows);
@@ -332,13 +373,38 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   useEffect(() => { measureUp(); }, [visibleRows, measureUp]);
 
   const showUp = rows.length > 0 && (upTarget !== null || hiddenAbove > 0 || hasOlder);
-  const goUp = () => {
-    if (upTarget) listRef.current?.scrollToRow(upTarget, true);
-    else {
-      loadOlder();
-      const first = visibleRows[0]?.key;
-      if (first) listRef.current?.scrollToRow(first, true);
+  const goUp = async () => {
+    if (navigation.current.active) return;
+    const generation = ++navigation.current.generation;
+    navigation.current.active = true;
+    // Like Mac's navigation load: keep looking across pages without replies,
+    // but bound a single click and cancel it on manual input, ↓ or unmount.
+    for (let pages = 0; pages <= 8; pages++) {
+      const waitingSince = performance.now();
+      while (true) {
+        if (navigation.current.generation !== generation) return;
+        // Loaded replies win immediately, also when one appears during a
+        // different pending fetch (Mac previousReplyTarget before polling).
+        const above = new Set(listRef.current?.rowsAbove() ?? []);
+        const target = [...rowsRef.current].reverse().find((row) => above.has(row.key) && rowSide(row) === 'agent');
+        if (target) {
+          navigation.current.active = false;
+          listRef.current?.scrollToRow(target.key, true);
+          return;
+        }
+        if (!messageProvider.isLoading(sessionId)) break;
+        if (performance.now() - waitingSince >= 3000) {
+          navigation.current.active = false;
+          return;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      if (pages === 8 || !await loadOlderRef.current()) break;
+      // Store delivery and window expansion must commit before measuring the
+      // newly prepended replies (including a page that only changed the cursor).
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
+    if (navigation.current.generation === generation) navigation.current.active = false;
   };
 
   // ── Actions ──
@@ -406,7 +472,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
             setTimeout(() => { if (atBottomRef.current) setWindowSize(WINDOW_START); }, 600);
           }
         }}
-        onNearTop={loadOlder}
+        onNearTop={() => { void loadOlder(); }}
+        onUserInteraction={cancelNavigation}
         onScroll={measureUp}
         unreadTarget={entry.current.boundary === null ? undefined : unreadTarget}
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
