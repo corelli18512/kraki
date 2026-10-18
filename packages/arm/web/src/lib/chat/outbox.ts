@@ -251,6 +251,8 @@ export const outbox = {
   /** Send a message (optimistic bubble + transport). Returns its clientId. */
   send(sessionId: string, text: string, opts: InputOptions = {}): string {
     const entries = useOutbox.getState().entries;
+    if (opts.answerTo) diag.answer(sessionId, opts.answerTo, new TextEncoder().encode(text).length,
+      entries.filter((e) => e.sessionId === sessionId && e.answerTo === opts.answerTo).length, 'web/outbox');
     const entry: PendingInput = {
       clientId: newClientId(),
       sessionId,
@@ -301,6 +303,8 @@ export const outbox = {
   dispatchStaged(clientId: string, text: string): boolean {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId && e.state === 'correcting');
     if (!entry) return false; // deleted / sent original: late speech events cannot resurrect it
+    if (entry.answerTo) diag.answer(entry.sessionId, entry.answerTo, new TextEncoder().encode(text).length,
+      this.forSession(entry.sessionId).filter((e) => e.answerTo === entry.answerTo).length, 'web/voice');
     const sending = { ...entry, text, state: 'sending' as const };
     update((list) => list.map((e) => e.clientId === clientId ? sending : e));
     diag.sends.dispatched(clientId);

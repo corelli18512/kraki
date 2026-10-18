@@ -6,6 +6,7 @@ import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
+import { diag } from './diag';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -908,6 +909,28 @@ describe('KrakiWSClient', () => {
       useAccountDeletion.getState().setNotice(false);
     });
 
+    it.each(['account_deleted', 'auth_error'] as const)('%s discards all pending diagnostics before account cleanup', async (type) => {
+      await connected();
+      const reply = vi.fn(), voice = vi.fn(), send = vi.fn();
+      diag.replies.onSummary = reply; diag.voices.onSummary = voice; diag.sends.onSummary = send;
+      diag.replies.started('account-a', 'typed');
+      diag.voices.begin(false); diag.voices.stateChanged('recording');
+      diag.sends.created('send-a', 'typed', 10, 0, true);
+      try {
+        lastWsInstance._receive({ type, ...(type === 'auth_error' ? { code: 'account_deleted' } : {}) });
+        expect(diag.replies.inFlight).toBe(0);
+        expect(diag.sends.inFlight).toBe(0);
+        diag.phase('background');
+        expect(reply).not.toHaveBeenCalled();
+        expect(voice).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        diag.replies.onSummary = diag.voices.onSummary = diag.sends.onSummary = undefined;
+        diag.replies.backgrounded(); diag.voices.stateChanged('idle'); diag.sends.finished('send-a', 'cleared');
+        useAccountDeletion.getState().setNotice(false);
+      }
+    });
+
     it('cannot delete while disconnected', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       useStore.getState().setStatus('disconnected');
@@ -983,6 +1006,18 @@ describe('KrakiWSClient', () => {
       });
 
       expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
+    });
+
+    it.each(['invalid_signature', 'auth_unavailable'])('%s discards diagnostics only when stored identity is invalid', async (code) => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      diag.replies.started('account-a', 'typed');
+      try {
+        lastWsInstance._receive({ type: 'auth_error', code });
+        expect(diag.replies.inFlight).toBe(code === 'invalid_signature' ? 0 : 1);
+      } finally { diag.replies.backgrounded(); }
     });
 
     it('saves relay URL and triggers reload on wrong_region', async () => {
@@ -2200,5 +2235,50 @@ describe('desktop local link routing (fake link)', () => {
       const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean);
       expect(sent.some((m) => m?.type === 'approve')).toBe(true);
     });
+  });
+});
+
+describe('diagnostic session_list and message batch application', () => {
+  afterEach(() => { diag.replies.onSummary = undefined; diag.replies.backgrounded(); });
+
+  const session = (id: string, deviceId = 'tentacle') => ({
+    id, deviceId, deviceName: 'Test', agent: 'pi' as const, state: 'active' as const,
+    messageCount: 0, lastSeq: 0, readSeq: 0,
+  });
+
+  it('abandons only idle/removed tracked replies owned by the listing tentacle', () => {
+    const client = new KrakiWSClient('ws://localhost:9999');
+    const summary = vi.fn();
+    diag.replies.onSummary = summary;
+    for (const id of ['idle', 'removed', 'active']) {
+      useStore.getState().upsertSession(session(id));
+      diag.replies.started(id, 'typed');
+    }
+    useStore.getState().upsertSession(session('other', 'other-tentacle'));
+    diag.replies.started('other', 'answer');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [
+        { ...session('idle'), state: 'idle' }, session('active'),
+      ] },
+    });
+    expect(summary).toHaveBeenCalledTimes(2);
+    expect(summary.mock.calls.map(([s]) => s.outcome)).toEqual(['abandoned', 'abandoned']);
+    expect(diag.replies.openSessions.sort()).toEqual(['active', 'other']);
+  });
+
+  it('measures synchronous session_list and actual store message batch apply with fixed source tags', () => {
+    const work = vi.spyOn(diag, 'work');
+    const client = new KrakiWSClient('ws://localhost:9999');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [session('s')] },
+    });
+    useStore.getState().prependMessages('s', [{
+      type: 'agent_message', sessionId: 's', deviceId: 'tentacle', seq: 1,
+      timestamp: new Date().toISOString(), payload: { content: 'private reply' },
+    }]);
+    expect(work.mock.calls.map(([source, sid]) => [source, sid])).toEqual([
+      ['web/session_list', undefined], ['web/message_batch', 's'],
+    ]);
+    expect(useStore.getState().messages.get('s')).toHaveLength(1);
   });
 });

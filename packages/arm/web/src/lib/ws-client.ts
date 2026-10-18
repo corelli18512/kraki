@@ -121,6 +121,7 @@ export class KrakiWSClient {
 
   /** The relay deleted this account (asked from here or another device): sign out for good. */
   private accountWasDeleted(): void {
+    diag.phase('logout');
     const savedClientId = getStore().githubClientId;
     localStorage.removeItem(STORAGE_KEY);
     this.transport.storedDeviceId = undefined;
@@ -816,6 +817,10 @@ export class KrakiWSClient {
   // TODO: Batch store updates — currently each session triggers individual Zustand set() calls,
   // causing N re-renders on reconnect. Build maps first, then set() once.
   private handleSessionList(msg: SessionListMessage): void {
+    diag.work('web/session_list', undefined, () => this.applySessionList(msg));
+  }
+
+  private applySessionList(msg: SessionListMessage): void {
     const store = getStore();
     const tentacleSessions = msg.payload?.sessions ?? [];
     const tentacleDeviceId = msg.deviceId;
@@ -833,8 +838,14 @@ export class KrakiWSClient {
     // Remove local sessions from this tentacle that are no longer in the list
     for (const [sid, session] of store.sessions) {
       if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
+        diag.replies.missedEnd(sid);
         store.removeSession(sid);
       }
+    }
+
+    diag.replies.expire();
+    for (const ts of tentacleSessions) {
+      if (ts.state === 'idle') diag.replies.missedEnd(ts.id);
     }
 
     // Update session metadata and trigger initial loads
@@ -1172,7 +1183,7 @@ export class KrakiWSClient {
       case 'auth_error':
         if ((msg as { code?: string }).code === 'account_deleted') { this.accountWasDeleted(); break; }
         processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
-          clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
+          clearStoredDeviceId: () => { diag.phase('logout'); this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),

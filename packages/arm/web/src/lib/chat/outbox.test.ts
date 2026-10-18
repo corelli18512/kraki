@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkDeadlines, outbox, useOutbox } from './outbox';
+import { diag } from '../diag';
 
 describe('outbox', () => {
   let sent: Record<string, unknown>[];
@@ -17,7 +18,7 @@ describe('outbox', () => {
       isDeliveryPathUp: () => pathUp,
     });
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
   const payload = () => sent.at(-1)!.payload as Record<string, unknown>;
   /** Tick once a second from `from` for `seconds`; returns the last time. */
@@ -32,6 +33,33 @@ describe('outbox', () => {
     expect(outbox.forSession('s')[0].state).toBe('sending');
     expect(outbox.confirm('s', id, 'hi')).toBe(true);
     expect(outbox.forSession('s')).toEqual([]);
+  });
+
+  it('cmd.answer covers typed and dispatched voice answers, not retries or plain prompts', () => {
+    const answer = vi.spyOn(diag, 'answer');
+    const first = outbox.send('s', 'Blue', { answerTo: 'q1' });
+    outbox.retry(first);
+    outbox.send('s', 'ordinary prompt');
+    const voice = outbox.stage('s', 'raw', { answerTo: 'q2' });
+    expect(answer).toHaveBeenCalledTimes(1);
+    outbox.dispatchStaged(voice, 'Corrected');
+    outbox.dispatchStaged(voice, 'late callback');
+    expect(answer.mock.calls).toEqual([
+      ['s', 'q1', 4, 0, 'web/outbox'], ['s', 'q2', 9, 1, 'web/voice'],
+    ]);
+    expect(useOutbox.getState().entries).toHaveLength(3);
+  });
+
+  it('cmd.answer counts only pending answers to that question and measures UTF-8 bytes', () => {
+    const answer = vi.spyOn(diag, 'answer');
+    outbox.send('s', 'plain');
+    outbox.send('other', 'answer elsewhere', { answerTo: 'q' });
+    outbox.send('s', 'other question', { answerTo: 'other-q' });
+    outbox.send('s', 'café', { answerTo: 'q' });
+    outbox.send('s', 'again', { answerTo: 'q' });
+    expect(answer.mock.calls.slice(-2)).toEqual([
+      ['s', 'q', 5, 0, 'web/outbox'], ['s', 'q', 5, 1, 'web/outbox'],
+    ]);
   });
 
   it('an answer carries answerTo and is never a steer', () => {

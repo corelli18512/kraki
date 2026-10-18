@@ -1,3 +1,4 @@
+import { diag } from '../lib/diag';
 import { desktopCredentials } from '../lib/desktop';
 import { create } from 'zustand';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
@@ -528,7 +529,7 @@ export const useStore = create<Store>()(persist((set) => ({
     return { archivedSessions: next };
   }),
 
-  prependMessages: (sessionId, older) => {
+  prependMessages: (sessionId, older) => diag.work('web/message_batch', sessionId, () => {
     // Range batches are authoritative for their session seqs. Besides normal
     // deduplication, they must replace stale rows written by older clients
     // (for example a transient `active` row occupying an agent reply's seq).
@@ -573,7 +574,7 @@ export const useStore = create<Store>()(persist((set) => ({
       next.set(sessionId, merged);
       return { messages: next };
     });
-  },
+  }),
 
   setTurnSteps: (sessionId, bubbleSeq, entries) => {
     set((state) => {
