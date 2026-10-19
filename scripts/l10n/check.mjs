@@ -88,7 +88,7 @@ function countWeb(file) {
   for (const m of src.matchAll(/\b(?:placeholder|title|aria-label|alt|label|footer|detail|body|confirm)=["']([^"']*[A-Za-z]{2}[^"']*)["']/g)) hits.push(m[1]);
   return hits;
 }
-const SWIFT_UI = /\b(?:Text|Button|Label|Toggle|Section|LabeledContent|Picker|Menu|TextField|SecureField|Link|NavigationLink|navigationTitle|alert|confirmationDialog|help|accessibilityLabel|accessibilityHint|String\(localized|LocalizedStringResource|LocalizedStringKey)\s*\(?\s*$/;
+const SWIFT_UI = /\b(?:Text|Button|Label|Toggle|Section|LabeledContent|Picker|Menu|TextField|SecureField|Link|NavigationLink|navigationTitle|alert|confirmationDialog|help|accessibilityLabel|accessibilityHint|String\(localized:?|LocalizedStringResource|LocalizedStringKey)\s*\(?\s*:?\s*$/;
 function countSwift(file) {
   const hits = [];
   for (const line of readFileSync(file, 'utf8').split('\n')) {
