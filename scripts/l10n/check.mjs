@@ -97,6 +97,7 @@ function countSwift(file) {
       const s = m[1];
       if (!/[A-Z][a-z]+[ ,.?!…'’][^"]*[a-z]/.test(s) || /^[a-z_.]+$/.test(s) || /^[^\p{L}\s]/u.test(s) || /\[[a-z]+\]|\w\.\w+\(|→/.test(s)) continue; // skip log-ish lines // sentence-like English only
       if (SWIFT_UI.test(line.slice(0, m.index))) continue; // auto-extracted by SwiftUI / already localized
+      if (/\bcomment:\s*$/.test(line.slice(0, m.index))) continue; // translator note
       hits.push(s);
     }
   }
