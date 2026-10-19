@@ -1,0 +1,4 @@
+/* Geometry only; report layout is the production chat.css. */
+:root { --k-bg: white; --k-fill: #f1f5f9; --k-text: #111; --k-text-2: #555; --k-text-3: #777; --k-border: #ccc; --k-mono: monospace; }
+html, body, #root { margin: 0; height: 100%; font-family: system-ui; }
+#root > .kreport-panel { width: 100%; }

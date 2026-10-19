@@ -1,13 +1,15 @@
 /**
  * Message Provider — transparent cache layer for session messages.
  *
- * Exposes a single method: fetchRange(sessionId, fromSeq, toSeq).
+ * fetchRange(sessionId, fromSeq, toSeq) plus observable retryable range status.
  * Checks IndexedDB first, falls back to tentacle for missing messages.
  * Callers don't know or care about the source.
  */
 
 import { getStore } from './store-adapter';
 import { createLogger } from './logger';
+import { outbox } from './chat/outbox';
+import { excludeInterval, missingIntervals } from './message-provider-range';
 import type { ChatMessage } from '../types/store';
 
 const logger = createLogger('msg-provider');
@@ -29,18 +31,37 @@ const NON_SPINE_CACHE_TYPES = new Set([
   'tool_complete',
   'permission',
   'question',
+  'answer',
   'permission_resolved',
   'question_resolved',
 ]);
 
+export function isSpineMessage(message: ChatMessage): boolean { return isSpineCacheMessage(message); }
+
 function isSpineCacheMessage(message: ChatMessage): boolean {
   const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
-  return typeof seq === 'number' && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
+  return typeof seq === 'number' && seq > 0 && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
 }
 
+export type RangeStatus =
+  | { state: 'idle' | 'loading' | 'loaded' }
+  | { state: 'incomplete'; remaining: Array<[number, number]> }
+  | { state: 'error'; error: 'timeout' | 'unavailable' | 'no-progress' | 'page-limit' | 'failed' };
+const IDLE: RangeStatus = { state: 'idle' };
+interface RangeOperation { epoch: number; tail: boolean }
+interface RangeBatch { messages: ChatMessage[]; truncated: boolean }
+interface RetryRange { from: number; to: number; options?: { initial?: boolean; foreground?: boolean } }
 interface PendingRequest {
-  sessionId: string;
-  resolve: (messages: ChatMessage[]) => void;
+  fromSeq: number;
+  toSeq: number;
+  retriedEmpty: boolean;
+  send: () => void;
+  resolve: (batch: RangeBatch) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+class RangeFailure extends Error {
+  constructor(readonly code: Extract<RangeStatus, { state: 'error' }>['error']) { super(code); }
 }
 
 class MessageProvider {
@@ -52,6 +73,63 @@ class MessageProvider {
   private sendFn: ((msg: Record<string, unknown>) => void) | null = null;
   /** Pending tentacle range-fetch requests awaiting handleRangeBatch */
   private pendingRequests = new Map<string, PendingRequest>();
+  /** The next empty answer after a timeout needs one confirmation. */
+  private uncertainEmptySessions = new Set<string>();
+  private epoch = 0;
+  private operations = new Map<string, RangeOperation>();
+  private rangeStatuses = new Map<string, RangeStatus>();
+  /** Legacy seq holes confirmed by conclusive range responses; reset with authority. */
+  private rangeTombstones = new Map<string, Array<[number, number]>>();
+  private rangeListeners = new Set<() => void>();
+  private retryRanges = new Map<string, RetryRange>();
+  /** Older paging must not hide a failed newest-edge reconciliation. */
+  private tailFailures = new Map<string, { status: RangeStatus; range: RetryRange }>();
+
+  /** Stable snapshot for useSyncExternalStore; timeout is not authoritative empty. */
+  getRangeStatus = (sessionId: string): RangeStatus => {
+    const status = this.rangeStatuses.get(sessionId) ?? IDLE;
+    if (status.state === 'loading' && this.operations.get(sessionId)?.tail) return status;
+    return this.tailFailures.get(sessionId)?.status ?? status;
+  };
+  subscribeRangeStatus = (listener: () => void): (() => void) => {
+    this.rangeListeners.add(listener);
+    return () => { this.rangeListeners.delete(listener); };
+  };
+  private setRangeStatus(sessionId: string, status: RangeStatus): void {
+    this.rangeStatuses.set(sessionId, status);
+    for (const listener of this.rangeListeners) listener();
+  }
+  /** Explicit retry/continue only; no unattended history download. */
+  retryRange(sessionId: string): void {
+    const range = this.tailFailures.get(sessionId)?.range ?? this.retryRanges.get(sessionId);
+    if (range) void this.fetchRange(sessionId, range.from, range.to, range.options);
+  }
+  private owns(sessionId: string, operation: RangeOperation): boolean {
+    return operation.epoch === this.epoch && this.operations.get(sessionId) === operation;
+  }
+  /** Call before session deletion. Already-started store/DB writes need consumer cancellation too. */
+  invalidateSession(sessionId: string): void {
+    this.operations.delete(sessionId);
+    const pending = this.pendingRequests.get(sessionId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingRequests.delete(sessionId);
+      pending.reject(new Error('invalidated'));
+    }
+    this.loadingSessions.delete(sessionId);
+    this.loadingThroughSeq.delete(sessionId);
+    this.loadingForeground.delete(sessionId);
+    this.pendingTailReconciles.delete(sessionId);
+    this.tentacleLastSeq.delete(sessionId);
+    this.tentacleDeviceMap.delete(sessionId);
+    this.retryRanges.delete(sessionId);
+    this.rangeStatuses.delete(sessionId);
+    this.rangeTombstones.delete(sessionId);
+    this.tailFailures.delete(sessionId);
+    this.uncertainEmptySessions.delete(sessionId);
+    getStore().setSessionLoading(sessionId, false);
+    for (const listener of this.rangeListeners) listener();
+  }
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
   /** Highest seq covered by each in-flight fetch. */
@@ -155,106 +233,151 @@ class MessageProvider {
 
   /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
-   * Puts the complete result into the store in one write.
+   * Delivers cached rows and authoritative pages as coverage advances.
+   * True means the requested range completed (including authoritative holes);
+   * false must not advance an older paging cursor.
    */
-  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean; foreground?: boolean }): Promise<void> {
+  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean; foreground?: boolean }): Promise<boolean> {
     if (this.loadingSessions.has(sessionId)) {
       logger.info('fetchRange skipped (loading)', { sessionId, fromSeq, toSeq });
-      return;
+      return false;
     }
 
     const clampedFrom = Math.max(1, fromSeq);
-    if (clampedFrom > toSeq) return;
+    if (clampedFrom > toSeq) return false;
 
     logger.info('fetchRange', { sessionId, fromSeq: clampedFrom, toSeq, initial: options?.initial });
 
+    const coversHead = options?.foreground || toSeq >= (this.tentacleLastSeq.get(sessionId) ?? Infinity);
+    const operation: RangeOperation = { epoch: this.epoch, tail: coversHead };
+    this.operations.set(sessionId, operation);
+    this.retryRanges.set(sessionId, { from: clampedFrom, to: toSeq, options });
     this.loadingSessions.add(sessionId);
     this.loadingThroughSeq.set(sessionId, toSeq);
     if (options?.foreground) this.loadingForeground.add(sessionId);
-    if (options?.initial) {
-      getStore().setSessionLoading(sessionId, true);
-    }
+    if (options?.initial) getStore().setSessionLoading(sessionId, true);
+    this.setRangeStatus(sessionId, { state: 'loading' });
 
     try {
-      // Step 1: Check IDB for the requested range
-      let idbMessages: ChatMessage[] = [];
-      try {
-        const db = await import('./message-db');
-        const cached = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
-        idbMessages = cached.filter(isSpineCacheMessage);
-        logger.info('IDB range query', {
-          sessionId,
-          fromSeq: clampedFrom,
-          toSeq,
-          found: idbMessages.length,
-          ignoredTransient: cached.length - idbMessages.length,
-          expected: toSeq - clampedFrom + 1,
-        });
-      } catch {
-        // IDB unavailable
+      const completed = await this.loadRange(sessionId, clampedFrom, toSeq, operation);
+      if (!this.owns(sessionId, operation) || !completed) return false;
+      // A completed tail response is coverage even if sparse or empty (legacy
+      // transient rows are filtered by Tentacle), never a timeout.
+      if (coversHead) {
+        this.tailFailures.delete(sessionId);
+        this.finishTailCatchUp(sessionId, toSeq, true);
       }
-
-      // Step 2: Check whether every integer seq in the requested window exists.
-      // Row count is not sufficient: older builds leaked fractional TRACE rows
-      // into IDB, and those extras can numerically mask missing durable rows.
-      const expectedCount = toSeq - clampedFrom + 1;
-      const idbSeqs = new Set(idbMessages.flatMap(m => {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        return typeof seq === 'number' && Number.isInteger(seq) && seq >= clampedFrom && seq <= toSeq
-          ? [seq]
-          : [];
-      }));
-      if (idbSeqs.size === expectedCount) {
-        // IDB has every durable seq — put in store and done.
-        this.deliverMessages(sessionId, idbMessages, options?.initial);
-        return;
+      // Tail first. Repair at most 50 bridge seqs per explicit reconciliation,
+      // never below the displayed minimum, and yield to a newer foreground tail.
+      if (options?.foreground && !this.pendingTailReconciles.has(sessionId)) {
+        const gaps = this.bridgeGaps(sessionId, clampedFrom);
+        if (gaps.length) {
+          const [from, end] = gaps[0];
+          const repaired = await this.loadRange(sessionId, from, Math.min(end, from + 49), operation);
+          if (!this.owns(sessionId, operation) || !repaired) return false;
+        }
       }
-
-      // Step 3: IDB has a gap — request from the first missing seq onward.
-      // Tentacle range requests are contiguous, so the response also refreshes
-      // any cached rows after the gap and restores a coherent tail window.
-      let afterSeq = clampedFrom - 1;
-      for (let s = clampedFrom; s <= toSeq; s++) {
-        if (idbSeqs.has(s)) afterSeq = s;
-        else break;
-      }
-
-      const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);
-      
-      // Merge IDB + tentacle, dedup by seq, sort
-      const allMessages = [...idbMessages, ...tentacleMessages];
-      const seen = new Set<number>();
-      const deduped = allMessages.filter(m => {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        if (typeof seq !== 'number' || seen.has(seq)) return false;
-        seen.add(seq);
-        return true;
-      });
-      deduped.sort((a, b) => {
-        const seqA = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
-        const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
-        return seqA - seqB;
-      });
-
-      // Store tentacle messages in IDB for future cache hits
-      if (tentacleMessages.length > 0) {
-        import('./message-db').then(db => db.putMessages(sessionId, tentacleMessages)).catch(() => {});
-      }
-
-      this.deliverMessages(sessionId, deduped, options?.initial);
+      const remaining = options?.foreground ? this.bridgeGaps(sessionId, clampedFrom) : [];
+      this.setRangeStatus(sessionId, remaining.length ? { state: 'incomplete', remaining } : { state: 'loaded' });
+      return true;
     } catch (err) {
+      if (!this.owns(sessionId, operation)) return false;
+      if (coversHead) this.finishTailCatchUp(sessionId, toSeq, false);
       logger.error('fetchRange failed', { sessionId, error: (err as Error).message });
+      const status: RangeStatus = { state: 'error', error: err instanceof RangeFailure ? err.code : 'failed' };
+      if (coversHead) this.tailFailures.set(sessionId, {
+        status, range: { from: clampedFrom, to: toSeq, options },
+      });
+      this.setRangeStatus(sessionId, status);
+      return false;
     } finally {
-      this.loadingSessions.delete(sessionId);
-      this.loadingThroughSeq.delete(sessionId);
-      this.loadingForeground.delete(sessionId);
-      getStore().setSessionLoading(sessionId, false);
-      const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
-      if (pendingLastSeq !== undefined) {
-        this.pendingTailReconciles.delete(sessionId);
-        this.reconcileTail(sessionId, pendingLastSeq);
+      // An old continuation must not clear a new operation's loading/timer state.
+      if (this.owns(sessionId, operation)) {
+        this.operations.delete(sessionId);
+        this.loadingSessions.delete(sessionId);
+        this.loadingThroughSeq.delete(sessionId);
+        this.loadingForeground.delete(sessionId);
+        getStore().setSessionLoading(sessionId, false);
+        const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
+        if (pendingLastSeq !== undefined) {
+          this.pendingTailReconciles.delete(sessionId);
+          this.reconcileTail(sessionId, pendingLastSeq);
+        }
       }
     }
+  }
+
+  private bridgeGaps(sessionId: string, tailFrom: number): Array<[number, number]> {
+    const messages = (getStore().messages.get(sessionId) ?? []).filter(isSpineCacheMessage);
+    const minimum = messages.reduce((min, message) => Math.min(min, (message as { seq: number }).seq), tailFrom);
+    return (this.rangeTombstones.get(sessionId) ?? []).reduce(
+      (gaps, [from, to]) => excludeInterval(gaps, from, to),
+      missingIntervals(messages, minimum, tailFrom - 1),
+    );
+  }
+
+  private recordRangeTombstones(sessionId: string, messages: ChatMessage[], from: number, to: number): void {
+    const ranges = [...(this.rangeTombstones.get(sessionId) ?? []), ...missingIntervals(messages, from, to)]
+      .sort(([a], [b]) => a - b);
+    const merged: Array<[number, number]> = [];
+    for (const [lo, hi] of ranges) {
+      const previous = merged.at(-1);
+      if (previous && lo <= previous[1] + 1) previous[1] = Math.max(previous[1], hi);
+      else merged.push([lo, hi]);
+    }
+    this.rangeTombstones.set(sessionId, merged);
+  }
+
+  private async loadRange(sessionId: string, from: number, to: number, operation: RangeOperation): Promise<boolean> {
+    let cached: ChatMessage[] = [];
+    try {
+      const db = await import('./message-db');
+      if (!this.owns(sessionId, operation)) return false;
+      cached = await db.getMessagesInRange(sessionId, from, to);
+    } catch { /* An unavailable cache may still be recovered from Tentacle. */ }
+    if (!this.owns(sessionId, operation)) return false;
+    const valid = (message: ChatMessage) => isSpineCacheMessage(message)
+      && 'sessionId' in message && message.sessionId === sessionId
+      && (message as { seq: number }).seq >= from && (message as { seq: number }).seq <= to;
+    const bySeq = new Map<number, ChatMessage>();
+    // Store delivery precedes its asynchronous IDB write. Preserve that real
+    // coverage for immediate retry/follow-up, and never replace newer memory
+    // with a lagging disk row. Incoming server pages still win below.
+    const memory = getStore().messages.get(sessionId) ?? [];
+    for (const message of [...cached, ...memory].filter(valid)) bySeq.set((message as { seq: number }).seq, message);
+    this.deliverMessages(sessionId, [...bySeq.values()]);
+    let missing = missingIntervals([...bySeq.values()], from, to);
+    // The first request refreshes through the target's end, preserving server
+    // authority over cached rows after the first hole. Continuations request
+    // actual missing intervals: Tentacle's 500-row cap keeps the newer suffix.
+    let request: [number, number] | undefined = missing.length ? [missing[0][0], to] : undefined;
+    for (let page = 0; request; page++) {
+      if (page === 50) throw new RangeFailure('page-limit');
+      const [requestFrom, requestTo] = request;
+      const batch = await this.requestFromTentacle(sessionId, requestFrom - 1, requestTo - requestFrom + 1);
+      if (!this.owns(sessionId, operation)) return false;
+      const incoming = batch.messages.filter(message => valid(message)
+        && (message as { seq: number }).seq >= requestFrom && (message as { seq: number }).seq <= requestTo);
+      // A suffix or middle page is progress if it fills any still-missing seq,
+      // not only when it advances the contiguous prefix. Duplicates cannot.
+      const previousCount = bySeq.size;
+      for (const message of incoming) bySeq.set((message as { seq: number }).seq, message);
+      this.deliverMessages(sessionId, [...bySeq.values()].sort((a, b) => (a as { seq: number }).seq - (b as { seq: number }).seq));
+      if (batch.truncated) {
+        if (bySeq.size === previousCount) throw new RangeFailure('no-progress');
+        missing = missing.flatMap(([lo, hi]) => missingIntervals(incoming, lo, hi));
+      } else {
+        // Authoritative empty settles only this request; other holes left by
+        // an earlier truncated middle page still require their own answer.
+        missing = excludeInterval(missing, requestFrom, requestTo);
+        // Like PendingTailBuffer's legacy tombstones, absence is authoritative
+        // coverage too. Keep it across bridge calculations and explicit retries.
+        this.recordRangeTombstones(sessionId, incoming, requestFrom, requestTo);
+      }
+      if (this.pendingTailReconciles.has(sessionId)) return false; // Newest foreground tail takes precedence.
+      request = missing[0];
+    }
+    return true;
   }
 
   /**
@@ -272,11 +395,11 @@ class MessageProvider {
     const count = (messages ?? []).length;
     logger.info('handleRangeBatch received', { sessionId, count, firstSeq, lastSeq, truncated });
     if (truncated) {
-      logger.warn('range batch was truncated by tentacle — caller may need to paginate', {
+      logger.debug('range batch truncated; continuing only with coverage progress', {
         sessionId, firstSeq, lastSeq, count,
       });
     }
-    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[]);
+    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[], firstSeq, lastSeq, truncated);
   }
 
   /**
@@ -284,34 +407,67 @@ class MessageProvider {
    * request; otherwise falls back to a direct store write so messages aren't
    * lost on unsolicited batches.
    */
-  private deliverPending(sessionId: string, messages: ChatMessage[]): void {
+  private deliverPending(sessionId: string, messages: ChatMessage[], firstSeq: number, lastSeq: number, truncated: boolean): void {
     const pending = this.pendingRequests.get(sessionId);
     if (pending) {
+      // The wire has actual row extrema, not request IDs. Reject a late
+      // different range, including batches whose rows contradict metadata.
+      // Overlapping subsets cannot be disambiguated without a wire change.
+      const matches = messages.length === 0
+        ? firstSeq === 0 && lastSeq === 0
+        : firstSeq >= pending.fromSeq && lastSeq <= pending.toSeq && firstSeq <= lastSeq
+          && messages.every((message) => {
+            const seq = 'seq' in message ? message.seq : undefined;
+            return typeof seq === 'number' && Number.isInteger(seq)
+              && seq >= pending.fromSeq && seq <= pending.toSeq
+              && 'sessionId' in message && message.sessionId === sessionId;
+          });
+      if (!matches) {
+        logger.warn('range batch does not match pending bounds', {
+          sessionId, firstSeq, lastSeq, fromSeq: pending.fromSeq, toSeq: pending.toSeq,
+        });
+        if (getStore().sessions.has(sessionId)) this.deliverMessages(sessionId, messages);
+        return;
+      }
+      if (messages.length === 0 && this.uncertainEmptySessions.has(sessionId) && !pending.retriedEmpty) {
+        pending.retriedEmpty = true;
+        pending.send();
+        return;
+      }
+      if (messages.length === 0) this.uncertainEmptySessions.delete(sessionId);
+      clearTimeout(pending.timer);
       this.pendingRequests.delete(sessionId);
-      pending.resolve(messages);
+      pending.resolve({ messages, truncated });
       return;
     }
-    // No pending request — direct batch (e.g. from a concurrent path)
-    if (messages.length > 0) {
-      getStore().prependMessages(sessionId, messages);
-    }
-    this.loadingSessions.delete(sessionId);
-    getStore().setSessionLoading(sessionId, false);
+    // Untagged network responses cannot be attributed to an old request on
+    // this wire. Do not let unsolicited delivery clear an IDB operation's loading.
+    if (getStore().sessions.has(sessionId)) this.deliverMessages(sessionId, messages);
   }
 
-  /** Clear all tracking (on disconnect). */
+  /** Record coverage only for an actual response/cache hit, never a timeout.
+   *  Terminal failure must not strand a waiting permission behind the hold. */
+  private finishTailCatchUp(sessionId: string, throughSeq: number, covered: boolean): void {
+    const store = getStore();
+    if (covered) store.markHistoryCaughtUp(sessionId, throughSeq);
+    else if ((store.cardHoldUntil.get(sessionId) ?? Infinity) <= throughSeq) store.holdCard(sessionId, 0);
+  }
+
+  /** Clear provider-owned work (on disconnect). Does not cancel store-owned writes. */
   clear(): void {
-    // Resolve any pending requests with empty results
-    for (const [, pending] of this.pendingRequests) {
-      pending.resolve([]);
-    }
+    for (const [sessionId, throughSeq] of this.loadingThroughSeq) this.finishTailCatchUp(sessionId, throughSeq, false);
+    this.epoch++;
+    for (const sessionId of [...this.loadingSessions]) this.invalidateSession(sessionId);
+    this.operations.clear();
     this.pendingRequests.clear();
     this.tentacleLastSeq.clear();
     this.tentacleDeviceMap.clear();
-    this.loadingSessions.clear();
-    this.loadingThroughSeq.clear();
-    this.loadingForeground.clear();
-    this.pendingTailReconciles.clear();
+    this.retryRanges.clear();
+    this.rangeStatuses.clear();
+    this.rangeTombstones.clear();
+    this.tailFailures.clear();
+    this.uncertainEmptySessions.clear();
+    for (const listener of this.rangeListeners) listener();
     this.tracePulled.clear();
     this.traceLoaded.clear();
     for (const listener of this.traceListeners) listener();
@@ -481,51 +637,59 @@ class MessageProvider {
    * semantics where `idbMessages` already cover up to and including `afterSeq`).
    * `limit` is the number of messages we want past `afterSeq`.
    */
-  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<ChatMessage[]> {
+  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<RangeBatch> {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
-    if (!tentacleDeviceId || !this.sendFn) {
-      logger.warn('cannot request from tentacle', { sessionId, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId });
-      return Promise.resolve([]);
-    }
-
+    if (!tentacleDeviceId || !this.sendFn) return Promise.reject(new RangeFailure('unavailable'));
     const fromSeq = afterSeq + 1;
     const toSeq = afterSeq + limit;
-    if (toSeq < fromSeq) return Promise.resolve([]);
-
-    return new Promise<ChatMessage[]>((resolve) => {
-      const pending: PendingRequest = { sessionId, resolve };
+    return new Promise<RangeBatch>((resolve, reject) => {
+      const pending: PendingRequest = {
+        fromSeq, toSeq, resolve, reject, retriedEmpty: false,
+        timer: undefined,
+        send: () => {
+          clearTimeout(pending.timer);
+          pending.timer = setTimeout(() => {
+            if (this.pendingRequests.get(sessionId) !== pending) return;
+            this.pendingRequests.delete(sessionId);
+            this.uncertainEmptySessions.add(sessionId);
+            reject(new RangeFailure('timeout'));
+          }, BATCH_TIMEOUT_MS);
+          try {
+            this.sendFn!({
+              type: 'request_session_messages_range', deviceId: getStore().deviceId ?? '',
+              payload: { sessionId, fromSeq, toSeq, targetDeviceId: tentacleDeviceId },
+            });
+          } catch (error) {
+            clearTimeout(pending.timer);
+            if (this.pendingRequests.get(sessionId) === pending) this.pendingRequests.delete(sessionId);
+            reject(error);
+          }
+        },
+      };
       this.pendingRequests.set(sessionId, pending);
-
-      const store = getStore();
-      this.sendFn!({
-        type: 'request_session_messages_range',
-        deviceId: store.deviceId ?? '',
-        payload: { sessionId, fromSeq, toSeq, targetDeviceId: tentacleDeviceId },
-      });
-
-      logger.info('requested from tentacle (range)', { sessionId, fromSeq, toSeq });
-
-      // Safety timeout — resolve with empty if tentacle never responds
-      setTimeout(() => {
-        // A later tail reconcile may already have installed a new request for
-        // this session. Only the request that armed this timer may time out.
-        if (this.pendingRequests.get(sessionId) === pending) {
-          logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
-          this.pendingRequests.delete(sessionId);
-          resolve([]);
-        }
-      }, BATCH_TIMEOUT_MS);
+      pending.send();
     });
   }
 
   /**
    * Put complete message set into the store and run side effects.
    */
-  private deliverMessages(sessionId: string, messages: ChatMessage[], initial?: boolean): void {
-    if (messages.length > 0) {
-      getStore().prependMessages(sessionId, messages);
+  private deliverMessages(sessionId: string, messages: ChatMessage[]): void {
+    const valid = messages.filter(message => isSpineCacheMessage(message)
+      && 'sessionId' in message && message.sessionId === sessionId);
+    if (valid.length > 0) {
+      getStore().prependMessages(sessionId, valid);
+      for (const message of valid) {
+        if (message.type !== 'user_message') continue;
+        const clientId = message.payload.clientId;
+        // confirm's clientId lookup is global: validate session first and never
+        // infer replay acceptance from text (which could confirm another retry).
+        if (clientId && outbox.forSession(sessionId).some(entry => entry.clientId === clientId)) {
+          outbox.confirm(sessionId, clientId, undefined);
+        }
+      }
     }
-    logger.info('delivered', { sessionId, count: messages.length, initial });
+    logger.info('delivered', { sessionId, count: valid.length });
   }
 }
 

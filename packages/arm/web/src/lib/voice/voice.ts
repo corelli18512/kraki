@@ -18,6 +18,12 @@ import type { VoiceCapability, VoiceLease, VoiceWord, VoiceWordOp } from '@kraki
 import { TARGET_RATE, loudness, toPcm16 } from './pcm';
 import { applyOps, cleanWord, wordLine } from './words';
 import type { VoiceContext } from './context';
+import { diag } from '../diag';
+import { VoiceTracker } from '../diag/experience';
+
+class VoiceFailure extends Error {
+  constructor(message: string, readonly metricCause: string) { super(message); }
+}
 
 // ── Settings (this device) ───────────────────────────────
 const KEYS = { correction: 'kraki:voice.correction', share: 'kraki:voice.correctionContext', consent: 'kraki:voice.consent.v1' };
@@ -124,7 +130,8 @@ export function onLeaseGrant(l: VoiceLease) {
 }
 export function onLeaseDenied(reason: string, detail?: string) {
   const w = leaseWaiters; leaseWaiters = [];
-  const err = new Error(DENIED[reason] ?? detail ?? 'The voice authorization request was rejected.');
+  const tag = ['quota_exhausted', 'not_entitled', 'invalid_request'].includes(reason) ? `lease_denied_${reason}` : 'lease_rejected';
+  const err = new VoiceFailure(DENIED[reason] ?? detail ?? 'The voice authorization request was rejected.', tag);
   w.forEach((x) => x.reject(err));
 }
 
@@ -140,7 +147,7 @@ function getLease(): Promise<VoiceLease> {
     }
     setTimeout(() => {
       const i = leaseWaiters.findIndex((x) => x.resolve === resolve);
-      if (i >= 0) { leaseWaiters.splice(i, 1); reject(new Error('The voice authorization request timed out.')); }
+      if (i >= 0) { leaseWaiters.splice(i, 1); reject(new VoiceFailure('The voice authorization request timed out.', 'lease_timeout')); }
     }, 10_000);
   });
 }
@@ -150,15 +157,16 @@ const WORKLET = `class C extends AudioWorkletProcessor{process(i){const c=i[0]&&
 interface Capture { stop: () => void }
 
 async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): Promise<Capture> {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error('No microphone is available. Connect a microphone and try again.');
+  if (!navigator.mediaDevices?.getUserMedia) throw new VoiceFailure('No microphone is available. Connect a microphone and try again.', 'mic_unavailable');
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch (e) {
     const name = (e as DOMException).name;
-    throw new Error(name === 'NotAllowedError' || name === 'SecurityError'
+    const denied = name === 'NotAllowedError' || name === 'SecurityError';
+    throw new VoiceFailure(denied
       ? 'Microphone access is required. Allow it for Kraki in your system privacy settings.'
-      : 'No microphone is available. Connect a microphone and try again.');
+      : 'No microphone is available. Connect a microphone and try again.', denied ? 'permission' : 'mic_unavailable');
   }
   const ctx = new AudioContext();
   await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
@@ -188,7 +196,9 @@ interface Recording {
 }
 let rec: Recording | null = null;
 
-function fail(message: string) {
+function fail(message: string, cause = VoiceTracker.classify(message)) {
+  diag.voices.cause(cause);
+  diag.voices.stateChanged('failed');
   rec?.staged?.complete(rec.rawText, rec.rawText, false);
   cleanup();
   useVoice.setState({ phase: 'failed', error: message });
@@ -210,17 +220,28 @@ const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-400
  */
 export async function startDictation(owner: string, context: VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void, onStage?: StageVoice): Promise<boolean> {
   const st = useVoice.getState();
-  if (!st.capability) { useVoice.setState({ phase: 'failed', owner, error: "Voice input isn't available in this region." }); return true; }
+  if (!st.capability) {
+    diag.voices.begin(false, voiceSettings.correction);
+    diag.voices.cause('unavailable');
+    diag.voices.stateChanged('failed');
+    useVoice.setState({ phase: 'failed', owner, error: "Voice input isn't available in this region." }); return true;
+  }
   if (!voiceSettings.consented) { useVoice.setState({ consentPending: true, owner }); return false; }
   if (rec) cancelDictation();
-  if (!transport?.connected()) { useVoice.setState({ phase: 'failed', owner, error: "Couldn't connect to Kraki. Check your connection and try again." }); return true; }
+  // Web opens a fresh broker socket for every attempt; a cached lease is not a warm connection.
+  diag.voices.begin(false, voiceSettings.correction);
+  if (!transport?.connected()) {
+    diag.voices.cause('offline');
+    diag.voices.stateChanged('failed');
+    useVoice.setState({ phase: 'failed', owner, error: "Couldn't connect to Kraki. Check your connection and try again." }); return true;
+  }
   useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
   const recordingId = uuid();
   let ws: WebSocket;
   try {
     ws = new WebSocket(st.capability.brokerUrl);
   } catch {
-    fail('The voice service address is invalid.');
+    fail('The voice service address is invalid.', 'config');
     return true;
   }
   ws.binaryType = 'arraybuffer';
@@ -229,7 +250,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   const send = (m: Record<string, unknown>) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
   const flush = () => { if (!r.ready) return; for (const p of r.pending) ws.send(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); r.pending = []; if (r.finishMode && !r.finishSent) sendFinish(); };
   const sendFinish = () => { r.finishSent = true; send({ type: 'finish', recordingId }); };
-  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail("Couldn't reach the voice service. Try again."); }, 12_000);
+  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail("Couldn't reach the voice service. Try again.", 'timeout'); }, 12_000);
 
   ws.onmessage = (ev) => {
     if (rec !== r || typeof ev.data !== 'string') return;
@@ -254,6 +275,10 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
           const text = String(m.text ?? '').trim();
           const mode = r.finishMode ?? 'edit';
           const raw = typeof m.rawText === 'string' ? m.rawText : r.rawText || text;
+          const correction = useVoice.getState().correctionText.trim();
+          diag.voices.finalReceived(new TextEncoder().encode(text).length,
+            (typeof m.rawText === 'string' && m.rawText.length > 0) || (correction.length > 0 && correction === text));
+          diag.voices.stateChanged('idle');
           r.done = true;
           cleanup();
           useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], owner: null, startedAt: null });
@@ -273,10 +298,10 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
         }
         break;
       case 'session_denied':
-        fail(DENIED[String(m.reason)] ?? String(m.detail ?? 'Voice input was refused.'));
+        fail(DENIED[String(m.reason)] ?? String(m.detail ?? 'Voice input was refused.'), VoiceTracker.classify(String(m.reason ?? 'denied')));
         break;
       case 'error':
-        fail(`Voice input failed: ${String(m.message ?? 'unknown error')}`);
+        fail(`Voice input failed: ${String(m.message ?? 'unknown error')}`, VoiceTracker.classify(String(m.message ?? 'unknown error')));
         break;
       default:
         break;
@@ -285,24 +310,27 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   ws.onclose = () => { if (rec === r && !r.done) fail('The voice connection closed. Try again.'); };
   ws.onerror = () => { /* onclose reports it */ };
 
+  diag.voices.stateChanged('obtainingLease');
   try {
     const [l] = await Promise.all([
       getLease(),
-      new Promise<void>((resolve, reject) => { ws.addEventListener('open', () => resolve(), { once: true }); ws.addEventListener('error', () => reject(new Error("Couldn't reach the voice service. Try again.")), { once: true }); }),
+      new Promise<void>((resolve, reject) => { ws.addEventListener('open', () => resolve(), { once: true }); ws.addEventListener('error', () => reject(new VoiceFailure("Couldn't reach the voice service. Try again.", 'network')), { once: true }); }),
     ]);
     if (rec !== r) return true;
     send({ type: 'authorize', uid: transport?.userId() ?? undefined, deviceId: transport?.deviceId() ?? undefined, authorization: l });
+    diag.voices.stateChanged('requestingPermission');
     r.capture = await openMicrophone((pcm, level) => {
       if (rec !== r || r.finishMode) return;
       const lv = useVoice.getState().levels;
       useVoice.setState({ levels: [...lv.slice(-7), level] });
       if (r.ready) ws.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
       else if (r.pending.reduce((n, p) => n + p.byteLength, 0) < 384_000) r.pending.push(pcm);
-    });
+    }).catch((e: Error) => { throw e instanceof VoiceFailure ? e : new VoiceFailure(e.message, 'audio_session'); });
     if (rec !== r) { r.capture.stop(); return true; }
+    diag.voices.stateChanged('recording');
     if (useVoice.getState().phase === 'connecting') useVoice.setState({ phase: 'recording' });
   } catch (e) {
-    if (rec === r) fail((e as Error).message);
+    if (rec === r) fail((e as Error).message, e instanceof VoiceFailure ? e.metricCause : VoiceTracker.classify((e as Error).message));
   }
   return true;
 }
@@ -324,13 +352,16 @@ export function finishDictation(mode: VoiceFinish) {
   }
   r.capture?.stop();
   r.capture = null;
+  diag.voices.stateChanged('finishing');
   useVoice.setState({ phase: 'finishing', staged: !!r.staged, levels: [] });
   if (r.ready && !r.finishSent) { r.finishSent = true; r.ws.send(JSON.stringify({ type: 'finish', recordingId: r.recordingId })); }
   if (r.timer) clearTimeout(r.timer);
-  r.timer = setTimeout(() => { if (rec === r) fail("The voice service didn't finish. Try again."); }, 25_000);
+  r.timer = setTimeout(() => { if (rec === r) fail("The voice service didn't finish. Try again.", 'timeout'); }, 25_000);
 }
 
 export function cancelDictation() {
+  diag.voices.outcome('cancelled', false);
+  diag.voices.stateChanged('idle');
   rec?.staged?.complete(rec.rawText, rec.rawText, false);
   cleanup();
   useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], error: null, owner: null, startedAt: null });
@@ -404,6 +435,7 @@ export function onWordsUpdated(words: VoiceWord[], requestId?: string) {
 
 /** Signed out / account deleted: nothing of the account stays. */
 export function resetVoice() {
+  diag.voices.outcome('suspended');
   cancelDictation();
   lease = null; inFlight = null;
   useVoice.setState({ capability: null, words: [], serverWords: [], outbox: [], consentPending: false });

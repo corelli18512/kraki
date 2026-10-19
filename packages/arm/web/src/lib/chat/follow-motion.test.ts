@@ -24,6 +24,25 @@ describe('entrances', () => {
   it('only rows added at the end enter', () => {
     expect(newTailKeys(['a', 'b'], ['a', 'b', 'c'])).toEqual(['c']);
     expect(newTailKeys(['a', 'pending'], ['a', 'sent'])).toEqual([]);
+    expect(newTailKeys(['a', 'live'], ['a', 'landed'])).toEqual([]);
     expect(newTailKeys(['b', 'c'], ['a', 'b', 'c'])).toEqual([]);
+  });
+
+  it('enters arrivals after the old tail survives front-window eviction', () => {
+    expect(newTailKeys(['a', 'b', 'c'], ['b', 'c', 'user'])).toEqual(['user']);
+    expect(newTailKeys(['a', 'b', 'c'], ['c', 'user', 'live'])).toEqual(['user', 'live']);
+    expect(newTailKeys(['a', 'b', 'pending'], ['b', 'pending', 'live'])).toEqual(['live']);
+  });
+
+  it('suppresses catch-up bursts larger than two even when the capped window evicts its front', () => {
+    expect(newTailKeys(['a', 'b', 'c', 'd'], ['d', 'user', 'reply', 'next-user'])).toEqual([]);
+    expect(newTailKeys(['a'], ['a', 'user', 'reply', 'next-user'])).toEqual([]);
+    expect(newTailKeys(['a', 'b', 'c'], ['c', 'user', 'reply'])).toEqual(['user', 'reply']);
+  });
+
+  it('does not animate a capped replacement, prepend or reorder', () => {
+    expect(newTailKeys(['a', 'b', 'live'], ['b', 'user', 'landed'])).toEqual([]);
+    expect(newTailKeys(['b', 'c'], ['older', 'b', 'c'])).toEqual([]);
+    expect(newTailKeys(['a', 'live', 'user'], ['a', 'user', 'live'])).toEqual([]);
   });
 });

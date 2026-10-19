@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { flushSync } from 'react-dom';
 import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
@@ -7,7 +8,7 @@ import { useNarrow } from '../../hooks/useNarrow';
 import { agentNavigationColors } from '../../lib/color';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
 import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
-import { messageProvider } from '../../lib/message-provider';
+import { isSpineMessage, messageProvider } from '../../lib/message-provider';
 import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
 import { Bubble, LIVE_KEY, rowSide, type BubbleContext, type ChatRow } from './Bubble';
@@ -15,6 +16,7 @@ import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } fr
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import { HistoryLoadStatus } from './HistoryLoadStatus';
 import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/chat/unread-entry';
 import './chat.css';
 
@@ -53,11 +55,22 @@ export interface ChatViewProps {
 export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArtifact }: ChatViewProps) {
   const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
   const session = useStore((s) => s.sessions.get(sessionId));
-  const card = useStore((s) => s.cards.get(sessionId));
+  const rawCard = useStore((s) => s.cards.get(sessionId));
+  const cardHoldUntil = useStore((s) => s.cardHoldUntil.get(sessionId)) ?? 0;
+  const historyCaughtUpThrough = useStore((s) => s.historyCaughtUpThrough.get(sessionId)) ?? 0;
   const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
   const connected = useStore((s) => s.status === 'connected');
   const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
-  const loading = useStore((s) => s.loadingSessions.has(sessionId));
+  const getRangeStatus = useCallback(() => messageProvider.getRangeStatus(sessionId), [sessionId]);
+  const rangeStatus = useSyncExternalStore(messageProvider.subscribeRangeStatus, getRangeStatus, getRangeStatus);
+  const loading = !!session && rangeStatus.state === 'loading';
+  const showHistoryStatus = !!session && (loading || rangeStatus.state === 'error' || rangeStatus.state === 'incomplete');
+  const retryHistory = useCallback(() => {
+    // Check again at admission: stale events and repeated clicks cannot start work.
+    if (!useStore.getState().sessions.has(sessionId) || messageProvider.isLoading(sessionId)) return;
+    const status = messageProvider.getRangeStatus(sessionId);
+    if (status.state === 'error' || status.state === 'incomplete') messageProvider.retryRange(sessionId);
+  }, [sessionId]);
   const allPending = useOutbox((s) => s.entries);
   const pending = useMemo(
     () => allPending.filter((e) => e.sessionId === sessionId).sort((a, b) => a.order - b.order),
@@ -67,6 +80,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // ── Rows ──
   const lastSeq = session?.lastSeq;
   const maxSeq = highestSeq(messages);
+  // Live deltas keep updating a subscription card while its preceding spine
+  // catches up. Do not draw it beneath an older cached conversation tail.
+  const cardCaughtUp = historyCaughtUpThrough >= cardHoldUntil
+    || messages.some((m) => isSpineMessage(m) && seqOf(m) >= cardHoldUntil);
+  const card = cardCaughtUp ? rawCard : undefined;
   // Performance data (open.summary / ready.summary): what is on screen now.
   useEffect(() => {
     if (diag.stability.wantsConversationUpdates) diag.stability.conversationRendered(sessionId, maxSeq, lastSeq ?? 0, messages.length > 0);
@@ -120,13 +138,31 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     });
     rowCache.current = nextCache;
     const landed = new Set(spine.map((i) => payloadOf(i.message).clientId).filter(Boolean));
-    for (const entry of pending) {
-      if (landed.has(entry.clientId)) continue;
-      out.push({ kind: 'pending', key: `pending:${entry.clientId}`, entry });
+    // Failed inputs stay where they were written, but only within the loaded
+    // spine window (Mac ChatViewModel.place). Retrying puts them at the tail.
+    const windowStart = spine.find((item) => seqOf(item.message) > 0);
+    const startSeq = windowStart ? seqOf(windowStart.message) : Infinity;
+    const remaining = pending.filter((entry) => !landed.has(entry.clientId));
+    const anchored = remaining.filter((entry) => entry.state === 'failed'
+      && entry.afterSeq !== undefined && entry.afterSeq >= startSeq)
+      .sort((a, b) => a.afterSeq! - b.afterSeq! || a.order - b.order);
+    for (const entry of anchored) {
+      const index = out.findIndex((row) => row.kind === 'spine' && seqOf(row.item.message) > entry.afterSeq!);
+      out.splice(index < 0 ? out.length : index, 0, { kind: 'pending', key: `pending:${entry.clientId}`, entry });
     }
-    if (showLive && card) out.push({ kind: 'live', key: LIVE_KEY, card });
+    const anchoredIds = new Set(anchored.map((entry) => entry.clientId));
+    for (const entry of remaining) {
+      if (!anchoredIds.has(entry.clientId)) out.push({ kind: 'pending', key: `pending:${entry.clientId}`, entry });
+    }
+    if (showLive && card) {
+      const anchor = card.steer?.anchor;
+      const index = anchor ? out.findIndex((row) => row.kind === 'pending' ? row.entry.clientId === anchor
+        : row.kind === 'spine' && row.item.message.type === 'user_message'
+          && (payloadOf(row.item.message).clientId === anchor || `${sessionId}:${seqOf(row.item.message)}` === anchor)) : -1;
+      out.splice(index < 0 ? out.length : index, 0, { kind: 'live', key: LIVE_KEY, card });
+    }
     return out;
-  }, [spine, pending, showLive, card]);
+  }, [spine, pending, showLive, card, sessionId]);
 
   // ── List state ──
   const listRef = useRef<ChatScrollerHandle>(null);
@@ -134,6 +170,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const atBottomRef = useRef(true);
   const [unseen, setUnseen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(72);
+  const measuredComposerHeight = useRef(72);
   const narrow = useNarrow();
   // Mac's floating composer grows over chat, without moving the newest edge.
   // ChatBottomObstruction: 36 capsule + 2×12 bottom padding − 6 row margin.
@@ -143,12 +180,38 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // extra reach so it can be scrolled into view (Mac composerOverlayInset).
   const restingDock = useRef<number | null>(null);
   const overlayReach = narrow || restingDock.current === null ? 0 : Math.max(0, Math.round(composerHeight - restingDock.current));
+  const historyBox = useRef<HTMLDivElement>(null);
+  const [historyHeight, setHistoryHeight] = useState(0);
+  const measuredHistoryHeight = useRef(0);
+  // Measurements reserve transcript space only. The status itself is positioned
+  // by its dock containing block, so child-only draft growth cannot overlap it
+  // while ResizeObserver delivery or the resulting React commit is pending.
+  const statusClearance = Math.max(bottomClearance, composerHeight + historyHeight + 8);
+  useLayoutEffect(() => {
+    const box = historyBox.current;
+    if (!box) return;
+    const measure = (synchronous: boolean) => {
+      const height = box.getBoundingClientRect().height;
+      if (height === measuredHistoryHeight.current) return;
+      measuredHistoryHeight.current = height;
+      if (synchronous) flushSync(() => setHistoryHeight(height));
+      else setHistoryHeight(height);
+    };
+    measure(false);
+    const observer = new ResizeObserver(() => measure(true));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [showHistoryStatus, sessionId]);
   const [upTarget, setUpTarget] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
   const [windowSize, setWindowSize] = useState(WINDOW_START);
-  const visibleRows = useMemo(() => rows.slice(Math.max(0, rows.length - windowSize)), [rows, windowSize]);
-  const hiddenAbove = rows.length - visibleRows.length;
+  const retainedStart = useRef<string | null>(null);
+  const navigation = useRef({ generation: 0, active: false });
+  const cancelNavigation = useCallback(() => {
+    navigation.current.generation++;
+    navigation.current.active = false;
+  }, []);
 
   // Entered with new messages: the read position, captured on this entry's
   // first render — before SessionPage's effect marks the Session read.
@@ -163,12 +226,27 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // reach the head, or a stale cached tail would land on an old reply.
   const entryHadGap = entry.current.hadGap && atHead;
   const unreadTarget = useMemo(() => (entryBoundary === null ? null : firstUnreadKey(
-    visibleRows.map((r) => r.kind === 'spine'
+    rows.map((r) => r.kind === 'spine'
       ? { key: r.key, seq: seqOf(r.item.message) || undefined, isUser: r.item.message.type === 'user_message' }
       : { key: r.key }),
     entryBoundary,
     entryHadGap,
-  )), [visibleRows, entryBoundary, entryHadGap]);
+  )), [rows, entryBoundary, entryHadGap]);
+
+  // Keep the loaded first-unread row and the reading window mounted. Tail
+  // arrivals may grow this window; only returning to the tail may trim it.
+  let windowStart = Math.max(0, rows.length - windowSize);
+  if (!atBottomRef.current && retainedStart.current) {
+    const retained = rows.findIndex((row) => row.key === retainedStart.current);
+    if (retained >= 0) windowStart = Math.min(windowStart, retained);
+  }
+  if (unreadTarget) {
+    const unreadIndex = rows.findIndex((row) => row.key === unreadTarget);
+    if (unreadIndex >= 0) windowStart = Math.min(windowStart, unreadIndex);
+  }
+  const visibleRows = useMemo(() => rows.slice(windowStart), [rows, windowStart]);
+  retainedStart.current = visibleRows[0]?.key ?? null;
+  const hiddenAbove = windowStart;
 
   // New session: fresh index space. Where it opens (the newest edge, or the
   // first new message) is reported by its own scroller, which is recreated
@@ -177,7 +255,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   useEffect(() => {
     setWindowSize(WINDOW_START);
     setUnseen(false);
-  }, [sessionId]);
+    return cancelNavigation;
+  }, [sessionId, cancelNavigation]);
 
   // A reply that lands while the reader is away marks ↓ with a dot.
   const lastAgentKey = useMemo(() => {
@@ -192,23 +271,44 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     seenAgentKey.current = lastAgentKey;
   }, [lastAgentKey]);
 
-  useEffect(() => {
+  const measureComposer = useCallback((synchronous: boolean) => {
+    const height = composerBox.current?.getBoundingClientRect().height;
+    // An unlaid-out/hidden dock has no usable clearance; retain its last size.
+    if (!height) return;
+    // Preserve desktop overlay reach when no history strip is present.
+    if (restingDock.current === null || height < restingDock.current) restingDock.current = height;
+    if (height === measuredComposerHeight.current) return;
+    // Set the guard before publishing: the resulting commit/observer delivery
+    // must not feed the same measurement back into another synchronous commit.
+    measuredComposerHeight.current = height;
+    if (synchronous) flushSync(() => setComposerHeight(height));
+    else setComposerHeight(height);
+  }, []);
+  // Parent commits (including compaction/session changes) settle before paint.
+  // Do not flushSync from a React lifecycle.
+  useLayoutEffect(() => { measureComposer(false); });
+  useLayoutEffect(() => {
     const el = composerBox.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const h = el.getBoundingClientRect().height;
-      // Smallest measured dock = its resting footprint.
-      if (h > 0 && (restingDock.current === null || h < restingDock.current)) restingDock.current = h;
-      setComposerHeight(h);
+    // Composer owns its draft and can commit without rendering ChatView. Observe
+    // only dock mutations outside the out-of-flow history subtree; transcript
+    // padding is outside this subtree too, so reserving space cannot feed back.
+    const mutations = new MutationObserver((records) => {
+      if (records.some(record => !historyBox.current?.contains(record.target))) measureComposer(true);
     });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    mutations.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
+    // Intrinsic/font/viewport changes need no DOM mutation. Commit their measured
+    // clearance in this before-paint callback, not a later React render.
+    const resize = new ResizeObserver(() => measureComposer(true));
+    resize.observe(el);
+    return () => { mutations.disconnect(); resize.disconnect(); };
+  }, [measureComposer]);
 
   const scrollToBottom = useCallback((smooth: boolean) => {
+    cancelNavigation();
     listRef.current?.scrollToBottom(smooth);
     setUnseen(false);
-  }, []);
+  }, [cancelNavigation]);
 
   // Sending (a message, an answer, a choice) returns to the newest edge.
   const afterSubmit = useCallback(() => {
@@ -224,17 +324,38 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
 
   // ── Older pages ──
   const lowSeq = lowestSeq(messages);
-  const hasOlder = lowSeq > 1;
-  const loadOlder = useCallback(() => {
+  // A successful empty/sparse range still advances history. Do not derive
+  // the next request solely from rows: a whole page may have no visible row.
+  const [olderCursor, setOlderCursor] = useState<number | null>(null);
+  const olderBefore = olderCursor === null ? lowSeq : Math.min(lowSeq, olderCursor);
+  const hasOlder = olderBefore > 1;
+  const olderInFlight = useRef(false);
+  const loadOlder = useCallback(async (): Promise<boolean> => {
     if (hiddenAbove > 0) {
-      setWindowSize((n) => n + WINDOW_PAGE);
-      return;
+      flushSync(() => setWindowSize(rows.length - hiddenAbove + WINDOW_PAGE));
+      return true;
     }
-    if (!hasOlder || messageProvider.isLoading(sessionId)) return;
-    const toSeq = lowSeq - 1;
-    setWindowSize((n) => n + WINDOW_PAGE);
-    void messageProvider.fetchRange(sessionId, Math.max(1, toSeq - OLDER_PAGE + 1), toSeq);
-  }, [hiddenAbove, hasOlder, lowSeq, sessionId]);
+    if (!hasOlder || olderInFlight.current || messageProvider.isLoading(sessionId)
+      || rangeStatus.state === 'incomplete') return false;
+    const toSeq = olderBefore - 1;
+    const fromSeq = Math.max(1, toSeq - OLDER_PAGE + 1);
+    olderInFlight.current = true;
+    try {
+      const completed = await messageProvider.fetchRange(sessionId, fromSeq, toSeq);
+      if (!completed) return false;
+      // Commit the page window AND loader removal before ↑ measures a row.
+      // Store delivery can have rendered first, before this await resumed.
+      flushSync(() => {
+        setOlderCursor(fromSeq);
+        setWindowSize((n) => n + OLDER_PAGE);
+      });
+      return true;
+    } finally {
+      olderInFlight.current = false;
+    }
+  }, [hiddenAbove, hasOlder, olderBefore, rows.length, sessionId, rangeStatus]);
+  const loadOlderRef = useRef(loadOlder);
+  loadOlderRef.current = loadOlder;
 
   // ── ↑: the start of the nearest reply whose top is above the view ──
   const rowsRef = useRef(rows);
@@ -252,13 +373,43 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   useEffect(() => { measureUp(); }, [visibleRows, measureUp]);
 
   const showUp = rows.length > 0 && (upTarget !== null || hiddenAbove > 0 || hasOlder);
-  const goUp = () => {
-    if (upTarget) listRef.current?.scrollToRow(upTarget, true);
-    else {
-      loadOlder();
-      const first = visibleRows[0]?.key;
-      if (first) listRef.current?.scrollToRow(first, true);
+  const goUp = async () => {
+    if (navigation.current.active) return;
+    const generation = ++navigation.current.generation;
+    navigation.current.active = true;
+    let pageCompleted: boolean | undefined = true;
+    // Like Mac's navigation load: keep looking across pages without replies,
+    // but bound a single click and cancel it on manual input, ↓ or unmount.
+    for (let pages = 0; pages <= 8; pages++) {
+      const waitingSince = performance.now();
+      while (true) {
+        if (navigation.current.generation !== generation) return;
+        // Loaded replies win immediately, including incremental cache/page
+        // delivery during this click's own fetch, before range completion.
+        const above = new Set(listRef.current?.rowsAbove() ?? []);
+        const target = [...rowsRef.current].reverse().find((row) => above.has(row.key) && rowSide(row) === 'agent');
+        if (target) {
+          navigation.current.active = false;
+          listRef.current?.scrollToRow(target.key, true);
+          return;
+        }
+        if (!messageProvider.isLoading(sessionId) && pageCompleted !== undefined) break;
+        if (performance.now() - waitingSince >= 3000) {
+          navigation.current.active = false;
+          return;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      if (pages === 8 || !pageCompleted) break;
+      pageCompleted = undefined;
+      // Keep polling targets/cancellation while loadOlder independently waits
+      // for full coverage before advancing its cursor and growing the window.
+      void loadOlderRef.current().then((completed) => { pageCompleted = completed; });
+      // Store delivery and window expansion must commit before measuring the
+      // newly prepended replies (including a page that only changed the cursor).
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
+    if (navigation.current.generation === generation) navigation.current.active = false;
   };
 
   // ── Actions ──
@@ -313,9 +464,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         rows={visibleRows}
         renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
         topInset={topInset + 8}
-        bottomInset={bottomClearance}
-        overlayReach={overlayReach}
-        header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
+        bottomInset={showHistoryStatus ? statusClearance : bottomClearance}
+        overlayReach={showHistoryStatus ? 0 : overlayReach}
+        header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader">{loading && <span className="kspinner" />}</div> : null}
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;
           setAtBottom(bottom);
@@ -326,18 +477,18 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
             setTimeout(() => { if (atBottomRef.current) setWindowSize(WINDOW_START); }, 600);
           }
         }}
-        onNearTop={loadOlder}
+        onNearTop={() => { void loadOlder(); }}
+        onUserInteraction={cancelNavigation}
         onScroll={measureUp}
         unreadTarget={entry.current.boundary === null ? undefined : unreadTarget}
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
         entranceSide={entranceSide}
       />
-      {rows.length === 0 && (
+      {session && rows.length === 0 && !showHistoryStatus && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>
-          {loading ? <span className="kspinner" /> : <p>Send a message to start.</p>}
+          <p>Send a message to start.</p>
         </div>
       )}
-
       <div className="kjump" style={{
         // MacComposerMetrics: bottomPadding12 + control36 + stackGap9.
         bottom: narrow ? composerHeight + 8 : 57,
@@ -364,6 +515,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       </div>
 
       <div className="kcomposer-dock" ref={composerBox}>
+        <div ref={historyBox} className="khistory-position">
+          {showHistoryStatus && <HistoryLoadStatus status={rangeStatus} onRetry={retryHistory} />}
+        </div>
         {isCompacting && (
           <div className="kcompacting" role="status" aria-label="Compacting context">
             <Loader className="kcompacting-spinner" aria-hidden />

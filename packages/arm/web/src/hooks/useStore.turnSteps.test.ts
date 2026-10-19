@@ -152,6 +152,29 @@ describe('setTurnSteps', () => {
     expect(tools).toHaveLength(2);
   });
 
+  it.each(['user_message', 'send_input'])('bounds a delayed live replacement at the next %s, not a steer', async (nextPrompt) => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1));
+    store.appendMessage('s1', traceEntry('tool_start', 'a-old'));
+    store.appendMessage('s1', m('user_message', 2, { delivery: 'steer' }));
+    store.appendMessage('s1', traceEntry('tool_complete', 'a-old'));
+    store.appendMessage('s1', m('agent_message', 3));
+    store.appendMessage('s1', m('idle', 4));
+    store.appendMessage('s1', m(nextPrompt, 5));
+    store.appendMessage('s1', { ...traceEntry('tool_start', 'b'), seq: 9002 });
+    const before = useStore.getState().messages.get('s1')!;
+    const turnB = before.slice(before.findIndex((msg) => msg.type === nextPrompt && msg.seq === 5));
+
+    store.setTurnSteps('s1', 1, [traceEntry('tool_complete', 'a-new')]);
+
+    const after = useStore.getState().messages.get('s1')!;
+    expect(after.slice(after.findIndex((msg) => msg.type === nextPrompt && msg.seq === 5))).toEqual(turnB);
+    expect(after.filter((msg) => msg.type === 'tool_start' || msg.type === 'tool_complete').map((msg) => msg.payload.toolCallId))
+      .toEqual(['a-new', 'b']);
+    expect(after.find((msg) => msg.type === 'user_message' && msg.payload.delivery === 'steer')).toBe(before[2]);
+    await vi.dynamicImportSettled();
+  });
+
   it('rejects a stale final-agent trace response once terminal status owns the turn', () => {
     const store = useStore.getState();
     store.appendMessage('s1', m('user_message', 1));

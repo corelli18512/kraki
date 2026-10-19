@@ -33,7 +33,8 @@ export function containsMermaid(html: string): boolean {
 
 let runtime: Promise<string> | null = null;
 
-function loadRuntime(fetcher: typeof fetch): Promise<string> {
+/** Trusted bundled source; preview must not inspect or execute report-provided loaders. */
+export function loadReportMermaidRuntime(fetcher: typeof fetch = fetch): Promise<string> {
   if (!runtime) {
     runtime = fetcher(MERMAID_RUNTIME_URL)
       .then((res) => (res.ok ? res.text() : Promise.reject(new Error(`HTTP ${res.status}`))))
@@ -50,7 +51,7 @@ export async function withMermaidRuntime(html: string, fetcher: typeof fetch = f
   if (!containsMermaid(html) || /mermaid\.initialize/i.test(html)) return html;
   let library: string;
   try {
-    library = await loadRuntime(fetcher);
+    library = await loadReportMermaidRuntime(fetcher);
   } catch {
     return html; // Show the source rather than no report.
   }

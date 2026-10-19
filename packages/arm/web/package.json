@@ -19,6 +19,7 @@
   "dependencies": {
     "@kraki/pulse": "workspace:*",
     "@kraki/protocol": "workspace:*",
+    "dompurify": "3.4.17",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",
