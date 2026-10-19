@@ -85,16 +85,20 @@ struct MacBubbleActionSlot: View {
     var onQuestionChoiceFramesChanged: ([MacQuestionChoiceFrame]) -> Void = { _ in }
     var onPermissionButtonFramesChanged: ([MacPermissionButtonFrame]) -> Void = { _ in }
 
+    var parallelToolLabel: String {
+        let running = action.payload["running"]?.intValue ?? 0
+        return running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…"
+    }
+
     var body: some View {
         Group {
             switch action.type {
             case "tool_start": toolChip(action, running: true)
             case "tool_complete": toolChip(action, running: false)
             case "tool_batch":
-                let running = action.payload["running"]?.intValue ?? 0
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
-                    Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
+                    Text(parallelToolLabel)
                         .font(.system(size: 13))
                         .foregroundStyle(Color.textSecondary)
                     Spacer(minLength: 0)
