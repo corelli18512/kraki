@@ -505,6 +505,7 @@ struct SessionRowContent: View {
     @Environment(AppState.self) private var appState
     let sessionId: String
     let isLast: Bool
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -514,7 +515,7 @@ struct SessionRowContent: View {
 
             if !isLast {
                 Color.borderPrimary
-                    .frame(height: 1.0 / UIScreen.main.scale)
+                    .frame(height: 1.0 / max(displayScale, 1))
                     .padding(.leading, 72) // leading(16) + avatar(44) + gap(12)
             }
         }
@@ -527,7 +528,7 @@ struct SessionRowContent: View {
 private func renderLucideIconForSwipe(_ type: LucideIconType, size: CGFloat = 22) -> UIImage? {
     let view = LucideIcon(type, size: size, strokeWidth: 2, color: .white)
     let renderer = ImageRenderer(content: view)
-    renderer.scale = UIScreen.main.scale
+    renderer.scale = currentDisplayScale()
     return renderer.uiImage?.withRenderingMode(.alwaysTemplate)
 }
 

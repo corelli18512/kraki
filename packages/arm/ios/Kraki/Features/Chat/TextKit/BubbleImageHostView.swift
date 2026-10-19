@@ -413,6 +413,8 @@ struct IOSImagePreviewGallery: View {
     let selection: IOSImagePreviewSelection
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int
+    /// A page to scroll to (Previous/Next buttons, initial page).
+    @State private var target: Int?
 
     init(selection: IOSImagePreviewSelection) {
         self.selection = selection
@@ -432,17 +434,48 @@ struct IOSImagePreviewGallery: View {
 
             // Swipe between images like Photos; each page zooms on its own
             // (a zoomed image pans first, then the page turns at its edge).
-            TabView(selection: $index) {
-                ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, page in
-                    IOSImagePreviewPage(item: page, selection: selection, onBackdropTap: { dismiss() })
-                        .padding(.top, 52)
-                        .padding(.bottom, selection.items.count > 1 ? 54 : 18)
-                        .padding(.horizontal, 12)
-                        .tag(offset)
-                        .accessibilityLabel(page.title)
+            // A paging scroll view sized to the full window, not TabView's
+            // page style: on iPhone Duo the status bar is on the right edge,
+            // and TabView's pager inherited that inset, so pages opened
+            // offset by half of it and swipes landed between images.
+            GeometryReader { geometry in
+              ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, item in
+                            IOSImagePreviewPage(item: item, selection: selection, onBackdropTap: { dismiss() })
+                                .padding(.top, 52)
+                                .padding(.bottom, selection.items.count > 1 ? 54 : 18)
+                                .padding(.horizontal, 12)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .id(offset)
+                                .accessibilityLabel(item.title)
+                        }
+                    }
+                    .scrollTargetLayout()
                 }
+                .scrollTargetBehavior(.paging)
+                .scrollIndicators(.hidden)
+                .contentMargins(0, for: .scrollContent)
+                // The page shown is derived from the actual offset, so it
+                // follows drags, programmatic scrolls and re-renders alike;
+                // nothing re-applies a stale page while content loads.
+                .onScrollGeometryChange(for: Int.self) { scroll in
+                    Int((scroll.contentOffset.x / max(scroll.containerSize.width, 1)).rounded())
+                } action: { _, now in
+                    let page = min(max(now, 0), max(selection.items.count - 1, 0))
+                    if page != index { index = page }
+                }
+                .onAppear {
+                    if selection.initialIndex > 0 { proxy.scrollTo(selection.initialIndex, anchor: .leading) }
+                }
+                .onChange(of: target) { _, page in
+                    guard let page else { return }
+                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(page, anchor: .leading) }
+                    target = nil
+                }
+              }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -518,7 +551,7 @@ struct IOSImagePreviewGallery: View {
 
     private func show(_ nextIndex: Int) {
         guard selection.items.indices.contains(nextIndex) else { return }
-        withAnimation(.easeInOut(duration: 0.25)) { index = nextIndex }
+        target = nextIndex
     }
 
     private func navigationButton(
