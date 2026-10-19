@@ -37,7 +37,7 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.getByText('Brand palette preview')).toBeInTheDocument();
     expect(screen.queryByText('Relay server')).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: '14 days' })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Archive After' }), { target: { value: '30' } });
     expect(commands.setAutoArchiveDays).toHaveBeenCalledWith('computer', 30);
     tab('About');
     expect(screen.queryByRole('radiogroup', { name: 'Theme' })).not.toBeInTheDocument();

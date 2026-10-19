@@ -279,3 +279,4 @@
   .kp-windows .kp-theme-grid { grid-template-columns:1fr; }
   .kp-windows .kp-theme-preview { display:none; }
 }
+.kp-select { border:1px solid var(--color-border-primary, #d4d4d8); border-radius:6px; background-color:var(--color-surface-primary, #fff); color:inherit; padding:3px 8px; font:inherit; font-size:13px; min-width:160px; }

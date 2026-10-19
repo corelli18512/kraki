@@ -1,17 +1,11 @@
-/** Format an ISO timestamp to a human-readable relative time */
+import { formatDateTime, formatRelativeDays, formatRelativeTime } from '../i18n/format';
+
+/** Format an ISO timestamp to a human-readable relative time ("5m ago" / "5分钟前"). */
 export function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return formatRelativeTime(iso);
 }
 
-/** Format for session list: time if today, "Xd ago" otherwise */
+/** Format for session list: time if today, "yesterday" / "Xd ago" otherwise */
 export function sessionTime(iso: string): string {
   const date = new Date(iso);
   const now = new Date();
@@ -19,23 +13,16 @@ export function sessionTime(iso: string): string {
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (isToday) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
+  if (isToday) return formatTime(iso);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const days = Math.round((todayStart - dateStart) / (1000 * 60 * 60 * 24));
-  if (days === 1) return 'yesterday';
-  return `${days}d ago`;
+  return formatRelativeDays(days);
 }
 
 /** Format an ISO timestamp to HH:MM (24-hour) */
 export function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatDateTime(iso, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 /** Capitalize first letter */

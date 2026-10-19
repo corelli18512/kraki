@@ -1,3 +1,4 @@
+import './i18n';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
@@ -8,11 +9,13 @@ import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
 import { trackVisualViewport } from './lib/visual-viewport';
 import { desktop } from './lib/desktop';
+import { syncDesktopLanguage } from './i18n/desktop-bridge';
 import { desktopBuildNumber, desktopDiagHttp, diag } from './lib/diag';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 
 trackVisualViewport();
+syncDesktopLanguage();
 // Performance data (Settings › Share Performance Data): Windows shell only.
 diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktopBuildNumber() });
 

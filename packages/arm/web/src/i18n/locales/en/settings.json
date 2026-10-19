@@ -1,0 +1,7 @@
+{
+  "language": {
+    "label": "Language",
+    "system": "System default ({{language}})",
+    "footer": "Applies to this device only."
+  }
+}

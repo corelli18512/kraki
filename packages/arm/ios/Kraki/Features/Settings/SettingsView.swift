@@ -118,6 +118,7 @@ struct SettingsView: View {
         Section {
             notificationsRow
             themeRow
+            languageRow
             NavigationLink {
                 VoiceInputSettingsPage()
             } label: {
@@ -223,6 +224,28 @@ struct SettingsView: View {
             guard appState.preferencesManager?.isApplyingRemote != true else { return }
             appState.preferencesManager?.sendTheme(newValue)
         }
+    }
+
+    /// iOS owns the per-app language picker (Settings › Kraki › Language);
+    /// we only link to it, so there is no in-app language state on iPhone.
+    private var languageRow: some View {
+        Button {
+            AppLanguage.openSystemLanguageSettings()
+        } label: {
+            LabeledContent {
+                HStack(spacing: 4) {
+                    Text(AppLanguage.current.nativeName)
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.footnote)
+                }
+                .foregroundStyle(.secondary)
+            } label: {
+                Text("Language")
+                    .foregroundStyle(Color.primary)
+            }
+        }
+        .accessibilityHint(Text("Choose Kraki's language in the Settings app."))
+        .accessibilityIdentifier("settings-language")
     }
 
     private func handlePushToggle(_ newValue: Bool) {

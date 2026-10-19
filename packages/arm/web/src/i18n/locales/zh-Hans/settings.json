@@ -1,0 +1,7 @@
+{
+  "language": {
+    "label": "语言",
+    "system": "跟随系统（{{language}}）",
+    "footer": "仅对此设备生效。"
+  }
+}

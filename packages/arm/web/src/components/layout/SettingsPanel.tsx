@@ -26,6 +26,7 @@ import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { signOut } from './ProfileBar';
 import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
 import './settings.css';
+import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
 import { deviceLastOnline } from '../../lib/device-last-online';
 import {
@@ -272,6 +273,7 @@ export function SettingsPanel({
           </div>
         )}
       </SettingsSection>
+      <LanguageSettingsRow />
       <SettingsSection title="Account Usage">
         <SettingsRow label={`Hold ${shortcut.shortcut} to peek at account usage`}>
           <SettingsSwitch

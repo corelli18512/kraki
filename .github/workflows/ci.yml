@@ -108,6 +108,9 @@ jobs:
       - name: Run validation
         run: pnpm validate
 
+      - name: Localization check (keys, placeholders, hard-coded UI ratchet)
+        run: pnpm l10n:check
+
   test-ios:
     name: Test iOS (Kraki)
     needs: scope
