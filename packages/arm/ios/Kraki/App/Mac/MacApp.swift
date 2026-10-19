@@ -621,6 +621,10 @@ struct MacApp: App {
             // every scene of the app.
             MenuBarIconLabel(appState: appState, tentacleCLI: tentacleCLI)
                 .task {
+                    // SwiftUI can start this task even when the status item is
+                    // not inserted. XCTest hosts must never discover real CLI
+                    // credentials or start the windowless presence services.
+                    guard !NativeTestRuntime.isRunningTests else { return }
                     // A login launch keeps the window hidden, so the window's
                     // `.task` never runs. Start from the status item instead:
                     // presence, connection and Needs You must work without a
