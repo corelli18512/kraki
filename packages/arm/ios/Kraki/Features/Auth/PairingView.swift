@@ -153,7 +153,7 @@ struct PairingView: View {
                             showManualEntry = false
                             completePairing(info)
                         } else {
-                            errorMessage = "Invalid pairing URL"
+                            errorMessage = String(localized: "Invalid pairing URL")
                         }
                     }
                     .disabled(manualURL.isEmpty)
@@ -184,7 +184,7 @@ struct PairingView: View {
                 completePairing(info)
             } else {
                 withAnimation {
-                    errorMessage = "Not a valid Kraki pairing code"
+                    errorMessage = String(localized: "Not a valid Kraki pairing code")
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     withAnimation { errorMessage = nil }
@@ -192,7 +192,7 @@ struct PairingView: View {
             }
         case .failure:
             withAnimation {
-                errorMessage = "Failed to read QR code"
+                errorMessage = String(localized: "Failed to read QR code")
             }
         }
     }

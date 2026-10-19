@@ -362,7 +362,7 @@ final class MacChatBubbleCell: NSView {
         stepsButton.target = self
         stepsButton.action = #selector(stepsTapped)
         stepsButton.isHidden = true
-        stepsButton.setAccessibilityLabel("Show steps", toolTip: MacControlHelp.showSteps)
+        stepsButton.setAccessibilityLabel(String(localized: "Show steps"), toolTip: MacControlHelp.showSteps)
 
         deliveryStatus.isBordered = false
         deliveryStatus.imagePosition = .imageOnly
@@ -958,19 +958,19 @@ final class MacChatBubbleCell: NSView {
         let menu = NSMenu()
         if coreTextBodyView.hasSelection {
             let copy = NSMenuItem(
-                title: "Copy Selection",
+                title: String(localized: "Copy Selection"),
                 action: #selector(MacCoreTextBodyView.copySelection(_:)),
                 keyEquivalent: ""
             )
             copy.target = coreTextBodyView
             menu.addItem(copy)
         } else if let text = MacMarkdown.plainText(content.body), !text.isEmpty {
-            let copy = NSMenuItem(title: "Copy", action: #selector(copyMessage), keyEquivalent: "")
+            let copy = NSMenuItem(title: String(localized: "Copy"), action: #selector(copyMessage), keyEquivalent: "")
             copy.target = self
             menu.addItem(copy)
         }
         if content.canShowSteps {
-            let steps = NSMenuItem(title: "Show Steps", action: #selector(stepsTapped), keyEquivalent: "")
+            let steps = NSMenuItem(title: String(localized: "Show Steps"), action: #selector(stepsTapped), keyEquivalent: "")
             steps.target = self
             menu.addItem(steps)
         }
@@ -993,8 +993,8 @@ final class MacChatBubbleCell: NSView {
 
     private func pendingActionItems() -> [NSMenuItem] {
         let actions: [(String, MacPendingAction)] = content?.pendingDeliveryState == "correcting"
-            ? [("Send Original", .sendOriginal), ("Edit", .edit), ("Delete", .delete)]
-            : [("Retry", .retry), ("Delete", .delete)]
+            ? [(String(localized: "Send Original"), .sendOriginal), (String(localized: "Edit"), .edit), (String(localized: "Delete"), .delete)]
+            : [(String(localized: "Retry"), .retry), (String(localized: "Delete"), .delete)]
         return actions.map { title, action in
             let item = NSMenuItem(title: title, action: #selector(pendingMenuAction(_:)), keyEquivalent: "")
             item.target = self
@@ -1062,34 +1062,34 @@ final class MacChatBubbleCell: NSView {
         deliveryStatus.isHidden = false
         let symbol = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         if state == "correcting" {
-            deliveryStatus.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Correcting voice input")?.withSymbolConfiguration(symbol)
+            deliveryStatus.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: String(localized: "Correcting voice input"))?.withSymbolConfiguration(symbol)
             deliveryStatus.contentTintColor = .secondaryLabelColor
             deliveryStatus.isEnabled = true
             deliveryStatus.alphaValue = 1
-            deliveryStatus.setAccessibilityLabel("Correcting voice input. Click for options")
-            deliveryStatus.toolTip = "Correcting voice input"
+            deliveryStatus.setAccessibilityLabel(String(localized: "Correcting voice input. Click for options"))
+            deliveryStatus.toolTip = String(localized: "Correcting voice input")
         } else if state == "unconfirmed" {
             deliveryStatus.image = NSImage(systemSymbolName: "questionmark.circle",
-                accessibilityDescription: "Awaiting confirmation")?.withSymbolConfiguration(symbol)
+                accessibilityDescription: String(localized: "Awaiting confirmation"))?.withSymbolConfiguration(symbol)
             deliveryStatus.contentTintColor = .systemOrange
             deliveryStatus.isEnabled = true
             deliveryStatus.alphaValue = 1
-            deliveryStatus.setAccessibilityLabel("Awaiting confirmation. Click to retry or delete")
-            deliveryStatus.toolTip = "Delivery not confirmed yet. Retry uses the same message ID."
+            deliveryStatus.setAccessibilityLabel(String(localized: "Awaiting confirmation. Click to retry or delete"))
+            deliveryStatus.toolTip = String(localized: "Delivery not confirmed yet. Retry uses the same message ID.")
         } else if state == "failed" {
             deliveryStatus.image = NSImage(systemSymbolName: "exclamationmark.circle.fill",
-                                           accessibilityDescription: "Not delivered")?.withSymbolConfiguration(symbol)
+                                           accessibilityDescription: String(localized: "Not delivered"))?.withSymbolConfiguration(symbol)
             deliveryStatus.contentTintColor = .systemRed
             deliveryStatus.isEnabled = true
             deliveryStatus.alphaValue = 1
-            deliveryStatus.setAccessibilityLabel("Not delivered. Click to retry or delete")
-            deliveryStatus.toolTip = "Not delivered"
+            deliveryStatus.setAccessibilityLabel(String(localized: "Not delivered. Click to retry or delete"))
+            deliveryStatus.toolTip = String(localized: "Not delivered")
         } else {
             deliveryStatus.image = NSImage(systemSymbolName: "clock",
-                                           accessibilityDescription: "Sending")?.withSymbolConfiguration(symbol)
+                                           accessibilityDescription: String(localized: "Sending"))?.withSymbolConfiguration(symbol)
             deliveryStatus.contentTintColor = .tertiaryLabelColor
             deliveryStatus.isEnabled = false
-            deliveryStatus.setAccessibilityLabel("Sending")
+            deliveryStatus.setAccessibilityLabel(String(localized: "Sending"))
             deliveryStatus.toolTip = nil
             deliveryStatus.alphaValue = 0
             let work = DispatchWorkItem { [weak self] in

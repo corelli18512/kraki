@@ -1,3 +1,5 @@
+import { formatDateTime, formatRelativeDays } from '../../i18n/format';
+import { t } from '../../i18n';
 import type { PendingInput } from './outbox';
 /**
  * Session list row projection shared by the wide (Mac sidebar) and narrow
@@ -27,14 +29,14 @@ export function resolveCardStatus(
 }
 
 export const STATUS_LABEL: Partial<Record<SessionCardStatus, string>> = {
-  active: 'Running',
-  compacting: 'Compacting',
-  waiting: 'Waiting for an answer',
-  approval: 'Waiting for approval',
-  error: 'Failed',
-  offline: 'Offline',
-  agentMessage: 'Last message from agent',
-  humanMessage: 'Last message from you',
+  get active() { return t('chat:sessionCard.status.active'); },
+  get compacting() { return t('chat:sessionCard.status.compacting'); },
+  get waiting() { return t('chat:sessionCard.status.waiting'); },
+  get approval() { return t('chat:sessionCard.status.approval'); },
+  get error() { return t('chat:sessionCard.status.error'); },
+  get offline() { return t('chat:sessionCard.status.offline'); },
+  get agentMessage() { return t('chat:sessionCard.status.agentMessage'); },
+  get humanMessage() { return t('chat:sessionCard.status.humanMessage'); },
 };
 
 /** Native effective date: a valid preview timestamp, otherwise session creation. */
@@ -50,10 +52,10 @@ export function sessionTimeLabel(iso: string, now = new Date()): string {
   if (Number.isNaN(date.getTime())) return '';
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((day(now) - day(date)) / 86_400_000);
-  if (days === 0) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  if (days === 1) return 'yesterday';
+  if (days === 0) return formatDateTime(date, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (days === 1) return formatRelativeDays(1);
   const elapsedDays = days - ((now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000) < (date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds() + date.getMilliseconds() / 1000) ? 1 : 0);
-  return `${Math.max(elapsedDays, 2)}d ago`;
+  return formatRelativeDays(Math.max(elapsedDays, 2));
 }
 
 export function collapseWhitespace(text: string | undefined): string {
@@ -63,8 +65,11 @@ export function collapseWhitespace(text: string | undefined): string {
 export type SessionDeliveryStatus = 'correcting' | 'sending' | 'unconfirmed' | 'failed' | 'queued';
 export type SessionPendingInput = Omit<PendingInput, 'state'> & { state: Exclude<SessionDeliveryStatus, 'queued'> };
 export const DELIVERY_LABEL = {
-  correcting: 'Correcting voice message before sending', unconfirmed: 'Awaiting delivery confirmation',
-  sending: 'Sending, awaiting confirmation', failed: 'Send failed', queued: 'Waiting for connection',
+  get correcting() { return t('chat:sessionCard.delivery.correcting'); },
+  get unconfirmed() { return t('chat:sessionCard.delivery.unconfirmed'); },
+  get sending() { return t('chat:sessionCard.delivery.sending'); },
+  get failed() { return t('chat:sessionCard.delivery.failed'); },
+  get queued() { return t('chat:sessionCard.delivery.queued'); },
 };
 
 /** Errors win over new sends; local order, timestamp and clientId break ties. */
@@ -74,7 +79,7 @@ export function sessionPendingPreview(entries: SessionPendingInput[], sessionId:
     a.timestamp.localeCompare(b.timestamp) || a.clientId.localeCompare(b.clientId)).at(-1);
   if (!pending) return undefined;
   const status: SessionDeliveryStatus = pending.state === 'sending' ? (online ? 'sending' : 'queued') : pending.state;
-  const text = collapseWhitespace(pending.text) || (pending.attachments?.length ? '[image]' : '…');
-  const prefix = status === 'failed' ? 'Send failed · ' : status === 'queued' ? 'Waiting for connection · ' : status === 'unconfirmed' ? 'Awaiting confirmation · ' : '';
-  return { text: prefix + text, timestamp: pending.timestamp, status };
+  const text = collapseWhitespace(pending.text) || (pending.attachments?.length ? t('chat:sessionCard.image') : '…');
+  const preview = status === 'failed' ? t('chat:sessionCard.failedPreview', { text }) : status === 'queued' ? t('chat:sessionCard.queuedPreview', { text }) : status === 'unconfirmed' ? t('chat:sessionCard.unconfirmedPreview', { text }) : text;
+  return { text: preview, timestamp: pending.timestamp, status };
 }

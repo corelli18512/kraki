@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 /**
  * Conversation spine → rendered rows. A direct port of the iOS/Mac client
  * (`TurnSpineProjection`, `ChatViewModel.presentingQuestions`,
@@ -88,7 +89,7 @@ export function terminalOutcomeOf(message: ChatMessage): TerminalOutcome | undef
   }
   if (message.type === 'interrupted_turn') {
     return p.reason === 'process_lost'
-      ? { type: 'failed', message: 'Agent process was lost' }
+      ? { type: 'failed', message: t('chat:bubble.processLost') }
       : { type: 'user_abort' };
   }
   return undefined;

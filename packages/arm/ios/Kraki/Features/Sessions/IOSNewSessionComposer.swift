@@ -67,7 +67,7 @@ struct IOSNewSessionComposer: View {
                 .disabled(!canSend)
                 .padding(.bottom, (IOSComposerMetrics.height - IOSComposerMetrics.control) / 2)
                 .accessibilityIdentifier("new-session-send")
-                .accessibilityLabel(recording ? "Start session with what you said" : "Start session")
+                .accessibilityLabel(recording ? String(localized: "Start session with what you said") : String(localized: "Start session"))
         }
         .onAppear { if !recording { focused = true } }
         .alert(VoiceConsent.title, isPresented: $showVoiceConsent) {

@@ -107,7 +107,7 @@ extension AppState {
         // Other keys for a computer this app already pinned: ask first, on
         // every path (also a cold launch before the first connection).
         if !keyChangeConfirmed, let trust = link.trust, pairingLinkChangesKey(link) {
-            pendingPairingPrompt = .replaceComputerKey(link, name: deviceStore.devices[trust.tentacleId]?.name ?? "this computer")
+            pendingPairingPrompt = .replaceComputerKey(link, name: deviceStore.devices[trust.tentacleId]?.name ?? String(localized: "this computer"))
             return
         }
         // Already signed in to this account: a QR that carries device trust

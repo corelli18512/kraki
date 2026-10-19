@@ -114,7 +114,7 @@ struct BuiltInSetupView: View {
             case .thisMac:
                 ThisMacSetupStep(
                     binaryPath: tentacleCLI.builtIn.binaryPath,
-                    stepLabel: movedFromCLI ? nil : "Step 1 of 2",
+                    stepLabel: movedFromCLI ? nil : String(localized: "Step 1 of 2"),
                     onContinue: { thisMacRole = BuiltInTentacle.ThisMacRole.runsAgents.rawValue; movedFromCLI = false },
                     onSkip: {
                         movedFromCLI = false
@@ -164,10 +164,10 @@ struct BuiltInSetupView: View {
 
     private func moveToApplications(_ location: AppInstallLocation) -> some View {
         StepCard(
-            title: "Move Kraki to Applications",
+            title: String(localized: "Move Kraki to Applications"),
             detail: location == .diskImage
-                ? "Kraki is running from the disk image. Drag Kraki onto the Applications folder, then open it from there."
-                : "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. In Finder, drag Kraki from Downloads into Applications, then open it again."
+                ? String(localized: "Kraki is running from the disk image. Drag Kraki onto the Applications folder, then open it from there.")
+                : String(localized: "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. In Finder, drag Kraki from Downloads into Applications, then open it again.")
         ) {
             HStack(spacing: 10) {
                 Button("Open Applications Folder") {
@@ -185,9 +185,9 @@ struct BuiltInSetupView: View {
         switch runner.phase {
         case .idle, .failed:
             StepCard(
-                step: signedOutByUser ? nil : "Step 2 of 2",
-                title: "Sign in",
-                detail: "Sign in with GitHub. The coding agents on this Mac become available here, on your phone and on your other computers."
+                step: signedOutByUser ? nil : String(localized: "Step 2 of 2"),
+                title: String(localized: "Sign in"),
+                detail: String(localized: "Sign in with GitHub. The coding agents on this Mac become available here, on your phone and on your other computers.")
             ) {
                 VStack(spacing: 10) {
                     Button {
@@ -219,9 +219,9 @@ struct BuiltInSetupView: View {
             ProgressView("Contacting GitHub…").controlSize(.small)
         case .waitingForBrowser:
             StepCard(
-                step: signedOutByUser ? nil : "Step 2 of 2",
-                title: "Continue in the sign-in window",
-                detail: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click."
+                step: signedOutByUser ? nil : String(localized: "Step 2 of 2"),
+                title: String(localized: "Continue in the sign-in window"),
+                detail: String(localized: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click.")
             ) {
                 VStack(spacing: 10) {
                     HStack(spacing: 6) {
@@ -241,12 +241,12 @@ struct BuiltInSetupView: View {
             }
         case .waitingForGitHub(let code, _):
             StepCard(
-                step: signedOutByUser ? nil : "Step 2 of 2",
-                title: "Enter this code on GitHub",
-                detail: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki."
+                step: signedOutByUser ? nil : String(localized: "Step 2 of 2"),
+                title: String(localized: "Enter this code on GitHub"),
+                detail: String(localized: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki.")
             ) {
                 VStack(spacing: 12) {
-                    Text(code)
+                    Text(verbatim: code)
                         .font(.system(size: 26, weight: .bold, design: .monospaced))
                         .tracking(3)
                         .textSelection(.enabled)
@@ -265,7 +265,7 @@ struct BuiltInSetupView: View {
                 }
             }
         case .configuring(let username), .done(let username):
-            ProgressView(username.isEmpty ? "Setting up…" : "Signed in as \(username). Setting up…")
+            ProgressView(username.isEmpty ? String(localized: "Setting up…") : String(localized: "Signed in as \(username). Setting up…"))
                 .controlSize(.small)
         }
     }
@@ -275,8 +275,8 @@ struct BuiltInSetupView: View {
         switch tentacleCLI.daemonState {
         case .needsApproval:
             StepCard(
-                title: "Let this Mac stay online",
-                detail: "Kraki is turned off in System Settings → General → Login Items. Turn Kraki on there so your phone and other computers can use the agents on this Mac."
+                title: String(localized: "Let this Mac stay online"),
+                detail: String(localized: "Kraki is turned off in System Settings → General → Login Items. Turn Kraki on there so your phone and other computers can use the agents on this Mac.")
             ) {
                 HStack(spacing: 10) {
                     Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
@@ -286,7 +286,7 @@ struct BuiltInSetupView: View {
                 }
             }
         case .error(let message):
-            StepCard(title: "Kraki couldn't start", detail: message) {
+            StepCard(title: String(localized: "Kraki couldn't start"), detail: message) {
                 HStack(spacing: 10) {
                     if message == TentacleCLIManager.launchdStuckMessage {
                         // macOS's own "Are you sure you want to restart?" dialog.

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { diag } from '../../lib/diag';
 import { SettingsAlert } from './SettingsControls';
 import { resetVoice } from '../../lib/voice/voice';
@@ -39,6 +40,7 @@ export function signOut() {
 }
 
 export function ProfileBar({ compact = false, menu = false }: { compact?: boolean; menu?: boolean } = {}) {
+  const { t } = useTranslation('settings');
   const user = useStore((s) => s.user);
   const [imgError, setImgError] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -56,7 +58,7 @@ export function ProfileBar({ compact = false, menu = false }: { compact?: boolea
 
   return (
     <>
-      {menu ? <><div className="ksr-menu-divider" role="separator" /><span className="ksb-profile-name">{user.login}</span><button type="button" role="menuitem" onClick={() => setConfirming(true)}><SignOutIcon /> Sign Out…</button></> : <div className={compact ? 'flex min-w-0 shrink items-center gap-2 px-1.5 py-1' : 'flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5'}>
+      {menu ? <><div className="ksr-menu-divider" role="separator" /><span className="ksb-profile-name">{user.login}</span><button type="button" role="menuitem" onClick={() => setConfirming(true)}><SignOutIcon /> {t('signOut.action')}</button></> : <div className={compact ? 'flex min-w-0 shrink items-center gap-2 px-1.5 py-1' : 'flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5'}>
         {isGitHub && !imgError ? (
           <img
             src={githubAvatarUrl(user.login)}
@@ -77,15 +79,15 @@ export function ProfileBar({ compact = false, menu = false }: { compact?: boolea
         </div>
         <button
           onClick={() => setConfirming(true)}
-          title="Sign out"
-          aria-label="Sign out"
+          title={t('signOut.label')}
+          aria-label={t('signOut.label')}
           className="shrink-0 rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
         >
           <SignOutIcon className="h-4 w-4" />
         </button>
       </div>}
 
-      {confirming && <div className="fixed inset-0 z-[90]"><SettingsAlert title={`Sign out of Kraki on ${desktop ? 'this PC' : 'this browser'}?`} body={`Conversations cached ${desktop ? 'on this PC' : 'in this browser'} are removed. Your computers keep all sessions; sign in again to see them.`} confirm="Sign Out" onCancel={() => setConfirming(false)} onConfirm={handleSignOut} /></div>}
+      {confirming && <div className="fixed inset-0 z-[90]"><SettingsAlert title={t(desktop ? 'signOut.titlePC' : 'signOut.titleBrowser')} body={t(desktop ? 'signOut.bodyPC' : 'signOut.bodyBrowser')} confirm={t('signOut.confirm')} onCancel={() => setConfirming(false)} onConfirm={handleSignOut} /></div>}
     </>
   );
 }

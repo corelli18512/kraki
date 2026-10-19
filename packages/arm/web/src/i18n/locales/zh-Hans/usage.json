@@ -1,1 +1,51 @@
-{}
+{
+  "status": {
+    "signIn": "需要登录",
+    "unavailable": "不可用",
+    "stale": "已过期",
+    "offline": "设备离线",
+    "rateLimited": "已达速率限制 · 请尝试刷新",
+    "failed": "无法刷新",
+    "overdue": "更新已逾期",
+    "notUpdated": "尚未更新",
+    "updatedNow": "刚刚更新",
+    "retryIn": "已达速率限制 · {{time}}后重试",
+    "updated": "更新于{{time}}"
+  },
+  "refresh": {
+    "connect": "连接后刷新",
+    "busy": "正在刷新…",
+    "updateDevice": "更新设备上的 Kraki 或启用账户用量以刷新",
+    "noDevice": "没有在线设备",
+    "timeout": "刷新超时。请重试。",
+    "connectionLost": "连接已断开。请重试。",
+    "disabled": "请在设备上启用账户用量。",
+    "deviceBusy": "设备正在刷新。请稍后重试。",
+    "failed": "无法刷新。请重试。",
+    "someFailed": "部分账户无法更新",
+    "rateLimits": "受服务提供商速率限制约束",
+    "recent": "刚刚刷新过 · 请稍候",
+    "hint": "刷新用量数据，不会绕过服务提供商的速率限制",
+    "action": "刷新"
+  },
+  "empty": "未在你的设备上找到 Claude 或 Codex 账户",
+  "currentSession": "当前会话",
+  "title": "账户用量",
+  "spentByCurrent": "当前会话使用此账户",
+  "windowTooltip": "{{name}} 剩余 {{percent}}%，{{time}}后重置",
+  "deviceOffline": "{{name}}（离线）",
+  "moreDevices_other": " +{{number}}",
+  "reset": {
+    "now": "现在",
+    "pair": "{{first}} {{second}}"
+  },
+  "window": {
+    "fiveHour": "5 小时",
+    "weekly": "每周",
+    "limit": "限额"
+  },
+  "update": {
+    "more_other": "{{name}} 和另外 {{number}} 台设备",
+    "hint_other": "更新 {{list}} 上的 Kraki 以查看其账户"
+  }
+}

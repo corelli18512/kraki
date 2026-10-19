@@ -283,7 +283,7 @@ final class DeviceIdentityKeys {
         ]
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Keychain save failed"])
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [NSLocalizedDescriptionKey: String(localized: "Keychain save failed")])
         }
     }
 

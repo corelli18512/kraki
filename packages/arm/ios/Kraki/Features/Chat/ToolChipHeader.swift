@@ -47,7 +47,7 @@ struct ToolChipHeader: View {
                 iconWithBadge
                 toolNamePill
                 if let h = headline, !h.isEmpty {
-                    Text(h.collapseWhitespace())
+                    Text(verbatim: h.collapseWhitespace())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -128,7 +128,7 @@ struct ToolChipHeader: View {
 
     @ViewBuilder
     private var toolNamePill: some View {
-        Text(toolName)
+        Text(verbatim: toolName)
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 5)

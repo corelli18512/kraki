@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
@@ -20,10 +21,11 @@ import { sessionTimestamp } from '../../lib/chat/session-card';
 import './sidebar.css';
 
 function Brand() {
+  const { t } = useTranslation('settings');
   return (
     <span className="ksb-brand">
       <span className="ksb-wordmark">KRAKI</span>
-      <span className="ksb-preview">Preview</span>
+      <span className="ksb-preview">{t('sidebar.preview')}</span>
     </span>
   );
 }
@@ -58,16 +60,17 @@ function useSortedSessions(query: string) {
 }
 
 function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+  const { t } = useTranslation('settings');
   const hasTentacle = useStore((s) => [...s.devices.values()].some((d) => d.role === 'tentacle' && d.online));
   return (
     <div className="ksb-empty">
       <BotMessageSquare className="ksb-empty-icon" strokeWidth={1.5} />
-      <p className="ksb-empty-title">No sessions yet</p>
-      <p className="ksb-empty-hint">{hasTentacle ? 'Start an agent on your connected computer.' : 'Connect a computer with the Kraki CLI to get started.'}</p>
+      <p className="ksb-empty-title">{t('sidebar.empty')}</p>
+      <p className="ksb-empty-hint">{hasTentacle ? t('sidebar.startAgent') : t('sidebar.connect')}</p>
       {hasTentacle ? (
         <div className="ksb-empty-actions">
-          <button type="button" className="ksb-button is-primary" onClick={onNew}>New Session</button>
-          <button type="button" className="ksb-button" onClick={onImport}><Download /> Import</button>
+          <button type="button" className="ksb-button is-primary" onClick={onNew}>{t('sidebar.newSession')}</button>
+          <button type="button" className="ksb-button" onClick={onImport}><Download /> {t('sidebar.import')}</button>
         </div>
       ) : <code className="ksb-code">curl -fsSL https://app.kraki.chat/install.sh | bash</code>}
     </div>
@@ -75,6 +78,7 @@ function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () =>
 }
 
 export function Sidebar() {
+  const { t } = useTranslation('settings');
   const narrow = useNarrow();
   const usageShortcut = useUsageShortcut((s) => s.shortcut);
   const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
@@ -118,8 +122,8 @@ export function Sidebar() {
   const list = query.trim() && sorted.length === 0
     ? <div className="ksb-noresults" data-testid="sidebar-no-results">
         <svg aria-hidden viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><circle cx="12.5" cy="12.5" r="11" /><path d="m21 21 9 9" /></svg>
-        <p>No matching sessions</p>
-        <span>Try another search</span>
+        <p>{t('sidebar.noResults')}</p>
+        <span>{t('sidebar.trySearch')}</span>
       </div>
     : total === 0 && archivedCount === 0
     ? (narrow
@@ -127,8 +131,8 @@ export function Sidebar() {
       : (
         <div className="ksb-empty ksb-empty-wide" data-testid="sidebar-empty">
           <KrakiLogo className="ksb-empty-logo" />
-          <p className="ksb-empty-title">No sessions yet</p>
-          <p className="ksb-empty-hint">Sessions you start here, on your phone or on the web show up in this list.</p>
+          <p className="ksb-empty-title">{t('sidebar.empty')}</p>
+          <p className="ksb-empty-hint">{t('sidebar.emptyHint')}</p>
         </div>
       ))
     : (
@@ -160,41 +164,41 @@ export function Sidebar() {
       <div className="ksb is-wide">
         <div className="ksb-top">
           <div className="ksb-app-menu-wrap">
-            <button type="button" className="ksb-icon" aria-label="App menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
+            <button type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
             {appMenu && <>
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
               <div className="ksb-plus-menu ksb-app-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> Devices</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={`Account Usage${usageShortcutEnabled ? ` (hold ${usageShortcut})` : ''}`} data-testid="sidebar-usage"><Gauge /> Account Usage</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> Settings…</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> {t('tabs.devices')}</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: usageShortcut }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> {t('sidebar.settings')}</button>
                 <ProfileBar menu />
               </div>
             </>}
           </div>
           <label className="ksb-search">
             <Search aria-hidden />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search sessions" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('sidebar.search')} aria-label={t('sidebar.searchSessions')} />
           </label>
           <div className="ksb-plus-wrap">
             <button
               type="button"
               className={`ksb-icon ksb-new${sessionId ? '' : ' is-composing'}`}
-              aria-label="New session"
-              title="New Session (Ctrl+N)"
+              aria-label={t('sidebar.newSessionLabel')}
+              title={t('sidebar.newSessionShortcut')}
               onClick={startNewSession}
               onContextMenu={(e) => { e.preventDefault(); setPlusMenu((v) => !v); }}
               data-testid="sidebar-new-session"
             ><Plus /></button>
             {plusMenu && (
               <div className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)}>
-                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); startNewSession(); }}><Plus /> New Session</button>
-                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> Import Session…</button>
+                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); startNewSession(); }}><Plus /> {t('sidebar.newSession')}</button>
+                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> {t('sidebar.importSession')}</button>
               </div>
             )}
           </div>
         </div>
-        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
+        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
+        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
@@ -208,7 +212,7 @@ export function Sidebar() {
         <>
           <div className="ksb-hero">
             <Brand />
-            {reconnecting && <span className="kspinner ksb-spin" aria-label="Connecting" />}
+            {reconnecting && <span className="kspinner ksb-spin" aria-label={t('sidebar.connectingLabel')} />}
           </div>
           <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
         </>
@@ -221,12 +225,12 @@ export function Sidebar() {
           <div className="ksb-tabbar-space" />
         </div>
       )}
-      <nav className="ksb-tabbar" aria-label="Sections">
+      <nav className="ksb-tabbar" aria-label={t('sidebar.sections')}>
         <div className="ksb-tabs">
           {([
-            ['sessions', 'Sessions', BotMessageSquare],
-            ['devices', 'Devices', MonitorCloud],
-            ['settings', 'Settings', UserCog],
+            ['sessions', t('tabs.sessions'), BotMessageSquare],
+            ['devices', t('tabs.devices'), MonitorCloud],
+            ['settings', t('title'), UserCog],
           ] as const).map(([id, label, Icon]) => (
             <button key={id} type="button" className={`ksb-tab ${tab === id ? 'is-active' : ''}`} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
               <Icon strokeWidth={1.8} />
@@ -234,7 +238,7 @@ export function Sidebar() {
             </button>
           ))}
         </div>
-        <button type="button" className="ksb-fab" aria-label="New session" onClick={() => setNewOpen(true)}><Plus /></button>
+        <button type="button" className="ksb-fab" aria-label={t('sidebar.newSessionLabel')} onClick={() => setNewOpen(true)}><Plus /></button>
       </nav>
       {dialogs}
     </div>

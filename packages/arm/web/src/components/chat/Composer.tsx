@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, CornerRightUp, ImagePlus, Square, X, CircleX } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
@@ -43,12 +44,12 @@ export function composerIntent(isBusy: boolean, hasQuestion: boolean, hasPermiss
   return isBusy ? 'steer' : 'prompt';
 }
 
-const PLACEHOLDER: Record<ComposerIntent, string> = {
-  prompt: 'Send a message…',
-  steer: 'Steer the agent…',
-  answerQuestion: 'Type your answer…',
-  denyPermission: 'Deny with reason…',
-};
+const PLACEHOLDER = {
+  prompt: 'composer.placeholder.prompt',
+  steer: 'composer.placeholder.steer',
+  answerQuestion: 'composer.placeholder.answerQuestion',
+  denyPermission: 'composer.placeholder.denyPermission',
+} as const;
 
 async function compressImage(file: File): Promise<{ attachment: Attachment; preview: string } | null> {
   const img = new window.Image();
@@ -103,6 +104,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   { sessionId, intent, canAbort, reachable, busy, agent, onSend, onAbort, onStageVoice },
   ref,
 ) {
+  const { t } = useTranslation('chat');
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const [image, setImage] = useState<{ attachment: Attachment; preview: string } | null>(null);
@@ -249,15 +251,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!canAttach || !file || !file.type.startsWith('image/')) return;
     const result = await compressImage(file);
     if (result) setImage(result);
-    else useStore.getState().setLastError('Image is too large (max 3 MB after compression).');
+    else useStore.getState().setLastError(t('composer.imageTooLarge'));
   };
 
   const voiceSend = dictation.active;
   const glyph = voiceSend ? 'send' : showsStop ? 'stop' : intent === 'steer' ? 'steer' : 'send';
-  const label = voiceSend ? 'Send dictation' : showsStop ? 'Stop agent'
-    : intent === 'answerQuestion' ? 'Submit answer'
-    : intent === 'denyPermission' ? 'Deny with reason'
-    : intent === 'steer' ? 'Steer agent' : 'Send message';
+  const label = voiceSend ? t('composer.sendDictation') : showsStop ? t('composer.stop')
+    : intent === 'answerQuestion' ? t('composer.submitAnswer')
+    : intent === 'denyPermission' ? t('composer.denyReason')
+    : intent === 'steer' ? t('composer.steer') : t('composer.send');
 
   return (
     <div className="kcomposer">
@@ -272,14 +274,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         <button
           type="button"
           className={`kcomposer-attach ${image ? 'has-image' : ''}`}
-          aria-label={image ? 'Replace image' : 'Attach image'}
+          aria-label={image ? t('composer.replaceImage') : t('composer.attachImage')}
           disabled={!canAttach}
           onClick={() => fileRef.current?.click()}
         >
-          {image ? <img src={image.preview} alt="Attached" /> : <ImagePlus aria-hidden />}
+          {image ? <img src={image.preview} alt={t('composer.attached')} /> : <ImagePlus aria-hidden />}
         </button>
         {image && (
-          <button type="button" className="kcomposer-unattach" disabled={!canAttach} aria-label="Remove image" onClick={() => setImage(null)}>
+          <button type="button" className="kcomposer-unattach" disabled={!canAttach} aria-label={t('composer.removeImage')} onClick={() => setImage(null)}>
             <X aria-hidden />
           </button>
         )}
@@ -295,8 +297,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           ref={fieldRef}
           rows={1}
           value={text}
-          placeholder={PLACEHOLDER[intent]}
-          aria-label={PLACEHOLDER[intent]}
+          placeholder={t(PLACEHOLDER[intent])}
+          aria-label={t(PLACEHOLDER[intent])}
           onChange={(e) => setDraft(sessionId, e.target.value)}
           onScroll={(e) => updateComposerScrollFade(e.currentTarget)}
           onCompositionStart={() => { composing.current = true; }}
@@ -315,7 +317,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           }}
         />
         </div>
-        {(hasText || image) && <button type="button" className="kcomposer-clear" aria-label="Clear draft" onClick={() => {
+        {(hasText || image) && <button type="button" className="kcomposer-clear" aria-label={t('composer.clear')} onClick={() => {
           setDraft(sessionId, ''); setImage(null); fieldRef.current?.focus();
         }}><CircleX aria-hidden /></button>}
         <MicButton owner={sessionId} onStart={startVoice} disabled={!reachable} />

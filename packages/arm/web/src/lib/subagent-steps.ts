@@ -1,3 +1,5 @@
+import { formatNumber } from '../i18n/format';
+import { t } from '../i18n';
 import type { SubagentInfo } from '@kraki/protocol';
 import type { ChatMessage } from '../types/store';
 
@@ -107,8 +109,8 @@ export function contentsLabel(merged: ChatMessage[], id: string): string | undef
   const steps = subagentStepCount(merged, id);
   const subs = childSubagentCount(merged, id);
   const parts = [
-    subs ? `${subs} subagent${subs === 1 ? '' : 's'}` : undefined,
-    steps ? `${steps} step${steps === 1 ? '' : 's'}` : undefined,
+    subs ? t('chat:subagent.count', { count: subs }) : undefined,
+    steps ? t('chat:subagent.steps', { count: steps }) : undefined,
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : undefined;
 }
@@ -126,10 +128,10 @@ export function subagentStatus(m: ChatMessage): NonNullable<SubagentInfo['status
 export function formatDuration(ms?: number): string | undefined {
   if (ms === undefined) return undefined;
   const s = Math.round(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return s < 60 ? t('chat:subagent.seconds', { seconds: formatNumber(s) }) : t('chat:subagent.minutesSeconds', { minutes: formatNumber(Math.floor(s / 60), { useGrouping: false }), seconds: formatNumber(s % 60) });
 }
 
 export function formatTokens(n?: number): string | undefined {
   if (n === undefined) return undefined;
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k tokens` : `${n} tokens`;
+  return n >= 1000 ? t('chat:subagent.thousandTokens', { value: formatNumber(n / 1000, { useGrouping: false, minimumFractionDigits: n >= 10_000 ? 0 : 1, maximumFractionDigits: n >= 10_000 ? 0 : 1 }) }) : t('chat:subagent.tokens', { count: n });
 }

@@ -30,19 +30,20 @@ enum UsageRingState {
 enum UsageFormat {
     static func shortReset(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }
-        let s = Int(date.timeIntervalSince(now))
-        guard s > 60 else { return "now" }
-        let d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60
-        if d > 0 { return h > 0 ? "\(d)d \(h)h" : "\(d)d" }
-        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
-        return "\(m)m"
+        let remaining = max(0, date.timeIntervalSince(now))
+        guard remaining > 60 else { return String(localized: "now") }
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: remaining) ?? "—"
     }
 
     static func windowName(_ w: AccountUsageWindow) -> String {
         switch w.kind {
-        case "five_hour": return "5h"
-        case "weekly": return "Weekly"
-        default: return w.title ?? "Limit"
+        case "five_hour": return String(localized: "5h")
+        case "weekly": return String(localized: "Weekly")
+        default: return w.title ?? String(localized: "Limit")
         }
     }
 }
@@ -63,10 +64,10 @@ private struct UsageCountingNumber: View, Animatable {
     var animatableData: Double { get { value } set { value = newValue } }
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 1) {
-            Text("\(Int(value.rounded()))")
+            Text(verbatim: "\(Int(value.rounded()))")
                 .font(.system(size: size, weight: .bold, design: .rounded)).monospacedDigit()
                 .tracking(-size * 0.03).foregroundStyle(color)
-            Text("%").font(.system(size: size * 0.42, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
+            Text(verbatim: "%").font(.system(size: size * 0.42, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
         }
     }
 }
@@ -96,7 +97,7 @@ struct UsageWindowRing: View {
                 UsageCountingNumber(value: value, size: size * 0.3,
                                     color: state == .out ? .red : (stale ? .secondary : .primary))
             } else {
-                Text("—").font(.system(size: size * 0.26, weight: .semibold, design: .rounded)).foregroundStyle(.tertiary)
+                Text(verbatim: "—").font(.system(size: size * 0.26, weight: .semibold, design: .rounded)).foregroundStyle(.tertiary)
             }
         }
         .padding(lineWidth / 2)
@@ -131,7 +132,7 @@ struct AccountUsageRings: View {
             if windows.isEmpty {
                 VStack(spacing: 5) {
                     UsageWindowRing(window: nil, stale: stale, size: size, lineWidth: lineWidth, animateIn: false)
-                    Text(account.error == "auth" ? "Sign-in needed" : "Unavailable")
+                    Text(account.error == "auth" ? String(localized: "Sign-in needed") : String(localized: "Unavailable"))
                         .scaledFont(small ? 9.5 : 10.5).foregroundStyle(.secondary)
                 }
             }
@@ -169,7 +170,7 @@ private struct UsageMatchedRing: ViewModifier {
 struct UsageProviderChip: View {
     let provider: String
     var body: some View {
-        Text(provider == "codex" ? "GPT" : "Claude")
+        Text(verbatim: provider == "codex" ? "GPT" : "Claude")
             .scaledFont(8.5, weight: .bold).tracking(0.3)
             .padding(.horizontal, 4.5).padding(.vertical, 2.5)
             .foregroundStyle(provider == "codex" ? AnyShapeStyle(.background) : AnyShapeStyle(Color.white))
@@ -289,8 +290,8 @@ struct AccountUsageReadStatus: View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.lastUpdatedText(now: context.date))
-                    .help(account.fetchedDate?.formatted(date: .abbreviated, time: .standard) ?? "No successful reading")
-                if let status = offline ? "Device offline" : account.readStatus(now: context.date) {
+                    .help(account.fetchedDate?.formatted(date: .abbreviated, time: .standard) ?? String(localized: "No successful reading"))
+                if let status = offline ? String(localized: "Device offline") : account.readStatus(now: context.date) {
                     Text(status).foregroundStyle(.orange)
                 }
             }
@@ -429,7 +430,7 @@ struct UsageRefreshButton: View {
             }
         }
         .padding(.trailing, -10) // align the disc with the row edge, keep the 44 pt hit area
-        .accessibilityLabel(busy ? "Refreshing accounts" : "Refresh accounts")
+        .accessibilityLabel(busy ? String(localized: "Refreshing accounts") : String(localized: "Refresh accounts"))
         .accessibilityHint("Refreshes readings without bypassing provider rate limits")
         .accessibilityIdentifier("account-usage-refresh")
     }
@@ -497,33 +498,33 @@ struct AccountUsageRefreshModel {
         available = connected && !ids.isEmpty
         status = Self.status(store: store, ids: ids, deviceIds: deviceIds, connected: connected, busy: busy, ready: ready)
         // Per-account failures already show on their rows.
-        isNotice = !busy && !["Provider rate limits apply", "Just updated", "Some accounts couldn't be updated"].contains(status)
+        isNotice = !busy && ![String(localized: "Provider rate limits apply"), String(localized: "Just updated"), String(localized: "Some accounts couldn't be updated")].contains(status)
     }
 
     @MainActor
     private static func status(store: DeviceStore, ids: [String], deviceIds: Set<String>?,
                                connected: Bool, busy: Bool, ready: Bool) -> String {
-        if !connected { return "Connect to refresh" }
-        if busy { return "Refreshing…" }
+        if !connected { return String(localized: "Connect to refresh") }
+        if busy { return String(localized: "Refreshing…") }
         if ids.isEmpty {
             let online = store.devices.values.contains {
                 $0.role == .tentacle && $0.online && (deviceIds?.contains($0.id) ?? true)
             }
-            return online ? "Update or enable account usage on your device to refresh" : "No device online"
+            return online ? String(localized: "Update or enable account usage on your device to refresh") : String(localized: "No device online")
         }
         if let error = ids.compactMap({ store.usageRefreshes[$0]?.error }).first {
             switch error {
-            case "timeout": return "Refresh timed out. Try again."
-            case "offline", "connection": return "Connection lost. Try again."
-            case "disabled": return "Enable account usage on the device."
-            case "busy": return "Device is already refreshing. Try again shortly."
-            default: return "Couldn't refresh. Try again."
+            case "timeout": return String(localized: "Refresh timed out. Try again.")
+            case "offline", "connection": return String(localized: "Connection lost. Try again.")
+            case "disabled": return String(localized: "Enable account usage on the device.")
+            case "busy": return String(localized: "Device is already refreshing. Try again shortly.")
+            default: return String(localized: "Couldn't refresh. Try again.")
             }
         }
         if ids.contains(where: { store.deviceUsage[$0]?.accounts.contains(where: { $0.error != nil }) == true }) {
-            return "Some accounts couldn't be updated"
+            return String(localized: "Some accounts couldn't be updated")
         }
-        return ready ? "Provider rate limits apply" : "Just updated"
+        return ready ? String(localized: "Provider rate limits apply") : String(localized: "Just updated")
     }
 }
 
@@ -531,7 +532,11 @@ struct AccountUsageRefreshModel {
 enum UsageUpdateHint {
     static func text(_ devices: [DeviceSummary]) -> String {
         let names = devices.map(\.name)
-        let list = names.count > 2 ? "\(names[0]) and \(names.count - 1) more" : names.joined(separator: " and ")
-        return "Update Kraki on \(list) to see \(devices.count == 1 ? "its" : "their") accounts"
+        let list = names.count > 2
+            ? String(localized: "\(names[0]) and \(names.count - 1) more")
+            : names.formatted(.list(type: .and))
+        return devices.count == 1
+            ? String(localized: "Update Kraki on \(list) to see its accounts")
+            : String(localized: "Update Kraki on \(list) to see their accounts")
     }
 }

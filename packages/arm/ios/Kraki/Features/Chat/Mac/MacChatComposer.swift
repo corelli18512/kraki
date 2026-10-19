@@ -207,8 +207,8 @@ struct MacChatComposer: View {
         guard appState.hasCompletedInitialConnect, let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
-            let name = device?.name ?? session?.deviceName ?? "Device"
-            return "\(name) is offline — message will deliver when it reconnects."
+            let name = device?.name ?? session?.deviceName ?? String(localized: "Device")
+            return String(localized: "\(name) is offline — message will deliver when it reconnects.")
         }
         return nil
     }
@@ -400,10 +400,10 @@ struct MacChatComposer: View {
     private var textFieldForMode: some View {
         let placeholder: String = {
             switch submissionIntent {
-            case .denyPermission: return "Deny with reason…"
-            case .answerQuestion: return "Type your answer…"
-            case .steer: return "Steer the agent…"
-            case .prompt: return "Send a message…"
+            case .denyPermission: return String(localized: "Deny with reason…")
+            case .answerQuestion: return String(localized: "Type your answer…")
+            case .steer: return String(localized: "Steer the agent…")
+            case .prompt: return String(localized: "Send a message…")
             }
         }()
 
@@ -663,7 +663,7 @@ struct MacChatComposer: View {
         }
         .accessibilityIdentifier("chat-attach-image")
         .accessibilityLabel("Attach image")
-        .accessibilityValue(previewImage == nil ? "No image selected" : "Image selected")
+        .accessibilityValue(previewImage == nil ? String(localized: "No image selected") : String(localized: "Image selected"))
     }
 
     private var canUseImageSlot: Bool { canAttachImage && !voiceOwnsComposer }
@@ -800,7 +800,7 @@ struct MacChatComposer: View {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowedContentTypes = [.image]
-        panel.title = "Attach Image"
+        panel.title = String(localized: "Attach Image")
         let completion: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = panel.url else { return }
             loadImage(url)
@@ -814,7 +814,7 @@ struct MacChatComposer: View {
 
     private func loadImage(_ url: URL) {
         guard let image = NSImage(contentsOf: url) else {
-            imageAttachError = "That file isn't a supported image format."
+            imageAttachError = String(localized: "That file isn't a supported image format.")
             return
         }
         attachImage(image)
@@ -827,7 +827,7 @@ struct MacChatComposer: View {
             provider.loadDataRepresentation(forTypeIdentifier: imageType) { data, _ in
                 Task { @MainActor in
                     guard let data, let image = NSImage(data: data) else {
-                        imageAttachError = "The clipboard image couldn't be read."
+                        imageAttachError = String(localized: "The clipboard image couldn't be read.")
                         return
                     }
                     attachImage(image)
@@ -843,7 +843,7 @@ struct MacChatComposer: View {
                       let string = String(data: data, encoding: .utf8),
                       let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
                       url.isFileURL else {
-                    imageAttachError = "The clipboard doesn't contain a readable image."
+                    imageAttachError = String(localized: "The clipboard doesn't contain a readable image.")
                     return
                 }
                 loadImage(url)
@@ -863,7 +863,7 @@ struct MacChatComposer: View {
                 return
             }
         }
-        imageAttachError = "That image is too large to send (over 3 MB after compression). Try a smaller picture."
+        imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
         clearImage()
     }
 

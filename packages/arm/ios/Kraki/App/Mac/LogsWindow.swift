@@ -38,7 +38,7 @@ struct LogsWindow: View {
         HStack(spacing: 8) {
             Picker("File", selection: $selectedFile) {
                 ForEach(availableFiles, id: \.self) { url in
-                    Text(url.lastPathComponent).tag(Optional(url))
+                    Text(verbatim: url.lastPathComponent).tag(Optional(url))
                 }
             }
             .pickerStyle(.menu)
@@ -111,7 +111,7 @@ struct LogsWindow: View {
         let data = (try? handle.readToEnd()) ?? Data()
         var text = String(decoding: data, as: UTF8.self)
         if start > 0, let firstNewline = text.firstIndex(of: "\n") {
-            text = "… (showing the end of the log)\n" + text[text.index(after: firstNewline)...]
+            text = String(localized: "… (showing the end of the log)\n") + text[text.index(after: firstNewline)...]
         }
         return text
     }

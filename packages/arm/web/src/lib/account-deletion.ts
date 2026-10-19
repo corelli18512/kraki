@@ -4,6 +4,7 @@
  * `account_deleted` to every device (`auth_error` code `account_deleted` to one
  * that was offline). This device then signs out for good.
  */
+import { t } from '../i18n';
 import { create } from 'zustand';
 
 export type AccountDeletionState =
@@ -28,8 +29,4 @@ export const useAccountDeletion = create<DeletionStore>((set) => ({
 
 export const DELETION_TIMEOUT_MS = 30_000;
 
-export const DELETE_EXPLANATION = `Kraki's servers delete your account, your devices, notification tokens, preferences, custom words and voice usage. Every phone, browser and computer is signed out.
-
-Conversations are stored on your own computers, not on Kraki's servers; they stay there. To remove them too, delete them first or run \`kraki\` on the computer and choose "Delete all Kraki data".
-
-Signing in with GitHub again later creates a new, empty account.`;
+export function deleteExplanation() { return t('settings:deletion.explanation'); }

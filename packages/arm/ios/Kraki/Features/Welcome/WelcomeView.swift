@@ -154,8 +154,8 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "exclamationmark.triangle.fill",
             iconColor: Color(hex: 0xFBBF24),
-            title: "Kraki CLI not found",
-            subtitle: "This build of Kraki can't run agents by itself. Install the kraki command-line tool in Terminal, then come back here."
+            title: String(localized: "Kraki CLI not found"),
+            subtitle: String(localized: "This build of Kraki can't run agents by itself. Install the kraki command-line tool in Terminal, then come back here.")
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -222,8 +222,8 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "moon.zzz.fill",
             iconColor: Color.textMuted,
-            title: "Kraki isn't running on this Mac",
-            subtitle: "Start the background service so agents on this Mac can be used from Kraki."
+            title: String(localized: "Kraki isn't running on this Mac"),
+            subtitle: String(localized: "Start the background service so agents on this Mac can be used from Kraki.")
         ) {
             HStack {
                 Button {
@@ -245,7 +245,7 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "xmark.octagon.fill",
             iconColor: Color(hex: 0xF4836E),
-            title: "Kraki couldn't run on this Mac",
+            title: String(localized: "Kraki couldn't run on this Mac"),
             subtitle: msg
         ) {
             HStack {
@@ -277,12 +277,12 @@ struct WelcomeView: View {
             WelcomeCard(
                 icon: "puzzlepiece.extension.fill",
                 iconColor: Color(hex: 0xFBBF24),
-                title: "Install a coding agent",
-                subtitle: "Kraki is connected. To start a session, this Mac needs a coding agent."
+                title: String(localized: "Install a coding agent"),
+                subtitle: String(localized: "Kraki is connected. To start a session, this Mac needs a coding agent.")
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     NoAgentsGuide(
-                        deviceName: "this Mac",
+                        deviceName: String(localized: "this Mac"),
                         isThisMac: true,
                         checkAgain: { await recheckLocalAgents(local) }
                     )
@@ -296,8 +296,8 @@ struct WelcomeView: View {
             WelcomeCard(
                 icon: "sparkles",
                 iconColor: Color.krakiPrimary,
-                title: "Start your first session",
-                subtitle: "Pick a coding agent and a model, then chat with it here. Pair your phone to follow along and approve actions from anywhere."
+                title: String(localized: "Start your first session"),
+                subtitle: String(localized: "Pick a coding agent and a model, then chat with it here. Pair your phone to follow along and approve actions from anywhere.")
             ) {
                 HStack {
                     Button {
@@ -369,8 +369,8 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "exclamationmark.circle.fill",
             iconColor: Color(hex: 0xFBBF24),
-            title: "Kraki is off in Login Items",
-            subtitle: "This Mac's agents are offline because Kraki is turned off in System Settings → General → Login Items. Turn it back on to reconnect them."
+            title: String(localized: "Kraki is off in Login Items"),
+            subtitle: String(localized: "This Mac's agents are offline because Kraki is turned off in System Settings → General → Login Items. Turn it back on to reconnect them.")
         ) {
             HStack {
                 Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
@@ -385,8 +385,8 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "lock.shield.fill",
             iconColor: Color(hex: 0xFBBF24),
-            title: "Allow Full Disk Access",
-            subtitle: "Without it, macOS keeps asking for permission whenever an agent touches Desktop, Documents or other protected folders. Turn on “Kraki” once in System Settings."
+            title: String(localized: "Allow Full Disk Access"),
+            subtitle: String(localized: "Without it, macOS keeps asking for permission whenever an agent touches Desktop, Documents or other protected folders. Turn on “Kraki” once in System Settings.")
         ) {
             HStack {
                 Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
@@ -404,8 +404,8 @@ struct WelcomeView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.title = "Locate kraki executable"
-        panel.message = "Pick the kraki binary in your filesystem."
+        panel.title = String(localized: "Locate kraki executable")
+        panel.message = String(localized: "Pick the kraki binary in your filesystem.")
         panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
         if panel.runModal() == .OK, let url = panel.url {
             tentacleCLI.setBinaryPathOverride(url.path)

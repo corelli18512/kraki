@@ -64,7 +64,7 @@ struct SessionListHeader: View {
         // While the relay link has been down for a moment the product name
         // reads "Connecting…"; it returns to the name once connected.
         let reconnecting = appState.showsReconnecting
-        return Text(reconnecting ? "Connecting…" : "KRAKI")
+        return Text(reconnecting ? String(localized: "Connecting…") : "KRAKI")
             .font(.system(size: reconnecting ? 17 : Self.wordmarkSize,
                           weight: reconnecting ? .semibold : .heavy,
                           design: reconnecting ? .default : .monospaced))
@@ -97,7 +97,7 @@ struct SessionListHeader: View {
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 // IME-safe: pinyin being composed is not a search query.
-                IMESearchField(placeholder: "Search Sessions", text: $query,
+                IMESearchField(placeholder: String(localized: "Search Sessions"), text: $query,
                                accessibilityIdentifier: "session-list-search-field")
                     .frame(maxWidth: .infinity)
                 if !query.isEmpty {
@@ -136,10 +136,10 @@ struct SessionListHeader: View {
     private var filterMenu: some View {
         Menu {
             Section("Filter by Computer") {
-                menuItem(nil, "All Computers", detail: sessions(sessionCount(nil)), symbol: "square.stack")
+                menuItem(nil, String(localized: "All Computers"), detail: sessions(sessionCount(nil)), symbol: "square.stack")
                 ForEach(devices) { device in
                     let count = sessions(sessionCount(device.id))
-                    menuItem(device.id, device.name, detail: device.online ? count : "Offline · \(count)",
+                    menuItem(device.id, device.name, detail: device.online ? count : String(localized: "Offline · \(count)"),
                              symbol: Self.symbol(for: device))
                 }
             }
@@ -148,7 +148,7 @@ struct SessionListHeader: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .accessibilityLabel(activeDevice.map { "Filter, showing \($0.name)" } ?? "Filter by Computer")
+        .accessibilityLabel(activeDevice.map { String(localized: "Filter, showing \($0.name)") } ?? String(localized: "Filter by Computer"))
         .accessibilityIdentifier("session-list-filter")
     }
 
@@ -165,7 +165,7 @@ struct SessionListHeader: View {
     }
 
     private func sessions(_ count: Int) -> String {
-        count == 1 ? "1 session" : "\(count) sessions"
+        String(localized: "\(count) sessions")
     }
 
     static func symbol(for device: DeviceSummary) -> String {

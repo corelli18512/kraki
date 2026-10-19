@@ -38,7 +38,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
     /// "active" row. Cleared to `.none` on idle.
     var activity: SessionActivity = .none
 
-    var displayTitle: String { title ?? autoTitle ?? "New Session" }
+    var displayTitle: String { title ?? autoTitle ?? String(localized: "New Session") }
 
     // MARK: - Codable
     //

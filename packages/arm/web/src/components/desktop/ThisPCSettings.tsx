@@ -3,6 +3,8 @@
  * which Kraki runs here (built in or the command-line one), whether this PC
  * runs agents, the background service, the coding agents and the logs.
  */
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useState } from 'react';
 import { desktop, type BuiltInBridge, type BuiltInState, type DesktopSettingsState } from '../../lib/desktop';
 import { SettingsRow, SettingsSection, SettingsSwitch } from '../layout/SettingsControls';
@@ -14,6 +16,7 @@ const ROLE_KEY = 'kraki-desktop.role';
 const OWNER_KEY = 'kraki-desktop.owner';
 
 function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: () => void }) {
+  const { t } = useTranslation('desktop');
   const check = useAgentsCheck(builtIn);
   const sheet = useDesktopSheet(onClose);
   return (
@@ -23,10 +26,10 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={sheet} tabIndex={-1} className="ds-sheet ds-local-agents-sheet" role="dialog" aria-modal="true" aria-label="Coding Agents on This PC">
+      <div ref={sheet} tabIndex={-1} className="ds-sheet ds-local-agents-sheet" role="dialog" aria-modal="true" aria-label={t('thisPC.agentsTitle')}>
         <div className="ds-local-agents-header">
-          <div className="ds-sheet-title">Coding Agents on This PC</div>
-          <p className="ds-local-agents-help">Kraki uses the agents installed and signed in on this PC. Install or sign in to an agent in its own app or in Terminal, then click Check Again.</p>
+          <div className="ds-sheet-title">{t('thisPC.agentsTitle')}</div>
+          <p className="ds-local-agents-help">{t('thisPC.agentsHelp')}</p>
         </div>
         <div className="ds-local-agents-panel">
           <AgentsPanel check={check} />
@@ -34,7 +37,7 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
         <div className="ds-sheet-actions">
           <span className="ds-spacer" />
           <button type="button" className="ds-button ds-button-primary ds-button-default" onClick={onClose}>
-            Done
+            {t('thisPC.done')}
           </button>
         </div>
       </div>
@@ -43,6 +46,7 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
 }
 
 export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
+  const { t } = useTranslation('desktop');
   const [state, setState] = useState<BuiltInState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +62,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       if (settings) setOs(await settings.state());
       if (builtIn.logsPath) setLogsPath(await builtIn.logsPath());
-    } catch { setError('Couldn’t read this PC’s status.'); }
+    } catch { setError(translate('desktop:thisPC.readFailed')); }
   }, [builtIn, settings]);
   useEffect(() => {
     void refresh();
@@ -73,21 +77,21 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
     setError(null);
     try {
       const r = await fn();
-      if (!r.ok) setError(r.error ?? 'Something went wrong.');
+      if (!r.ok) setError(r.error ?? translate('desktop:thisPC.failed'));
       else after?.();
       await refresh();
     } catch {
-      setError('Couldn’t update this PC’s status.');
+      setError(translate('desktop:thisPC.updateFailed'));
     } finally {
       setBusy(null);
     }
   };
 
-  if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{error ?? 'Checking…'}</p>;
+  if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{error ?? t('thisPC.checking')}</p>;
   const external = !state.owned && (localStorage.getItem(OWNER_KEY) === 'external' || state.cliDaemon || state.cliLogin);
   const presence = (action: 'start' | 'stop' | 'restart') => {
     if (external) return builtIn.externalPresence?.(action)
-      ?? Promise.resolve({ ok: false, error: 'External service control is unavailable.' });
+      ?? Promise.resolve({ ok: false, error: t('thisPC.externalUnavailable') });
     if (action === 'start') return settings?.goOnline?.() ?? builtIn.enable();
     if (action === 'stop') return settings?.goOffline?.() ?? builtIn.disable({ keepOwnership: true });
     return builtIn.restart();
@@ -95,27 +99,27 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const runsAgents = state.owned;
   const status =
     busy === 'online' || busy === 'on' || busy === 'switch'
-      ? 'Going online…'
+      ? t('thisPC.goingOnline')
       : busy === 'offline' || busy === 'off'
-        ? 'Going offline…'
+        ? t('thisPC.goingOffline')
         : busy === 'restart'
-          ? 'Reconnecting…'
+          ? t('thisPC.reconnecting')
           : !state.running
-            ? 'Offline'
+            ? t('thisPC.offline')
             : state.relayState === 'connected'
-              ? 'Online'
+              ? t('thisPC.online')
               : state.relayState
-                ? `Connecting · ${state.relayState}`
-                : 'Checking…';
+                ? t('thisPC.connecting', { state: state.relayState })
+                : t('thisPC.checking');
 
   return (
     <div data-testid="settings-this-pc">
-      <SettingsSection title="Agents">
+      <SettingsSection title={t('thisPC.agents')}>
         {external ? (
           <>
             <SettingsRow
               label="Kraki"
-              detail="The command-line Kraki runs the agents on this PC. You update it from a terminal."
+              detail={t('thisPC.cliDetail')}
             >
               <button
                 type="button"
@@ -125,24 +129,24 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                   void act('switch', builtIn.enable, () => localStorage.setItem(OWNER_KEY, 'builtIn'));
                 }}
               >
-                {busy === 'switch' ? 'Switching…' : 'Use built-in Kraki'}
+                {busy === 'switch' ? t('thisPC.switching') : t('thisPC.useBuiltIn')}
               </button>
             </SettingsRow>
             <p className="kp-foot">
-              Switching stops the command-line Kraki's background service and keeps your sign-in and sessions.
+              {t('thisPC.switchDetail')}
             </p>
           </>
         ) : (
           <SettingsRow
-            label="Run agents on this PC"
+            label={t('thisPC.runAgents')}
             detail={
               runsAgents
-                ? 'Kraki runs in the background and starts when you sign in to Windows.'
-                : 'When off, this PC only controls agents on your other computers.'
+                ? t('thisPC.background')
+                : t('thisPC.remoteOnly')
             }
           >
             <SettingsSwitch
-              label="Run agents on this PC"
+              label={t('thisPC.runAgents')}
               on={runsAgents}
               disabled={!!busy}
               onChange={(on) => {
@@ -153,15 +157,15 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
           </SettingsRow>
         )}
         {!state.available && (
-          <SettingsRow label="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation.">
+          <SettingsRow label={t('thisPC.notInstalled')} detail={t('thisPC.installDetail')}>
             <a className="kp-button" href="https://kraki.chat/docs" target="_blank" rel="noreferrer">
-              Install Kraki…
+              {t('thisPC.install')}
             </a>
           </SettingsRow>
         )}
-        <SettingsRow label="Coding agents">
+        <SettingsRow label={t('thisPC.codingAgents')}>
           <button type="button" className="kp-button" onClick={() => setAgentsOpen(true)}>
-            Check Coding Agents…
+            {t('thisPC.checkAgents')}
           </button>
         </SettingsRow>
         {(settings?.locateCli || settings?.recheckCli) && (
@@ -175,7 +179,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                   void act('locate', settings.locateCli!);
                 }}
               >
-                Locate Kraki…
+                {t('thisPC.locate')}
               </button>
             )}
             {settings.recheckCli && (
@@ -187,14 +191,14 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                   void act('check', settings.recheckCli!);
                 }}
               >
-                {busy === 'check' ? 'Checking…' : 'Re-check'}
+                {busy === 'check' ? t('thisPC.checking') : t('thisPC.recheck')}
               </button>
             )}
           </div>
         )}
       </SettingsSection>
-      <SettingsSection title="Online">
-        <SettingsRow label="Status">
+      <SettingsSection title={t('thisPC.online')}>
+        <SettingsRow label={t('thisPC.status')}>
           <span className="text-text-secondary">{status}</span>
         </SettingsRow>
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
@@ -209,7 +213,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                     void act('offline', () => presence('stop'));
                   }}
                 >
-                  Go Offline
+                  {t('thisPC.goOffline')}
                 </button>
               )}
               <button
@@ -220,7 +224,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                   void act('restart', () => presence('restart'));
                 }}
               >
-                Reconnect
+                {t('thisPC.reconnect')}
               </button>
             </>
           ) : (
@@ -232,14 +236,14 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                   void act('online', () => presence('start'));
                 }}
               >
-                Go Online
+                {t('thisPC.goOnline')}
               </button>
           )}
         </div>
         {settings?.setLaunchAtLogin && os && (
-          <SettingsRow label="Start automatically at login">
+          <SettingsRow label={t('thisPC.launchAtLogin')}>
             <SettingsSwitch
-              label="Start automatically at login"
+              label={t('thisPC.launchAtLogin')}
               on={os.launchAtLogin}
               disabled={!!busy}
               onChange={(on) => {
@@ -250,10 +254,10 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         )}
       </SettingsSection>
       {settings?.setAllowRemoteUpdates && os && (
-        <SettingsSection title="Updates">
-          <SettingsRow label="Let my other devices update Kraki on this PC">
+        <SettingsSection title={t('thisPC.updates')}>
+          <SettingsRow label={t('thisPC.remoteUpdates')}>
             <SettingsSwitch
-              label="Let my other devices update Kraki on this PC"
+              label={t('thisPC.remoteUpdates')}
               on={os.allowRemoteUpdates}
               disabled={!!busy}
               onChange={(on) => {
@@ -261,23 +265,23 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               }}
             />
           </SettingsRow>
-          <p className="kp-foot ds-updates-help">From your phone or another computer, you can update Kraki here when a new version is out. Kraki restarts for a few seconds; running sessions are only stopped if you choose to.</p>
+          <p className="kp-foot ds-updates-help">{t('thisPC.updatesHelp')}</p>
         </SettingsSection>
       )}
-      <SettingsSection title="Logs">
+      <SettingsSection title={t('thisPC.logs')}>
         {(logsPath ?? os?.logsPath) && (
-          <SettingsRow label="Path">
+          <SettingsRow label={t('thisPC.path')}>
             <span className="ds-logs-path text-text-secondary">{logsPath ?? os?.logsPath}</span>
           </SettingsRow>
         )}
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
           {(settings?.showLogsInExplorer || builtIn.showLogsInExplorer) && (
             <button type="button" className="kp-button" onClick={settings?.showLogsInExplorer ?? builtIn.showLogsInExplorer}>
-              Show in Explorer
+              {t('thisPC.explorer')}
             </button>
           )}
           <button type="button" className="kp-button" onClick={() => builtIn.openLogs()}>
-            Open Logs Window
+            {t('thisPC.logsWindow')}
           </button>
         </div>
       </SettingsSection>

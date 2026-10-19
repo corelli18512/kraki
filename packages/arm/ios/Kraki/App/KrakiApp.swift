@@ -58,9 +58,9 @@ struct KrakiApp: App {
 
     private var pairingPromptTitle: String {
         switch appState.pendingPairingPrompt {
-        case .confirmRelay: return "Connect to a Self-Hosted Server?"
-        case .alreadyConnected: return "Already Connected"
-        case .replaceComputerKey(_, let name): return "New Key for \(name)?"
+        case .confirmRelay: return String(localized: "Connect to a Self-Hosted Server?")
+        case .alreadyConnected: return String(localized: "Already Connected")
+        case .replaceComputerKey(_, let name): return String(localized: "New Key for \(name)?")
         case nil: return ""
         }
     }
@@ -192,8 +192,8 @@ struct KrakiApp: App {
                 case .confirmRelay(let link):
                     Text("This code connects to \(link.relayHost), which is not a Kraki server. Continue only if you set up this server yourself.")
                 case .alreadyConnected(_, let login):
-                    Text(login.map { "This iPhone is already connected as \($0). To connect a different account, log out first." }
-                        ?? "This iPhone is already connected. To connect a different account, log out first.")
+                    Text(login.map { String(localized: "This iPhone is already connected as \($0). To connect a different account, log out first.") }
+                        ?? String(localized: "This iPhone is already connected. To connect a different account, log out first."))
                 case .replaceComputerKey(_, let name):
                     Text("This code has a different key than the one you paired with \(name). Continue only if you reinstalled Kraki there — otherwise someone may be trying to intercept your sessions.")
                 }

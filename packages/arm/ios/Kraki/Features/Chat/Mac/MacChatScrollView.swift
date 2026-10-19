@@ -367,26 +367,26 @@ final class MacChatScrollView: MacSmoothScrollView {
 
         // Double chevron = "all the way to the newest"; drawn smaller so its
         // footprint matches the single ↑ chevron.
-        jumpButton.image = NSImage(systemSymbolName: "chevron.down.2", accessibilityDescription: "Jump to latest")?
+        jumpButton.image = NSImage(systemSymbolName: "chevron.down.2", accessibilityDescription: String(localized: "Jump to latest"))?
             .withSymbolConfiguration(.init(pointSize: 11.5, weight: .semibold))
         jumpButton.imagePosition = .imageOnly
         jumpButton.isBordered = false
         jumpButton.target = self
         jumpButton.action = #selector(jumpTapped)
         jumpButton.isHidden = true
-        jumpButton.setAccessibilityLabel("Jump to latest", toolTip: MacControlHelp.jumpToLatest)
+        jumpButton.setAccessibilityLabel(String(localized: "Jump to latest"), toolTip: MacControlHelp.jumpToLatest)
         addSubview(jumpButton)
 
         latestStartButton.image = NSImage(
             systemSymbolName: "chevron.up",
-            accessibilityDescription: "Jump to previous reply start"
+            accessibilityDescription: String(localized: "Jump to previous reply start")
         )?.withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
         latestStartButton.imagePosition = .imageOnly
         latestStartButton.isBordered = false
         latestStartButton.target = self
         latestStartButton.action = #selector(latestStartTapped)
         latestStartButton.isHidden = true
-        latestStartButton.setAccessibilityLabel("Jump to previous reply start", toolTip: MacControlHelp.jumpToReplyStart)
+        latestStartButton.setAccessibilityLabel(String(localized: "Jump to previous reply start"), toolTip: MacControlHelp.jumpToReplyStart)
         addSubview(latestStartButton)
 
         unseenDot.wantsLayer = true

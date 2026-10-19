@@ -18,14 +18,14 @@ enum PushPreviewFormat {
     }
 
     static let fallbackTitle = "Kraki"
-    static let fallbackBody = "Open Kraki to view the update."
+    static let fallbackBody = String(localized: "Open Kraki to view the update.")
 
     /// Category id → body shown while previews are hidden (locked iPhone).
     static let lockedPlaceholders: [(category: String, placeholder: String)] = [
-        ("kraki.reply", "New reply"),
-        ("kraki.permission", "Needs your approval"),
-        ("kraki.question", "Has a question for you"),
-        ("kraki.failed", "A turn failed"),
+        ("kraki.reply", String(localized: "New reply")),
+        ("kraki.permission", String(localized: "Needs your approval")),
+        ("kraki.question", String(localized: "Has a question for you")),
+        ("kraki.failed", String(localized: "A turn failed")),
     ]
 
     static func content(fromJSON json: String) -> Content {
@@ -40,21 +40,24 @@ enum PushPreviewFormat {
         let category: String
         switch obj["type"] as? String {
         case "permission":
-            body = "Needs approval: " + (summary ?? "Review the requested action.")
+            body = summary.map { String(localized: "Needs approval: \($0)") }
+                ?? String(localized: "Needs approval: Review the requested action.")
             category = "kraki.permission"
         case "question":
-            body = "Question: " + (summary ?? "Open the Session to respond.")
+            body = summary.map { String(localized: "Question: \($0)") }
+                ?? String(localized: "Question: Open the Session to respond.")
             category = "kraki.question"
         case "error":
-            body = "Failed: " + (summary ?? "The turn did not finish.")
+            body = summary.map { String(localized: "Failed: \($0)") }
+                ?? String(localized: "Failed: The turn did not finish.")
             category = "kraki.failed"
         case "idle":
             if let summary {
                 body = summary
             } else if steps > 0 {
-                body = "Finished with \(steps) step\(steps == 1 ? "" : "s") and no reply."
+                body = String(localized: "Finished with \(steps) steps and no reply.")
             } else {
-                body = "Finished with no reply."
+                body = String(localized: "Finished with no reply.")
             }
             category = "kraki.reply"
         default:

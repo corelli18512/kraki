@@ -815,14 +815,14 @@ final class KrakiVoiceInputController {
         return failedSessionID == nil || failedSessionID == sessionID
     }
 
-    static let connectionStalledMessage = "Voice cut off: your connection stalled."
+    static let connectionStalledMessage = String(localized: "Voice cut off: your connection stalled.")
 
     /// The owner of a failed recording says what became of the words heard
     /// so far ("back in the message box"), so the failure reads as one story.
     func appendFailureDetail(_ detail: String, for sessionID: String) {
         guard case .failed(let message) = state, failedSessionID == nil || failedSessionID == sessionID,
               !message.hasSuffix(detail) else { return }
-        state = .failed("\(message) \(detail)")
+        state = .failed(String(localized: "\(message) \(detail)"))
     }
 
     func clearFailure() {
@@ -1388,10 +1388,10 @@ final class KrakiVoiceInputController {
             return VoiceInputError.microphoneUnavailable.localizedDescription
         }
         if lower.contains("audio capture stalled") {
-            return "The microphone stopped providing audio. Please try again."
+            return String(localized: "The microphone stopped providing audio. Please try again.")
         }
         if lower.contains("audio input changed") || lower.contains("audio input format") {
-            return "The audio input changed during recording. Please try again."
+            return String(localized: "The audio input changed during recording. Please try again.")
         }
         // Speech recognition stopped hearing us: the upload stalled long
         // enough on this device's network for the provider to give up
@@ -1400,24 +1400,24 @@ final class KrakiVoiceInputController {
             return Self.connectionStalledMessage
         }
         if lower.contains("ws error") || lower.contains("ws send error") || lower.contains("ws ping error") {
-            return "Voice cut off: the connection dropped."
+            return String(localized: "Voice cut off: the connection dropped.")
         }
         if lower.contains("asr closed without final") || lower.contains("asr_closed_without_final") {
-            return "Speech recognition ended before returning a transcript. Please try again."
+            return String(localized: "Speech recognition ended before returning a transcript. Please try again.")
         }
         if lower.contains("quota") {
-            return "The voice session couldn't be renewed. Please try again."
+            return String(localized: "The voice session couldn't be renewed. Please try again.")
         }
         if lower.contains("lease") || lower.contains("denied") || lower.contains("authorization") {
-            return "The voice session authorization was rejected. Please try again."
+            return String(localized: "The voice session authorization was rejected. Please try again.")
         }
         if lower.contains("timed out") || lower.contains("timeout") {
-            return "The voice service timed out. Please try again."
+            return String(localized: "The voice service timed out. Please try again.")
         }
         if lower.contains("network") || lower.contains("ws ") || lower.contains("socket") {
-            return "The voice service connection was interrupted."
+            return String(localized: "The voice service connection was interrupted.")
         }
-        return "Voice input failed. Please try again."
+        return String(localized: "Voice input failed. Please try again.")
     }
 }
 

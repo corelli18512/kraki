@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { KrakiLogo } from './components/KrakiLogo';
 import { markNotificationEntry } from './lib/chat/unread-entry';
 import { useEffect, useRef } from 'react';
@@ -24,13 +25,14 @@ function RelayBlockingOverlay({
 }: {
   status: 'disconnected' | 'error' | 'awaiting_login' | 'connecting' | 'connected';
 }) {
+  const { t } = useTranslation('app');
   const isConnecting = status === 'connecting';
   const title = status === 'error'
-    ? 'Connection Error'
-    : 'Disconnected';
+    ? t('connection.errorTitle')
+    : t('connection.disconnected');
   const message = status === 'error'
-    ? 'Could not connect to the relay server. Make sure the head is running.'
-    : 'Lost connection to the relay server.';
+    ? t('connection.failed')
+    : t('connection.lost');
 
   return (
     <div
@@ -57,14 +59,14 @@ function RelayBlockingOverlay({
               onClick={() => wsClient.connect()}
               className="rounded-lg bg-kraki-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-kraki-600"
             >
-              Connect now
+              {t('connection.connect')}
             </button>
           </div>
         )}
         {isConnecting && (
           <div className="mt-5 flex items-center justify-center gap-2">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-            <span className="text-sm text-text-muted">Connecting…</span>
+            <span className="text-sm text-text-muted">{t('connection.connecting')}</span>
           </div>
         )}
       </div>
@@ -107,11 +109,13 @@ export function App() {
   // Tray › Needs You (Kraki for Windows): sessions waiting on an answer or approval.
   const sessions = useStore((s) => s.sessions);
   const previews = useStore((s) => s.sessionPreviews);
+  const { i18n: { language } } = useTranslation();
   useEffect(() => {
     if (!desktop?.setNeedsYou) return;
     const list = desktopNeedsYou(sessions, previews);
     desktop.setNeedsYou(list);
-  }, [sessions, previews]);
+    // Reasons are localized: resend when the language changes.
+  }, [sessions, previews, language]);
 
   // Clicking a desktop notification opens its session.
   useEffect(() => desktop?.onOpenSession((sid) => {

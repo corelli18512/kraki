@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { i18next } from '../../i18n';
 import { MemoryRouter, useLocation } from 'react-router';
 import { SessionRow } from './SessionRow';
 import { useStore } from '../../hooks/useStore';
@@ -15,7 +16,18 @@ function row(selected = false) {
 }
 beforeEach(() => { useStore.getState().reset(); useOutbox.setState({ entries: [] }); vi.restoreAllMocks(); });
 
+afterEach(async () => { await i18next.changeLanguage('en'); });
+
 describe('SessionRow Mac sidebar', () => {
+  it('updates menu actions live without translating the user title or model name', async () => {
+    row();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Sidebar test/ }));
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual(['置顶', '标为未读', '重命名…', '分叉', '归档', '删除…']);
+    expect(screen.getByText('Sidebar test')).toBeInTheDocument();
+    expect(screen.getByText('deepseek/deepseek-flash')).toBeInTheDocument();
+    expect(screen.getByText('会话已创建')).toBeInTheDocument();
+  });
   it.each([
     ['question', 'Waiting for an answer'],
     ['permission', 'Waiting for approval'],

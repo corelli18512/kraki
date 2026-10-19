@@ -40,7 +40,7 @@ struct MacToolActivityRow: View {
                 iconWithBadge
                 toolNamePill
                 if let headline = headlineForDisplay, !headline.isEmpty {
-                    Text(headline.collapseWhitespace())
+                    Text(verbatim: headline.collapseWhitespace())
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -103,7 +103,7 @@ struct MacToolActivityRow: View {
     }
 
     private var toolNamePill: some View {
-        Text(message.toolName ?? "tool")
+        Text(verbatim: message.toolName ?? String(localized: "tool"))
             .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 5)
@@ -147,12 +147,12 @@ struct MacToolActivityRow: View {
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let argsRef = message.argsRef {
-                lazySection(title: "Arguments", ref: argsRef)
+                lazySection(title: String(localized: "Arguments"), ref: argsRef)
             } else if let args = message.args, !args.isEmpty {
-                textSection(title: "Arguments", body: formatArgs(args))
+                textSection(title: String(localized: "Arguments"), body: formatArgs(args))
             }
             if let resultRef = message.resultRef {
-                lazySection(title: "Result", ref: resultRef)
+                lazySection(title: String(localized: "Result"), ref: resultRef)
             }
             if message.argsRef == nil,
                message.resultRef == nil,
@@ -196,7 +196,7 @@ struct MacToolActivityRow: View {
             switch store.state(for: ref.id) {
             case .ready(_, let data):
                 ScrollView {
-                    Text(String(data: data, encoding: .utf8) ?? "(non-utf8 bytes)")
+                    Text(String(data: data, encoding: .utf8) ?? String(localized: "(non-utf8 bytes)"))
                         .font(.system(size: 11))
                         .fontDesign(.monospaced)
                         .foregroundStyle(.secondary)
@@ -211,7 +211,7 @@ struct MacToolActivityRow: View {
             case .awaitingChunks(let received, let total):
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text(total.map { "Loading \(received)/\($0)…" } ?? "Loading…")
+                    Text(total.map { String(localized: "Loading \(received)/\($0)…") } ?? "Loading…")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }

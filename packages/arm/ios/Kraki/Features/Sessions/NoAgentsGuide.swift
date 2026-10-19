@@ -33,12 +33,12 @@ struct NoAgentsGuide: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(isThisMac ? "No coding agent on this Mac" : "No coding agent on \(deviceName)")
+                Text(isThisMac ? String(localized: "No coding agent on this Mac") : String(localized: "No coding agent on \(deviceName)"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)
                 Text(isThisMac
-                     ? "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again."
-                     : "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it.")
+                     ? String(localized: "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again.")
+                     : String(localized: "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it."))
                     .font(.system(size: 12))
                     .foregroundStyle(Color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

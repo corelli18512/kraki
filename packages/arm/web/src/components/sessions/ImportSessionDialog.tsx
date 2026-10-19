@@ -1,3 +1,6 @@
+import { formatNumber } from '../../i18n/format';
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
@@ -21,9 +24,9 @@ interface SessionGroup {
 }
 
 function groupLabel(path: string): string {
-  if (path === '/' || path === '') return 'System';
+  if (path === '/' || path === '') return translate('sessions:import.system');
   const home = '~';
-  if (path === home || path === '/Users' || path.match(/^\/Users\/[^/]+$/)) return 'Home';
+  if (path === home || path === '/Users' || path.match(/^\/Users\/[^/]+$/)) return translate('sessions:import.home');
   // Extract last path component
   const parts = path.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -118,6 +121,7 @@ function GroupSection({ group, importingIds, onImport, search }: {
   onImport: (sessionId: string) => void;
   search: string;
 }) {
+  const { t } = useTranslation('sessions');
   const autoExpand = search.length > 0;
   const [manualExpanded, setManualExpanded] = useState(false);
   const expanded = autoExpand || manualExpanded;
@@ -143,10 +147,10 @@ function GroupSection({ group, importingIds, onImport, search }: {
         {group.liveCount > 0 && (
           <span className="flex items-center gap-1 text-[10px] text-emerald-500">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            {group.liveCount}
+            {formatNumber(group.liveCount, { useGrouping: false })}
           </span>
         )}
-        <span className="text-[11px] text-text-muted">{group.sessions.length}</span>
+        <span className="text-[11px] text-text-muted">{formatNumber(group.sessions.length, { useGrouping: false })}</span>
       </button>
 
       {expanded && group.repository && (
@@ -168,7 +172,7 @@ function GroupSection({ group, importingIds, onImport, search }: {
           onClick={() => setShowAll(true)}
           className="ml-9 mt-0.5 text-[11px] text-kraki-500 hover:text-kraki-400 transition-colors"
         >
-          Show {group.sessions.length - INITIAL_SHOW} more…
+          {t('import.showMore', { count: group.sessions.length - INITIAL_SHOW })}
         </button>
       )}
     </div>
@@ -181,6 +185,7 @@ function SessionRow({ session, importing, onImport, search }: {
   onImport: () => void;
   search: string;
 }) {
+  const { t } = useTranslation('sessions');
   const isLinked = !!session.linkedKrakiSessionId;
   const displayText = session.summary ?? session.sessionId.slice(0, 12);
 
@@ -210,7 +215,7 @@ function SessionRow({ session, importing, onImport, search }: {
       ) : (
         <button
           onClick={onImport}
-          title="Import session"
+          title={t('import.action')}
           className="shrink-0 rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-kraki-500"
         >
           <Plus className="h-4 w-4" />
@@ -223,6 +228,7 @@ function SessionRow({ session, importing, onImport, search }: {
 const LAST_IMPORT_DEVICE_KEY = 'kraki:last-import-device';
 
 export function ImportSessionDialog({ open, onClose }: Props) {
+  const { t, i18n } = useTranslation('sessions');
   useEscape(open, onClose);
   const localSessions = useStore(s => s.localSessions);
   const loading = useStore(s => s.localSessionsLoading);
@@ -273,7 +279,7 @@ export function ImportSessionDialog({ open, onClose }: Props) {
     });
   }, [localSessions, search]);
 
-  const groups = useMemo(() => buildGroups(filtered), [filtered]);
+  const groups = useMemo(() => buildGroups(filtered), [filtered, i18n.resolvedLanguage]);
   const totalCount = localSessions.length;
 
   const handleImport = useCallback((sessionId: string) => {
@@ -311,7 +317,7 @@ export function ImportSessionDialog({ open, onClose }: Props) {
         <div className="flex shrink-0 items-center justify-between border-b border-border-primary px-4 py-3">
           <div className="flex items-center gap-2">
             <Download className="h-4 w-4 text-kraki-500" />
-            <h2 className="text-base font-semibold text-text-primary">Import Session</h2>
+            <h2 className="text-base font-semibold text-text-primary">{t('import.title')}</h2>
           </div>
           <button
             onClick={onClose}
@@ -331,7 +337,7 @@ export function ImportSessionDialog({ open, onClose }: Props) {
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search sessions…"
+              placeholder={t('import.search')}
               className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none"
               autoFocus
             />
@@ -372,15 +378,15 @@ export function ImportSessionDialog({ open, onClose }: Props) {
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-kraki-500" />
-              <p className="mt-2 text-sm text-text-muted">Scanning local sessions…</p>
+              <p className="mt-2 text-sm text-text-muted">{t('import.scanning')}</p>
             </div>
           ) : groups.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12">
               <p className="text-sm text-text-secondary">
-                {search ? 'No sessions match your search' : 'No local sessions found'}
+                {search ? t('import.noMatch') : t('import.empty')}
               </p>
               <p className="mt-1 text-xs text-text-muted">
-                {search ? 'Try a different search term' : 'Run copilot in your terminal to create sessions'}
+                {search ? t('import.trySearch') : t('import.runCopilot')}
               </p>
             </div>
           ) : (
@@ -400,8 +406,8 @@ export function ImportSessionDialog({ open, onClose }: Props) {
         {!loading && totalCount > 0 && (
           <div className="shrink-0 border-t border-border-primary px-4 py-2 text-center text-[11px] text-text-muted">
             {search && filtered.length !== totalCount
-              ? `${filtered.length} of ${totalCount} local sessions`
-              : `${totalCount} local sessions`}
+              ? t('import.filtered', { shown: filtered.length, total: totalCount })
+              : t('import.total', { count: totalCount })}
           </div>
         )}
       </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
 import { markNotificationEntry } from '../lib/chat/unread-entry';
 import { sessionDisplayTitle } from '../lib/session-status';
@@ -18,6 +19,7 @@ import { setDesiredSessionSubscription } from '../lib/session-subscription-lifec
 import { allowAutoRead, isAutoReadSuppressed } from '../lib/read-visibility';
 
 export function SessionPage() {
+  const { t } = useTranslation('chat');
   const { sessionId } = useParams<{ sessionId: string }>();
   const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
   const device = useStore((s) => session ? s.devices.get(session.deviceId) : undefined);
@@ -147,7 +149,7 @@ export function SessionPage() {
       <div className="flex flex-1 items-center justify-center">
         <div className="text-center">
           <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-          <p className="mt-3 text-sm text-text-secondary">Starting session…</p>
+          <p className="mt-3 text-sm text-text-secondary">{t('session.starting')}</p>
         </div>
       </div>
     );
@@ -158,12 +160,12 @@ export function SessionPage() {
       <div className="flex flex-1 items-center justify-center">
         <div className="text-center">
           <span className="text-4xl">🤷</span>
-          <p className="mt-3 text-sm text-text-secondary">Session not found</p>
+          <p className="mt-3 text-sm text-text-secondary">{t('session.notFound')}</p>
           <button
             onClick={() => navigate('/')}
             className="mt-3 text-xs font-medium text-kraki-500 hover:text-kraki-400"
           >
-            ← Back to sessions
+            {t('session.back')}
           </button>
         </div>
       </div>
@@ -180,7 +182,7 @@ export function SessionPage() {
           <div className="relative flex min-w-0 flex-1">
             <ChatHeader
               // Reconnecting is silent in the conversation; only the title says so.
-              title={isReconnecting ? 'Connecting…' : displayTitle}
+              title={isReconnecting ? t('session.connecting') : displayTitle}
               mode={sessionMode}
               narrow={narrow}
               backBadge={totalOtherUnread}
@@ -192,7 +194,7 @@ export function SessionPage() {
             />
             {!isReconnecting && !isDeviceOnline && (
               <div className="kchat-banner" style={{ top: topInset }}>
-                {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
+                {t('session.offline', { device: session.deviceName ?? t('session.device') })}
               </div>
             )}
 
@@ -205,7 +207,7 @@ export function SessionPage() {
       </div>
 
       {mobileInfoOpen && session && (
-        <div className="fixed inset-0 z-50" onKeyDown={(e) => e.key === 'Escape' && setMobileInfoOpen(false)} role="dialog" aria-label="Session Info" aria-modal="true" tabIndex={-1}>
+        <div className="fixed inset-0 z-50" onKeyDown={(e) => e.key === 'Escape' && setMobileInfoOpen(false)} role="dialog" aria-label={t('session.info')} aria-modal="true" tabIndex={-1}>
           <div className="ksi-backdrop absolute inset-0 bg-black/20" onClick={() => setMobileInfoOpen(false)} />
           <div className="ksi-sheet">
             <SessionInfoPanel

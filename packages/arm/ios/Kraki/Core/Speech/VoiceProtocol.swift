@@ -114,33 +114,38 @@ enum VoiceInputError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unavailable:
-            return "Voice input isn't available in this region."
+            return String(localized: "Voice input isn't available in this region.")
         case .invalidBrokerURL:
-            return "The voice service address is invalid."
+            return String(localized: "The voice service address is invalid.")
         case .offline:
-            return "Couldn't connect to Kraki. Check your connection and try again."
+            return String(localized: "Couldn't connect to Kraki. Check your connection and try again.")
         case .microphoneDenied:
             #if os(iOS)
-            return "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone."
+            return String(localized: "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone.")
             #else
-            return "Microphone access is required. Enable it in System Settings → Privacy & Security → Microphone."
+            return String(localized: "Microphone access is required. Enable it in System Settings → Privacy & Security → Microphone.")
             #endif
         case .microphoneUnavailable:
             #if os(macOS)
-            return "No microphone is available. Connect a microphone and select it in System Settings → Sound → Input, then try again."
+            return String(localized: "No microphone is available. Connect a microphone and select it in System Settings → Sound → Input, then try again.")
             #else
-            return "No microphone is available. Connect a microphone and try again."
+            return String(localized: "No microphone is available. Connect a microphone and try again.")
             #endif
         case .leaseInFlight:
-            return "A previous voice request is still finishing. Try again in a moment."
+            return String(localized: "A previous voice request is still finishing. Try again in a moment.")
         case .leaseTimedOut:
-            return "The voice authorization request timed out."
+            return String(localized: "The voice authorization request timed out.")
         case .leaseDenied(.quotaExhausted, _):
-            return "Today's voice-input quota has been used."
+            return String(localized: "Today's voice-input quota has been used.")
         case .leaseDenied(.notEntitled, _):
-            return "Voice input isn't enabled for this account."
+            return String(localized: "Voice input isn't enabled for this account.")
         case .leaseDenied(.invalidRequest, let detail):
-            return detail ?? "The voice authorization request was rejected."
+            return detail ?? String(localized: "The voice authorization request was rejected.")
+        // Keep raw gateway reasons stable for diagnostics; localize only the UI copy.
+        case .gateway("Voice input was reset for this account. Please try again."):
+            return String(localized: "Voice input was reset for this account. Please try again.")
+        case .gateway("The microphone audio session couldn't be started."):
+            return String(localized: "The microphone audio session couldn't be started.")
         case .gateway(let reason):
             return reason
         }

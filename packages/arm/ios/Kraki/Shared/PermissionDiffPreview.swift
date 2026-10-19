@@ -1,5 +1,17 @@
 import SwiftUI
 
+// Shared here because the chat picker files belong to platform-specific targets.
+extension SessionMode {
+    var chatLocalizedTitle: String {
+        switch self {
+        case .safe: return String(localized: "Safe")
+        case .auto: return String(localized: "Auto")
+        case .delegate: return String(localized: "Delegate")
+        }
+    }
+}
+
+
 /// Compact, colored preview of the change a file-edit permission would make,
 /// so an approval in Safe mode is not blind. Reads the `content` slot that
 /// Tentacle fills with a unified-style diff for edit tools (Claude Edit /
@@ -27,7 +39,7 @@ struct PermissionDiffPreview: View {
         let shown = all.prefix(maxLines)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
-                Text(line.isEmpty ? " " : String(line))
+                Text(verbatim: line.isEmpty ? " " : String(line))
                     .font(.system(size: fontSize, design: .monospaced))
                     .foregroundStyle(color(for: line))
                     .lineLimit(1)
@@ -65,12 +77,12 @@ struct PermissionDiffPreview: View {
 /// Shared permission prompt copy (iOS and macOS).
 enum PermissionPromptCopy {
     static func title(_ message: ChatMessage) -> String {
-        let base = (message.toolDescription ?? "Run \(message.toolName ?? "tool")")
+        let base = (message.toolDescription ?? String(localized: "Run \(message.toolName ?? String(localized: "tool"))"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard message.payload["decision"]?.stringValue == nil else { return base }
-        return base.hasSuffix("?") ? base : base + "?"
+        return base.hasSuffix("?") ? base : String(localized: "\(base)?")
     }
-    static let caption = "Needs your approval · Safe mode"
+    static let caption = String(localized: "Needs your approval · Safe mode")
 }
 
 /// Resolved state: a small capsule, the same shape as the buttons it replaced.
@@ -80,7 +92,7 @@ struct PermissionOutcomeCapsule: View {
         let denied = decision == "deny"
         HStack(spacing: 5) {
             Image(systemName: denied ? "xmark" : "checkmark").font(.system(size: 10, weight: .bold))
-            Text(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")
+            Text(decision == "always_allow" ? String(localized: "Always allowed") : denied ? String(localized: "Denied") : String(localized: "Approved"))
                 .font(.system(size: 12, weight: .semibold))
         }
         .foregroundStyle(denied ? Color.red : Color.green)

@@ -11,7 +11,7 @@ enum MacBubbleActionMetrics {
     static let outcomeLabelFont = NSFont.systemFont(ofSize: 13, weight: .medium)
     static let outcomeDetailFont = NSFont.systemFont(ofSize: 12)
     static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
-    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "Stopped" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? String(localized: "Turn failed") : String(localized: "Stopped") }
 
     static let choiceFont = NSFont.systemFont(ofSize: 13, weight: .medium)
     static let choicePaddingH: CGFloat = 14
@@ -94,7 +94,7 @@ struct MacBubbleActionSlot: View {
                 let running = action.payload["running"]?.intValue ?? 0
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
-                    Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
+                    Text("\(running) tools running in parallel…")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.textSecondary)
                     Spacer(minLength: 0)
@@ -149,7 +149,7 @@ struct MacBubbleActionSlot: View {
                     .font(.system(size: 13))
                     .foregroundStyle(success ? Color.green : Color.red)
             }
-            Text(message.toolName ?? "tool")
+            Text(verbatim: message.toolName ?? String(localized: "tool"))
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Color.textPrimary)
             if let headline = message.headline, !headline.isEmpty {
@@ -229,8 +229,8 @@ struct MacBubbleActionSlot: View {
             localErrorLabel(message)
             if decision == nil {
                 HStack(spacing: 6) {
-                    permissionButton("Approve", symbol: "checkmark", message, decision: "approve", primary: true)
-                    permissionButton("Deny", symbol: "xmark", message, decision: "deny", primary: false)
+                    permissionButton(String(localized: "Approve"), symbol: "checkmark", message, decision: "approve", primary: true)
+                    permissionButton(String(localized: "Deny"), symbol: "xmark", message, decision: "deny", primary: false)
                 }
             }
         }
@@ -266,7 +266,7 @@ struct MacBubbleActionSlot: View {
             .padding(.horizontal, MacBubbleActionMetrics.choicePaddingH)
             .padding(.vertical, 6)
         }
-        .accessibilityLabel("\(label) permission")
+        .accessibilityLabel(primary ? String(localized: "Approve permission") : String(localized: "Deny permission"))
         .background {
             GeometryReader { proxy in
                 Color.clear.preference(

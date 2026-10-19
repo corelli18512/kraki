@@ -1,1 +1,62 @@
-{}
+{
+  "connection": {
+    "errorTitle": "连接错误",
+    "disconnected": "已断开连接",
+    "failed": "无法连接到中继服务器。请确认 head 正在运行。",
+    "lost": "与中继服务器的连接已断开。",
+    "connect": "立即连接",
+    "connecting": "正在连接…"
+  },
+  "devices": {
+    "title": "设备",
+    "phoneTitle": "在手机上使用 Kraki",
+    "phoneDetail": "用手机扫码，即可在手机上查看和运行会话。",
+    "showCode": "显示二维码…"
+  },
+  "dashboard": {
+    "authenticating": "正在验证身份…",
+    "welcome": "欢迎使用 Kraki",
+    "signInDetail": "登录以连接到你的编程 Agent 会话。",
+    "signIn": "使用 GitHub 登录",
+    "or": "或",
+    "scan": "扫描二维码",
+    "privacy": "隐私政策",
+    "downloadMac": "想使用这台 Mac 上的编程 Agent？下载 Kraki for Mac",
+    "connecting": "正在连接中继服务器…",
+    "selectSession": "从侧边栏选择一个会话以开始使用",
+    "generateQr": "运行 <command>kraki connect</command> 以生成二维码。"
+  },
+  "errors": {
+    "dismiss": "关闭错误提示",
+    "unexpectedTitle": "出了点问题",
+    "unexpected": "发生了意外错误",
+    "tryAgain": "重试",
+    "connectFirst": "请先连接 Kraki。账户将从服务器上删除。",
+    "noAnswer": "Kraki 没有响应。请检查连接后重试。",
+    "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
+    "deleteAccount": "无法删除账户。请重试。",
+    "permissionSend": "无法发送。请重试。",
+    "permissionUnconfirmed": "Agent 尚未确认。请重试。"
+  },
+  "scanner": {
+    "denied": "无法访问相机。请检查浏览器或设备设置。",
+    "back": "返回",
+    "pointAt": "对准 <command>kraki connect</command> 生成的二维码"
+  },
+  "crypto": {
+    "keyGeneration": "密钥对生成失败",
+    "keysNotReady": "密钥尚未初始化",
+    "recipientRequired": "至少需要一个接收设备",
+    "noDeviceKey": "未找到设备“{{deviceId}}”的加密密钥"
+  },
+  "pairing": {
+    "confirmTitle": "连接到自托管服务器？",
+    "confirmDetail": "此二维码请求连接到 <b></b>，它不是 Kraki 服务器。请仅在你自行搭建了该服务器的情况下继续。",
+    "connect": "连接",
+    "appTitle": "在 Kraki 应用中打开",
+    "install": "安装 Kraki for iPhone，然后重新扫描电脑上的二维码。",
+    "unavailable": "Kraki for iPhone 尚未推出。你可以在此浏览器中连接。",
+    "getApp": "获取 Kraki for iPhone",
+    "browser": "在浏览器中继续"
+  }
+}

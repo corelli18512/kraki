@@ -202,9 +202,9 @@ struct NewSessionSheet: View {
 
     private var headerTitle: String {
         switch screen {
-        case .form: return "New Session"
-        case .devicePicker: return "Device"
-        case .agentModelPicker: return "Agent"
+        case .form: return String(localized: "New Session")
+        case .devicePicker: return String(localized: "Device")
+        case .agentModelPicker: return String(localized: "Agent")
         }
     }
 
@@ -220,17 +220,17 @@ struct NewSessionSheet: View {
     /// they'd be creating without drilling in. Falls back to "Select"
     /// when nothing is picked yet (e.g. greeting hasn't landed).
     private var agentRowValue: String {
-        guard !selectedAgentId.isEmpty || !selectedModel.isEmpty else { return "Select" }
+        guard !selectedAgentId.isEmpty || !selectedModel.isEmpty else { return String(localized: "Select") }
         let agentLabel = selectedAgentId.isEmpty ? "" : AgentInfo.from(selectedAgentId).label
-        if selectedModel.isEmpty { return agentLabel.isEmpty ? "Select" : agentLabel }
+        if selectedModel.isEmpty { return agentLabel.isEmpty ? String(localized: "Select") : agentLabel }
         if agentLabel.isEmpty { return selectedModel }
         return "\(agentLabel) · \(selectedModel)"
     }
 
     private var formCard: some View {
         VStack(spacing: 0) {
-            rowButton(label: "Device",
-                      value: tentacles.first(where: { $0.id == selectedDeviceId })?.name ?? "Select") {
+            rowButton(label: String(localized: "Device"),
+                      value: tentacles.first(where: { $0.id == selectedDeviceId })?.name ?? String(localized: "Select")) {
                 withAnimation(.easeInOut(duration: 0.22)) { screen = .devicePicker }
             }
 
@@ -253,7 +253,7 @@ struct NewSessionSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             } else {
-                rowButton(label: "Agent", value: agentRowValue) {
+                rowButton(label: String(localized: "Agent"), value: agentRowValue) {
                     withAnimation(.easeInOut(duration: 0.22)) { screen = .agentModelPicker }
                 }
             }
@@ -274,9 +274,9 @@ struct NewSessionSheet: View {
 
     private var agentStatusText: String {
         switch deviceStore.agentAvailability(for: selectedDeviceId) {
-        case .ready, .connecting: return "Connecting…"
-        case .offline: return "Device offline"
-        case .noAgents: return "None installed"
+        case .ready, .connecting: return String(localized: "Connecting…")
+        case .offline: return String(localized: "Device offline")
+        case .noAgents: return String(localized: "None installed")
         }
     }
 
@@ -558,11 +558,11 @@ struct NewSessionSheet: View {
 
     private func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
-        case .low:    return "Low"
-        case .medium: return "Medium"
-        case .high:   return "High"
-        case .xhigh:  return "XHigh"
-        case .max:    return "Max"
+        case .low:    return String(localized: "Low")
+        case .medium: return String(localized: "Medium")
+        case .high:   return String(localized: "High")
+        case .xhigh:  return String(localized: "XHigh")
+        case .max:    return String(localized: "Max")
         }
     }
 }
@@ -590,11 +590,11 @@ struct ModelPickerCard: View {
 
     private func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
-        case .low:    return "Low"
-        case .medium: return "Medium"
-        case .high:   return "High"
-        case .xhigh:  return "XHigh"
-        case .max:    return "Max"
+        case .low:    return String(localized: "Low")
+        case .medium: return String(localized: "Medium")
+        case .high:   return String(localized: "High")
+        case .xhigh:  return String(localized: "XHigh")
+        case .max:    return String(localized: "Max")
         }
     }
 

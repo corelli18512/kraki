@@ -117,15 +117,14 @@ struct DeviceListView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Text("📡")
+            Text(verbatim: "📡")
                 .font(.system(size: 40))
 
             Text("No computers yet")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            (Text("Install Kraki on the computer that runs your coding agents, then run ")
-                + Text("kraki connect").monospaced() + Text(" there and scan the code."))
+            Text("Install Kraki on the computer that runs your coding agents, then run \(Text(verbatim: "kraki connect").monospaced()) there and scan the code.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -160,7 +159,7 @@ private struct DeviceRow: View {
                 .fill(dotColor)
                 .frame(width: 8, height: 8)
 
-            Text(device.name)
+            Text(verbatim: device.name)
                 .font(.body)
 
             Spacer()

@@ -68,12 +68,12 @@ struct ChatPlaceholderView: View {
             AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm, status: session.state)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayTitle)
+                Text(verbatim: session.displayTitle)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.textTitle)
                 HStack(spacing: 6) {
-                    Text(session.agent)
-                    if let model = session.model { Text("· \(model)") }
+                    Text(verbatim: session.agent)
+                    if let model = session.model { Text(verbatim: "· \(model)") }
                 }
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.textSecondary)
@@ -85,7 +85,7 @@ struct ChatPlaceholderView: View {
                 Circle()
                     .fill(Color.modeColor(session.mode))
                     .frame(width: 6, height: 6)
-                Text(session.mode.rawValue.uppercased())
+                Text(session.mode.chatLocalizedTitle.uppercased())
                     .font(.system(size: 10, weight: .heavy))
                     .tracking(0.5)
                     .foregroundStyle(Color.modeColor(session.mode))
@@ -102,7 +102,7 @@ struct ChatPlaceholderView: View {
                     Circle()
                         .fill(device.online ? Color(hex: 0x34D399) : Color.textMuted)
                         .frame(width: 5, height: 5)
-                    Text(device.name)
+                    Text(verbatim: device.name)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -146,12 +146,12 @@ struct ChatPlaceholderView: View {
                     .font(.system(size: 9, weight: .heavy, design: .monospaced))
                     .tracking(0.6)
                     .foregroundStyle(roleColor(for: msg))
-                Text("#\(msg.seq)")
+                Text(verbatim: "#\(msg.seq)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Color.textMuted)
                 Spacer()
             }
-            Text(extractText(msg))
+            Text(verbatim: extractText(msg))
                 .font(.system(size: 12))
                 .textSelection(.enabled)
                 .foregroundStyle(Color.textPrimary)
@@ -199,10 +199,10 @@ struct ChatPlaceholderView: View {
 
     private func roleLabel(for msg: ChatMessage) -> String {
         switch msg.type {
-        case "user_message": return "USER"
-        case "tool_start", "tool_complete", "tool_error": return "TOOL"
-        case "permission_request", "permission_response": return "PERM"
-        case "agent_text", "agent_message": return "AGENT"
+        case "user_message": return String(localized: "USER")
+        case "tool_start", "tool_complete", "tool_error": return String(localized: "TOOL")
+        case "permission_request", "permission_response": return String(localized: "PERM")
+        case "agent_text", "agent_message": return String(localized: "AGENT")
         default: return msg.type.uppercased()
         }
     }

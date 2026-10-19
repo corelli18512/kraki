@@ -208,7 +208,7 @@ final class MessageRouter {
 
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
-            let message = json["message"] as? String ?? "Unknown server error"
+            let message = json["message"] as? String ?? String(localized: "Unknown server error")
             if appState?.accountDeletionFailedIfPending(message) != true {
                 appState?.lastError = message
             }
@@ -485,7 +485,7 @@ final class MessageRouter {
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             appState.messageStore.endCardTurn(sessionId)
             let draft = payload?["draft"] as? String ?? ""
-            updatePreview(sessionId, text: draft.isEmpty ? "Stopped" : draft,
+            updatePreview(sessionId, text: draft.isEmpty ? String(localized: "Stopped") : draft,
                           type: "agent", timestamp: timestamp)
 
         case "system_message":
@@ -499,7 +499,7 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 updatePreview(sessionId, text: content, type: "agent", timestamp: timestamp)
             } else if (payload?["kind"] as? String) != "no_reply" {
-                updatePreview(sessionId, text: "System notice", type: "agent", timestamp: timestamp)
+                updatePreview(sessionId, text: String(localized: "System notice"), type: "agent", timestamp: timestamp)
             }
 
         case "agent_message_delta":
@@ -595,7 +595,7 @@ final class MessageRouter {
             // Not a turn boundary: a retrying turn can recover, and its card
             // (e.g. a pending permission) must stay. Turn end is signalled separately.
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            let errorText = payload?["message"] as? String ?? "Error"
+            let errorText = payload?["message"] as? String ?? String(localized: "Error")
             // If this error correlates to a pending create/fork/import
             // by requestId, fail the placeholder so the optimistic
             // view shows an error state instead of spinning forever.
@@ -913,7 +913,7 @@ final class MessageRouter {
                 ?? ISO8601DateFormatter().string(from: Date())
             updatePreview(
                 sessionId,
-                text: "Session created",
+                text: String(localized: "Session created"),
                 type: "session_created",
                 timestamp: timestamp,
                 notify: false

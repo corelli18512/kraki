@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useStore } from '../../hooks/useStore';
 import { X } from 'lucide-react';
 
@@ -6,6 +7,7 @@ import { X } from 'lucide-react';
  * Rendered at the app shell level, visible regardless of current route.
  */
 export function ErrorBanner() {
+  const { t } = useTranslation('app');
   const lastError = useStore((s) => s.lastError);
   const clearError = useStore((s) => s.setLastError);
 
@@ -20,7 +22,7 @@ export function ErrorBanner() {
       <button
         onClick={() => clearError(null)}
         className="shrink-0 rounded p-0.5 text-red-400 hover:bg-red-500/20 hover:text-red-300"
-        aria-label="Dismiss error"
+        aria-label={t('errors.dismiss')}
       >
         <X size={14} />
       </button>

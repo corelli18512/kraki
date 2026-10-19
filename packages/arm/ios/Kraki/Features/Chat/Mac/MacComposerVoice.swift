@@ -218,7 +218,7 @@ struct MacComposerVoiceTranscriptOnly: View {
         // connection is back and recording starts by itself.
         if preview.spoken.isEmpty, controller.state == .waitingForConnection {
             let separator = preview.prefix.isEmpty || preview.prefix.last?.isWhitespace == true ? "" : " "
-            return [(preview.prefix, 1), (separator + "Connecting…", 0.45), (preview.suffix, 1)]
+            return [(preview.prefix, 1), (separator + String(localized: "Connecting…"), 0.45), (preview.suffix, 1)]
         }
         return [(preview.prefix, 1), (preview.spoken, 1), (preview.suffix, 1)]
     }
@@ -254,7 +254,7 @@ final class MacComposerVoiceTranscriptView: NSView {
         rebuildAttributedText()
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
-        setAccessibilityLabel("Voice transcript")
+        setAccessibilityLabel(String(localized: "Voice transcript"))
         setAccessibilityValue(value.string)
         if width > 1 {
             measuredWidth = width

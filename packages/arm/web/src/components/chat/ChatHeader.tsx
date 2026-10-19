@@ -1,3 +1,5 @@
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronLeft } from 'lucide-react';
@@ -6,9 +8,9 @@ import { hasWindowsTitleBar } from '../../lib/desktop';
 export type SessionMode = import('@kraki/protocol').SessionMode;
 
 export const MODES: { id: SessionMode; label: string; color: string; hint: string }[] = [
-  { id: 'safe', label: 'Safe', color: '#34d399', hint: 'Ask before changes and commands' },
-  { id: 'auto', label: 'Auto', color: '#fbbf24', hint: 'Run tools without asking' },
-  { id: 'delegate', label: 'Delegate', color: '#f4836e', hint: 'Run everything, answer on its own' },
+  { id: 'safe', get label() { return translate('chat:header.modes.safe.label'); }, color: '#34d399', get hint() { return translate('chat:header.modes.safe.hint'); } },
+  { id: 'auto', get label() { return translate('chat:header.modes.auto.label'); }, color: '#fbbf24', get hint() { return translate('chat:header.modes.auto.hint'); } },
+  { id: 'delegate', get label() { return translate('chat:header.modes.delegate.label'); }, color: '#f4836e', get hint() { return translate('chat:header.modes.delegate.hint'); } },
 ];
 
 /** Header height reserved over the list (the list scrolls under it). */
@@ -25,6 +27,7 @@ export function ChatHeader({
   onMode: (mode: SessionMode) => void;
   backBadge?: number;
 }) {
+  const { t } = useTranslation('chat');
   const [menu, setMenu] = useState(false);
   const [hovering, setHovering] = useState(false);
   const [interaction, setInteraction] = useState(0);
@@ -77,7 +80,7 @@ export function ChatHeader({
 
   const segmentsOpen = menu && !narrow && !hasWindowsTitleBar;
   const dropdown = menu && (narrow || hasWindowsTitleBar) && (
-    <div className="khead-menu" role="menu" aria-label="Session mode picker">
+    <div className="khead-menu" role="menu" aria-label={t('header.modePicker')}>
       {MODES.map((m) => (
         <button
           key={m.id}
@@ -110,14 +113,14 @@ export function ChatHeader({
   return (
     <header className={`khead ${narrow ? 'is-narrow' : 'is-wide'}${hasWindowsTitleBar ? ' is-windows' : ''}`}>
       {narrow && (
-        <button type="button" className="khead-round" aria-label="Back" onClick={onBack}>
+        <button type="button" className="khead-round" aria-label={t('header.back')} onClick={onBack}>
           <ChevronLeft aria-hidden />
           {!!backBadge && <span className="khead-badge">{backBadge}</span>}
         </button>
       )}
       {/* As on Mac: the expanded mode segments take the title's place so they
           never overlap it. Windows uses a dropdown next to the title instead. */}
-      <button type="button" className={`khead-title${segmentsOpen ? ' is-hidden' : ''}`} aria-hidden={segmentsOpen ? true : undefined} tabIndex={segmentsOpen ? -1 : undefined} onClick={onTitle} title="Session details">
+      <button type="button" className={`khead-title${segmentsOpen ? ' is-hidden' : ''}`} aria-hidden={segmentsOpen ? true : undefined} tabIndex={segmentsOpen ? -1 : undefined} onClick={onTitle} title={t('header.details')}>
         <span>{title}</span>
       </button>
       {hasWindowsTitleBar && <span className="khead-separator" aria-hidden="true" />}
@@ -132,13 +135,13 @@ export function ChatHeader({
             : (index + (e.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
           options[next]?.focus();
         }}>
-        {menu && !narrow && !hasWindowsTitleBar ? <div className="khead-segments" role="menu" aria-label="Session mode picker">
+        {menu && !narrow && !hasWindowsTitleBar ? <div className="khead-segments" role="menu" aria-label={t('header.modePicker')}>
           {MODES.map((m) => <button key={m.id} type="button" role="menuitemradio" aria-checked={m.id === mode}
             style={{ background: m.id === mode ? m.color : undefined }}
             onClick={() => { if (m.id !== mode) onMode(m.id); setInteraction((v) => v + 1); }}>
             {m.label}
           </button>)}
-        </div> : <button ref={triggerRef} type="button" className="khead-capsule" aria-label={`Session mode, ${current.label}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+        </div> : <button ref={triggerRef} type="button" className="khead-capsule" aria-label={t('header.mode', { mode: current.label })} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
           <span className="khead-dot" style={{ background: current.color }} />
           {current.label}
           {hasWindowsTitleBar && <ChevronDown className="khead-chevron" aria-hidden="true" />}

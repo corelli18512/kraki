@@ -4,6 +4,7 @@
  * Mac's ExistingCLIChoicePresenter. Choosing Kraki for Windows stops the CLI's
  * background service and its login entry; sign-in and sessions carry over.
  */
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { desktop, type BuiltInState } from '../../lib/desktop';
 import { ChooseOwner, OWNER_KEY } from './DesktopSetup';
@@ -15,6 +16,7 @@ export function needsOwnerChoice(s: BuiltInState | null, stored: string | null):
 }
 
 export function OwnerChoiceHost() {
+  const { t } = useTranslation('desktop');
   const builtIn = desktop?.builtIn;
   const [state, setState] = useState<BuiltInState | null>(null);
   const [done, setDone] = useState(false);
@@ -27,7 +29,7 @@ export function OwnerChoiceHost() {
   if (!builtIn || done || !needsOwnerChoice(state, localStorage.getItem(OWNER_KEY))) return null;
   return (
     <div className="ds-sheet-backdrop ds-owner-backdrop" data-testid="owner-choice">
-      <div className="ds-sheet ds-owner-sheet" role="dialog" aria-modal="true" aria-label="Which Kraki runs your agents">
+      <div className="ds-sheet ds-owner-sheet" role="dialog" aria-modal="true" aria-label={t('owner.title')}>
         <ChooseOwner
           builtIn={builtIn}
           version={state?.version ?? null}

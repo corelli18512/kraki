@@ -102,7 +102,7 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenu
         footerLabel.textColor = .secondaryLabel
         footerLabel.lineBreakMode = .byTruncatingTail
         var config = UIButton.Configuration.plain()
-        config.title = "Open table"
+        config.title = String(localized: "Open table")
         config.image = UIImage(systemName: "chevron.right", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
         config.imagePlacement = .trailing
         config.imagePadding = 3
@@ -122,12 +122,14 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenu
         addInteraction(UIContextMenuInteraction(delegate: self))
 
         isAccessibilityElement = true
-        accessibilityLabel = "Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns"
+        let rows = String(localized: "\(layout.bodyRowCount) rows")
+        let columns = String(localized: "\(layout.columnCount) columns")
+        accessibilityLabel = String(localized: "Table, \(rows), \(columns)")
         accessibilityValue = layout.semanticText()
         accessibilityTraits = [.adjustable]
         accessibilityCustomActions = [
-            UIAccessibilityCustomAction(name: "Open table", target: self, selector: #selector(accessibilityShowAllRows)),
-            UIAccessibilityCustomAction(name: "Copy table", target: self, selector: #selector(accessibilityCopy)),
+            UIAccessibilityCustomAction(name: String(localized: "Open table"), target: self, selector: #selector(accessibilityShowAllRows)),
+            UIAccessibilityCustomAction(name: String(localized: "Copy table"), target: self, selector: #selector(accessibilityCopy)),
         ]
     }
 
@@ -267,15 +269,15 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenu
         UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             guard let self else { return nil }
             var actions: [UIMenuElement] = [
-                UIAction(title: "Copy Table", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                UIAction(title: String(localized: "Copy Table"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                     UIPasteboard.general.string = self?.tableLayout.markdown()
                 },
-                UIAction(title: "Copy as TSV", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                UIAction(title: String(localized: "Copy as TSV"), image: UIImage(systemName: "tablecells")) { [weak self] _ in
                     UIPasteboard.general.string = self?.tableLayout.tsv()
                 },
             ]
             if !self.full, self.onShowAll != nil {
-                actions.append(UIAction(title: "Open Table", image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
+                actions.append(UIAction(title: String(localized: "Open Table"), image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
                     self?.onShowAll?()
                 })
             }
@@ -336,17 +338,17 @@ final class TKTableSheetViewController: UIViewController {
         close.action = #selector(dismissSheet)
         navigationItem.leftBarButtonItem = close
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "Copy", image: nil, primaryAction: nil,
+            title: String(localized: "Copy"), image: nil, primaryAction: nil,
             menu: UIMenu(children: [
-                UIAction(title: "Copy Table", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                UIAction(title: String(localized: "Copy Table"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                     UIPasteboard.general.string = self?.tableLayout.markdown()
                 },
-                UIAction(title: "Copy as TSV", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                UIAction(title: String(localized: "Copy as TSV"), image: UIImage(systemName: "tablecells")) { [weak self] _ in
                     UIPasteboard.general.string = self?.tableLayout.tsv()
                 },
             ]))
 
-        titleLabel.text = "Table"
+        titleLabel.text = String(localized: "Table")
         titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabel
@@ -373,11 +375,13 @@ final class TKTableSheetViewController: UIViewController {
     }
 
     private func updateSubtitle() {
-        var text = "\(tableLayout.bodyRowCount) rows × \(tableLayout.columnCount) columns"
+        let rows = String(localized: "\(tableLayout.bodyRowCount) rows")
+        let columns = String(localized: "\(tableLayout.columnCount) columns")
         if let column = tableLayout.sortColumn {
-            text += " · sorted by \(tableLayout.plainHeader[column])"
+            subtitleLabel.text = String(localized: "\(rows) × \(columns) · sorted by \(tableLayout.plainHeader[column])")
+        } else {
+            subtitleLabel.text = String(localized: "\(rows) × \(columns)")
         }
-        subtitleLabel.text = text
     }
 
     @objc private func dismissSheet() { dismiss(animated: true) }

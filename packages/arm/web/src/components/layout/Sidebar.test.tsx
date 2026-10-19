@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { i18next } from '../../i18n';
 import { MemoryRouter } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { Sidebar } from './Sidebar';
@@ -8,7 +9,23 @@ beforeEach(() => {
   useStore.getState().reset();
 });
 
+afterEach(async () => { await act(async () => { await i18next.changeLanguage('en'); }); });
+
 describe('Sidebar', () => {
+  it('switches sidebar labels and menus live without changing user identity', async () => {
+    useStore.getState().setUser({ id: 'u', login: 'octocat', provider: 'github' });
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText('暂无会话')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '搜索会话' })).toHaveAttribute('placeholder', '搜索');
+    fireEvent.click(screen.getByLabelText('应用菜单'));
+    expect(screen.getByRole('menuitem', { name: '设备' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '账户用量' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '设置…' })).toBeInTheDocument();
+    expect(screen.getByText('octocat')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: '退出登录…' }));
+    expect(screen.getByRole('alertdialog', { name: '在此浏览器中退出 Kraki？' })).toBeInTheDocument();
+  });
   it('renders session list', () => {
     useStore.getState().setStatus('connected');
     render(<MemoryRouter><Sidebar /></MemoryRouter>);

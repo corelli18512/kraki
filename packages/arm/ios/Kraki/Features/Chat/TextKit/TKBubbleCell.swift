@@ -140,12 +140,12 @@ private final class TKHTMLArtifactButton: UIControl {
         let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = caption?.isEmpty == false
             ? caption!
-            : (name?.isEmpty == false ? name! : "Report")
+            : (name?.isEmpty == false ? name! : String(localized: "Report"))
         titleLabel.text = title
-        detailLabel.text = "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
+        detailLabel.text = String(localized: "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
         accessibilityLabel = title
         accessibilityValue = detailLabel.text
-        accessibilityHint = "Opens report preview"
+        accessibilityHint = String(localized: "Opens report preview")
     }
 
     func reset() {
@@ -321,7 +321,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         moreButton.configuration = configuration
         moreButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
         moreButton.addTarget(self, action: #selector(openSteps), for: .touchUpInside)
-        moreButton.accessibilityLabel = "Show steps"
+        moreButton.accessibilityLabel = String(localized: "Show steps")
         contentView.addSubview(moreButton)
         deliveryStatus.isHidden = true
         deliveryStatus.addTarget(self, action: #selector(deliveryStatusTapped), for: .touchUpInside)
@@ -603,7 +603,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             deliveryStatus.tintColor = .secondaryLabel
             deliveryStatus.isUserInteractionEnabled = true
             deliveryStatus.alpha = 1
-            deliveryStatus.accessibilityLabel = "Correcting transcript before sending"
+            deliveryStatus.accessibilityLabel = String(localized: "Correcting transcript before sending")
             deliveryStatus.imageView?.addSymbolEffect(.variableColor.iterative, options: .repeating)
             if let clientID = pendingClientID {
                 deliveryStatus.menu = UIMenu(children: correctingActions(clientID))
@@ -616,18 +616,18 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             deliveryStatus.tintColor = .systemOrange
             deliveryStatus.isUserInteractionEnabled = true
             deliveryStatus.alpha = 1
-            deliveryStatus.accessibilityLabel = "Awaiting confirmation. Tap to retry"
+            deliveryStatus.accessibilityLabel = String(localized: "Awaiting confirmation. Tap to retry")
         } else if state == "failed" {
             deliveryStatus.setImage(UIImage(systemName: "exclamationmark.circle.fill", withConfiguration: symbol), for: .normal)
             deliveryStatus.tintColor = .systemRed
             deliveryStatus.isUserInteractionEnabled = true
             deliveryStatus.alpha = 1
-            deliveryStatus.accessibilityLabel = "Not delivered. Tap to retry"
+            deliveryStatus.accessibilityLabel = String(localized: "Not delivered. Tap to retry")
         } else {
             deliveryStatus.setImage(UIImage(systemName: "clock", withConfiguration: symbol), for: .normal)
             deliveryStatus.tintColor = .tertiaryLabel
             deliveryStatus.isUserInteractionEnabled = false
-            deliveryStatus.accessibilityLabel = "Sending"
+            deliveryStatus.accessibilityLabel = String(localized: "Sending")
             deliveryStatus.alpha = 0
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self, self.deliveryStatusKey == key else { return }
@@ -852,18 +852,18 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         guard let content else { return [] }
         var actions: [UIAction] = []
         if let text = TKMarkdown.plainText(content.body), !text.isEmpty {
-            actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
+            actions.append(UIAction(title: String(localized: "Copy"), image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.string = text
             })
             if content.liveBody == nil {
-                actions.append(UIAction(title: "Select Text", image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
+                actions.append(UIAction(title: String(localized: "Select Text"), image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
                     // After the context menu finishes dismissing.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.beginTextSelection() }
                 })
             }
         }
         if content.canShowSteps {
-            actions.append(UIAction(title: "Show Steps", image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
+            actions.append(UIAction(title: String(localized: "Show Steps"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
                 self?.openSteps()
             })
         }
@@ -871,10 +871,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             actions.append(contentsOf: correctingActions(clientID))
         }
         if ["failed", "unconfirmed"].contains(content.pendingDeliveryState ?? ""), let clientID = pendingClientID {
-            actions.insert(UIAction(title: "Retry", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+            actions.insert(UIAction(title: String(localized: "Retry"), image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                 self?.onPendingAction?(clientID, .retry)
             }, at: 0)
-            actions.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            actions.append(UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                 self?.onPendingAction?(clientID, .delete)
             })
         }
@@ -948,10 +948,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     /// transcript), or drop it.
     private func correctingActions(_ clientID: String) -> [UIAction] {
         [
-            UIAction(title: "Send Original", image: UIImage(systemName: "paperplane")) { [weak self] _ in
+            UIAction(title: String(localized: "Send Original"), image: UIImage(systemName: "paperplane")) { [weak self] _ in
                 self?.onPendingAction?(clientID, .retry)
             },
-            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                 self?.onPendingAction?(clientID, .delete)
             },
         ]

@@ -34,7 +34,7 @@ struct MacSetupIntro: View {
                 .clipShape(Circle().scale(clip))
                 .padding(.bottom, 18)
 
-            Text("KRAKI")
+            Text(verbatim: "KRAKI")
                 .font(.system(size: 26, weight: .heavy, design: .monospaced))
                 .tracking(4.6)
                 .foregroundStyle(Color.textTitle)
@@ -55,7 +55,7 @@ struct MacSetupIntro: View {
         .contentShape(Rectangle())
         .onTapGesture { finish() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Kraki")
+        .accessibilityLabel(Text(verbatim: "Kraki"))
         .task { await run() }
     }
 

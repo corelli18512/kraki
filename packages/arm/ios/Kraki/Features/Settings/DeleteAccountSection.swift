@@ -46,7 +46,7 @@ struct DeleteAccountSection: View {
         }
     }
 
-    static let explanation = """
+    static var explanation: String { String(localized: """
     Kraki's servers delete your account, your devices, notification tokens, \
     preferences, custom words and voice usage. Every phone, browser and computer \
     is signed out.
@@ -56,7 +56,7 @@ struct DeleteAccountSection: View {
     computer and choose "Delete all Kraki data".
 
     Signing in with GitHub again later creates a new, empty account.
-    """
+    """) }
 }
 
 /// Shown on the sign-in screen after the account was deleted.

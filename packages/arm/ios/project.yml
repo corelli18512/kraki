@@ -191,6 +191,9 @@ targets:
           - "**/.DS_Store"
       - path: Kraki/Core/Notifications/PushPreviewFormat.swift
       - path: Kraki/Core/Crypto/DeviceTrust.swift
+      # Same String Catalog as the app, so push fallback text is localized.
+      - path: Kraki/Resources/Localization/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - package: CoinfraCrypto
     settings:

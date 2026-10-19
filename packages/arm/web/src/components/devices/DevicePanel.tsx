@@ -1,3 +1,5 @@
+import { formatDateTime } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
@@ -12,7 +14,7 @@ function formatDate(iso?: string): string {
   const normalized = iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`;
   const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return formatDateTime(d, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 export function DevicePanel({
@@ -34,6 +36,7 @@ export function DevicePanel({
   onSelectSession: (id: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('devices');
   const deviceUpdates = useStore((s) => s.deviceUpdates);
   const deviceVersions = useStore((s) => s.deviceVersions);
   const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
@@ -56,10 +59,10 @@ export function DevicePanel({
       ? 'animate-pulse bg-amber-400'
       : 'bg-slate-400';
   const statusLabel = device.online && hasGreeting
-    ? 'online'
+    ? t('panel.online')
     : device.online
-      ? 'connecting…'
-      : 'offline';
+      ? t('panel.connecting')
+      : t('panel.offline');
 
   const handleRemove = () => {
     wsClient.removeDevice(device.id);
@@ -84,27 +87,27 @@ export function DevicePanel({
         <span className="text-[11px] text-text-muted">{statusLabel}</span>
         {isCurrentDevice && (
           <span className="rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
-            This device
+            {t('panel.thisDevice')}
           </span>
         )}
-        {canRemove && <button type="button" onClick={() => setConfirmOpen(true)} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-red-500 hover:bg-red-500/10">Remove…</button>}
+        {canRemove && <button type="button" onClick={() => setConfirmOpen(true)} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-red-500 hover:bg-red-500/10">{t('panel.removeAction')}</button>}
       </div>
 
       <div className="space-y-4 px-5 pb-4">
-        {identityError && <p role="alert" className="text-xs text-text-muted">Couldn’t identify this PC. Device removal is unavailable.</p>}
+        {identityError && <p role="alert" className="text-xs text-text-muted">{t('panel.identityError')}</p>}
         {/* Device info */}
         <div className="space-y-1.5">
           <div className="flex justify-between text-[11px]">
-            <span className="text-text-muted">Added</span>
+            <span className="text-text-muted">{t('panel.added')}</span>
             <span className="text-text-secondary">{formatDate(device.createdAt)}</span>
           </div>
           <div className="flex justify-between text-[11px]">
-            <span className="text-text-muted">Last online</span>
-            <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
+            <span className="text-text-muted">{t('panel.lastOnline')}</span>
+            <span className="text-text-secondary">{device.online ? t('panel.now') : formatDate(device.lastSeen)}</span>
           </div>
           {shownVersion && (
             <div className="flex justify-between text-[11px]">
-              <span className="text-text-muted">Version</span>
+              <span className="text-text-muted">{t('panel.version')}</span>
               <span className="text-text-secondary">{shownVersion}</span>
             </div>
           )}
@@ -115,7 +118,7 @@ export function DevicePanel({
         {/* Agents & Models */}
         {agents && agents.length > 0 ? (
           <div>
-            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Agents</h3>
+            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">{t('panel.agents')}</h3>
             <div className="space-y-2">
               {agents.map((agent) => (
                 <div key={agent.id}>
@@ -133,7 +136,7 @@ export function DevicePanel({
           </div>
         ) : models && models.length > 0 ? (
           <div>
-            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Supported Models</h3>
+            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">{t('panel.models')}</h3>
             <div className="flex flex-wrap gap-1">
               {models.map((m) => (
                 <span key={m} className="rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] text-text-secondary">
@@ -147,7 +150,7 @@ export function DevicePanel({
         {/* Sessions */}
         <div>
           <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-            Sessions{deviceSessions.length > 0 ? ` (${deviceSessions.length})` : ''}
+            {deviceSessions.length > 0 ? t('panel.sessionsCount', { count: deviceSessions.length }) : t('panel.sessions')}
           </h3>
           {deviceSessions.length > 0 ? (
             <div className="space-y-1">
@@ -166,7 +169,7 @@ export function DevicePanel({
               ))}
             </div>
           ) : (
-            <p className="text-[11px] text-text-muted">No sessions on this device</p>
+            <p className="text-[11px] text-text-muted">{t('panel.none')}</p>
           )}
         </div>
       </div>
@@ -185,22 +188,22 @@ export function DevicePanel({
             className="mx-4 w-full max-w-sm rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold text-text-primary">Remove {device.name}?</h3>
+            <h3 className="text-sm font-semibold text-text-primary">{t('panel.removeTitle', { name: device.name })}</h3>
             <p className="mt-2 text-xs text-text-secondary">
-              It's signed out of your account. To use it again, sign in or pair it again.
+              {t('panel.removeDetail')}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setConfirmOpen(false)}
                 className="rounded-lg px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-tertiary"
               >
-                Cancel
+                {t('panel.cancel')}
               </button>
               <button
                 onClick={handleRemove}
                 className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-800"
               >
-                Remove
+                {t('panel.remove')}
               </button>
             </div>
           </div>

@@ -15,11 +15,11 @@ extension AppState {
     /// (→ `accountWasDeleted()`) or a `server_error` (→ `.failed`).
     func requestAccountDeletion() {
         guard connectionStatus == .connected else {
-            accountDeletion = .failed("Connect to Kraki first. The account is deleted on the server.")
+            accountDeletion = .failed(String(localized: "Connect to Kraki first. The account is deleted on the server."))
             return
         }
         guard sendRelayControl(["type": "delete_account"]) else {
-            accountDeletion = .failed("Couldn't reach Kraki. Try again.")
+            accountDeletion = .failed(String(localized: "Couldn't reach Kraki. Try again."))
             return
         }
         accountDeletion = .deleting
@@ -28,7 +28,7 @@ extension AppState {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard let self, self.accountDeletionAttempt == attempt, self.accountDeletion == .deleting else { return }
-            self.accountDeletion = .failed("Kraki didn't answer. Check the connection and try again.")
+            self.accountDeletion = .failed(String(localized: "Kraki didn't answer. Check the connection and try again."))
         }
     }
 

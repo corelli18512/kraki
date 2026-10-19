@@ -1,1 +1,54 @@
-{}
+{
+  "status": {
+    "signIn": "Sign-in needed",
+    "unavailable": "Unavailable",
+    "stale": "Stale",
+    "offline": "Device offline",
+    "rateLimited": "Rate limited · try refreshing",
+    "failed": "Couldn't refresh",
+    "overdue": "Update overdue",
+    "notUpdated": "Not updated yet",
+    "updatedNow": "Updated just now",
+    "retryIn": "Rate limited · retry in {{time}}",
+    "updated": "Updated {{time}}"
+  },
+  "refresh": {
+    "connect": "Connect to refresh",
+    "busy": "Refreshing…",
+    "updateDevice": "Update or enable account usage on your device to refresh",
+    "noDevice": "No device online",
+    "timeout": "Refresh timed out. Try again.",
+    "connectionLost": "Connection lost. Try again.",
+    "disabled": "Enable account usage on the device.",
+    "deviceBusy": "Device is already refreshing. Try again shortly.",
+    "failed": "Couldn't refresh. Try again.",
+    "someFailed": "Some accounts couldn't be updated",
+    "rateLimits": "Provider rate limits apply",
+    "recent": "Refreshed recently · wait a moment",
+    "hint": "Refresh readings without bypassing provider rate limits",
+    "action": "Refresh"
+  },
+  "empty": "No Claude or Codex accounts found on your devices",
+  "currentSession": "Current session",
+  "title": "Account Usage",
+  "spentByCurrent": "Spent by the current session",
+  "windowTooltip": "{{name}} {{percent}}% left, resets in {{time}}",
+  "deviceOffline": "{{name}} (offline)",
+  "moreDevices_one": " +{{number}}",
+  "moreDevices_other": " +{{number}}",
+  "reset": {
+    "now": "now",
+    "pair": "{{first}} {{second}}"
+  },
+  "window": {
+    "fiveHour": "5h",
+    "weekly": "Weekly",
+    "limit": "Limit"
+  },
+  "update": {
+    "more_one": "{{name}} and {{number}} more",
+    "more_other": "{{name}} and {{number}} more",
+    "hint_one": "Update Kraki on {{list}} to see its accounts",
+    "hint_other": "Update Kraki on {{list}} to see their accounts"
+  }
+}

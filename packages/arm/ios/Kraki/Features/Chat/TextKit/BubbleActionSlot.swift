@@ -23,7 +23,7 @@ enum BubbleActionMetrics {
     static var outcomeLabelFont: UIFont { ScaledFont.uiFont(13, weight: .medium) }
     static var outcomeDetailFont: UIFont { ScaledFont.uiFont(12) }
     static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
-    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "Stopped" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? String(localized: "Turn failed") : String(localized: "Stopped") }
 
     static var choiceFont: UIFont { ScaledFont.uiFont(14, weight: .medium) }
     static let choicePaddingH: CGFloat = 14
@@ -65,7 +65,7 @@ struct BubbleActionSlot: View {
                 let running = action.payload["running"]?.intValue ?? 0
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
-                    Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
+                    Text("\(running) tools running in parallel…")
                         .scaledFont(13).foregroundStyle(Color.textSecondary)
                     Spacer(minLength: 0)
                 }
@@ -114,7 +114,7 @@ struct BubbleActionSlot: View {
                     .scaledFont(13)
                     .foregroundStyle((m.payload["success"]?.boolValue ?? true) ? Color.green : Color.red)
             }
-            Text(m.toolName ?? "tool").scaledFont(12, weight: .semibold, design: .monospaced).foregroundStyle(Color.textPrimary)
+            Text(verbatim: m.toolName ?? String(localized: "tool")).scaledFont(12, weight: .semibold, design: .monospaced).foregroundStyle(Color.textPrimary)
             if let h = m.headline, !h.isEmpty {
                 Text(h).scaledFont(12, design: .monospaced).foregroundStyle(Color.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -171,8 +171,8 @@ struct BubbleActionSlot: View {
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
                     : AnyLayout(HStackLayout(spacing: 6))
                 layout {
-                    permissionButton("Approve", symbol: "checkmark", message, decision: "approve", primary: true)
-                    permissionButton("Deny", symbol: "xmark", message, decision: "deny", primary: false)
+                    permissionButton(String(localized: "Approve"), symbol: "checkmark", message, decision: "approve", primary: true)
+                    permissionButton(String(localized: "Deny"), symbol: "xmark", message, decision: "deny", primary: false)
                 }
             }
         }
@@ -205,7 +205,7 @@ struct BubbleActionSlot: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(label) permission")
+        .accessibilityLabel(primary ? String(localized: "Approve permission") : String(localized: "Deny permission"))
     }
 
     private func permissionArgsSummary(_ message: ChatMessage) -> String? {

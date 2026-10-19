@@ -34,7 +34,7 @@ struct SessionCardMetadataRow: View {
             Text(effort.map { "· \($0)" } ?? "")
                 .foregroundStyle(modelColor)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel(effort.map { "Reasoning effort: \($0)" } ?? "")
+                .accessibilityLabel(effort.map { String(localized: "Reasoning effort: \($0)") } ?? "")
                 .accessibilityIdentifier("session-effort-\(sessionId)")
         }
         .font(font)

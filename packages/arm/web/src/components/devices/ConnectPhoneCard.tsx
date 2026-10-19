@@ -6,6 +6,8 @@
  *
  * Open it by dispatching `kraki:connect-phone` on window.
  */
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
 import { Check, CircleCheck, Link, TriangleAlert, X } from 'lucide-react';
@@ -16,6 +18,7 @@ import './connect-phone.css';
 export const CONNECT_PHONE_EVENT = 'kraki:connect-phone';
 
 function QrSvg({ text }: { text: string }) {
+  const { t } = useTranslation('devices');
   const path = useMemo(() => {
     const qr = qrcode(0, 'M');
     qr.addData(text);
@@ -26,13 +29,14 @@ function QrSvg({ text }: { text: string }) {
     return { d, n };
   }, [text]);
   return (
-    <svg viewBox={`0 0 ${path.n} ${path.n}`} width="184" height="184" shapeRendering="crispEdges" aria-label="Pairing QR code">
+    <svg viewBox={`0 0 ${path.n} ${path.n}`} width="184" height="184" shapeRendering="crispEdges" aria-label={t('connectPhone.qr')}>
       <path d={path.d} fill="#000" />
     </svg>
   );
 }
 
 function Card({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation('devices');
   const devices = useStore((s) => s.devices);
   const myDeviceId = useStore((s) => s.deviceId);
   const [payload, setPayload] = useState<{ url: string; expiresAt: number } | null>(null);
@@ -73,8 +77,8 @@ function Card({ onClose }: { onClose: () => void }) {
       setPayload({ url: r.url, expiresAt: r.expiresAt ? Date.parse(r.expiresAt) : Date.now() + 5 * 60_000 });
     } else {
       setError(r?.error === 'daemon_not_running'
-        ? 'Kraki isn’t running on this PC. Turn on “Run agents on this PC” in Settings, then try again.'
-        : 'Couldn’t get a code from the relay. Check your connection and try again.');
+        ? translate('devices:connectPhone.notRunning')
+        : translate('devices:connectPhone.relayError'));
     }
     setLoading(false);
   }, []);
@@ -139,19 +143,19 @@ function Card({ onClose }: { onClose: () => void }) {
         onClose();
       }
     }}>
-      <div ref={cardRef} tabIndex={-1} className="cp-card" role="dialog" aria-modal="true" aria-label="Connect your phone" data-testid="connect-phone">
-        <button type="button" className="cp-close" onClick={onClose} title="Close (Esc)" aria-label="Close"><X strokeWidth={3.2} /></button>
+      <div ref={cardRef} tabIndex={-1} className="cp-card" role="dialog" aria-modal="true" aria-label={t('connectPhone.title')} data-testid="connect-phone">
+        <button type="button" className="cp-close" onClick={onClose} title={t('connectPhone.closeShortcut')} aria-label={t('connectPhone.close')}><X strokeWidth={3.2} /></button>
         {connected ? (
           <div className="cp-success">
             <CircleCheck className="cp-success-icon" />
-            <div className="cp-title">Connected</div>
-            <div className="cp-detail">{connected} can now see and run your sessions.</div>
+            <div className="cp-title">{t('connectPhone.connected')}</div>
+            <div className="cp-detail">{t('connectPhone.connectedDetail', { name: connected })}</div>
           </div>
         ) : (
           <div className="cp-content">
             <div className="cp-head">
-              <div className="cp-title">Connect your phone</div>
-              <div className="cp-detail">Scan with your phone’s camera. Your sessions show up there — no sign-in needed.</div>
+              <div className="cp-title">{t('connectPhone.title')}</div>
+              <div className="cp-detail">{t('connectPhone.detail')}</div>
             </div>
             <div className="cp-qr">
               {payload && <div className={loading ? 'cp-qr-code cp-dim' : 'cp-qr-code'}><QrSvg text={payload.url} /></div>}
@@ -159,7 +163,7 @@ function Card({ onClose }: { onClose: () => void }) {
               {!loading && error && (
                 <div className="cp-error">
                   <TriangleAlert className="cp-error-icon" />
-                  <button type="button" className="cp-retry" onClick={() => { void load(); }}>Try again</button>
+                  <button type="button" className="cp-retry" onClick={() => { void load(); }}>{t('connectPhone.tryAgain')}</button>
                 </div>
               )}
             </div>
@@ -167,7 +171,7 @@ function Card({ onClose }: { onClose: () => void }) {
               <div className="cp-error-text">{error}</div>
             ) : (
               <div className="cp-footer">
-                <span className="cp-waiting"><span className="cp-spinner cp-spinner-mini" />Waiting for your phone</span>
+                <span className="cp-waiting"><span className="cp-spinner cp-spinner-mini" />{t('connectPhone.waiting')}</span>
                 <button
                   type="button"
                   className="cp-copy"
@@ -175,7 +179,7 @@ function Card({ onClose }: { onClose: () => void }) {
                   title={payload?.url}
                   onClick={() => { if (payload) { void navigator.clipboard.writeText(payload.url); setCopied(true); } }}
                 >
-                  {copied ? <Check /> : <Link />}{copied ? 'Copied' : 'Copy link'}
+                  {copied ? <Check /> : <Link />}{copied ? t('connectPhone.copied') : t('connectPhone.copy')}
                 </button>
               </div>
             )}

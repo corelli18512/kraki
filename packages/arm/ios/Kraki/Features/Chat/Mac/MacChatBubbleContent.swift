@@ -72,7 +72,7 @@ enum MacChatBubbleContentBuilder {
         case .user:
             body = rawBody.map { lighteningUncorrected(recolored($0, color: .white), message: message) }
         case .error:
-            body = recolored(rawBody ?? NSAttributedString(string: message.result ?? "Error"), color: .systemRed)
+            body = recolored(rawBody ?? NSAttributedString(string: message.result ?? String(localized: "Error")), color: .systemRed)
         case .agent, .system:
             body = rawBody
         }
@@ -224,9 +224,7 @@ enum MacChatBubbleContentBuilder {
         switch action.type {
         case "tool_batch":
             let running = action.payload["running"]?.intValue ?? 0
-            let label = running == 1
-                ? "1 tool running in parallel…"
-                : "\(running) tools running in parallel…"
+            let label = String(localized: "\(running) tools running in parallel…")
             return textWidth(label, font: .systemFont(ofSize: 13)) + 24
         case "tool_start", "tool_complete":
             let label = [action.toolName, action.headline]

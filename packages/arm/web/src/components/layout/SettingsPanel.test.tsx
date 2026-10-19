@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SettingsPanel, providerLabel, PERFORMANCE_DATA_FOOTER } from './SettingsPanel';
+import { SettingsPanel, providerLabel, performanceDataFooter } from './SettingsPanel';
 import { diag } from '../../lib/diag';
 import { useStore } from '../../hooks/useStore';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
@@ -193,8 +193,8 @@ describe('SettingsPanel native preferences parity', () => {
       open();
       const toggle = screen.getAllByRole('switch', { name: 'Share Performance Data' }).at(-1)!;
       expect(toggle).toHaveAttribute('aria-checked', 'true');
-      expect(screen.getAllByText(PERFORMANCE_DATA_FOOTER).length).toBeGreaterThan(0);
-      expect(PERFORMANCE_DATA_FOOTER).toContain('Never message text, drafts, voice, attachments or file names.');
+      expect(screen.getAllByText(performanceDataFooter()).length).toBeGreaterThan(0);
+      expect(performanceDataFooter()).toContain('Never message text, drafts, voice, attachments or file names.');
       fireEvent.click(toggle);
       expect(set).toHaveBeenCalledWith(false);
     } finally { active.mockRestore(); }

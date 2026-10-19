@@ -77,12 +77,12 @@ struct SessionInfoSheet: View {
 
     private var sessionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Session")
+            sectionHeader(String(localized: "Session"))
 
             titleRow
-            infoRow("Agent", value: AgentInfo.from(session.agent).label)
+            infoRow(String(localized: "Agent"), value: AgentInfo.from(session.agent).label)
             modelRow
-            infoRow("Created", value: session.createdAt.formatted(date: .abbreviated, time: .shortened))
+            infoRow(String(localized: "Created"), value: session.createdAt.formatted(date: .abbreviated, time: .shortened))
         }
     }
 
@@ -94,7 +94,7 @@ struct SessionInfoSheet: View {
     /// (`rename_session` payload contract).
     @ViewBuilder
     private var titleRow: some View {
-        infoRow(label: "Title") {
+        infoRow(label: String(localized: "Title")) {
             if editingTitle {
                 TextField("Session title", text: $titleDraft)
                     .multilineTextAlignment(.trailing)
@@ -142,11 +142,11 @@ struct SessionInfoSheet: View {
     /// is used to choose a model in both surfaces.
     @ViewBuilder
     private var modelRow: some View {
-        let label = appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent) ?? "Select"
+        let label = appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent) ?? String(localized: "Select")
         let canTap = !availableModels.isEmpty
         if canTap {
             NavigationLink(value: ModelPickerNav()) {
-                infoRow(label: "Model") {
+                infoRow(label: String(localized: "Model")) {
                     HStack(spacing: 4) {
                         Text(label)
                             .foregroundStyle(.primary)
@@ -159,7 +159,7 @@ struct SessionInfoSheet: View {
             }
             .buttonStyle(.plain)
         } else if let model = appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent) {
-            infoRow("Model", value: model)
+            infoRow(String(localized: "Model"), value: model)
         }
     }
 
@@ -169,20 +169,20 @@ struct SessionInfoSheet: View {
     private var usageSection: some View {
         if let usage {
             VStack(alignment: .leading, spacing: 8) {
-                sectionHeader("Usage")
+                sectionHeader(String(localized: "Usage"))
 
                 contextRow(usage: usage)
 
-                tokenRow("Input tokens", count: usage.inputTokens)
-                tokenRow("Output tokens", count: usage.outputTokens)
-                tokenRow("Cache read", count: usage.cacheReadTokens)
-                tokenRow("Cache write", count: usage.cacheWriteTokens)
+                tokenRow(String(localized: "Input tokens"), count: usage.inputTokens)
+                tokenRow(String(localized: "Output tokens"), count: usage.outputTokens)
+                tokenRow(String(localized: "Cache read"), count: usage.cacheReadTokens)
+                tokenRow(String(localized: "Cache write"), count: usage.cacheWriteTokens)
 
                 Divider()
 
-                infoRow("Total cost", value: formatCost(usage.totalCost))
+                infoRow(String(localized: "Total cost"), value: formatCost(usage.totalCost))
                 if usage.totalDurationMs > 0 {
-                    infoRow("Duration", value: formatDuration(usage.totalDurationMs))
+                    infoRow(String(localized: "Duration"), value: formatDuration(usage.totalDurationMs))
                 }
             }
         }
@@ -210,8 +210,8 @@ struct SessionInfoSheet: View {
                 let ratio = min(1.0, Double(used) / Double(ceiling))
                 let percent = Int((ratio * 100).rounded())
                 VStack(alignment: .leading, spacing: 6) {
-                    infoRow(label: "Context") {
-                        Text("\(formatTokenCount(used)) / \(formatTokenCount(ceiling))  ·  \(percent)%")
+                    infoRow(label: String(localized: "Context")) {
+                        Text(verbatim: "\(formatTokenCount(used)) / \(formatTokenCount(ceiling))  ·  \(percent)%")
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.trailing)
                     }
@@ -219,7 +219,7 @@ struct SessionInfoSheet: View {
                         .tint(contextBandColor(ratio: ratio))
                 }
             } else {
-                tokenRow("Context", count: used)
+                tokenRow(String(localized: "Context"), count: used)
             }
         }
     }
@@ -238,7 +238,7 @@ struct SessionInfoSheet: View {
     private var deviceSection: some View {
         if let device {
             VStack(alignment: .leading, spacing: 8) {
-                sectionHeader("Device")
+                sectionHeader(String(localized: "Device"))
 
                 // Tapping the device row exits the chat view entirely
                 // and lands on the device detail panel in the Devices
@@ -250,7 +250,7 @@ struct SessionInfoSheet: View {
                     dismiss()
                     appState.deviceStore.navigateToDeviceId = device.id
                 } label: {
-                    infoRow(label: "Name") {
+                    infoRow(label: String(localized: "Name")) {
                         HStack(spacing: 4) {
                             Text(device.name)
                                 .foregroundStyle(.primary)
@@ -263,18 +263,18 @@ struct SessionInfoSheet: View {
                 }
                 .buttonStyle(.plain)
 
-                infoRow(label: "Status") {
+                infoRow(label: String(localized: "Status")) {
                     HStack(spacing: 4) {
                         Circle()
                             .fill(device.online ? Color.green : Color.gray)
                             .frame(width: 6, height: 6)
-                        Text(device.online ? "Online" : "Offline")
+                        Text(device.online ? String(localized: "Online") : String(localized: "Offline"))
                             .foregroundStyle(.primary)
                     }
                 }
 
                 if let version {
-                    infoRow("Version", value: version)
+                    infoRow(String(localized: "Version"), value: version)
                 }
             }
         }

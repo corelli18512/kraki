@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Web-side attachment cache and chunk reassembly.
  *
@@ -168,15 +169,15 @@ export async function ingestChunk(
 
   const ref = expectedRefs.get(id);
   if (!ref) {
-    setAttachmentError(id, 'Attachment metadata unavailable');
+    setAttachmentError(id, t('chat:attachments.errors.metadataUnavailable'));
     return 'terminal-error';
   }
   if (!Number.isInteger(index) || !Number.isInteger(total) || total <= 0 || index < 0 || index >= total) {
-    setAttachmentError(id, 'Invalid attachment chunk index');
+    setAttachmentError(id, t('chat:attachments.errors.invalidIndex'));
     return 'terminal-error';
   }
   if (mimeType !== ref.mimeType) {
-    setAttachmentError(id, `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`);
+    setAttachmentError(id, t('chat:attachments.errors.mimeMismatch', { expected: ref.mimeType, actual: mimeType || t('chat:attachments.errors.empty') }));
     return 'terminal-error';
   }
 
@@ -204,11 +205,11 @@ export async function ingestChunk(
   }
 
   if (current.total !== null && current.total !== total) {
-    setAttachmentError(id, `Attachment chunk count changed from ${current.total} to ${total}`);
+    setAttachmentError(id, t('chat:attachments.errors.chunkCountChanged', { before: current.total, after: total }));
     return 'terminal-error';
   }
   if (current.mimeType !== null && current.mimeType !== mimeType) {
-    setAttachmentError(id, 'Attachment MIME type changed during transfer');
+    setAttachmentError(id, t('chat:attachments.errors.mimeChanged'));
     return 'terminal-error';
   }
   if (current.received.has(index)) return 'accepted';
@@ -217,13 +218,13 @@ export async function ingestChunk(
     decodedLength = base64Length(data);
     if (decodedLength < 0) throw new Error('negative decoded length');
   } catch {
-    setAttachmentError(id, 'Attachment chunk is not valid base64');
+    setAttachmentError(id, t('chat:attachments.errors.invalidBase64'));
     return 'terminal-error';
   }
   let receivedBytes = decodedLength;
   for (const chunk of current.received.values()) receivedBytes += base64Length(chunk);
   if (receivedBytes > ref.size) {
-    setAttachmentError(id, `Attachment exceeds declared size ${ref.size}`);
+    setAttachmentError(id, t('chat:attachments.errors.sizeExceeded', { size: ref.size }));
     return 'terminal-error';
   }
   current.received.set(index, data);
@@ -236,7 +237,7 @@ export async function ingestChunk(
     for (let i = 0; i < total; i++) {
       const chunk = current.received.get(i);
       if (chunk === undefined) {
-        setAttachmentError(id, `Attachment is missing chunk ${i}`);
+        setAttachmentError(id, t('chat:attachments.errors.missingChunk', { index: i }));
         return 'terminal-error';
       }
       chunks.push(chunk);
@@ -261,7 +262,7 @@ export async function ingestChunk(
       void persistToIDB({ id, mimeType, size: blob.size, blob, lastAccessed: Date.now() });
       notify(id);
     } catch (err) {
-      setAttachmentError(id, `Attachment decode failed: ${(err as Error).message}`);
+      setAttachmentError(id, t('chat:attachments.errors.decodeFailed', { error: (err as Error).message }));
       return 'terminal-error';
     }
   } else {
@@ -293,19 +294,19 @@ export function failAttachment(ref: ContentRef, reason: string): void {
 
 async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<string | null> {
   if (!/^[0-9a-f]{32}$/i.test(ref.id)) {
-    return 'Attachment id is not a valid content hash';
+    return t('chat:attachments.errors.invalidHash');
   }
   if (mimeType !== ref.mimeType) {
-    return `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`;
+    return t('chat:attachments.errors.mimeMismatch', { expected: ref.mimeType, actual: mimeType || t('chat:attachments.errors.empty') });
   }
   if (blob.size !== ref.size) {
-    return `Attachment size mismatch: expected ${ref.size}, got ${blob.size}`;
+    return t('chat:attachments.errors.sizeMismatch', { expected: ref.size, actual: blob.size });
   }
   const bytes = await blobToArrayBuffer(blob);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
   if (!hex.startsWith(ref.id.toLowerCase())) {
-    return 'Attachment checksum mismatch';
+    return t('chat:attachments.errors.checksumMismatch');
   }
   return null;
 }
@@ -315,10 +316,10 @@ function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   if (typeof modernBlob.arrayBuffer === 'function') return modernBlob.arrayBuffer();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read attachment blob'));
+    reader.onerror = () => reject(reader.error ?? new Error(t('chat:attachments.errors.readFailed')));
     reader.onload = () => {
       if (reader.result instanceof ArrayBuffer) resolve(reader.result);
-      else reject(new Error('Attachment blob did not produce bytes'));
+      else reject(new Error(t('chat:attachments.errors.noBytes')));
     };
     reader.readAsArrayBuffer(blob);
   });

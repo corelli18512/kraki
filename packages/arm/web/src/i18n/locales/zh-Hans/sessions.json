@@ -1,1 +1,124 @@
-{}
+{
+  "archive": {
+    "loading": "正在加载…",
+    "after": "自动归档时间",
+    "never": "永不",
+    "detail": "超过此时间没有新消息的会话会被归档。置顶会话不会被归档。",
+    "deleteConfirm": "要从你的电脑中删除已归档会话吗？此操作无法撤销。",
+    "heading": "已归档（{{count}}）",
+    "days_other": "{{count}} 天",
+    "delete_other": "删除 {{count}} 个已归档会话…"
+  },
+  "row": {
+    "offline": "离线",
+    "pinned": "已置顶",
+    "unread": "未读",
+    "created": "会话已创建",
+    "unpin": "取消置顶",
+    "pin": "置顶",
+    "read": "已读",
+    "more": "更多",
+    "markRead": "标为已读",
+    "markUnread": "标为未读",
+    "rename": "重命名…",
+    "fork": "分叉",
+    "archive": "归档",
+    "delete": "删除…",
+    "deleteConfirm": "要删除此会话吗？此操作无法撤销。",
+    "deleteSession": "删除会话",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高"
+    }
+  },
+  "newDialog": {
+    "title": "新建会话",
+    "noComputers": "没有在线电脑",
+    "connectComputer": "连接电脑以创建会话",
+    "device": "设备",
+    "model": "模型",
+    "modelPlaceholder": "例如 claude-sonnet-4",
+    "thinking": "思考",
+    "context": "上下文",
+    "default": "默认",
+    "tokens": "100 万 token",
+    "start": "开始会话",
+    "updateDetail": "这台电脑上的 Kraki 有可用更新",
+    "update": "有可用更新",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高"
+    }
+  },
+  "import": {
+    "system": "系统",
+    "home": "主目录",
+    "action": "导入会话",
+    "title": "导入会话",
+    "search": "搜索会话…",
+    "scanning": "正在扫描本地会话…",
+    "noMatch": "没有匹配的会话",
+    "empty": "未找到本地会话",
+    "trySearch": "试试其他搜索词",
+    "runCopilot": "在终端运行 copilot 以创建会话",
+    "showMore": "再显示 {{count}} 个…",
+    "total_other": "{{count}} 个本地会话",
+    "filtered": "{{total}} 个本地会话中的 {{shown}} 个"
+  },
+  "composer": {
+    "placeholder": "描述任务，例如“修复 my-app 中失败的测试”",
+    "thisPc": "这台电脑",
+    "thisComputer": "这台电脑",
+    "chooseComputer": "选择电脑",
+    "online": "在线",
+    "offline": "离线",
+    "openKraki": "在该电脑上打开 Kraki 以使用",
+    "model": "模型",
+    "thinking": "思考",
+    "startHint": "开始会话 (Enter)",
+    "start": "开始会话",
+    "noComputers": "没有在线电脑。在电脑上打开 Kraki，即可在该电脑上开始会话。",
+    "theComputer": "电脑",
+    "thisPcLower": "这台电脑",
+    "thisComputerLower": "这台电脑",
+    "installLocal": "Kraki 可配合你电脑上的编程 Agent 使用。安装并登录一个 Agent，然后重新检查。",
+    "installRemote": "Kraki 可配合该电脑上的编程 Agent 使用。在该电脑上安装并登录一个 Agent，然后重启 Kraki。",
+    "checking": "正在检查…",
+    "checkAgain": "重新检查",
+    "firstTask": "我们先做什么？",
+    "phone": "在手机上也使用 Kraki",
+    "nextTask": "接下来做什么？",
+    "moreOffline": "另有 {{count}} 台离线电脑",
+    "models_other": "{{count}} 个模型",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高"
+    },
+    "effortDetail": {
+      "low": "回复最快",
+      "medium": "均衡",
+      "high": "面对难题时思考更久",
+      "xhigh": "最深入，速度最慢",
+      "max": "最深入，速度最慢"
+    },
+    "effortThinking": {
+      "low": "低强度思考",
+      "medium": "中强度思考",
+      "high": "高强度思考",
+      "xhigh": "超高强度思考",
+      "max": "最高强度思考"
+    },
+    "connecting": "正在连接到 {{deviceName}}…",
+    "deviceOffline": "{{deviceName}} 已离线。请在上方选择另一台电脑。",
+    "noAgent": "{{deviceName}} 上没有编程 Agent"
+  }
+}

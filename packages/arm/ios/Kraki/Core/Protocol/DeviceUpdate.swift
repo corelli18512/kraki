@@ -56,10 +56,10 @@ struct AvailableUpdate: Equatable, Sendable {
     /// One line telling the user how to update that computer themselves.
     var howTo: String {
         switch installedVia {
-        case "mac-app": return "Open Kraki on that Mac and choose Kraki → Check for Updates…"
-        case "windows-app": return "Install the latest Kraki for Windows on that PC. Kraki updates with the app."
-        case "legacy": return "Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`."
-        default: return "Run `kraki update` on that computer."
+        case "mac-app": return String(localized: "Open Kraki on that Mac and choose Kraki → Check for Updates…")
+        case "windows-app": return String(localized: "Install the latest Kraki for Windows on that PC. Kraki updates with the app.")
+        case "legacy": return String(localized: "Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`.")
+        default: return String(localized: "Run `kraki update` on that computer.")
         }
     }
 }

@@ -73,23 +73,23 @@ enum MacOnlineStatus: Equatable {
 
     var title: String {
         switch self {
-        case .checking: return "Checking this Mac…"
-        case .online: return "This Mac is online"
-        case .goingOnline: return "This Mac is going online…"
-        case .goingOffline: return "This Mac is going offline…"
-        case .offline: return "This Mac is offline"
-        case .needsLoginItems, .problem: return "This Mac can't go online"
-        case .controlsOthersOnly: return "This Mac controls other computers"
+        case .checking: return String(localized: "Checking this Mac…")
+        case .online: return String(localized: "This Mac is online")
+        case .goingOnline: return String(localized: "This Mac is going online…")
+        case .goingOffline: return String(localized: "This Mac is going offline…")
+        case .offline: return String(localized: "This Mac is offline")
+        case .needsLoginItems, .problem: return String(localized: "This Mac can't go online")
+        case .controlsOthersOnly: return String(localized: "This Mac controls other computers")
         }
     }
 
     var detail: String? {
         switch self {
-        case .online: return "Your phone and other computers can use its agents"
-        case .offline: return "Your phone can't use the agents on this Mac"
-        case .needsLoginItems: return "Turn Kraki on in System Settings › Login Items"
+        case .online: return String(localized: "Your phone and other computers can use its agents")
+        case .offline: return String(localized: "Your phone can't use the agents on this Mac")
+        case .needsLoginItems: return String(localized: "Turn Kraki on in System Settings › Login Items")
         case .problem(let message): return message
-        case .controlsOthersOnly: return "No agents run on this Mac"
+        case .controlsOthersOnly: return String(localized: "No agents run on this Mac")
         case .checking, .goingOnline, .goingOffline: return nil
         }
     }
@@ -224,7 +224,7 @@ enum MacMenuBarIcon {
             return true
         }
         image.isTemplate = badge == .none
-        image.accessibilityDescription = "Kraki – \(status.title)"
+        image.accessibilityDescription = String(localized: "Kraki – \(status.title)")
         return image
     }
 
@@ -290,12 +290,12 @@ final class MacPresenceController {
         if UserDefaults.standard.bool(forKey: Self.confirmQuitSuppressedKey) { return true }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Quit Kraki and take this Mac offline?"
-        alert.informativeText = "Your phone and other computers won't be able to use the agents on this Mac until you open Kraki again.\n\nTo keep this Mac online, just close the window. Kraki stays in the menu bar."
-        alert.addButton(withTitle: "Quit and Go Offline")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(localized: "Quit Kraki and take this Mac offline?")
+        alert.informativeText = String(localized: "Your phone and other computers won't be able to use the agents on this Mac until you open Kraki again.\n\nTo keep this Mac online, just close the window. Kraki stays in the menu bar.")
+        alert.addButton(withTitle: String(localized: "Quit and Go Offline"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         alert.showsSuppressionButton = true
-        alert.suppressionButton?.title = "Don't ask again"
+        alert.suppressionButton?.title = String(localized: "Don't ask again")
         let confirmed = alert.runModal() == .alertFirstButtonReturn
         if confirmed, alert.suppressionButton?.state == .on {
             UserDefaults.standard.set(true, forKey: Self.confirmQuitSuppressedKey)

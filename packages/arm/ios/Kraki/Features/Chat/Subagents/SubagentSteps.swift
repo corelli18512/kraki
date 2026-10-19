@@ -145,8 +145,8 @@ enum SubagentSteps {
         let steps = stepCount(merged, id)
         let subs = childSubagentCount(merged, id)
         let parts = [
-            subs > 0 ? "\(subs) subagent\(subs == 1 ? "" : "s")" : nil,
-            steps > 0 ? "\(steps) step\(steps == 1 ? "" : "s")" : nil,
+            subs > 0 ? String(localized: "\(subs) subagents") : nil,
+            steps > 0 ? String(localized: "\(steps) steps") : nil,
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -167,20 +167,26 @@ enum SubagentSteps {
     static func formatDuration(_ ms: Int?) -> String? {
         guard let ms else { return nil }
         let s = Int((Double(ms) / 1000).rounded())
-        return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = s < 60 ? [.second] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: TimeInterval(s))
     }
 
     static func formatTokens(_ n: Int?) -> String? {
         guard let n else { return nil }
-        if n < 1000 { return "\(n) tokens" }
+        if n < 1000 { return String(localized: "\(n) tokens") }
         let k = Double(n) / 1000
-        return n >= 10_000 ? "\(Int(k.rounded()))k tokens" : String(format: "%.1fk tokens", k)
+        let value = n >= 10_000
+            ? k.formatted(.number.precision(.fractionLength(0)))
+            : k.formatted(.number.precision(.fractionLength(1)))
+        return String(localized: "\(value)k tokens")
     }
 
     /// Card meta line: "Running · 3 steps · 12s".
     static func cardMeta(_ merged: [ChatMessage], _ m: ChatMessage) -> String {
         [
-            status(of: m) == .running ? "Running" : nil,
+            status(of: m) == .running ? String(localized: "Running") : nil,
             m.toolCallId.flatMap { contentsLabel(merged, $0) },
             formatDuration(info(of: m)?.durationMs),
         ].compactMap { $0 }.joined(separator: " · ")
@@ -190,10 +196,10 @@ enum SubagentSteps {
     static func pageFacts(_ merged: [ChatMessage], _ m: ChatMessage) -> String {
         let state: String
         switch status(of: m) {
-        case .running: state = "Running"
-        case .failed: state = "Failed"
-        case .stopped: state = "Stopped"
-        case .completed: state = "Done"
+        case .running: state = String(localized: "Running")
+        case .failed: state = String(localized: "Failed")
+        case .stopped: state = String(localized: "Stopped")
+        case .completed: state = String(localized: "Done")
         }
         return [
             state,
@@ -221,20 +227,20 @@ enum PermissionStep {
 
     static func title(_ message: ChatMessage) -> String {
         if let d = message.payload["description"]?.stringValue, !d.isEmpty { return d }
-        if let t = message.payload["toolName"]?.stringValue, !t.isEmpty { return "Run \(t)" }
-        return message.content ?? "Permission"
+        if let t = message.payload["toolName"]?.stringValue, !t.isEmpty { return String(localized: "Run \(t)") }
+        return message.content ?? String(localized: "Permission")
     }
 
     /// "Approved", "Always allowed", "Denied", "Denied: <reason>"; nil while open.
     static func outcome(_ message: ChatMessage) -> String? {
         switch message.payload["decision"]?.stringValue {
-        case "approve": return "Approved"
-        case "always_allow": return "Always allowed"
+        case "approve": return String(localized: "Approved")
+        case "always_allow": return String(localized: "Always allowed")
         case "deny":
             if let reason = message.payload["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !reason.isEmpty { return "Denied: \(reason)" }
-            return "Denied"
-        default: return message.cancelled ? "Cancelled" : nil
+               !reason.isEmpty { return String(localized: "Denied: \(reason)") }
+            return String(localized: "Denied")
+        default: return message.cancelled ? String(localized: "Cancelled") : nil
         }
     }
 

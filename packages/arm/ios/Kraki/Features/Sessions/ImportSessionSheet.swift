@@ -176,7 +176,7 @@ struct ImportSessionSheet: View {
 
     private var emptyView: some View {
         VStack(spacing: 8) {
-            Text("🕳")
+            Text(verbatim: "🕳")
                 .font(.system(size: 40))
             Text("No local sessions found")
                 .font(.subheadline)
@@ -230,7 +230,7 @@ struct ImportSessionSheet: View {
                     .foregroundStyle(.green)
             }
             Spacer()
-            Text("\(group.sessions.count)")
+            Text(verbatim: "\(group.sessions.count)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -243,7 +243,7 @@ struct ImportSessionSheet: View {
                 if s.isLive {
                     Circle().fill(.green).frame(width: 6, height: 6)
                 }
-                Text(s.summary?.isEmpty == false ? s.summary! : "(no summary)")
+                Text(s.summary?.isEmpty == false ? s.summary! : String(localized: "(no summary)"))
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
@@ -329,7 +329,7 @@ private struct SessionGroup: Identifiable {
         if let repository {
             return repository.split(separator: "/").last.map(String.init) ?? repository
         }
-        if path.isEmpty || path == "/" { return "System" }
+        if path.isEmpty || path == "/" { return String(localized: "import.systemPath", defaultValue: "System") }
         let parts = path.split(separator: "/").filter { !$0.isEmpty }
         return parts.last.map(String.init) ?? path
     }

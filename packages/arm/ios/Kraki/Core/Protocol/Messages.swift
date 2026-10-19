@@ -113,7 +113,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
             return TerminalOutcome(type: kind, message: action["payload"]?.dictValue?["message"]?.stringValue)
         case "interrupted_turn":
             return payload["reason"]?.stringValue == "process_lost"
-                ? TerminalOutcome(type: "failed", message: "Agent process was lost")
+                ? TerminalOutcome(type: "failed", message: String(localized: "Agent process was lost"))
                 : TerminalOutcome(type: "user_abort", message: nil)
         default:
             return nil
@@ -258,7 +258,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         if attachments?.contains(where: { $0.type == "image" }) == true { return false }
         return !contentRefAttachments.contains { $0.mimeType.hasPrefix("image/") }
     }
-    static let imageUnavailableText = "_Image unavailable_"
+    static let imageUnavailableText = String(localized: "_Image unavailable_")
 
     var contentRefAttachments: [ContentRef] {
         guard let arr = payload["attachments"]?.arrayValue else { return [] }

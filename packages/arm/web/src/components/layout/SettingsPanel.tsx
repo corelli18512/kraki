@@ -1,3 +1,5 @@
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { diag } from '../../lib/diag';
 import { useEffect, useRef, useState } from 'react';
 import { Check, CheckCircle, ChevronRight, Smartphone, X } from 'lucide-react';
@@ -35,37 +37,32 @@ import {
 } from '../../lib/notification-prefs';
 
 const tabs = ['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About'] as const;
-const tabDescriptions: Record<string, string> = {
-  General: 'Appearance, shortcuts, and everyday behavior.',
-  Account: 'Your account and identity on this PC.',
-  'Voice Input': 'Transcription, conversation context, and custom words.',
-  Notifications: 'Choose when Kraki gets your attention.',
-  'This PC': 'Choose how Kraki works on this computer.',
-  Devices: 'Your connected computers and apps.',
-  About: 'App versions, diagnostics, and support.',
-};
+const tabKeys = {
+  General: 'general', Account: 'account', 'Voice Input': 'voice', Notifications: 'notifications',
+  'This PC': 'thisPC', Devices: 'devices', About: 'about',
+} as const;
+type SettingsTab = typeof tabs[number];
 
-/** Same labels as Mac AccountPane.providerLabel: GitHub by default, otherwise
- *  the provider id capitalized ("open" → "Open"). */
 /** Same section, copy and default (on) as Mac DiagSettingsSection. */
-export const PERFORMANCE_DATA_FOOTER = 'Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find problems and make Kraki better. '
-  + 'Never message text, drafts, voice, attachments or file names. '
-  + 'Turning this off stops performance uploads and deletes unsent performance data. Basic daily account activity counts are separate.';
+export function performanceDataFooter() { return translate('settings:performance.footer'); }
 
 function PerformanceDataSection() {
+  const { t } = useTranslation('settings');
   const [on, setOn] = useState(diag.enabled);
   return (
-    <SettingsSection title="Privacy" footer={PERFORMANCE_DATA_FOOTER}>
-      <SettingsRow label="Share Performance Data">
-        <SettingsSwitch label="Share Performance Data" on={on} onChange={(next) => { setOn(next); void diag.setEnabled(next); }} />
+    <SettingsSection title={t('performance.privacy')} footer={performanceDataFooter()}>
+      <SettingsRow label={t('performance.share')}>
+        <SettingsSwitch label={t('performance.share')} on={on} onChange={(next) => { setOn(next); void diag.setEnabled(next); }} />
       </SettingsRow>
       <div className="kp-row">
-        <a href="https://app.kraki.chat/privacy/" target="_blank" rel="noreferrer" className="text-kraki-500">Privacy Policy</a>
+        <a href="https://app.kraki.chat/privacy/" target="_blank" rel="noreferrer" className="text-kraki-500">{t('about.privacy')}</a>
       </div>
     </SettingsSection>
   );
 }
 
+/** Same labels as Mac AccountPane.providerLabel: GitHub by default, otherwise
+ *  the provider id capitalized ("open" → "Open"). */
 export function providerLabel(provider: string | null | undefined): string {
   if (!provider || provider === 'github') return 'GitHub';
   return provider.split(/(\s+)/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
@@ -82,9 +79,11 @@ export function SettingsPanel({
   inline?: boolean;
   className?: string;
 }) {
+  const { t } = useTranslation('settings');
+  const tabLabel = (name: SettingsTab) => t(`tabs.${tabKeys[name]}`);
   const { theme, setTheme } = useTheme();
   const state = useStore();
-  const [tab, setTab] = useState<string>('General');
+  const [tab, setTab] = useState<SettingsTab>('General');
   const [diagCopied, setDiagCopied] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
@@ -133,14 +132,14 @@ export function SettingsPanel({
   useEffect(() => {
     if (!open) return;
     if (isPushSupported()) void isPushSubscribed().then(setPushEnabled);
-    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError('Couldn’t identify this PC. Device removal is unavailable.'));
+    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError(t('errors.identifyPC')));
     void bridge
       ?.state()
       .then((s) => {
         setOs(s);
         setUsageShortcut(s.usageShortcut, s.usageShortcutEnabled);
       })
-      .catch(() => setError('Couldn’t read system preferences.'));
+      .catch(() => setError(t('errors.readPreferences')));
   }, [open, bridge]);
   useEffect(() => {
     if (!open || inline) return;
@@ -164,10 +163,10 @@ export function SettingsPanel({
     if (!fn) return;
     try {
       const result = await fn();
-      setError(result.ok ? null : (result.error ?? 'Couldn’t save this preference.'));
+      setError(result.ok ? null : (result.error ?? t('errors.savePreference')));
       if (result.ok && bridge) setOs(await bridge.state());
     } catch {
-      setError('Couldn’t save this preference.');
+      setError(t('errors.savePreference'));
     }
   }
   async function updateShortcut(key: string, enabled: boolean) {
@@ -175,11 +174,11 @@ export function SettingsPanel({
       try {
         const result = await bridge.setUsageShortcut(key, enabled);
         if (!result.ok) {
-          setError(result.error ?? 'Couldn’t register this shortcut.');
+          setError(result.error ?? t('errors.shortcut'));
           return;
         }
       } catch {
-        setError('Couldn’t register this shortcut.');
+        setError(t('errors.shortcut'));
         return;
       }
     }
@@ -193,7 +192,7 @@ export function SettingsPanel({
       try {
         if (!on) {
           if (pushEnabled && !(await unsubscribeFromPush())) {
-            setError('Couldn’t turn off push notifications.');
+            setError(t('errors.disablePush'));
             return;
           }
           wsClient.unregisterPushToken({ provider: 'web_push' });
@@ -201,14 +200,14 @@ export function SettingsPanel({
         } else if (state.vapidPublicKey) {
           const token = await subscribeToPush(state.vapidPublicKey);
           if (!token) {
-            setError('Notifications are blocked. Turn them on in site Settings.');
+            setError(t('errors.blockedNotifications'));
             return;
           }
           wsClient.registerPushToken({ provider: 'web_push', token });
           setPushEnabled(true);
         }
       } catch {
-        setError('Couldn’t update push notifications.');
+        setError(t('errors.updatePush'));
         return;
       } finally {
         setPushLoading(false);
@@ -219,20 +218,20 @@ export function SettingsPanel({
     setNotificationsEnabled(on);
   }
   const diagnostics = [
-    ['Background Service', os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
+    [t('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
     [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
     ...[...state.devices.values()]
       .filter((d) => d.role === 'tentacle')
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : ' · offline'}`]),
-    ['Relay', `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
-    ...(state.deviceId ? [['Device ID', state.deviceId]] : []),
+      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : t('about.offlineSuffix')}`]),
+    [t('about.relay'), `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
+    ...(state.deviceId ? [[t('about.deviceId'), state.deviceId]] : []),
   ];
   const general = (
     <>
-      <SettingsSection title="Appearance">
-        <SettingsRow label="Theme">
-          <div className={isWindows ? 'kp-theme-grid' : 'kp-segment'} role="radiogroup" aria-label="Theme">
+      <SettingsSection title={t('general.appearance')}>
+        <SettingsRow label={t('general.theme')}>
+          <div className={isWindows ? 'kp-theme-grid' : 'kp-segment'} role="radiogroup" aria-label={t('general.theme')}>
             {(isWindows ? ['light', 'dark', 'system'] as const : ['system', 'light', 'dark'] as const).map((option) => (
               <button
                 type="button"
@@ -256,7 +255,7 @@ export function SettingsPanel({
                 }}
               >
                 {isWindows && <span className={`kp-theme-preview kp-theme-preview-${option}`} aria-hidden="true"><span /><span><i /><i /><i /></span></span>}
-                <span>{isWindows && option === 'system' ? 'Use system' : option[0].toUpperCase() + option.slice(1)}</span>
+                <span>{isWindows && option === 'system' ? t('general.useSystem') : t(`general.themes.${option}`)}</span>
                 {isWindows && <Check size={15} aria-hidden="true" />}
               </button>
             ))}
@@ -274,17 +273,17 @@ export function SettingsPanel({
         )}
       </SettingsSection>
       <LanguageSettingsRow />
-      <SettingsSection title="Account Usage">
-        <SettingsRow label={`Hold ${shortcut.shortcut} to peek at account usage`}>
+      <SettingsSection title={t('general.accountUsage')}>
+        <SettingsRow label={t('general.holdUsage', { shortcut: shortcut.shortcut })}>
           <SettingsSwitch
-            label="Peek at account usage"
+            label={t('general.peekUsage')}
             on={shortcut.enabled}
             onChange={(on) => {
               void updateShortcut(shortcut.shortcut, on);
             }}
           />
         </SettingsRow>
-        <SettingsRow label="Shortcut">
+        <SettingsRow label={t('general.shortcut')}>
           <button
             type="button"
             className={`kp-button kp-shortcut${shortcut.recording ? ' is-recording' : ''}`}
@@ -306,25 +305,23 @@ export function SettingsPanel({
               }
             }}
           >
-            {shortcut.recording ? 'Press a shortcut…' : shortcut.shortcut}
+            {shortcut.recording ? t('general.recordShortcut') : shortcut.shortcut}
           </button>
         </SettingsRow>
         <p className="kp-foot">
-          Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front
-          the panel opens inside its window{bridge?.setUsageShortcut ? '; over other apps it floats' : ''}. “Account
-          Usage” {desktop ? 'in the tray' : 'in the sidebar'} opens it any time.
+          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : 'general.shortcutFooterSidebar')}
         </p>
       </SettingsSection>
       {state.archiveInfo.size > 0 && <section className="kp-section">
-        <h3>Sessions</h3>
+        <h3>{t('tabs.sessions')}</h3>
         <ArchiveSettings />
       </section>}
       {bridge && os && (
-        <SettingsSection title="Behavior">
+        <SettingsSection title={t('general.behavior')}>
           {bridge.setKeepRunningInTray && (
-            <SettingsRow label="Keep running in tray when window closes">
+            <SettingsRow label={t('general.keepRunning')}>
               <SettingsSwitch
-                label="Keep running in tray when window closes"
+                label={t('general.keepRunning')}
                 on={os.keepRunningInTray}
                 onChange={(on) => {
                   void updateOs(() => bridge.setKeepRunningInTray!(on));
@@ -333,9 +330,9 @@ export function SettingsPanel({
             </SettingsRow>
           )}
           {bridge.setLaunchAtLogin && (
-            <SettingsRow label="Open Kraki at login">
+            <SettingsRow label={t('general.launchAtLogin')}>
               <SettingsSwitch
-                label="Open Kraki at login"
+                label={t('general.launchAtLogin')}
                 on={os.launchAtLogin}
                 onChange={(on) => {
                   void updateOs(() => bridge.setLaunchAtLogin!(on));
@@ -359,18 +356,17 @@ export function SettingsPanel({
             <p className="kp-account-name text-sm font-semibold">{state.user.email ?? state.user.login}</p>
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
               <CheckCircle size={10} color="#34D399" />
-              Signed in via{' '}
-              {providerLabel(state.user.provider)}
+              {t('account.signedInVia', { provider: providerLabel(state.user.provider) })}
             </p>
           </div>
         </div>
       </SettingsSection>
-      <SettingsSection title="Identity">
-        <SettingsRow label="Login">
+      <SettingsSection title={t('account.identity')}>
+        <SettingsRow label={t('account.login')}>
           <span className="text-text-secondary">{state.user.login}</span>
         </SettingsRow>
         {state.user.email && (
-          <SettingsRow label="Email">
+          <SettingsRow label={t('account.email')}>
             <span>{state.user.email}</span>
           </SettingsRow>
         )}
@@ -378,7 +374,7 @@ export function SettingsPanel({
       <SettingsSection>
         <div className="kp-row">
           <button type="button" className="kp-button text-red-600" onClick={() => setConfirmSignOut(true)}>
-            Sign Out…
+            {t('signOut.action')}
           </button>
         </div>
       </SettingsSection>
@@ -389,18 +385,18 @@ export function SettingsPanel({
       )}
     </>
   ) : (
-    <p className="text-center text-text-secondary">Not signed in.</p>
+    <p className="text-center text-text-secondary">{t('account.notSignedIn')}</p>
   );
   const notifications = (
     <>
-      <SettingsSection title="System permission">
-        <SettingsRow label="Status">
+      <SettingsSection title={t('notifications.systemPermission')}>
+        <SettingsRow label={t('notifications.status')}>
           <span className="text-text-secondary">
             {(os?.notificationPermission ?? permission) === 'granted'
-              ? 'Granted'
+              ? t('notifications.granted')
               : (os?.notificationPermission ?? permission) === 'denied'
-                ? `Off — turn on in ${desktop ? 'System' : 'site'} Settings`
-                : 'Not asked yet'}
+                ? desktop ? t('notifications.deniedSystem') : t('notifications.deniedSite')
+                : t('notifications.notAsked')}
           </span>
         </SettingsRow>
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
@@ -412,20 +408,20 @@ export function SettingsPanel({
                 void Notification.requestPermission().then(setPermission);
               }}
             >
-              Allow Notifications…
+              {t('notifications.allow')}
             </button>
           )}
           {bridge?.openNotificationSettings && (
             <button type="button" className="kp-button" onClick={bridge.openNotificationSettings}>
-              Open System Settings…
+              {t('notifications.openSettings')}
             </button>
           )}
         </div>
       </SettingsSection>
-      <SettingsSection title="In-app">
-        <SettingsRow label="Notify me when an agent replies or needs me">
+      <SettingsSection title={t('notifications.inApp')}>
+        <SettingsRow label={t('notifications.notify')}>
           <SettingsSwitch
-            label="Notify me when an agent replies or needs me"
+            label={t('notifications.notify')}
             on={notificationsEnabled}
             disabled={pushLoading}
             onChange={(on) => {
@@ -434,18 +430,17 @@ export function SettingsPanel({
           />
         </SettingsRow>
         <p className="kp-foot">
-          Shown while Kraki is running{desktop ? ' (also from the tray)' : ''}, except for the Session you are looking
-          at.
+          {t(desktop ? 'notifications.footerDesktop' : 'notifications.footerWeb')}
         </p>
       </SettingsSection>
       {!desktop && (
-        <SettingsSection title="Web Push">
+        <SettingsSection title={t('notifications.webPush')}>
           <p className="kp-foot" style={{ border: 0 }}>
             {state.vapidPublicKey && isPushSupported()
               ? pushEnabled
-                ? 'Push notifications are on, including when this browser is closed.'
-                : 'Turn notifications on to receive replies and requests when this browser is closed.'
-              : 'Push notifications aren’t available with this relay.'}
+                ? t('notifications.pushOn')
+                : t('notifications.pushOff')
+              : t('notifications.unavailable')}
           </p>
         </SettingsSection>
       )}
@@ -453,7 +448,7 @@ export function SettingsPanel({
   );
   const devices = (
     <>
-      <SettingsSection title="Devices">
+      <SettingsSection title={t('tabs.devices')}>
         {[...state.devices.values()]
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((d) => (
@@ -466,14 +461,14 @@ export function SettingsPanel({
                 <div className="flex-1">
                   <p className="kp-device-name font-medium">{d.name}</p>
                   <div className="kp-device-meta">
-                    <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? 'Computer' : 'App'}</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? t('devices.computer') : t('devices.app')}</span>
                     {d.role === 'tentacle' && <span>{state.deviceVersions.get(d.id)}</span>}
-                    {!d.online && deviceLastOnline(d.lastSeen) && <span>Last online {deviceLastOnline(d.lastSeen)}</span>}
+                    {!d.online && deviceLastOnline(d.lastSeen) && <span>{t('devices.lastOnline', { time: deviceLastOnline(d.lastSeen) })}</span>}
                   </div>
                 </div>
                 {builtInKnown && !d.online && d.id !== state.deviceId && d.id !== builtInId ? (
                   <button type="button" className="kp-button" onClick={() => setRemoving(d)}>
-                    Remove…
+                    {t('devices.removeAction')}
                   </button>
                 ) : (
                   <span className="font-mono text-[10px] text-text-muted" title={d.id}>
@@ -490,15 +485,15 @@ export function SettingsPanel({
           <div className="kp-row">
             <Smartphone size={20} className="text-kraki-500" />
             <div>
-              <p>Use Kraki on your phone</p>
-              <p className="kp-foot">Scan a code with your phone to see and run your sessions there.</p>
+              <p>{t('devices.phone')}</p>
+              <p className="kp-foot">{t('devices.phoneHint')}</p>
             </div>
             <button
               type="button"
               className="kp-button shrink-0"
               onClick={() => window.dispatchEvent(new Event(CONNECT_PHONE_EVENT))}
             >
-              Show Code…
+              {t('devices.showCode')}
             </button>
           </div>
         </SettingsSection>
@@ -512,7 +507,7 @@ export function SettingsPanel({
       <div className="text-center">
         <p className="kp-brand-title font-mono text-[18px] font-black tracking-[3.5px]">KRAKI</p>
         <p className="mt-1 text-[10px] font-medium uppercase tracking-[.3px] text-text-muted">
-          Multi-device · Multi-agent · Coding
+          {t('about.tagline')}
         </p>
       </div>
       <dl className="mt-1.5 space-y-[3px]">
@@ -530,18 +525,18 @@ export function SettingsPanel({
           void navigator.clipboard
             .writeText(diagnostics.map(([label, value]) => `${label}: ${value}`).join('\n'))
             .then(() => setDiagCopied(true))
-            .catch(() => setError('Couldn’t copy diagnostics.'));
+            .catch(() => setError(t('errors.copyDiagnostics')));
         }}
       >
-        {diagCopied ? 'Copied' : 'Copy Diagnostics'}
+        {diagCopied ? t('about.copied') : t('about.copyDiagnostics')}
       </button>
       {desktop && <BuildProvenance info={desktop.buildInfo} />}
       <hr className="my-1.5 w-[220px] border-border-primary" />
       <div className="flex flex-wrap justify-center gap-4 text-xs font-medium text-kraki-500">
         {[
-          ['Privacy Policy', 'https://app.kraki.chat/privacy/'],
-          ['Website', 'https://kraki.chat'],
-          ['Documentation', 'https://kraki.chat/docs'],
+          [t('about.privacy'), 'https://app.kraki.chat/privacy/'],
+          [t('about.website'), 'https://kraki.chat'],
+          [t('about.documentation'), 'https://kraki.chat/docs'],
           ['GitHub', 'https://github.com/corelli18512/kraki'],
         ].map(([label, href]) => (
           <a key={label} href={href} target="_blank" rel="noreferrer">
@@ -561,18 +556,18 @@ export function SettingsPanel({
         className={`${inline ? 'kp-inline' : 'kp-window'}${isWindows ? ' kp-windows' : ''}`}
         role="dialog"
         aria-modal={isWindows && !inline ? true : undefined}
-        aria-label="Settings"
+        aria-label={t('title')}
         data-testid="settings-window"
       >
         <div className="kp-title">
-          {isWindows ? <><h2>{tab}</h2><p className="kp-page-description">{tabDescriptions[tab]}</p></> : tab}
-          <button type="button" className="kp-close" aria-label="Close settings" onClick={onClose}>
+          {isWindows ? <><h2>{tabLabel(tab)}</h2><p className="kp-page-description">{t(`tabDescriptions.${tabKeys[tab]}`)}</p></> : tabLabel(tab)}
+          <button type="button" className="kp-close" aria-label={t('close')} onClick={onClose}>
             <X size={isWindows ? 16 : 14} strokeWidth={1.6} />
           </button>
         </div>
         <div className={isWindows ? 'kp-navigation' : undefined} style={isWindows ? undefined : { display: 'contents' }}>
-          {isWindows && <><div className="kp-nav-brand"><KrakiLogo className="kp-nav-logo" /><span>Kraki</span></div><p className="kp-nav-label">Settings</p></>}
-          <div className="kp-tabs" role="tablist" aria-label="Settings" aria-orientation={isWindows ? 'vertical' : undefined}>
+          {isWindows && <><div className="kp-nav-brand"><KrakiLogo className="kp-nav-logo" /><span>Kraki</span></div><p className="kp-nav-label">{t('title')}</p></>}
+          <div className="kp-tabs" role="tablist" aria-label={t('title')} aria-orientation={isWindows ? 'vertical' : undefined}>
             {tabs.map((name) => (
               <button
                 type="button"
@@ -596,19 +591,19 @@ export function SettingsPanel({
                   buttons[next].focus();
                 }}
                 aria-controls="settings-pane"
-                aria-label={isWindows ? name : undefined}
-                title={isWindows ? name : undefined}
+                aria-label={isWindows ? tabLabel(name) : undefined}
+                title={isWindows ? tabLabel(name) : undefined}
                 key={name}
                 onClick={() => setTab(name)}
               >
                 <SettingsTabIcon name={name} windows={isWindows} />
-                <span>{name}</span>
+                <span>{tabLabel(name)}</span>
               </button>
             ))}
           </div>
-          {isWindows && <button type="button" className="kp-nav-profile" aria-label="Account details" onClick={() => setTab('Account')}>
+          {isWindows && <button type="button" className="kp-nav-profile" aria-label={t('account.details')} onClick={() => setTab('Account')}>
             <span className="kp-nav-avatar" aria-hidden="true">{(state.user?.email ?? state.user?.login ?? '?').slice(0, 2).toUpperCase()}</span>
-            <span className="kp-nav-identity"><strong>{state.user?.email ?? state.user?.login ?? 'Not signed in'}</strong><small>{state.status === 'connected' ? 'Connected' : 'Disconnected'}</small></span>
+            <span className="kp-nav-identity"><strong>{state.user?.email ?? state.user?.login ?? t('account.notSignedInLabel')}</strong><small>{state.status === 'connected' ? t('account.connected') : t('account.disconnected')}</small></span>
             <ChevronRight size={14} aria-hidden="true" />
           </button>}
         </div>
@@ -616,7 +611,7 @@ export function SettingsPanel({
           id="settings-pane"
           role="tabpanel"
           tabIndex={isWindows ? 0 : undefined}
-          aria-label={tab}
+          aria-label={tabLabel(tab)}
           className={`kp-pane${tab === 'About' ? ' kp-pane-about' : ''}`}
           data-testid="settings-scroll"
           key={tab}
@@ -634,7 +629,7 @@ export function SettingsPanel({
               <ThisPCSettings builtIn={desktop.builtIn} />
             ) : (
               <p className="kp-foot">
-                Run Kraki for Windows to run agents on this PC. The browser controls your other computers.
+                {t('thisPC.browserHint')}
               </p>
             )
           ) : tab === 'Devices' ? (
@@ -657,9 +652,9 @@ export function SettingsPanel({
         </div>
         {confirmSignOut && (
           <SettingsAlert
-            title={`Sign out of Kraki on ${desktop ? 'this PC' : 'this browser'}?`}
-            body={`Conversations cached ${desktop ? 'on this PC' : 'in this browser'} are removed. Your computers keep all sessions; sign in again to see them.`}
-            confirm="Sign Out"
+            title={t(desktop ? 'signOut.titlePC' : 'signOut.titleBrowser')}
+            body={t(desktop ? 'signOut.bodyPC' : 'signOut.bodyBrowser')}
+            confirm={t('signOut.confirm')}
             onCancel={() => setConfirmSignOut(false)}
             onConfirm={() => {
               signOut();
@@ -669,9 +664,9 @@ export function SettingsPanel({
         )}
         {removing && (
           <SettingsAlert
-            title={`Remove ${removing.name}?`}
-            body="It's signed out of your account. To use it again, sign in or pair it again."
-            confirm="Remove"
+            title={t('devices.removeTitle', { name: removing.name })}
+            body={t('devices.removeBody')}
+            confirm={t('devices.remove')}
             onCancel={() => setRemoving(null)}
             onConfirm={() => {
               wsClient.removeDevice(removing.id);

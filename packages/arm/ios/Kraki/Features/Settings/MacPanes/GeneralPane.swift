@@ -115,8 +115,8 @@ final class LoginItemSetting {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            self.error = on ? "Couldn't add Kraki to login items: \(error.localizedDescription)"
-                            : "Couldn't remove Kraki from login items: \(error.localizedDescription)"
+            self.error = on ? String(localized: "Couldn't add Kraki to login items: \(error.localizedDescription)")
+                            : String(localized: "Couldn't remove Kraki from login items: \(error.localizedDescription)")
         }
         let status = SMAppService.mainApp.status
         enabled = status == .enabled || status == .requiresApproval

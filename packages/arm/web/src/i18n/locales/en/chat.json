@@ -1,1 +1,283 @@
-{}
+{
+  "action": {
+    "tool": "tool",
+    "turnFailed": "Turn failed",
+    "stopped": "Stopped",
+    "approvalCaption": "Needs your approval · Safe mode",
+    "proposedChange": "Proposed change",
+    "alwaysAllowed": "Always allowed",
+    "denied": "Denied",
+    "approved": "Approved",
+    "sending": "Sending…",
+    "approveLabel": "Approve permission",
+    "denyLabel": "Deny permission",
+    "approve": "Approve",
+    "deny": "Deny",
+    "parallel_one": "{{count}} tool running in parallel…",
+    "parallel_other": "{{count}} tools running in parallel…",
+    "answer": "Answer: {{choice}}",
+    "moreLines_one": "… {{count}} more line",
+    "moreLines_other": "… {{count}} more lines",
+    "run": "Run {{tool}}",
+    "runQuestion": "Run {{tool}}?"
+  },
+  "attachments": {
+    "report": "Report",
+    "image": "Image",
+    "loading": "Loading",
+    "openGallery": "Open image gallery",
+    "openPreview": "Open image preview",
+    "attachment": "Attachment",
+    "invalidImage": "Invalid image",
+    "retry": "Click to retry",
+    "bytes_one": "{{count}} byte",
+    "bytes_other": "{{count}} bytes",
+    "kilobytes": "{{size}} KB",
+    "megabytes": "{{size}} MB",
+    "openReport": "Open report {{title}}",
+    "reportSize": "Report · {{size}}",
+    "numberedImage": "Image {{number}}",
+    "errors": {
+      "metadataUnavailable": "Attachment metadata unavailable",
+      "invalidIndex": "Invalid attachment chunk index",
+      "mimeChanged": "Attachment MIME type changed during transfer",
+      "invalidBase64": "Attachment chunk is not valid base64",
+      "readFailed": "Failed to read attachment blob",
+      "noBytes": "Attachment blob did not produce bytes",
+      "mimeMismatch": "Attachment MIME type mismatch: expected {{expected}}, got {{actual}}",
+      "chunkCountChanged": "Attachment chunk count changed from {{before}} to {{after}}",
+      "sizeExceeded": "Attachment exceeds declared size {{size}}",
+      "missingChunk": "Attachment is missing chunk {{index}}",
+      "decodeFailed": "Attachment decode failed: {{error}}",
+      "empty": "empty",
+      "invalidHash": "Attachment id is not a valid content hash",
+      "checksumMismatch": "Attachment checksum mismatch",
+      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}"
+    }
+  },
+  "bubble": {
+    "showSteps": "Show steps",
+    "systemNotice": "System notice",
+    "correctingOptions": "Correcting voice input. Click for options",
+    "unconfirmedOptions": "Awaiting confirmation. Click to retry or delete",
+    "failedOptions": "Not delivered. Click to retry or delete",
+    "correcting": "Correcting voice input",
+    "unconfirmed": "Delivery not confirmed yet. Retry uses the same message ID.",
+    "notDelivered": "Not delivered",
+    "sendOriginal": "Send Original",
+    "retry": "Retry",
+    "edit": "Edit",
+    "delete": "Delete",
+    "working": "Agent is working",
+    "processLost": "Agent process was lost"
+  },
+  "header": {
+    "modePicker": "Session mode picker",
+    "back": "Back",
+    "details": "Session details",
+    "modes": {
+      "safe": {
+        "label": "Safe",
+        "hint": "Ask before changes and commands"
+      },
+      "auto": {
+        "label": "Auto",
+        "hint": "Run tools without asking"
+      },
+      "delegate": {
+        "label": "Delegate",
+        "hint": "Run everything, answer on its own"
+      }
+    },
+    "mode": "Session mode, {{mode}}"
+  },
+  "table": {
+    "title": "Table",
+    "search": "Search",
+    "noMatches": "No matches",
+    "copied": "Copied",
+    "copyMarkdown": "Copy Markdown",
+    "copyTsv": "Copy TSV",
+    "close": "Close",
+    "closeHint": "Close (Esc)",
+    "open": "Open table",
+    "matchIndex": "{{index}} of {{total}}",
+    "dimensions": "{{rows}} · {{columns}}",
+    "preview": "Showing {{shown}} of {{rows}} · {{columns}}",
+    "scroll_one": "{{count}} column · scroll for more",
+    "scroll_other": "{{count}} columns · scroll for more",
+    "rows_one": "{{count}} row",
+    "rows_other": "{{count}} rows",
+    "columns_one": "{{count}} column",
+    "columns_other": "{{count}} columns"
+  },
+  "view": {
+    "empty": "Send a message to start.",
+    "previousReply": "Previous reply",
+    "latest": "Jump to latest",
+    "newReply": "New reply",
+    "compactingLabel": "Compacting context",
+    "compacting": "Compacting context…"
+  },
+  "composer": {
+    "imageTooLarge": "Image is too large (max 3 MB after compression).",
+    "sendDictation": "Send dictation",
+    "stop": "Stop agent",
+    "submitAnswer": "Submit answer",
+    "denyReason": "Deny with reason",
+    "steer": "Steer agent",
+    "send": "Send message",
+    "replaceImage": "Replace image",
+    "attachImage": "Attach image",
+    "attached": "Attached",
+    "removeImage": "Remove image",
+    "clear": "Clear draft",
+    "placeholder": {
+      "prompt": "Send a message…",
+      "steer": "Steer the agent…",
+      "answerQuestion": "Type your answer…",
+      "denyPermission": "Deny with reason…"
+    }
+  },
+  "history": {
+    "conversation": "Conversation history",
+    "loadingHistory": "Loading history…",
+    "missing": "Some history is missing.",
+    "loadingLabel": "Loading history",
+    "continueLabel": "Continue loading history",
+    "retryLabel": "Retry history",
+    "loading": "Loading…",
+    "continue": "Continue",
+    "retry": "Retry",
+    "errors": {
+      "timeout": "History request timed out.",
+      "unavailable": "History is unavailable.",
+      "partial": "Some history could not be loaded.",
+      "failed": "History could not be loaded."
+    }
+  },
+  "report": {
+    "openFailed": "Couldn’t open this report in the browser.",
+    "restore": "Restore Split View",
+    "expand": "Expand Report",
+    "preview": "HTML report preview",
+    "openBrowser": "Open in Browser",
+    "close": "Close Report",
+    "loadFailed": "Couldn’t load this report",
+    "loading": "Loading report…",
+    "sizeError": "This report exceeds the 10 MB safety limit.",
+    "sanitizationFailed": "Report sanitization failed."
+  },
+  "imageViewer": {
+    "preview": "Image preview",
+    "previous": "Previous image",
+    "next": "Next image",
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "fit": "Fit to window",
+    "close": "Close image preview"
+  },
+  "message": {
+    "actions": "Message actions",
+    "copySelection": "Copy Selection",
+    "copy": "Copy",
+    "showSteps": "Show Steps"
+  },
+  "steps": {
+    "tool": "tool",
+    "permission": "Permission",
+    "denied": "Denied",
+    "alwaysAllowed": "Always allowed",
+    "approved": "Approved",
+    "error": "Error",
+    "running": "Running",
+    "subagent": "subagent",
+    "run": "Run {{tool}}",
+    "deniedReason": "Denied: {{reason}}",
+    "openSubagent": "Open subagent {{name}}"
+  },
+  "stepsModal": {
+    "subagent": "Subagent",
+    "steps": "Steps",
+    "back": "Back",
+    "live": "LIVE",
+    "close": "Close steps",
+    "empty": "No steps recorded",
+    "emptyDetail": "This turn completed without a recorded tool trace.",
+    "loadingSteps": "Loading steps…",
+    "running": "Running",
+    "failed": "Failed",
+    "stopped": "Stopped",
+    "done": "Done",
+    "working": "Working… its steps appear here as it reports them.",
+    "noSubagentSteps": "The agent did not report this subagent's steps.",
+    "report": "Report",
+    "loadFailed": "Couldn’t load: {{error}}",
+    "loading": " Loading…"
+  },
+  "tool": {
+    "arguments": "Arguments",
+    "result": "Result",
+    "loading": "Loading…",
+    "runningLabel": "Running {{tool}}{{headline}}",
+    "stoppedLabel": "Stopped {{tool}}{{headline}}",
+    "loadFailed": "Couldn't load: {{error}}"
+  },
+  "voice": {
+    "dictate": "Dictate",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "dismiss": "Dismiss",
+    "continue": "Continue"
+  },
+  "session": {
+    "starting": "Starting session…",
+    "notFound": "Session not found",
+    "back": "← Back to sessions",
+    "connecting": "Connecting…",
+    "device": "Device",
+    "info": "Session Info",
+    "offline": "{{device}} is offline — messages will be sent when it reconnects",
+    "new": "New Session"
+  },
+  "sessionCard": {
+    "status": {
+      "active": "Running",
+      "compacting": "Compacting",
+      "waiting": "Waiting for an answer",
+      "approval": "Waiting for approval",
+      "error": "Failed",
+      "offline": "Offline",
+      "agentMessage": "Last message from agent",
+      "humanMessage": "Last message from you"
+    },
+    "delivery": {
+      "correcting": "Correcting voice message before sending",
+      "unconfirmed": "Awaiting delivery confirmation",
+      "sending": "Sending, awaiting confirmation",
+      "failed": "Send failed",
+      "queued": "Waiting for connection"
+    },
+    "failedPreview": "Send failed · {{text}}",
+    "queuedPreview": "Waiting for connection · {{text}}",
+    "unconfirmedPreview": "Awaiting confirmation · {{text}}",
+    "image": "[image]"
+  },
+  "subagent": {
+    "count_one": "{{count}} subagent",
+    "count_other": "{{count}} subagents",
+    "steps_one": "{{count}} step",
+    "steps_other": "{{count}} steps",
+    "seconds": "{{seconds}}s",
+    "minutesSeconds": "{{minutes}}m {{seconds}}s",
+    "thousandTokens": "{{value}}k tokens",
+    "tokens_one": "{{count}} token",
+    "tokens_other": "{{count}} tokens"
+  },
+  "router": {
+    "sessionCreated": "Session created",
+    "turnFailed": "Turn failed",
+    "userAborted": "User aborted",
+    "systemNotice": "System notice"
+  }
+}

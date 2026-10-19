@@ -30,10 +30,10 @@ struct VoiceTerm: Identifiable, Equatable, Codable {
     /// `Term = …` line, so the word itself may not hold “=” or start with “#”.
     var problem: String? {
         let t = cleanTerm
-        if t.contains("=") || t.contains("\u{FF1D}") { return "A word can't contain “=”." }
-        if t.hasPrefix("#") { return "A word can't start with “#”." }
+        if t.contains("=") || t.contains("\u{FF1D}") { return String(localized: "A word can't contain “=”.") }
+        if t.hasPrefix("#") { return String(localized: "A word can't start with “#”.") }
         if let l = line, l.count > VoiceVocabulary.maxEntryLength {
-            return "Too long (max \(VoiceVocabulary.maxEntryLength) characters)."
+            return String(localized: "Too long (max \(VoiceVocabulary.maxEntryLength) characters).")
         }
         return nil
     }
@@ -83,8 +83,8 @@ enum VoiceConsent {
 
     static func grant() { UserDefaults.standard.set(true, forKey: key) }
 
-    static let title = "Voice input uses cloud services"
-    static let message = """
+    static let title = String(localized: "Voice input uses cloud services")
+    static let message = String(localized: """
     Unlike your chats, which are end-to-end encrypted, voice input is processed \
     in the cloud: your recording is sent through Kraki's voice service to a \
     third-party speech recognition provider to turn it into text.
@@ -95,8 +95,8 @@ enum VoiceConsent {
     password) are sent to a third-party AI service that fixes mistakes.
 
     You can turn these off in Settings → Voice Input.
-    """
-    static let continueButton = "Continue"
+    """)
+    static let continueButton = String(localized: "Continue")
 }
 
 /// The user's own spelling vocabulary for voice correction, stored on this
@@ -321,13 +321,13 @@ extension VoiceTerm {
 }
 
 enum VoiceVocabularyCopy {
-    static let title = "Custom Words"
-    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate."
-    static let emptyTitle = "No custom words yet"
-    static let recognizedAs = "Often recognized as"
-    static let recognizedAsFooter = "Optional. How voice input tends to get it wrong, separated by commas. Similar spellings are caught too."
-    static let termFooter = "Spelled exactly as it should appear."
-    static let signedOut = "Sign in to edit your custom words."
+    static let title = String(localized: "Custom Words")
+    static let explanation = String(localized: "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate.")
+    static let emptyTitle = String(localized: "No custom words yet")
+    static let recognizedAs = String(localized: "Often recognized as")
+    static let recognizedAsFooter = String(localized: "Optional. How voice input tends to get it wrong, separated by commas. Similar spellings are caught too.")
+    static let termFooter = String(localized: "Spelled exactly as it should appear.")
+    static let signedOut = String(localized: "Sign in to edit your custom words.")
 }
 
 #if os(iOS)
@@ -371,7 +371,7 @@ struct VoiceVocabularyPage: View {
                         Button { add() } label: { Label("Add Word", systemImage: "plus") }
                     }
                 } footer: {
-                    Text(store.canEdit ? VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries)."
+                    Text(store.canEdit ? String(localized: "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate. \(store.savedCount) of \(VoiceVocabulary.maxEntries).")
                          : VoiceVocabularyCopy.signedOut)
                 }
             }
@@ -397,9 +397,9 @@ private struct VoiceTermRow: View {
     let term: VoiceTerm
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(term.cleanTerm).font(.body)
+            Text(verbatim: term.cleanTerm).font(.body)
             if !term.heardList.isEmpty {
-                Text("Often recognized as " + term.heardList.joined(separator: ", "))
+                Text("Often recognized as \(term.heardList.joined(separator: ", "))")
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
             }
         }
@@ -442,7 +442,7 @@ private struct VoiceTermEditor: View {
                 Section {
                     TextField("e.g. post gress, postgres Q L", text: $term.heardAs, axis: .vertical)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                } header: { Text(VoiceVocabularyCopy.recognizedAs + " (optional)") } footer: {
+                } header: { Text("Often recognized as (optional)") } footer: {
                     Text(VoiceVocabularyCopy.recognizedAsFooter)
                 }
                 if !isNew {
@@ -451,12 +451,12 @@ private struct VoiceTermEditor: View {
                     }
                 }
             }
-            .navigationTitle(isNew ? "Add Word" : "Edit Word")
+            .navigationTitle(isNew ? String(localized: "Add Word") : String(localized: "Edit Word"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: dismiss) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isNew ? "Add" : "Save") { store.upsert(term); dismiss() }.disabled(!canSave)
+                    Button(isNew ? String(localized: "Add") : String(localized: "Save")) { store.upsert(term); dismiss() }.disabled(!canSave)
                 }
             }
             .onAppear { if isNew { focus = true } }
@@ -482,7 +482,7 @@ struct VoiceVocabularyMacSection: View {
             } else {
                 HStack(spacing: 10) {
                     Text("Word or name").frame(width: 180, alignment: .leading)
-                    Text(VoiceVocabularyCopy.recognizedAs + " (optional)")
+                    Text("Often recognized as (optional)")
                     Spacer()
                 }
                 .font(.caption).foregroundStyle(.secondary)
@@ -507,7 +507,7 @@ struct VoiceVocabularyMacSection: View {
                     .help("Remove")
                 }
                 if let problem = term.problem {
-                    Text(problem + " This word isn't saved.").font(.caption).foregroundStyle(.orange)
+                    Text("\(problem) This word isn't saved.").font(.caption).foregroundStyle(.orange)
                 } else if store.isDuplicate(term.term, excluding: term.id) {
                     Text("“\(term.cleanTerm)” is already in the list; only the first is used.")
                         .font(.caption).foregroundStyle(.orange)
@@ -521,7 +521,7 @@ struct VoiceVocabularyMacSection: View {
                 } label: { Label("Add Word", systemImage: "plus") }
                 .disabled(store.isFull)
                 Spacer()
-                Text("\(store.savedCount) / \(VoiceVocabulary.maxEntries)")
+                Text(verbatim: "\(store.savedCount) / \(VoiceVocabulary.maxEntries)")
                     .monospacedDigit().font(.caption).foregroundStyle(.secondary)
             }
         } header: {
@@ -538,12 +538,12 @@ struct VoiceVocabularyMacSection: View {
 // MARK: - Voice Input settings screens
 
 enum VoiceInputCopy {
-    static let title = "Voice Input"
-    static let correction = "Correct Transcripts"
-    static let correctionFooter = "After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider."
-    static let unavailable = "Voice input isn't available with this relay. Your Custom Words still sync to your other devices."
-    static let context = "Use Conversation Context"
-    static let contextFooter = "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent."
+    static let title = String(localized: "Voice Input")
+    static let correction = String(localized: "Correct Transcripts")
+    static let correctionFooter = String(localized: "After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider.")
+    static let unavailable = String(localized: "Voice input isn't available with this relay. Your Custom Words still sync to your other devices.")
+    static let context = String(localized: "Use Conversation Context")
+    static let contextFooter = String(localized: "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent.")
 }
 
 #if os(iOS)
@@ -569,7 +569,7 @@ struct VoiceInputSettingsPage: View {
                         Text(VoiceVocabularyCopy.title)
                         Spacer()
                         let count = VoiceVocabulary.parse(vocabularyText).count
-                        if count > 0 { Text("\(count)").foregroundStyle(.secondary) }
+                        if count > 0 { Text(verbatim: String(count)).foregroundStyle(.secondary) }
                     }
                 }
             } header: {

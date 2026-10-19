@@ -78,7 +78,7 @@ struct MacEntryGateView: View {
             .resizable()
             .interpolation(.high)
             .frame(width: 176, height: 176)
-            .accessibilityLabel("Kraki")
+            .accessibilityLabel(Text(verbatim: "Kraki"))
     }
 
     private var signedOutContent: some View {
@@ -169,7 +169,7 @@ struct MacEntryGateView: View {
                 .opacity(appeared ? 1 : 0)
 
             VStack(spacing: 5) {
-                Text("KRAKI")
+                Text(verbatim: "KRAKI")
                     .font(.system(size: 24, weight: .heavy, design: .monospaced))
                     .tracking(4.2)
                     .foregroundStyle(Color.textTitle)
@@ -220,7 +220,7 @@ struct MacEntryGateView: View {
             }
 
             HStack(spacing: 8) {
-                Text("kraki connect")
+                Text(verbatim: "kraki connect")
                     .font(.system(size: 13, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.textTitle)
 
@@ -253,7 +253,7 @@ struct MacEntryGateView: View {
                     if isCheckingCredentials {
                         ProgressView().controlSize(.small)
                     }
-                    Text(isCheckingCredentials ? "Checking…" : "Check Again")
+                    Text(isCheckingCredentials ? String(localized: "Checking…") : String(localized: "Check Again"))
                         .font(.system(size: 12.5, weight: .semibold))
                 }
                 .frame(minWidth: 116, minHeight: 30)
@@ -304,9 +304,9 @@ struct MacEntryGateView: View {
     private var connectionStatusText: String {
         switch appState.connectionStatus {
         case .connecting:
-            return "Establishing a secure channel to your relay."
+            return String(localized: "Establishing a secure channel to your relay.")
         case .authenticating:
-            return "Verifying your account and pairing this device."
+            return String(localized: "Verifying your account and pairing this device.")
         default:
             return ""
         }

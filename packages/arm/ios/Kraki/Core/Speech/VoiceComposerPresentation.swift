@@ -47,16 +47,16 @@ enum VoiceComposerPresentation {
         case .idle:
             return ""
         case .waitingForConnection:
-            return "Connecting…"
+            return String(localized: "Connecting…")
         case .requestingPermission:
-            return "Requesting microphone access…"
+            return String(localized: "Requesting microphone access…")
         case .obtainingLease:
-            return "Authorizing voice input…"
+            return String(localized: "Authorizing voice input…")
         case .recording:
-            return displayText.isEmpty ? "Listening…" : displayText
+            return displayText.isEmpty ? String(localized: "Listening…") : displayText
         case .finishing:
             return displayText.isEmpty
-                ? "Finishing transcription and correction…"
+                ? String(localized: "Finishing transcription and correction…")
                 : displayText
         case .failed(let message):
             return message
@@ -89,20 +89,20 @@ enum VoiceComposerPresentation {
 
         switch state {
         case .waitingForConnection:
-            appendVoice("Connecting…", opacity: 0.45)
+            appendVoice(String(localized: "Connecting…"), opacity: 0.45)
         case .requestingPermission:
-            appendVoice("Requesting microphone access…", opacity: 0.45)
+            appendVoice(String(localized: "Requesting microphone access…"), opacity: 0.45)
         case .obtainingLease:
-            appendVoice("Authorizing voice input…", opacity: 0.45)
+            appendVoice(String(localized: "Authorizing voice input…"), opacity: 0.45)
         case .recording:
             appendVoice(
-                rawText.isEmpty ? "Listening…" : rawText,
+                rawText.isEmpty ? String(localized: "Listening…") : rawText,
                 opacity: rawText.isEmpty ? 0.45 : 1
             )
         case .finishing:
             let source = correctionSource.isEmpty ? rawText : correctionSource
             if correctionText.isEmpty {
-                appendVoice(source.isEmpty ? "Correcting…" : source, opacity: 0.82)
+                appendVoice(source.isEmpty ? String(localized: "Correcting…") : source, opacity: 0.82)
             } else {
                 let corrected = Array(correctionText)
                 for (index, character) in corrected.enumerated() {
@@ -312,10 +312,10 @@ struct IOSVoiceComposerSurface: View {
             }
             .buttonStyle(.plain)
             .disabled(state != .recording)
-            .accessibilityLabel(state == .recording ? "Finish voice input" : statusText)
+            .accessibilityLabel(state == .recording ? String(localized: "Finish voice input") : statusText)
             .accessibilityHint(
                 state == .recording
-                    ? "Stops recording and starts transcription correction"
+                    ? String(localized: "Stops recording and starts transcription correction")
                     : ""
             )
         }

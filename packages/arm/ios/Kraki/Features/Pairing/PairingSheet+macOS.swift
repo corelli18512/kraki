@@ -183,7 +183,7 @@ struct PairingSheet: View {
                     Button {
                         if let p = payload { KrakiPasteboard.setString(p.url); copied = true }
                     } label: {
-                        Label(copied ? "Copied" : "Copy link", systemImage: copied ? "checkmark" : "link")
+                        Label(copied ? String(localized: "Copied") : String(localized: "Copy link"), systemImage: copied ? "checkmark" : "link")
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.krakiPrimary)

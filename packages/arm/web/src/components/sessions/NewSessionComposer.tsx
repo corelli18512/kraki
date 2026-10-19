@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 /**
  * New session: one composer — Kraki for Mac's NewSessionComposer.
  *
@@ -52,10 +53,6 @@ export function agentAvailability(device: DeviceSummary | undefined, agents: Age
   return agents === undefined ? 'connecting' : 'noAgents';
 }
 
-const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
-const EFFORT_DETAIL: Record<ReasoningEffort, string> = {
-  low: 'Fastest replies', medium: 'Balanced', high: 'Thinks longer on hard problems', xhigh: 'Most thorough, slowest', max: 'Most thorough, slowest',
-};
 const EFFORT_FILL: Record<ReasoningEffort, number> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 3 };
 
 /** SF desktopcomputer: filled display, slim stem and foot (not an outline monitor). */
@@ -155,13 +152,14 @@ function ChoiceSection({ title, children }: { title?: string; children: React.Re
   );
 }
 
-export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201cFix the failing tests in my-app\u201d', minRows = 3, onCreated }: {
+export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   placeholder?: string; minRows?: number; onCreated?: () => void;
 }) {
+  const { t } = useTranslation('sessions');
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
   const localId = useThisPCDeviceId();
-  const localName = desktop?.platform === 'win32' ? 'This PC' : 'This computer';
+  const localName = desktop?.platform === 'win32' ? t('composer.thisPc') : t('composer.thisComputer');
 
   const tentacles = useMemo(() => [...devices.values()].filter((d) => d.role === 'tentacle'), [devices]);
   const online = useMemo(() => tentacles.filter((d) => d.online), [tentacles]);
@@ -285,7 +283,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     onCreated?.();
   };
 
-  const deviceLabel = device ? (device.id === localId ? localName : device.name) : 'Choose a computer';
+  const deviceLabel = device ? (device.id === localId ? localName : device.name) : t('composer.chooseComputer');
   const close = () => setOpenPill(null);
 
   return (
@@ -304,8 +302,8 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
           className="ns-text"
           value={text}
           rows={minRows}
-          placeholder={placeholder}
-          aria-label={placeholder}
+          placeholder={placeholder ?? t('composer.placeholder')}
+          aria-label={placeholder ?? t('composer.placeholder')}
           onChange={(e) => setText(e.target.value)}
           onScroll={(e) => updateComposerScrollFade(e.currentTarget)}
           onFocus={() => setFocused(true)}
@@ -328,7 +326,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
             </PillButton>
             {openPill === 'device' && (
               <Popover onClose={close}>
-                <ChoiceSection title="Online">
+                <ChoiceSection title={t('composer.online')}>
                   {online.map((d) => (
                     <ChoiceRow
                       key={d.id}
@@ -341,11 +339,11 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                   ))}
                 </ChoiceSection>
                 {offline.length > 0 && (
-                  <ChoiceSection title="Offline">
+                  <ChoiceSection title={t('composer.offline')}>
                     {offline.slice(0, 6).map((d) => (
-                      <ChoiceRow key={d.id} title={d.name} detail="Open Kraki on it to use it" enabled={false} mark={<DesktopComputer className="ns-offline" />} />
+                      <ChoiceRow key={d.id} title={d.name} detail={t('composer.openKraki')} enabled={false} mark={<DesktopComputer className="ns-offline" />} />
                     ))}
-                    {offline.length > 6 && <div className="ns-more">and {offline.length - 6} more offline</div>}
+                    {offline.length > 6 && <div className="ns-more">{t('composer.moreOffline', { count: offline.length - 6 })}</div>}
                   </ChoiceSection>
                 )}
               </Popover>
@@ -366,7 +364,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                         <ChoiceRow
                           key={a.id}
                           title={agentLabel(a.id)}
-                          detail={`${n} ${n === 1 ? 'model' : 'models'}`}
+                          detail={t('composer.models', { count: n })}
                           selected={a.id === agentId}
                           mark={<AgentGlyph agent={a.id} size={15} />}
                           onClick={() => { setAgentId(a.id); close(); }}
@@ -378,7 +376,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
               </div>
               <div className="ns-pill-wrap">
                 <PillButton open={openPill === 'model'} onOpen={() => setOpenPill('model')} enabled={models.length > 1} testId="new-session-model">
-                  <span className="ns-pill-text">{model ? modelName(model) : 'Model'}</span>
+                  <span className="ns-pill-text">{model ? modelName(model) : t('composer.model')}</span>
                 </PillButton>
                 {openPill === 'model' && (
                   <Popover onClose={close}>
@@ -400,15 +398,15 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                 <div className="ns-pill-wrap">
                   <PillButton open={openPill === 'effort'} onOpen={() => setOpenPill('effort')} testId="new-session-effort">
                     <EffortGauge effort={effort} />
-                    <span className="ns-pill-text">{effort ? `${EFFORT_LABEL[effort]} thinking` : 'Thinking'}</span>
+                    <span className="ns-pill-text">{effort ? t(`composer.effortThinking.${effort}`) : t('composer.thinking')}</span>
                   </PillButton>
                   {openPill === 'effort' && (
                     <Popover onClose={close}>
                       {efforts.map((e) => (
                         <ChoiceRow
                           key={e}
-                          title={EFFORT_LABEL[e]}
-                          detail={EFFORT_DETAIL[e]}
+                          title={t(`composer.effort.${e}`)}
+                          detail={t(`composer.effortDetail.${e}`)}
                           selected={e === effort}
                           mark={<span className="ns-muted-mark"><EffortGauge effort={e} /></span>}
                           onClick={() => { setEffort(e); if (model) writeJson(EFFORT_PREF_KEY, model, e); close(); }}
@@ -422,7 +420,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
           )}
           <span className="ns-spacer" />
           {!dictation.active && <MicButton owner="new" onStart={startVoice} disabled={availability !== 'ready'} />}
-          <button type="button" className="ns-send" disabled={dictation.active ? dictation.phase === 'finishing' : !canSubmit} onClick={() => (dictation.active ? finishDictation('send') : submit())} title="Start session (Enter)" data-testid="new-session-create" aria-label="Start session">
+          <button type="button" className="ns-send" disabled={dictation.active ? dictation.phase === 'finishing' : !canSubmit} onClick={() => (dictation.active ? finishDictation('send') : submit())} title={t('composer.startHint')} data-testid="new-session-create" aria-label={t('composer.start')}>
             <ArrowUp strokeWidth={3} />
           </button>
         </div>
@@ -440,17 +438,18 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
 function StatusLine({ anyOnline, availability, deviceName, isThisPC }: {
   anyOnline: boolean; availability: AgentAvailability; deviceName?: string; isThisPC: boolean;
 }) {
+  const { t } = useTranslation('sessions');
   if (!anyOnline) {
-    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />No computer is online. Open Kraki on a computer to start a session there.</div>;
+    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{t('composer.noComputers')}</div>;
   }
   if (availability === 'ready') return null;
   if (availability === 'connecting') {
-    return <div className="ns-hint"><span className="ns-spinner" />Connecting to {deviceName ?? 'the computer'}…</div>;
+    return <div className="ns-hint"><span className="ns-spinner" />{t('composer.connecting', { deviceName: deviceName ?? t('composer.theComputer') })}</div>;
   }
   if (availability === 'offline') {
-    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{deviceName ?? 'This computer'} is offline. Pick another one above.</div>;
+    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{t('composer.deviceOffline', { deviceName: deviceName ?? t('composer.thisComputer') })}</div>;
   }
-  return <NoAgentsGuide deviceName={isThisPC ? 'this PC' : deviceName ?? 'this computer'} isThisPC={isThisPC} />;
+  return <NoAgentsGuide deviceName={isThisPC ? t('composer.thisPcLower') : deviceName ?? t('composer.thisComputerLower')} isThisPC={isThisPC} />;
 }
 
 const INSTALL_LINKS = [
@@ -462,14 +461,15 @@ const INSTALL_LINKS = [
 
 /** NoAgentsGuide on Mac: the selected computer runs, but has no coding agent. */
 function NoAgentsGuide({ deviceName, isThisPC }: { deviceName: string; isThisPC: boolean }) {
+  const { t } = useTranslation('sessions');
   const [checking, setChecking] = useState(false);
   return (
     <div className="ns-noagents" data-testid="new-session-no-agents">
-      <div className="ns-noagents-title">No coding agent on {deviceName}</div>
+      <div className="ns-noagents-title">{t('composer.noAgent', { deviceName })}</div>
       <div className="ns-noagents-detail">
         {isThisPC
-          ? 'Kraki works with the coding agents on your computer. Install one and sign in to it, then check again.'
-          : 'Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it.'}
+          ? t('composer.installLocal')
+          : t('composer.installRemote')}
       </div>
       <div className="ns-noagents-links">
         {INSTALL_LINKS.map((l) => (
@@ -486,7 +486,7 @@ function NoAgentsGuide({ deviceName, isThisPC }: { deviceName: string; isThisPC:
           disabled={checking}
           onClick={() => { setChecking(true); void desktop!.builtIn!.restart().finally(() => setTimeout(() => setChecking(false), 4000)); }}
         >
-          {checking ? 'Checking…' : 'Check Again'}
+          {checking ? t('composer.checking') : t('composer.checkAgain')}
         </button>
       )}
     </div>
@@ -498,14 +498,15 @@ function NoAgentsGuide({ deviceName, isThisPC }: { deviceName: string; isThisPC:
  * the composer, and a quiet way to add the phone (MacStartSessionView).
  */
 export function StartSessionView({ firstTime, onConnectPhone }: { firstTime: boolean; onConnectPhone?: () => void }) {
+  const { t } = useTranslation('sessions');
   return (
     <div className="ns-start" data-testid="start-session">
       <div className="ns-start-inner">
-        <h1 className="ns-start-title">{firstTime ? 'What should we work on first?' : "What's next?"}</h1>
+        <h1 className="ns-start-title">{firstTime ? t('composer.firstTask') : t('composer.nextTask')}</h1>
         <div className="ns-start-composer"><NewSessionComposer /></div>
         {firstTime && onConnectPhone && (
           <button type="button" className="ns-phone-link" onClick={onConnectPhone}>
-            <Smartphone className="ns-hint-icon" />Use Kraki on your phone too
+            <Smartphone className="ns-hint-icon" />{t('composer.phone')}
           </button>
         )}
       </div>

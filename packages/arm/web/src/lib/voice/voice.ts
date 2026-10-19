@@ -13,6 +13,7 @@
  * A one-time notice explains that voice input, unlike chat, is processed in
  * the cloud. Custom Words are account data, synced through the relay.
  */
+import { t } from '../../i18n';
 import { create } from 'zustand';
 import type { VoiceCapability, VoiceLease, VoiceWord, VoiceWordOp } from '@kraki/protocol';
 import { TARGET_RATE, loudness, toPcm16 } from './pcm';
@@ -38,12 +39,8 @@ export const voiceSettings = {
   grantConsent() { localStorage.setItem(KEYS.consent, '1'); },
 };
 
-export const CONSENT_TITLE = 'Voice input uses cloud services';
-export const CONSENT_MESSAGE = `Unlike your chats, which are end-to-end encrypted, voice input is processed in the cloud: your recording is sent through Kraki's voice service to a third-party speech recognition provider to turn it into text.
-
-With Correct Transcripts on, the text, your Custom Words and some conversation context (the title, agent, model and names or terms from recent messages; never whole messages or anything that looks like a key or password) are sent to a third-party AI service that fixes mistakes.
-
-You can turn these off in Settings → Voice Input.`;
+export function consentTitle() { return t('settings:voice.consentTitle'); }
+export function consentMessage() { return t('settings:voice.consentMessage'); }
 
 export type VoicePhase = 'idle' | 'connecting' | 'recording' | 'finishing' | 'failed';
 /** What the finished transcript is for: send it, or put it in the draft to edit. */
@@ -118,10 +115,11 @@ export function onAuthOk(voice: VoiceCapability | undefined, words: VoiceWord[] 
 let lease: VoiceLease | null = null;
 let leaseWaiters: { resolve: (l: VoiceLease) => void; reject: (e: Error) => void }[] = [];
 
-const DENIED: Record<string, string> = {
-  quota_exhausted: "Today's voice-input quota has been used.",
-  not_entitled: "Voice input isn't enabled for this account.",
-};
+function denialMessage(reason: string): string | undefined {
+  if (reason === 'quota_exhausted') return t('settings:voice.errors.quota');
+  if (reason === 'not_entitled') return t('settings:voice.errors.notEntitled');
+  return undefined;
+}
 
 export function onLeaseGrant(l: VoiceLease) {
   lease = l;
@@ -131,7 +129,7 @@ export function onLeaseGrant(l: VoiceLease) {
 export function onLeaseDenied(reason: string, detail?: string) {
   const w = leaseWaiters; leaseWaiters = [];
   const tag = ['quota_exhausted', 'not_entitled', 'invalid_request'].includes(reason) ? `lease_denied_${reason}` : 'lease_rejected';
-  const err = new VoiceFailure(DENIED[reason] ?? detail ?? 'The voice authorization request was rejected.', tag);
+  const err = new VoiceFailure(denialMessage(reason) ?? detail ?? t('settings:voice.errors.rejected'), tag);
   w.forEach((x) => x.reject(err));
 }
 
@@ -147,7 +145,7 @@ function getLease(): Promise<VoiceLease> {
     }
     setTimeout(() => {
       const i = leaseWaiters.findIndex((x) => x.resolve === resolve);
-      if (i >= 0) { leaseWaiters.splice(i, 1); reject(new VoiceFailure('The voice authorization request timed out.', 'lease_timeout')); }
+      if (i >= 0) { leaseWaiters.splice(i, 1); reject(new VoiceFailure(t('settings:voice.errors.leaseTimeout'), 'lease_timeout')); }
     }, 10_000);
   });
 }
@@ -157,7 +155,7 @@ const WORKLET = `class C extends AudioWorkletProcessor{process(i){const c=i[0]&&
 interface Capture { stop: () => void }
 
 async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): Promise<Capture> {
-  if (!navigator.mediaDevices?.getUserMedia) throw new VoiceFailure('No microphone is available. Connect a microphone and try again.', 'mic_unavailable');
+  if (!navigator.mediaDevices?.getUserMedia) throw new VoiceFailure(t('settings:voice.errors.noMicrophone'), 'mic_unavailable');
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -165,8 +163,8 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
     const name = (e as DOMException).name;
     const denied = name === 'NotAllowedError' || name === 'SecurityError';
     throw new VoiceFailure(denied
-      ? 'Microphone access is required. Allow it for Kraki in your system privacy settings.'
-      : 'No microphone is available. Connect a microphone and try again.', denied ? 'permission' : 'mic_unavailable');
+      ? t('settings:voice.errors.permission')
+      : t('settings:voice.errors.noMicrophone'), denied ? 'permission' : 'mic_unavailable');
   }
   const ctx = new AudioContext();
   await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
@@ -224,7 +222,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     diag.voices.begin(false, voiceSettings.correction);
     diag.voices.cause('unavailable');
     diag.voices.stateChanged('failed');
-    useVoice.setState({ phase: 'failed', owner, error: "Voice input isn't available in this region." }); return true;
+    useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.unavailable') }); return true;
   }
   if (!voiceSettings.consented) { useVoice.setState({ consentPending: true, owner }); return false; }
   if (rec) cancelDictation();
@@ -233,7 +231,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   if (!transport?.connected()) {
     diag.voices.cause('offline');
     diag.voices.stateChanged('failed');
-    useVoice.setState({ phase: 'failed', owner, error: "Couldn't connect to Kraki. Check your connection and try again." }); return true;
+    useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.offline') }); return true;
   }
   useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
   const recordingId = uuid();
@@ -241,7 +239,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   try {
     ws = new WebSocket(st.capability.brokerUrl);
   } catch {
-    fail('The voice service address is invalid.', 'config');
+    fail(t('settings:voice.errors.invalidAddress'), 'config');
     return true;
   }
   ws.binaryType = 'arraybuffer';
@@ -250,7 +248,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   const send = (m: Record<string, unknown>) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
   const flush = () => { if (!r.ready) return; for (const p of r.pending) ws.send(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); r.pending = []; if (r.finishMode && !r.finishSent) sendFinish(); };
   const sendFinish = () => { r.finishSent = true; send({ type: 'finish', recordingId }); };
-  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail("Couldn't reach the voice service. Try again.", 'timeout'); }, 12_000);
+  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail(t('settings:voice.errors.unreachable'), 'timeout'); }, 12_000);
 
   ws.onmessage = (ev) => {
     if (rec !== r || typeof ev.data !== 'string') return;
@@ -298,23 +296,23 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
         }
         break;
       case 'session_denied':
-        fail(DENIED[String(m.reason)] ?? String(m.detail ?? 'Voice input was refused.'), VoiceTracker.classify(String(m.reason ?? 'denied')));
+        fail(denialMessage(String(m.reason)) ?? String(m.detail ?? t('settings:voice.errors.refused')), VoiceTracker.classify(String(m.reason ?? 'denied')));
         break;
       case 'error':
-        fail(`Voice input failed: ${String(m.message ?? 'unknown error')}`, VoiceTracker.classify(String(m.message ?? 'unknown error')));
+        fail(t('settings:voice.errors.failed', { message: String(m.message ?? t('settings:voice.errors.unknown')) }), VoiceTracker.classify(String(m.message ?? 'unknown error')));
         break;
       default:
         break;
     }
   };
-  ws.onclose = () => { if (rec === r && !r.done) fail('The voice connection closed. Try again.'); };
+  ws.onclose = () => { if (rec === r && !r.done) fail(t('settings:voice.errors.closed'), 'network'); };
   ws.onerror = () => { /* onclose reports it */ };
 
   diag.voices.stateChanged('obtainingLease');
   try {
     const [l] = await Promise.all([
       getLease(),
-      new Promise<void>((resolve, reject) => { ws.addEventListener('open', () => resolve(), { once: true }); ws.addEventListener('error', () => reject(new VoiceFailure("Couldn't reach the voice service. Try again.", 'network')), { once: true }); }),
+      new Promise<void>((resolve, reject) => { ws.addEventListener('open', () => resolve(), { once: true }); ws.addEventListener('error', () => reject(new VoiceFailure(t('settings:voice.errors.unreachable'), 'network')), { once: true }); }),
     ]);
     if (rec !== r) return true;
     send({ type: 'authorize', uid: transport?.userId() ?? undefined, deviceId: transport?.deviceId() ?? undefined, authorization: l });
@@ -347,7 +345,7 @@ export function finishDictation(mode: VoiceFinish) {
   r.finishMode = mode;
   // Send during lease/microphone admission must not open the mic afterwards.
   if (!r.capture && useVoice.getState().phase === 'connecting') {
-    fail('Voice input did not finish. Nothing more was recorded.');
+    fail(t('settings:voice.errors.unfinished'), 'gateway');
     return;
   }
   r.capture?.stop();
@@ -356,7 +354,7 @@ export function finishDictation(mode: VoiceFinish) {
   useVoice.setState({ phase: 'finishing', staged: !!r.staged, levels: [] });
   if (r.ready && !r.finishSent) { r.finishSent = true; r.ws.send(JSON.stringify({ type: 'finish', recordingId: r.recordingId })); }
   if (r.timer) clearTimeout(r.timer);
-  r.timer = setTimeout(() => { if (rec === r) fail("The voice service didn't finish. Try again.", 'timeout'); }, 25_000);
+  r.timer = setTimeout(() => { if (rec === r) fail(t('settings:voice.errors.finishTimeout'), 'timeout'); }, 25_000);
 }
 
 export function cancelDictation() {
@@ -376,10 +374,10 @@ export function declineConsent() { useVoice.setState({ consentPending: false, ow
 
 /** What the composer shows while dictating (VoiceComposerPresentation). */
 export function transcriptPieces(s: Pick<VoiceState, 'phase' | 'rawText' | 'correctionText'>): { text: string; opacity: number }[] {
-  if (s.phase === 'connecting') return [{ text: 'Connecting…', opacity: 0.45 }];
-  if (s.phase === 'recording') return [{ text: s.rawText || 'Listening…', opacity: s.rawText ? 1 : 0.45 }];
+  if (s.phase === 'connecting') return [{ text: t('settings:voice.connecting'), opacity: 0.45 }];
+  if (s.phase === 'recording') return [{ text: s.rawText || t('settings:voice.listening'), opacity: s.rawText ? 1 : 0.45 }];
   if (s.phase === 'finishing') {
-    if (!s.correctionText) return [{ text: s.rawText || 'Correcting…', opacity: 0.82 }];
+    if (!s.correctionText) return [{ text: s.rawText || t('settings:voice.correcting'), opacity: 0.82 }];
     const chars = [...s.correctionText];
     const tail = [0.48, 0.64, 0.78, 0.9];
     return chars.map((c, i) => ({ text: c, opacity: tail[chars.length - 1 - i] ?? 0.96 }));
@@ -398,7 +396,7 @@ export function editWords(ops: VoiceWordOp[]): string | null {
   for (const op of ops) {
     if (op.op === 'remove') { clean.push(op); continue; }
     const w = cleanWord(op.term, op.heardAs ?? '');
-    if (!w) return 'A word can’t contain “=”, start with “#”, or be longer than 120 characters.';
+    if (!w) return t('settings:voice.invalidWord');
     clean.push({ ...op, ...w });
   }
   const st = useVoice.getState();

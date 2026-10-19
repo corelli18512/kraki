@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useMemo, useRef, useState, useLayoutEffect, useSyncExternalStore } from 'react';
 import { ChevronLeft, CircleCheck, CircleX } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
@@ -95,6 +96,7 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
   agent?: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('chat');
   const live = bubbleSeq === null;
   const body = useRef<HTMLDivElement>(null);
   // Like Mac's StepsTarget, capture the opened turn once its prompt is known
@@ -175,29 +177,29 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     if (body.current && path.length === 0) body.current.scrollTop = body.current.scrollHeight;
   }, [steps, path.length]);
 
-  const title = current ? (subagentOf(current)?.name ?? 'Subagent') : 'Steps';
+  const title = current ? (subagentOf(current)?.name ?? t('stepsModal.subagent')) : t('stepsModal.steps');
   return (
-    <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Steps">
+    <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label={t('stepsModal.steps')}>
       <div ref={sheet} tabIndex={-1} className="ksheet" onClick={(e) => e.stopPropagation()}>
         <div className="ksheet-head">
           {path.length > 0 && (
-            <button type="button" onClick={back} className="ksheet-back" aria-label="Back">
-              <ChevronLeft aria-hidden />{path.length > 1 ? 'Back' : 'Steps'}
+            <button type="button" onClick={back} className="ksheet-back" aria-label={t('stepsModal.back')}>
+              <ChevronLeft aria-hidden />{path.length > 1 ? t('stepsModal.back') : t('stepsModal.steps')}
             </button>
           )}
           <h3>{title}</h3>
-          {live && <span className="ksheet-live">LIVE</span>}
-          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><CircleX aria-hidden /></button>
+          {live && <span className="ksheet-live">{t('stepsModal.live')}</span>}
+          <button type="button" onClick={onClose} className="ksheet-close" aria-label={t('stepsModal.close')}><CircleX aria-hidden /></button>
         </div>
         <div ref={body} className="ksheet-body" key={path.join('/')}>
           {steps.length === 0 ? loaded ? (
             <div className="ksheet-empty">
               <CircleCheck aria-hidden />
-              <h4>No steps recorded</h4>
-              <p>This turn completed without a recorded tool trace.</p>
+              <h4>{t('stepsModal.empty')}</h4>
+              <p>{t('stepsModal.emptyDetail')}</p>
             </div>
           ) : (
-            <div className="ksheet-waiting"><span className="kspinner" /><p>Loading steps…</p></div>
+            <div className="ksheet-waiting"><span className="kspinner" /><p>{t('stepsModal.loadingSteps')}</p></div>
           ) : current ? (
             <SubagentPage msg={current} merged={merged} steps={steps} agent={agent} sessionId={sessionId} onOpen={open} />
           ) : (
@@ -222,11 +224,12 @@ function SubagentPage({ msg, merged, steps, agent, sessionId, onOpen }: {
   sessionId: string;
   onOpen: (id: string) => void;
 }) {
+  const { t } = useTranslation('chat');
   const id = callIdOf(msg) ?? '';
   const info = subagentOf(msg);
   const status = subagentStatus(msg);
   const facts = [
-    status === 'running' ? 'Running' : status === 'failed' ? 'Failed' : status === 'stopped' ? 'Stopped' : 'Done',
+    status === 'running' ? t('stepsModal.running') : status === 'failed' ? t('stepsModal.failed') : status === 'stopped' ? t('stepsModal.stopped') : t('stepsModal.done'),
     contentsLabel(merged, id),
     formatDuration(info?.durationMs),
     formatTokens(info?.tokens),
@@ -239,7 +242,7 @@ function SubagentPage({ msg, merged, steps, agent, sessionId, onOpen }: {
       {merged.some((m) => (m.payload as { parentToolCallId?: string }).parentToolCallId === id) ? (
         <StepsList messages={steps} agent={agent} sessionId={sessionId} parentId={id} onOpenSubagent={onOpen} />
       ) : (
-        <p className="ksub-empty">{status === 'running' ? 'Working… its steps appear here as it reports them.' : 'The agent did not report this subagent\'s steps.'}</p>
+        <p className="ksub-empty">{status === 'running' ? t('stepsModal.working') : t('stepsModal.noSubagentSteps')}</p>
       )}
       {resultRef && status !== 'running' && <SubagentReport resultRef={resultRef} sessionId={sessionId} />}
     </div>
@@ -247,14 +250,15 @@ function SubagentPage({ msg, merged, steps, agent, sessionId, onOpen }: {
 }
 
 function SubagentReport({ resultRef, sessionId }: { resultRef: ContentRef; sessionId: string }) {
+  const { t } = useTranslation('chat');
   const { status, text, error } = useAttachmentText(resultRef, sessionId, pullRef, true);
   return (
     <div className="ksub-report">
-      <div className="ksub-report-label">Report</div>
+      <div className="ksub-report-label">{t('stepsModal.report')}</div>
       {/* A failed transfer is terminal: say so (as Mac does) instead of spinning forever. */}
       {status === 'error'
-        ? <p className="ksub-report-error" role="alert">Couldn’t load: {error}</p>
-        : text === null ? <p className="ksheet-loading"><span className="kspinner" /> Loading…</p> : <Markdown text={text} />}
+        ? <p className="ksub-report-error" role="alert">{t('stepsModal.loadFailed', { error })}</p>
+        : text === null ? <p className="ksheet-loading"><span className="kspinner" />{t('stepsModal.loading')}</p> : <Markdown text={text} />}
     </div>
   );
 }

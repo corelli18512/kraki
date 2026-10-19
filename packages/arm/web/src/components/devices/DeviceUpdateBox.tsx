@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import type { DeviceSummary } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
@@ -6,6 +7,7 @@ import { availableUpdate, isActivePhase, updateHowTo, updateTitle, type UpdatePr
 
 /** "Kraki x is available", the Update button (remote update), progress and outcome. */
 export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
+  const { t } = useTranslation('devices');
   const deviceUpdates = useStore((s) => s.deviceUpdates);
   const deviceVersions = useStore((s) => s.deviceVersions);
   const progress = useStore((s) => s.updateProgress.get(device.id));
@@ -47,49 +49,49 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
           onClick={() => wsClient.updateDevice(device.id)}
           className="rounded-md bg-kraki-500 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-40"
         >
-          Update
+          {t('update.button')}
         </button>
-        <span>{device.online ? `Kraki restarts on ${device.name}; about a minute.` : `Available when ${device.name} is online.`}</span>
+        <span>{device.online ? t('update.restartHint', { name: device.name }) : t('update.offlineHint', { name: device.name })}</span>
       </div>
     ));
   }
   const block = deviceUpdates.get(device.id)?.remoteBlock;
   const text = block === 'disabled'
-    ? `Updating from other devices is turned off on that computer. ${updateHowTo(update)}`
+    ? t('update.disabled', { howTo: updateHowTo(update) })
     : block === 'not_writable'
-      ? 'Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.'
+      ? t('update.admin')
       : updateHowTo(update);
   return box('info', updateTitle(update), text);
 
   function progressBox(p: UpdateProgress) {
     const to = p.to ? ` ${p.to}` : '';
     switch (p.phase) {
-      case 'requested': return box('info', `Asking ${device.name} to update…`);
+      case 'requested': return box('info', t('update.requested', { name: device.name }));
       case 'busy': {
         const n = p.runningSessions ?? 0;
-        return box('warn', `${n === 1 ? '1 session is' : `${n} sessions are`} running`, (
+        return box('warn', t('update.busy', { count: n }), (
           <div className="space-y-1.5">
-            <div>Updating restarts Kraki on {device.name} and stops these sessions.</div>
+            <div>{t('update.stopsSessions', { name: device.name })}</div>
             <div className="flex flex-wrap gap-1.5">
-              <button type="button" className="rounded-md bg-kraki-500 px-2 py-1 text-[11px] font-semibold text-white" onClick={() => wsClient.updateDevice(device.id, 'now')}>Update now</button>
-              <button type="button" className="rounded-md bg-surface-tertiary px-2 py-1 text-[11px] font-medium" onClick={() => wsClient.updateDevice(device.id, 'idle')}>Update when they finish</button>
-              <button type="button" className="px-2 py-1 text-[11px]" onClick={() => setUpdateProgress(device.id, null)}>Cancel</button>
+              <button type="button" className="rounded-md bg-kraki-500 px-2 py-1 text-[11px] font-semibold text-white" onClick={() => wsClient.updateDevice(device.id, 'now')}>{t('update.now')}</button>
+              <button type="button" className="rounded-md bg-surface-tertiary px-2 py-1 text-[11px] font-medium" onClick={() => wsClient.updateDevice(device.id, 'idle')}>{t('update.whenIdle')}</button>
+              <button type="button" className="px-2 py-1 text-[11px]" onClick={() => setUpdateProgress(device.id, null)}>{t('update.cancel')}</button>
             </div>
           </div>
         ));
       }
-      case 'waiting_idle': return box('info', 'Will update when the running sessions finish', `Kraki${to} installs on ${device.name} as soon as nothing is running.`);
-      case 'downloading': return box('info', `Downloading Kraki${to}…`, p.progress !== undefined ? (
+      case 'waiting_idle': return box('info', t('update.waiting'), t('update.idleDetail', { version: to, name: device.name }));
+      case 'downloading': return box('info', t('update.downloading', { version: to }), p.progress !== undefined ? (
         <div className="h-1.5 w-48 overflow-hidden rounded-full bg-surface-tertiary"><div className="h-full bg-kraki-500" style={{ width: `${Math.round(p.progress * 100)}%` }} /></div>
       ) : undefined);
       case 'installing':
         return now - p.at > 180_000
-          ? box('warn', `${device.name} isn’t back online yet`, 'If it doesn’t return, check Kraki on that computer.')
-          : box('info', device.online ? `Installing Kraki${to}…` : `Restarting Kraki on ${device.name}…`, 'It will be back online in a moment.');
-      case 'updated': return box('ok', `✓ Updated to Kraki${to}`);
-      case 'rolled_back': return box('warn', 'Update didn’t work, so nothing changed', `The new version didn’t start on ${device.name}, so it went back to ${p.from ?? 'the previous version'}.`);
-      case 'failed': return box('bad', 'Couldn’t update', (
-        <span>{p.error ?? 'Something went wrong. Nothing was changed.'} <button type="button" className="underline" onClick={() => setUpdateProgress(device.id, null)}>Dismiss</button></span>
+          ? box('warn', t('update.notBack', { name: device.name }), t('update.checkComputer'))
+          : box('info', device.online ? t('update.installing', { version: to }) : t('update.restarting', { name: device.name }), t('update.backSoon'));
+      case 'updated': return box('ok', t('update.updated', { version: to }));
+      case 'rolled_back': return box('warn', t('update.rolledBack'), t('update.rolledBackDetail', { name: device.name, from: p.from ?? t('update.previousVersion') }));
+      case 'failed': return box('bad', t('update.failed'), (
+        <span>{p.error ?? t('update.errorFallback')} <button type="button" className="underline" onClick={() => setUpdateProgress(device.id, null)}>{t('update.dismiss')}</button></span>
       ));
       default: return null;
     }

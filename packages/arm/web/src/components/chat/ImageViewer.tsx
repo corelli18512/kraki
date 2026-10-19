@@ -1,3 +1,5 @@
+import { formatNumber } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
@@ -20,6 +22,7 @@ export function ImagePreviewProvider({ children }: { children: ReactNode }) {
 }
 
 export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSelection; onClose: () => void }) {
+  const { t } = useTranslation('chat');
   const [index, setIndex] = useState(selection.initialIndex);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -128,22 +131,22 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
   // Keys started in the modal stay isolated; releases of preexisting held
   // shortcuts (e.g. Usage peek) still reach window cleanup as native events.
   return (
-    <div ref={dialog} tabIndex={-1} className="kimage-viewer" role="dialog" aria-modal="true" aria-label="Image preview"
+    <div ref={dialog} tabIndex={-1} className="kimage-viewer" role="dialog" aria-modal="true" aria-label={t('imageViewer.preview')}
       onKeyDown={(event) => event.stopPropagation()}
       onKeyUp={(event) => { if (modalKeys.current.delete(event.code || event.key)) event.stopPropagation(); }}>
       <div className="kimage-toolbar">
         <span className="kimage-title">{item.title}</span>
-        {selection.items.length > 1 && <span className="kimage-index">{index + 1} / {selection.items.length}</span>}
+        {selection.items.length > 1 && <span className="kimage-index">{formatNumber(index + 1, { useGrouping: false })} / {formatNumber(selection.items.length, { useGrouping: false })}</span>}
         <span className="kimage-spacer" />
         {selection.items.length > 1 && <>
-          <button type="button" title="Previous image" aria-label="Previous image" disabled={index === 0} onClick={() => show(index - 1)}><ChevronLeft /></button>
-          <button type="button" title="Next image" aria-label="Next image" disabled={index === selection.items.length - 1} onClick={() => show(index + 1)}><ChevronRight /></button>
+          <button type="button" title={t('imageViewer.previous')} aria-label={t('imageViewer.previous')} disabled={index === 0} onClick={() => show(index - 1)}><ChevronLeft /></button>
+          <button type="button" title={t('imageViewer.next')} aria-label={t('imageViewer.next')} disabled={index === selection.items.length - 1} onClick={() => show(index + 1)}><ChevronRight /></button>
         </>}
-        <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => changeZoom(zoom / 1.25)}><ZoomOut /></button>
-        <span className="kimage-zoom">{zoom.toFixed(1)}×</span>
-        <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.25)}><ZoomIn /></button>
-        <button type="button" title="Fit to window" aria-label="Fit to window" onClick={() => changeZoom(1)}><Minimize2 /></button>
-        <button type="button" title="Close image preview" aria-label="Close image preview" onClick={dismiss}><X /></button>
+        <button type="button" title={t('imageViewer.zoomOut')} aria-label={t('imageViewer.zoomOut')} onClick={() => changeZoom(zoom / 1.25)}><ZoomOut /></button>
+        <span className="kimage-zoom">{formatNumber(zoom, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}×</span>
+        <button type="button" title={t('imageViewer.zoomIn')} aria-label={t('imageViewer.zoomIn')} onClick={() => changeZoom(zoom * 1.25)}><ZoomIn /></button>
+        <button type="button" title={t('imageViewer.fit')} aria-label={t('imageViewer.fit')} onClick={() => changeZoom(1)}><Minimize2 /></button>
+        <button type="button" title={t('imageViewer.close')} aria-label={t('imageViewer.close')} onClick={dismiss}><X /></button>
       </div>
       <div ref={canvas} className="kimage-canvas" onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}
         onWheel={(event) => {

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { i18next } from '../../i18n';
 import { NewSessionComposer } from './NewSessionComposer';
 import { useStore } from '../../hooks/useStore';
 
@@ -10,7 +11,24 @@ vi.mock('../chat/Voice', () => ({
 
 beforeEach(() => { useStore.getState().reset(); localStorage.clear(); });
 
+afterEach(async () => { await i18next.changeLanguage('en'); });
+
 describe('NewSessionComposer', () => {
+  it('updates its default placeholder and empty state when the language changes', async () => {
+    render(<NewSessionComposer />);
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'Describe a task, e.g. “Fix the failing tests in my-app”');
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '描述任务，例如“修复 my-app 中失败的测试”');
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('选择电脑');
+    expect(screen.getByRole('button', { name: '开始会话' })).toHaveAttribute('title', '开始会话 (Enter)');
+    expect(screen.getByText('没有在线电脑。在电脑上打开 Kraki，即可在该电脑上开始会话。')).toBeInTheDocument();
+  });
+
+  it('preserves a caller-provided placeholder in every language', async () => {
+    await i18next.changeLanguage('zh-Hans');
+    render(<NewSessionComposer placeholder="User-provided instruction" />);
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'User-provided instruction');
+  });
   it('keeps the new-session draft across visiting a session', () => {
     const first = render(<NewSessionComposer />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unfinished task' } });
