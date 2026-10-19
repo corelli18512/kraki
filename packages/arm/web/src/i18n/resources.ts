@@ -10,8 +10,18 @@ import type { LanguageCode } from './languages';
 export type Resources = typeof en;
 export type Namespace = keyof Resources;
 
-/** Every translation must cover exactly the English keys (deeply). */
-type DeepStringShape<T> = { [K in keyof T]: T[K] extends string ? string : DeepStringShape<T[K]> };
+/**
+ * Every translation must cover the English keys (deeply). Plural forms vary by
+ * language (zh has only `_other`, Russian adds `_few`/`_many`), so plural
+ * suffix keys are optional here; i18n.test.ts and `pnpm l10n:check` enforce
+ * that each plural base key exists.
+ */
+type PluralKey = `${string}_${'zero' | 'one' | 'two' | 'few' | 'many'}`;
+type DeepStringShape<T> = {
+  [K in keyof T as K extends PluralKey ? never : K]: T[K] extends string ? string : DeepStringShape<T[K]>;
+} & {
+  [K in keyof T as K extends PluralKey ? K : never]?: string;
+} & { [plural: PluralKey]: string };
 export type LocaleResources = DeepStringShape<Resources>;
 
 export const resources: Record<LanguageCode, LocaleResources> = {
