@@ -125,11 +125,9 @@ final class MacChatScrollView: MacSmoothScrollView {
     var olderEdgeArmed: Bool { scrollPolicy.olderPageArmed }
     var hasUserScrolled = false
     private var initialTailTrimRequested = false
-    private var underfilledHistoryCheckScheduled = false
-    private var underfilledHistoryPagesRequested = 0
-    private var underfilledHistoryRequestedTop: Int?
+    var underfilledHistory = MacUnderfilledHistoryState()
     private(set) var representedSessionId: String?
-    private var presentationEpoch = 0
+    private(set) var presentationEpoch = 0
     var diagnosticWindowTop = 0
     var diagnosticWindowBottom = 0
     private var diagnosticRawCount = 0
@@ -137,7 +135,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     var diagnosticAtOldest = false
     var diagnosticAtNewest = false
     private var lastPresentationLogSignature = ""
-    private var presentationHealthWorkItem: DispatchWorkItem?
+    var presentationHealthWorkItem: DispatchWorkItem?
     var geometryAnchorLock: (key: String, delta: CGFloat)?
     var latestStartJumpPending = false
     private var bubbleActionMouseMonitor: Any?
@@ -265,7 +263,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         didSet { requestInitialTailTrimIfReady() }
     }
 
-    private func requestInitialTailTrimIfReady() {
+    func requestInitialTailTrimIfReady() {
         guard canTrimTailWindow,
               !hasUserScrolled,
               !initialTailTrimRequested,
@@ -342,8 +340,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             self?.applyAnimatedLiveHeightStep(delta)
         }
         chatDocumentView.onFullWindowGeometryReady = { [weak self] in
-            self?.requestInitialTailTrimIfReady()
-            self?.scheduleUnderfilledHistoryCheck()
+            self?.fullWindowGeometryDidBecomeReady()
         }
         composerSubmitObserver = NotificationCenter.default.addObserver(
             forName: .krakiComposerSubmitted,
@@ -480,9 +477,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
-        underfilledHistoryCheckScheduled = false
-        underfilledHistoryPagesRequested = 0
-        underfilledHistoryRequestedTop = nil
+        underfilledHistory = MacUnderfilledHistoryState()
         loadingOlder = false
         loadingNewer = false
         hasUnloadedNewer = false
@@ -718,77 +713,6 @@ final class MacChatScrollView: MacSmoothScrollView {
         if !chatDocumentView.presentationHealth(in: contentView.bounds).unresolvedSeqs.isEmpty {
             schedulePresentationHealthCheck()
         }
-    }
-
-    /// A compact raw tail can project to less than one screen (e.g. stopped
-    /// turns). It cannot generate older scroll intent, so fill it at rest,
-    /// independently of the normal user-driven edge-paging policy.
-    func scheduleUnderfilledHistoryCheck() {
-        guard !isDeallocating, !underfilledHistoryCheckScheduled else { return }
-        underfilledHistoryCheckScheduled = true
-        let epoch = presentationEpoch
-        DispatchQueue.main.async { [weak self] in
-            guard let self, epoch == self.presentationEpoch else { return }
-            self.underfilledHistoryCheckScheduled = false
-            guard !self.isDeallocating,
-                  !self.snapshotApplyActive,
-                  self.alphaValue > 0,
-                  self.contentView.bounds.width > 1,
-                  self.contentView.bounds.height > 1,
-                  self.diagnosticWindowTop > 1,
-                  !self.diagnosticAtOldest,
-                  !self.loadingOlder, !self.loadingNewer,
-                  !self.navigationLoadInFlight,
-                  !self.hasPendingLatestStartJump,
-                  !self.scrollPolicy.navigationActive,
-                  !self.isScrollInteractionActive,
-                  !self.isResizingControls, self.window?.inLiveResize != true,
-                  !self.isProgrammaticScrollActive,
-                  self.chatDocumentView.contents.isEmpty || self.chatDocumentView.isFullWindowGeometryReady,
-                  self.underfilledHistoryPagesRequested < 8,
-                  self.underfilledHistoryRequestedTop != self.diagnosticWindowTop,
-                  let loadOlder = self.onScrolledNearTop else { return }
-            // Do not count bottom-alignment padding, edge spinners, or composer
-            // clearance as rendered history. Wait for exact row heights above.
-            let frames = self.chatDocumentView.itemFrames
-            let renderedHeight = (frames.last?.maxY ?? 0) - (frames.first?.minY ?? 0)
-            let availableHeight = self.contentView.bounds.height - self.topContentInset
-                - self.chatDocumentView.bottomSafeArea
-            guard renderedHeight < availableHeight - 1 else { return }
-            // Consume before dispatch: SwiftUI/provider loading flags can lag
-            // one turn. A no-progress request must not spin on the same edge.
-            self.underfilledHistoryRequestedTop = self.diagnosticWindowTop
-            self.underfilledHistoryPagesRequested += 1
-            loadOlder()
-        }
-    }
-
-    func schedulePresentationHealthCheck() {
-        // Streaming snapshots may arrive 10–20 times per second. Keep the first
-        // deadline for this epoch instead of perpetually postponing diagnosis;
-        // the work item reads the latest window metadata when it fires.
-        guard presentationHealthWorkItem == nil else { return }
-        let epoch = presentationEpoch
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, epoch == self.presentationEpoch else { return }
-            self.presentationHealthWorkItem = nil
-            let health = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
-            if !self.isScrollInteractionActive, !health.unresolvedSeqs.isEmpty {
-                _ = self.chatDocumentView.updateVisibleCells(
-                    in: self.contentView.bounds,
-                    runwayOverride: 0
-                )
-            }
-            let refreshed = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
-            self.emitPresentationLog(
-                reason: refreshed.unresolvedSeqs.isEmpty
-                    ? "viewport-resolved"
-                    : "viewport-stuck",
-                force: true
-            )
-        }
-        presentationHealthWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
     }
 
     func emitPresentationLog(reason: String, force: Bool) {

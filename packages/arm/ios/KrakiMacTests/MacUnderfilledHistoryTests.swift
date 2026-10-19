@@ -9,7 +9,9 @@ final class MacUnderfilledHistoryTests: MacChatListTestCase {
         await settle(fx)
         let state = try XCTUnwrap(fx.app.messageStore.windowState(sid))
         XCTAssertLessThan(state.topSeq, 106, "the initial 15 raw rows must expand without a scroll")
-        XCTAssertGreaterThan(fx.sv.chatDocumentView.itemFrames.last!.maxY - fx.sv.chatDocumentView.itemFrames.first!.minY,
+        let frames = fx.sv.chatDocumentView.itemFrames
+        let first = try XCTUnwrap(frames.first), last = try XCTUnwrap(frames.last)
+        XCTAssertGreaterThan(last.maxY - first.minY,
                              fx.sv.contentView.bounds.height - fx.sv.topContentInset - fx.sv.chatDocumentView.bottomSafeArea)
         XCTAssertFalse(fx.sv.hasUserScrolled)
         XCTAssertFalse(fx.sv.diagnosticAtOldest, "stop once filled, rather than eagerly loading all history")
