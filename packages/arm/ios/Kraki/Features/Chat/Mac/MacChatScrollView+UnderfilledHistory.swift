@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 /// Bounded at-rest older paging for a history window that does not fill the
@@ -57,3 +58,4 @@ extension MacChatScrollView {
         }
     }
 }
+#endif

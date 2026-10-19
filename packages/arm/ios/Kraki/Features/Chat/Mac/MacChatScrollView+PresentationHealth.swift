@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 extension MacChatScrollView {
@@ -29,3 +30,4 @@ extension MacChatScrollView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
     }
 }
+#endif
