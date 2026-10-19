@@ -61,7 +61,7 @@ struct MacConnectPhoneStep: View {
     }
 }
 
-/// Full-window page: the setup backdrop and card around the pairing step.
+/// Full-window page: the setup card around the pairing step.
 struct MacConnectPhoneStepPage: View {
     var preview: TentacleCLIManager.PairingPayload?
     var previewConnected: DeviceSummary?
@@ -70,7 +70,6 @@ struct MacConnectPhoneStepPage: View {
     var body: some View {
         ZStack {
             Color.surfacePrimary.ignoresSafeArea()
-            backdrop
             GeometryReader { proxy in
                 ScrollView(.vertical) {
                     card
@@ -106,24 +105,6 @@ struct MacConnectPhoneStepPage: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(Color.borderPrimary.opacity(0.8), lineWidth: 1)
             )
-    }
-
-    /// Same soft glow as the signed-out setup page (MacEntryGateView).
-    private var backdrop: some View {
-        ZStack {
-            Circle()
-                .fill(Color.krakiPrimary.opacity(0.09))
-                .frame(width: 520, height: 520)
-                .blur(radius: 80)
-                .offset(x: 220, y: -210)
-            Circle()
-                .fill(Color.cyan.opacity(0.055))
-                .frame(width: 440, height: 440)
-                .blur(radius: 90)
-                .offset(x: -260, y: 240)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 #endif
