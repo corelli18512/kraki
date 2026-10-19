@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import type { SessionLiveSnapshot } from '@kraki/protocol';
 import { useAccountDeletion } from './account-deletion';
 import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
+import type { CardActionState } from '@kraki/protocol';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
+import { diag } from './diag';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -239,7 +242,7 @@ describe('KrakiWSClient', () => {
   });
 
   describe('message routing', () => {
-    async function connectAndAuth(client: KrakiWSClient) {
+    async function connectAndAuth(client: KrakiWSClient, snapshot?: SessionLiveSnapshot) {
       client.connect();
       await vi.waitFor(() => {
         expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
@@ -262,7 +265,7 @@ describe('KrakiWSClient', () => {
         type: 'session_subscription_set', deviceId: 'dev-1', seq: 2, timestamp: '',
         payload: {
           accepted: true, sessionId: 'sess-1',
-          snapshot: {
+          snapshot: snapshot ?? {
             digest: { id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' },
             spineHeadSeq: 0,
             card: { draft: '', action: null },
@@ -270,6 +273,58 @@ describe('KrakiWSClient', () => {
         },
       });
     }
+
+    it('keeps authoritative subscription snapshot cursors and uses its head for implicit markRead', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      const reconcile = vi.spyOn(messageProvider, 'reconcileTail').mockImplementation(() => {});
+      useStore.getState().appendMessage('sess-1', {
+        type: 'user_message', sessionId: 'sess-1', deviceId: 'dev-1', seq: 10, timestamp: '',
+        payload: { content: 'Cached history' },
+      });
+      await connectAndAuth(client, {
+        digest: { id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 100, readSeq: 75, messageCount: 100, createdAt: '' },
+        spineHeadSeq: 100,
+        card: { draft: 'Current draft', action: null },
+      });
+
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 75 });
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(useStore.getState().cardHoldUntil.get('sess-1')).toBe(100);
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('Current draft');
+      expect(reconcile).toHaveBeenCalledWith('sess-1', 100);
+
+      const send = vi.spyOn(client, 'sendEncrypted').mockImplementation(() => {});
+      client.markRead('sess-1');
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'mark_read', payload: { seq: 100 } }));
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 100 });
+      expect(useStore.getState().unreadCount.has('sess-1')).toBe(false);
+      client.disconnect();
+    });
+
+    it('keeps a subscription snapshot manual-unread rollback authoritative', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      vi.spyOn(messageProvider, 'reconcileTail').mockImplementation(() => {});
+      await connectAndAuth(client, {
+        digest: { id: 'sess-1', agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 100, readSeq: 99, messageCount: 100, createdAt: '' },
+        spineHeadSeq: 100,
+        card: { draft: '', action: null },
+      });
+      useStore.getState().upsertSession({ ...useStore.getState().sessions.get('sess-1')!, readSeq: 100 });
+      client.setDesiredSession(null);
+      receiveInner({ type: 'session_subscription_set', deviceId: 'dev-1', seq: 3, timestamp: '',
+        payload: { accepted: true, sessionId: null, snapshot: null } });
+      client.setDesiredSession('sess-1');
+      receiveInner({ type: 'session_subscription_set', deviceId: 'dev-1', seq: 4, timestamp: '',
+        payload: { accepted: true, sessionId: 'sess-1', snapshot: {
+          digest: { id: 'sess-1', agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 100, readSeq: 99, messageCount: 100, createdAt: '' },
+          spineHeadSeq: 100, card: { draft: '', action: null },
+        } } });
+
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ lastSeq: 100, readSeq: 99 });
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(isAutoReadSuppressed('sess-1')).toBe(true);
+      client.disconnect();
+    });
 
     it('routes agent_message to store', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
@@ -565,6 +620,101 @@ describe('KrakiWSClient', () => {
       expect(action?.type === 'permission' ? action.payload.id : undefined).toBe('perm-abc');
     });
 
+    describe('permission confirmation', () => {
+      const permission = {
+        type: 'permission' as const,
+        payload: { id: 'perm-1', toolName: 'shell', args: { command: 'ls' }, description: 'List files' },
+      };
+      let client: KrakiWSClient;
+
+      function receiveAction(action: CardActionState | null) {
+        receiveInner({
+          type: 'card_action', deviceId: 'dev-1', seq: 3, timestamp: '',
+          sessionId: 'sess-1', payload: { action },
+        });
+      }
+
+      // Keep the transport live so a missing confirmation really can time out.
+      async function advanceWithLivePath(ms: number) {
+        for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          lastWsInstance._receive({ type: 'pong' });
+        }
+      }
+
+      beforeEach(async () => {
+        vi.useFakeTimers();
+        client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        receiveAction(permission);
+      });
+
+      afterEach(() => {
+        client.disconnect();
+        vi.useRealTimers();
+      });
+
+      it.each(['approve', 'deny'] as const)('keeps optimistic %s through a stale unresolved update until Tentacle resolves it', async (decision) => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', decision, undefined, undelivered);
+        const pending = useStore.getState().cards.get('sess-1')?.action;
+        expect(pending?.payload).toMatchObject({ id: 'perm-1', decision, localPending: true });
+
+        receiveAction(permission);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(pending);
+
+        // The Tentacle's decision is authoritative, even if another device won.
+        const serverDecision = decision === 'approve' ? 'deny' : 'approve';
+        const resolved = { ...permission, payload: { ...permission.payload, decision: serverDecision } };
+        receiveAction(resolved);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(resolved);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(resolved);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
+
+      it('lets a genuinely new permission id replace a pending decision', async () => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', 'approve', undefined, undelivered);
+        const nextPermission = { ...permission, payload: { ...permission.payload, id: 'perm-2' } };
+        receiveAction(nextPermission);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(nextPermission);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(nextPermission);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
+
+      it.each(['approve', 'deny'] as const)('rolls back an unconfirmed %s after a stale unresolved update and reports it once', async (decision) => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', decision, undefined, undelivered);
+        receiveAction(permission);
+        await advanceWithLivePath(18_000);
+        expect(undelivered).not.toHaveBeenCalled();
+        await advanceWithLivePath(2_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual({
+          ...permission,
+          payload: { ...permission.payload, localError: 'Not confirmed by the agent. Try again.' },
+        });
+        expect(undelivered).toHaveBeenCalledTimes(1);
+        await advanceWithLivePath(4_000);
+        expect(undelivered).toHaveBeenCalledTimes(1);
+      });
+
+      it('treats a cleared slot as confirmation of the pending decision', async () => {
+        const undelivered = vi.fn();
+        client.resolvePermission('sess-1', 'perm-1', 'shell', 'approve', undefined, undelivered);
+        receiveAction(null);
+        const confirmed = {
+          ...permission,
+          payload: { ...permission.payload, decision: 'approve', retained: true },
+        };
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(confirmed);
+        await advanceWithLivePath(22_000);
+        expect(useStore.getState().cards.get('sess-1')?.action).toEqual(confirmed);
+        expect(undelivered).not.toHaveBeenCalled();
+      });
+    });
+
     it('routes a question as a spine agent_message (never card state)', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
@@ -812,6 +962,28 @@ describe('KrakiWSClient', () => {
       useAccountDeletion.getState().setNotice(false);
     });
 
+    it.each(['account_deleted', 'auth_error'] as const)('%s discards all pending diagnostics before account cleanup', async (type) => {
+      await connected();
+      const reply = vi.fn(), voice = vi.fn(), send = vi.fn();
+      diag.replies.onSummary = reply; diag.voices.onSummary = voice; diag.sends.onSummary = send;
+      diag.replies.started('account-a', 'typed');
+      diag.voices.begin(false); diag.voices.stateChanged('recording');
+      diag.sends.created('send-a', 'typed', 10, 0, true);
+      try {
+        lastWsInstance._receive({ type, ...(type === 'auth_error' ? { code: 'account_deleted' } : {}) });
+        expect(diag.replies.inFlight).toBe(0);
+        expect(diag.sends.inFlight).toBe(0);
+        diag.phase('background');
+        expect(reply).not.toHaveBeenCalled();
+        expect(voice).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        diag.replies.onSummary = diag.voices.onSummary = diag.sends.onSummary = undefined;
+        diag.replies.backgrounded(); diag.voices.stateChanged('idle'); diag.sends.finished('send-a', 'cleared');
+        useAccountDeletion.getState().setNotice(false);
+      }
+    });
+
     it('cannot delete while disconnected', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       useStore.getState().setStatus('disconnected');
@@ -887,6 +1059,18 @@ describe('KrakiWSClient', () => {
       });
 
       expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
+    });
+
+    it.each(['invalid_signature', 'auth_unavailable'])('%s discards diagnostics only when stored identity is invalid', async (code) => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      diag.replies.started('account-a', 'typed');
+      try {
+        lastWsInstance._receive({ type: 'auth_error', code });
+        expect(diag.replies.inFlight).toBe(code === 'invalid_signature' ? 0 : 1);
+      } finally { diag.replies.backgrounded(); }
     });
 
     it('saves relay URL and triggers reload on wrong_region', async () => {
@@ -2104,5 +2288,50 @@ describe('desktop local link routing (fake link)', () => {
       const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean);
       expect(sent.some((m) => m?.type === 'approve')).toBe(true);
     });
+  });
+});
+
+describe('diagnostic session_list and message batch application', () => {
+  afterEach(() => { diag.replies.onSummary = undefined; diag.replies.backgrounded(); });
+
+  const session = (id: string, deviceId = 'tentacle') => ({
+    id, deviceId, deviceName: 'Test', agent: 'pi' as const, state: 'active' as const,
+    messageCount: 0, lastSeq: 0, readSeq: 0,
+  });
+
+  it('abandons only idle/removed tracked replies owned by the listing tentacle', () => {
+    const client = new KrakiWSClient('ws://localhost:9999');
+    const summary = vi.fn();
+    diag.replies.onSummary = summary;
+    for (const id of ['idle', 'removed', 'active']) {
+      useStore.getState().upsertSession(session(id));
+      diag.replies.started(id, 'typed');
+    }
+    useStore.getState().upsertSession(session('other', 'other-tentacle'));
+    diag.replies.started('other', 'answer');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [
+        { ...session('idle'), state: 'idle' }, session('active'),
+      ] },
+    });
+    expect(summary).toHaveBeenCalledTimes(2);
+    expect(summary.mock.calls.map(([s]) => s.outcome)).toEqual(['abandoned', 'abandoned']);
+    expect(diag.replies.openSessions.sort()).toEqual(['active', 'other']);
+  });
+
+  it('measures synchronous session_list and actual store message batch apply with fixed source tags', () => {
+    const work = vi.spyOn(diag, 'work');
+    const client = new KrakiWSClient('ws://localhost:9999');
+    (client as unknown as { handleSessionList(msg: unknown): void }).handleSessionList({
+      type: 'session_list', deviceId: 'tentacle', payload: { sessions: [session('s')] },
+    });
+    useStore.getState().prependMessages('s', [{
+      type: 'agent_message', sessionId: 's', deviceId: 'tentacle', seq: 1,
+      timestamp: new Date().toISOString(), payload: { content: 'private reply' },
+    }]);
+    expect(work.mock.calls.map(([source, sid]) => [source, sid])).toEqual([
+      ['web/session_list', undefined], ['web/message_batch', 's'],
+    ]);
+    expect(useStore.getState().messages.get('s')).toHaveLength(1);
   });
 });

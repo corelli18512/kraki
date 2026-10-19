@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { withMermaidRuntime } from '../../lib/report-mermaid';
+import { prepareReportPreview } from '../../lib/report-preview';
 import { desktop } from '../../lib/desktop';
 import { formatReportBytes, htmlArtifactTitle } from './Attachments';
 import { X, Maximize2, Minimize2, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
@@ -44,7 +45,7 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
   const title = htmlArtifactTitle(artifact);
   const { status, text, error } = useAttachmentText(artifact, sessionId, ATTACHMENT_PULL, artifact.size <= MAX_REPORT_BYTES);
   const oversized = artifact.size > MAX_REPORT_BYTES || (text !== null && new TextEncoder().encode(text).byteLength > MAX_REPORT_BYTES);
-  const [prepared, setPrepared] = useState<{ id: string; html: string; url: string } | null>(null);
+  const [prepared, setPrepared] = useState<{ id: string; sessionId: string; exportHtml: string; url: string } | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   useEffect(() => {
@@ -52,13 +53,14 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
     if (status !== 'ready' || text === null || oversized) return;
     let url: string | null = null;
     let cancelled = false;
-    void withMermaidRuntime(text).then((html) => {
+    // Preview is a constrained document; explicit export keeps the original report.
+    void Promise.all([prepareReportPreview(text), withMermaidRuntime(text)]).then(([previewHtml, exportHtml]) => {
       if (cancelled) return;
-      url = URL.createObjectURL(new Blob([withArtifactCsp(html)], { type: 'text/html' }));
-      setPrepared({ id: artifact.id, html, url });
+      url = URL.createObjectURL(new Blob([previewHtml], { type: 'text/html' }));
+      setPrepared({ id: artifact.id, sessionId, exportHtml, url });
     }).catch((reason: unknown) => { if (!cancelled) setRenderError(String(reason)); });
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
-  }, [artifact.id, status, text, oversized]);
+  }, [artifact.id, sessionId, status, text, oversized]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('.kimage-viewer')) onClose();
@@ -66,7 +68,7 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  const ready = prepared?.id === artifact.id ? prepared : null;
+  const ready = prepared?.id === artifact.id && prepared.sessionId === sessionId ? prepared : null;
   const reason = oversized ? SIZE_ERROR : status === 'error' ? error : renderError;
   const expansionLabel = expanded ? 'Restore Split View' : 'Expand Report';
   return <aside className={`kreport-panel ${expanded ? 'is-expanded' : ''}`} aria-label="HTML report preview">
@@ -74,7 +76,7 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
       <RichTextDocumentIcon className="kreport-header-icon" />
       <span className="kreport-header-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
       {ready && <button type="button" aria-label="Open in Browser" title="Open in Browser" onClick={() => {
-        void exportHtmlReport(ready.html, artifact.name || title).catch((reason: unknown) => setExportError(reason instanceof Error ? reason.message : String(reason)));
+        void exportHtmlReport(ready.exportHtml, artifact.name || title).catch((reason: unknown) => setExportError(reason instanceof Error ? reason.message : String(reason)));
       }}><Compass /></button>}
       {onToggleExpanded && <button type="button" className="kreport-expand" onClick={onToggleExpanded} aria-label={expansionLabel} title={expansionLabel}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>}
       <button type="button" onClick={onClose} aria-label="Close Report" title="Close Report"><X /></button>

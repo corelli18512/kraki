@@ -197,7 +197,10 @@ export class PiAdapter extends AgentAdapter {
     this.stopped = true;
     clearModelRetry(this);
     if (this.evictTimer) clearInterval(this.evictTimer);
-    for (const s of this.sessions.values()) s.proc.kill();
+    for (const s of this.sessions.values()) {
+      this.stopAwaitingSubagents(s);
+      s.proc.kill();
+    }
     this.sessions.clear();
     this.compactingSessions.clear();
   }
@@ -214,6 +217,8 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
+    const previous = this.sessions.get(sessionId);
+    if (previous) this.stopAwaitingSubagents(previous);
     const [provider, modelId] = this.resolveModelId(model);
     // Export the meta sidecar path so the extension's kraki_get_mode reads the
     // live permission mode (the adapter, via persistMeta, is the source of truth).
@@ -537,14 +542,16 @@ export class PiAdapter extends AgentAdapter {
 
           if (state.isCompacting) {
             idleSince = null;
-            this.setCompacting(sessionId, true);
+            // A deferred probe must not change maintenance for a dead or
+            // replaced process. Preserve the original ACK/watchdog outcome.
+            if (this.sessions.get(sessionId) === s && s.proc.alive) this.setCompacting(sessionId, true);
             logger.debug({ sessionId }, 'pi prompt ACK delayed by compaction; continuing to wait');
             continue;
           }
 
           // A missed native compaction_end must not leave stale UI once Pi reports
           // real streaming or a settled non-compacting state.
-          this.setCompacting(sessionId, false);
+          if (this.sessions.get(sessionId) === s && s.proc.alive) this.setCompacting(sessionId, false);
           if (state.isStreaming) {
             logger.debug({ sessionId }, 'pi prompt accepted before ACK; watchdog reconciled active state');
             return;

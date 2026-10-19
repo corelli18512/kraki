@@ -44,7 +44,7 @@ test('uses native dark Steps/subagent surfaces and keyboard focus without recolo
   await page.locator('.ksheet-close').focus();
   await expect(page.locator('.ksheet-close')).toHaveCSS('outline-color', 'rgb(14, 88, 138)');
   await expect(page.locator('.ksheet-close')).toHaveCSS('outline-width', '3px');
-  await expect(page.locator('.ksheet-close')).toHaveCSS('border-radius', '1px');
+  await expect(page.locator('.ksheet-close')).toHaveCSS('border-radius', '2px');
   await page.evaluate(() => {
     const backdrop = document.createElement('div');
     backdrop.className = 'ksheet-backdrop';

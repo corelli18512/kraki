@@ -7,13 +7,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
 import { handleEvent } from '../adapters/pi-events.js';
+import { PiRpcProcess } from '../adapters/pi-rpc.js';
+import type { PiSession } from '../adapters/pi-session.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function setup() {
   const adapter = new PiAdapter({ cliPath: '/unused' });
@@ -104,6 +106,63 @@ describe('pi background subagents', () => {
     expect(t.proc.request).toHaveBeenCalledWith('prompt', { message: '/subagents-stop run-1' }, { timeoutMs: 10_000 });
     expect(t.adapter.isTurnSettled(t.sid)).toBe(true);
     expect(t.of('onIdle')).toHaveLength(0);
+  });
+
+  describe.each(['stop', 'replacement'] as const)('%s timer cleanup', retirement => {
+    it.each(['grace', 'hold'] as const)('cancels the %s timer synchronously before process teardown or replacement', async timer => {
+      vi.useFakeTimers();
+      const t = setup();
+      await t.emit({ type: 'agent_start' });
+      await t.launch('D', 'run-1');
+      await t.settle();
+      if (timer === 'grace') await t.snapshot([{ id: 'run-1', state: 'failed' }]);
+      const original = t.adapter.sessions.get(t.sid)!;
+      expect(original.awaitingSubagents).toBe(true);
+      expect(original.subagentHoldTimer).toBeDefined();
+      if (timer === 'grace') expect(original.subagentGrace).toBeDefined();
+      const tracker = t.adapter.subagentTracker(t.sid);
+      const retirePending = vi.spyOn(tracker, 'retirePending');
+      const steps = vi.spyOn(t.adapter, 'emitSubagentSteps');
+      const completions = t.of('onToolComplete');
+      const timerState = () => [original.awaitingSubagents, original.subagentGrace, original.subagentHoldTimer];
+      let stateAtProcessBoundary: unknown[] | undefined;
+      let stopping: Promise<void> | undefined;
+      let replacement: PiSession | undefined;
+      try {
+        if (retirement === 'stop') {
+          t.proc.kill.mockImplementation(() => { stateAtProcessBoundary = timerState(); });
+          stopping = t.adapter.stop();
+        } else {
+          // Exercise the real spawn path without starting Pi or writing files.
+          Object.assign(t.adapter, { persistMeta: () => {}, ensureToolsExtension: () => '/unused/tools.ts' });
+          vi.spyOn(PiRpcProcess.prototype, 'start').mockImplementation(() => { stateAtProcessBoundary = timerState(); });
+          const spawn = (t.adapter as unknown as {
+            spawn: (id: string, cwd: string, model: string, mode: 'auto') => PiSession;
+          }).spawn.bind(t.adapter);
+          replacement = spawn(t.sid, '/unused', 'fake/model', 'auto');
+          replacement.turn.beginTurn({ captureNow: true });
+        }
+        // Check before yielding: retirement must not leave either timer armed.
+        expect(stateAtProcessBoundary).toEqual([false, undefined, undefined]);
+        expect(timerState()).toEqual([false, undefined, undefined]);
+        expect(vi.getTimerCount()).toBe(0);
+        await stopping;
+        await vi.advanceTimersByTimeAsync(PiAdapter.SUBAGENT_HOLD_IDLE_MS);
+        expect(original.turn.isSettled).toBe(false);
+        if (replacement) {
+          expect(t.adapter.sessions.get(t.sid)).toBe(replacement);
+          expect(replacement.turn.isSettled).toBe(false);
+        }
+        expect(retirePending).not.toHaveBeenCalled();
+        expect(steps).not.toHaveBeenCalled();
+        expect(t.of('onIdle')).toEqual([]);
+        expect(t.of('onMessage')).toEqual([]);
+        expect(t.of('onToolComplete')).toEqual(completions);
+      } finally {
+        await stopping;
+        t.adapter.stopAwaitingSubagents(original);
+      }
+    });
   });
 
   it('a foreground subagent settles normally', async () => {

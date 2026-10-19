@@ -72,6 +72,23 @@ export class StabilityTracker {
   private opening: { sessionId: string; since: number; target: number; value: OpenSummary } | null = null;
   private generation = 0;
 
+  /** Discard identity-bound milestones and invalidate their timers without summaries.
+   * Keep the process exit marker, current network path, clocks and callbacks. */
+  reset(): void {
+    this.generation += 1;
+    this.everVisible = this.everAuthenticated = false;
+    this.hiddenAt = this.asleepAt = this.lastPathChange = this.lastWake = null;
+    this.readySince = null;
+    this.ready = null;
+    this.readyConnects = this.outageLast = this.outageDetected = 0;
+    this.outageReauthed = null;
+    this.outage = null;
+    this.reconnectingShownAt = null;
+    this.awaitingList = false;
+    this.target = null;
+    this.opening = null;
+  }
+
   appVisible(hasCachedContent: boolean, viewing: boolean): void {
     if (this.asleepAt !== null) {
       const asleep = this.asleepAt;
@@ -300,6 +317,8 @@ export class SendTracker {
     return { kind, outcome: 'delivered', shown: 'none', shownMs: 0, failedInBackground: false, manualRetries: 0,
       autoResends: 0, restored: false, offlineAtSend: false, attachments: 0, textLength: 0 };
   }
+
+  reset(): void { this.entries.clear(); }
 
   created(clientId: string, kind: SendSummary['kind'], textLength: number, attachments: number, pathUp: boolean): void {
     this.entries.set(clientId, { summary: { ...this.blank(kind), offlineAtSend: !pathUp, attachments, textLength }, createdAt: this.now(), shownSince: null });

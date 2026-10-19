@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { MockRelayServer } from './helpers/mock-ws-server';
+import { MockTentaclePeer } from './helpers/mock-tentacle-peer';
 import type { WebSocket } from 'ws';
 
 const SESSION_ID = 'session-features';
@@ -7,6 +8,7 @@ const DEVICE_ID = 'tentacle-1';
 
 const TEST_SESSION = {
   id: SESSION_ID,
+  title: 'Feature test',
   deviceId: DEVICE_ID,
   deviceName: 'Test Tentacle',
   agent: 'copilot',
@@ -33,35 +35,36 @@ async function gotoWithRelay(
   opts: { path?: string } = {},
 ): Promise<void> {
   const path = opts.path ?? '/';
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.goto(`${path}?relay=${encodeURIComponent(server.url)}`);
+  await page.goto(`${path}?relay=${encodeURIComponent(server.url)}&token=e2e-test`);
 }
 
 async function authenticateClient(
   server: MockRelayServer,
-): Promise<WebSocket> {
+): Promise<{ ws: WebSocket; peer: MockTentaclePeer }> {
   const ws = await server.waitForConnection();
-  await server.waitForMessage(ws);
+  const auth = await server.waitForMessage(ws);
+  expect(auth).toMatchObject({ type: 'auth', device: { encryptionKey: expect.any(String) } });
+  const peer = await MockTentaclePeer.create(ws, DEVICE_ID);
   server.sendAuthOk(ws, {
     sessions: [TEST_SESSION],
-    devices: [TEST_DEVICE],
+    devices: [{ ...TEST_DEVICE, encryptionKey: peer.encryptionKey }],
   });
-  await server.waitForMessage(ws);
-  return ws;
+  peer.connect();
+  return { ws, peer };
 }
 
 async function setupAndOpenSession(
   page: Page,
   server: MockRelayServer,
-): Promise<WebSocket> {
+): Promise<{ ws: WebSocket; peer: MockTentaclePeer }> {
+  const client = authenticateClient(server);
   await gotoWithRelay(page, server);
-  const ws = await authenticateClient(server);
-  const sessionCard = page.getByText('Copilot').filter({ visible: true }).first();
+  const { ws, peer } = await client;
+  const sessionCard = page.getByRole('list').getByRole('button', { name: /Feature test/ });
   await expect(sessionCard).toBeVisible({ timeout: 5000 });
   await sessionCard.click();
   await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 3000 });
-  return ws;
+  return { ws, peer };
 }
 
 // ─── Test Suite ───────────────────────────────────────────────────────
@@ -78,7 +81,7 @@ test.describe('Feature fixes', () => {
   });
 
   test('#41: URLs in agent messages render as clickable links', async ({ page }) => {
-    const ws = await setupAndOpenSession(page, server);
+    const { ws } = await setupAndOpenSession(page, server);
 
     server.sendMessage(ws, {
       type: 'agent_message',
@@ -96,7 +99,7 @@ test.describe('Feature fixes', () => {
   ]) {
     test(`one primary control: Stop while nothing is typed, Steer once there is text (${viewport.name})`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await setupAndOpenSession(page, server);
+      const { peer } = await setupAndOpenSession(page, server);
       const input = page.getByPlaceholder('Steer the agent…');
       const stop = page.getByRole('button', { name: 'Stop agent' });
 
@@ -114,6 +117,11 @@ test.describe('Feature fixes', () => {
 
       await steer.click();
       await expect(input).toHaveValue('');
+      expect(await peer.waitForMessage('send_input')).toMatchObject({
+        sessionId: SESSION_ID,
+        payload: { text: 'change direction', delivery: 'steer' },
+      });
+      await expect(page.getByRole('alert')).toHaveCount(0);
     });
   }
 });

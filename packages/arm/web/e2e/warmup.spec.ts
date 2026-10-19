@@ -105,7 +105,7 @@ test.describe('Smart warm-up', () => {
     });
 
     // Click session card
-    const card = page.getByText('Copilot').first();
+    const card = page.getByRole('list').getByRole('button', { name: /Ready to help/ });
     await expect(card).toBeVisible({ timeout: 5000 });
     await card.click();
 
@@ -138,6 +138,6 @@ test.describe('Smart warm-up', () => {
     });
 
     // Session card should still appear even without preview
-    await expect(page.getByText('Copilot').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('list').getByRole('button', { name: /New Session/ })).toBeVisible({ timeout: 5000 });
   });
 });

@@ -166,6 +166,42 @@ describe('MessageProvider — TRACE axis', () => {
     expect(list).toEqual(['user_message', 'tool_start', 'tool_complete', 'agent_message']);
   });
 
+  it.each([
+    { turnB: 'live', empty: false },
+    { turnB: 'live', empty: true },
+    { turnB: 'concluded', empty: false },
+    { turnB: 'concluded', empty: true },
+  ])('preserves $turnB turn B when A’s delayed live response arrives (empty=$empty)', async ({ turnB, empty }) => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1));
+    store.appendMessage('s1', trace('tool_start', 'a-old'));
+    messageProvider.requestTurnTrace('s1', 1);
+
+    // Another client concludes A and starts B before A's live pull returns.
+    store.appendMessage('s1', m('agent_message', 2));
+    store.appendMessage('s1', m('idle', 3));
+    store.appendMessage('s1', m('user_message', 4));
+    if (turnB === 'concluded') store.appendMessage('s1', m('agent_message', 5));
+    messageProvider.handleTurnTraceBatch('s1', turnB === 'live' ? 4 : 5, [
+      trace('tool_start', 'b'), trace('tool_complete', 'b'),
+      m('permission', 9001, { id: 'b-permission', decision: 'allow' }),
+      m('agent_narration', 9002, { content: 'B narration' }),
+      m('error', 9003, { message: 'B error' }),
+    ], turnB === 'concluded');
+    const before = useStore.getState().messages.get('s1')!;
+    const bStart = before.findIndex((msg) => msg.type === 'user_message' && msg.seq === 4);
+    const expectedB = before.slice(bStart);
+    const response = empty ? [] : [trace('tool_complete', 'a-new'), m('error', 9001, { message: 'A error' })];
+
+    messageProvider.handleTurnTraceBatch('s1', 1, response, false);
+
+    const after = useStore.getState().messages.get('s1')!;
+    expect(after.slice(after.findIndex((msg) => msg.type === 'user_message' && msg.seq === 4))).toEqual(expectedB);
+    expect(after.filter((msg) => msg.type === 'tool_start' || msg.type === 'tool_complete').map((msg) => msg.payload.toolCallId))
+      .toEqual(empty ? ['b', 'b'] : ['a-new', 'b', 'b']);
+    await vi.dynamicImportSettled();
+  });
+
   it('handleTurnTraceBatch keeps the pull re-triggerable when turn incomplete', () => {
     const store = useStore.getState();
     store.prependMessages('s1', [
