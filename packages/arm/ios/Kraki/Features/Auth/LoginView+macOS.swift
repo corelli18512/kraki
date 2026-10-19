@@ -83,8 +83,6 @@ struct MacEntryGateView: View {
 
     private var signedOutContent: some View {
         ZStack {
-            entryBackdrop
-
             if showsIntro {
                 MacSetupIntro { withAnimation(.easeOut(duration: 0.35)) { introDone = true } }
                     .transition(.opacity)
@@ -137,24 +135,6 @@ struct MacEntryGateView: View {
         .padding(.horizontal, 48)
         .padding(.vertical, usesBuiltInSetup ? 8 : 34)
         .frame(maxWidth: .infinity)
-    }
-
-    private var entryBackdrop: some View {
-        ZStack {
-            Circle()
-                .fill(Color.krakiPrimary.opacity(0.09))
-                .frame(width: 520, height: 520)
-                .blur(radius: 80)
-                .offset(x: 220, y: -210)
-
-            Circle()
-                .fill(Color.cyan.opacity(0.055))
-                .frame(width: 440, height: 440)
-                .blur(radius: 90)
-                .offset(x: -260, y: 240)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     private var signedOutBrand: some View {

@@ -12,7 +12,7 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['src/main.tsx', 'src/mock/**', 'src/types/**', 'src/test/**'],
+      exclude: ['src/main.tsx', 'src/boot.tsx', 'src/mock/**', 'src/types/**', 'src/test/**'],
     },
   },
 });
