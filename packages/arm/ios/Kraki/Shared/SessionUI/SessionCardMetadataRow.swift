@@ -13,6 +13,17 @@ struct SessionCardMetadataRow: View {
     let modelColor: Color
     var statusColor: Color? = nil
 
+    private var localizedEffort: String? {
+        guard let effort, let level = ReasoningEffort(rawValue: effort) else { return effort }
+        switch level {
+        case .low: return String(localized: "low")
+        case .medium: return String(localized: "medium")
+        case .high: return String(localized: "high")
+        case .xhigh: return String(localized: "xhigh")
+        case .max: return String(localized: "max")
+        }
+    }
+
     var body: some View {
         SessionMetadataLayout(hasDevice: machineName != nil, hasModel: model?.isEmpty == false,
                               hasEffort: effort != nil) {
@@ -31,10 +42,10 @@ struct SessionCardMetadataRow: View {
                 .lineLimit(1)
                 .truncationMode(.head)
                 .accessibilityIdentifier("session-model-\(sessionId)")
-            Text(effort.map { "· \($0)" } ?? "")
+            Text(localizedEffort.map { "· \($0)" } ?? "")
                 .foregroundStyle(modelColor)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel(effort.map { String(localized: "Reasoning effort: \($0)") } ?? "")
+                .accessibilityLabel(localizedEffort.map { String(localized: "Reasoning effort: \($0)") } ?? "")
                 .accessibilityIdentifier("session-effort-\(sessionId)")
         }
         .font(font)

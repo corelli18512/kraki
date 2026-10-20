@@ -87,9 +87,6 @@
     "startHint": "Start session (Enter)",
     "start": "Start session",
     "noComputers": "No computer is online. Open Kraki on a computer to start a session there.",
-    "theComputer": "the computer",
-    "thisPcLower": "this PC",
-    "thisComputerLower": "this computer",
     "installLocal": "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again.",
     "installRemote": "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it.",
     "checking": "Checking…",
@@ -123,6 +120,10 @@
     },
     "connecting": "Connecting to {{deviceName}}…",
     "deviceOffline": "{{deviceName}} is offline. Pick another one above.",
-    "noAgent": "No coding agent on {{deviceName}}"
+    "noAgent": "No coding agent on {{deviceName}}",
+    "connectingUnknown": "Connecting to the computer…",
+    "thisComputerOffline": "This computer is offline. Pick another one above.",
+    "noAgentThisComputer": "No coding agent on this computer",
+    "noAgentThisPc": "No coding agent on this PC"
   }
 }

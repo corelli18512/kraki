@@ -204,7 +204,7 @@ func formatDuration(_ ms: Double) -> String {
     guard ms.isFinite, ms >= 0 else { return "—" }
     let totalSeconds = min(ms / 1_000, 1e12)
     if totalSeconds < 60 {
-        return String(format: String(localized: "%.1fs"), locale: .current, totalSeconds)
+        return String(format: String(localized: "%.1fs"), totalSeconds)
     }
     let minutes = Int(totalSeconds) / 60
     let seconds = Int(totalSeconds) % 60

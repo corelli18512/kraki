@@ -23,6 +23,6 @@ describe('QrScanner localization', () => {
     render(<QrScanner onScan={vi.fn()} onClose={vi.fn()} />);
     const instruction = screen.getByText('kraki connect');
     expect(instruction.tagName).toBe('CODE');
-    expect(instruction.parentElement).toHaveTextContent('对准 kraki connect 生成的二维码');
+    expect(instruction.parentElement).toHaveTextContent('将相机对准 kraki connect 生成的二维码');
   });
 });

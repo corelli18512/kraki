@@ -64,6 +64,12 @@ Draft — to be reviewed by the product owner. Every client uses these terms.
 | draft | 草稿 | |
 | voice input | 语音输入 | |
 | transcription | 转写 | |
+| transcript | 转写文本 | |
+| Correct Transcripts | 修正转写文本 | voice setting |
+| correction service / Correcting… | 修正服务 / 正在修正… | |
+| Often recognized as | 常被识别为 | custom words |
+| optional | 可选 | |
+| click (Mac) | 点按 | Apple style |
 | custom words | 自定义词汇 | |
 | notification | 通知 | |
 | menu bar / tray | 菜单栏 / 托盘 | |

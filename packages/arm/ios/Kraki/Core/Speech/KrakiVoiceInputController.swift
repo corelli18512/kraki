@@ -511,7 +511,7 @@ final class KrakiVoiceInputController {
         failedSessionID = owner
         metrics.cause("identity_changed")
         state = .failed(
-            VoiceInputError.gateway("Voice input was reset for this account. Please try again.")
+            VoiceInputError.gateway(VoiceInputError.accountResetReason)
                 .localizedDescription
         )
         completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false, failed: true))
@@ -721,7 +721,7 @@ final class KrakiVoiceInputController {
         }
         guard activated else {
             failRecording(
-                VoiceInputError.gateway("The microphone audio session couldn't be started."),
+                VoiceInputError.gateway(VoiceInputError.audioSessionStartFailedReason),
                 closeTransport: false
             )
             return

@@ -3,7 +3,6 @@
  * which Kraki runs here (built in or the command-line one), whether this PC
  * runs agents, the background service, the coding agents and the logs.
  */
-import { t as translate } from '../../i18n';
 import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useState } from 'react';
 import { desktop, type BuiltInBridge, type BuiltInState, type DesktopSettingsState } from '../../lib/desktop';
@@ -14,6 +13,9 @@ import './desktop-setup.css';
 
 const ROLE_KEY = 'kraki-desktop.role';
 const OWNER_KEY = 'kraki-desktop.owner';
+
+type ErrorKey = 'thisPC.readFailed' | 'thisPC.failed' | 'thisPC.updateFailed' | 'thisPC.externalUnavailable';
+type PCError = { key: ErrorKey } | { message: string };
 
 function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: () => void }) {
   const { t } = useTranslation('desktop');
@@ -49,7 +51,8 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const { t } = useTranslation('desktop');
   const [state, setState] = useState<BuiltInState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PCError | null>(null);
+  const errorText = error && ('key' in error ? t(error.key) : error.message);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const closeAgents = useCallback(() => setAgentsOpen(false), []);
   const [logsPath, setLogsPath] = useState<string | null>(null);
@@ -62,7 +65,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       if (settings) setOs(await settings.state());
       if (builtIn.logsPath) setLogsPath(await builtIn.logsPath());
-    } catch { setError(translate('desktop:thisPC.readFailed')); }
+    } catch { setError({ key: 'thisPC.readFailed' }); }
   }, [builtIn, settings]);
   useEffect(() => {
     void refresh();
@@ -72,26 +75,26 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const act = async (name: string, fn: () => Promise<{ ok: boolean; error?: string }>, after?: () => void) => {
+  const act = async (name: string, fn: () => Promise<{ ok: boolean; error?: string; errorKey?: ErrorKey }>, after?: () => void) => {
     setBusy(name);
     setError(null);
     try {
       const r = await fn();
-      if (!r.ok) setError(r.error ?? translate('desktop:thisPC.failed'));
+      if (!r.ok) setError(r.error != null ? { message: r.error } : { key: r.errorKey ?? 'thisPC.failed' });
       else after?.();
       await refresh();
     } catch {
-      setError(translate('desktop:thisPC.updateFailed'));
+      setError({ key: 'thisPC.updateFailed' });
     } finally {
       setBusy(null);
     }
   };
 
-  if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{error ?? t('thisPC.checking')}</p>;
+  if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{errorText ?? t('thisPC.checking')}</p>;
   const external = !state.owned && (localStorage.getItem(OWNER_KEY) === 'external' || state.cliDaemon || state.cliLogin);
   const presence = (action: 'start' | 'stop' | 'restart') => {
     if (external) return builtIn.externalPresence?.(action)
-      ?? Promise.resolve({ ok: false, error: t('thisPC.externalUnavailable') });
+      ?? Promise.resolve({ ok: false, errorKey: 'thisPC.externalUnavailable' as const });
     if (action === 'start') return settings?.goOnline?.() ?? builtIn.enable();
     if (action === 'stop') return settings?.goOffline?.() ?? builtIn.disable({ keepOwnership: true });
     return builtIn.restart();
@@ -287,7 +290,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       </SettingsSection>
       {error && (
         <p role="alert" className="mt-2 text-xs text-orange-500">
-          {error}
+          {errorText}
         </p>
       )}
       {agentsOpen && <AgentsSheet builtIn={builtIn} onClose={closeAgents} />}

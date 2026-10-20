@@ -89,7 +89,7 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
           ? box('warn', t('update.notBack', { name: device.name }), t('update.checkComputer'))
           : box('info', device.online ? t('update.installing', { version: to }) : t('update.restarting', { name: device.name }), t('update.backSoon'));
       case 'updated': return box('ok', t('update.updated', { version: to }));
-      case 'rolled_back': return box('warn', t('update.rolledBack'), t('update.rolledBackDetail', { name: device.name, from: p.from ?? t('update.previousVersion') }));
+      case 'rolled_back': return box('warn', t('update.rolledBack'), p.from ? t('update.rolledBackDetail', { name: device.name, from: p.from }) : t('update.rolledBackDetailPrevious', { name: device.name }));
       case 'failed': return box('bad', t('update.failed'), (
         <span>{p.error ?? t('update.errorFallback')} <button type="button" className="underline" onClick={() => setUpdateProgress(device.id, null)}>{t('update.dismiss')}</button></span>
       ));

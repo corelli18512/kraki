@@ -82,16 +82,6 @@ struct SessionCardProjection: Equatable {
     let isDraft: Bool
     let deviceOnline: Bool?
 
-    private static func effortLabel(_ effort: ReasoningEffort) -> String {
-        switch effort {
-        case .low: String(localized: "low")
-        case .medium: String(localized: "medium")
-        case .high: String(localized: "high")
-        case .xhigh: String(localized: "xhigh")
-        case .max: String(localized: "max")
-        }
-    }
-
     static func make(
         session: SessionInfo,
         device: DeviceSummary?,
@@ -123,7 +113,7 @@ struct SessionCardProjection: Equatable {
             title: session.displayTitle,
             machineName: normalizedMachineName,
             model: modelName ?? session.model,
-            effortLabel: session.model?.isEmpty == false ? session.reasoningEffort.map { effortLabel($0) } : nil,
+            effortLabel: session.model?.isEmpty == false ? session.reasoningEffort?.rawValue : nil,
             previewText: previewText?.isEmpty == true ? nil : previewText,
             timestamp: timestamp,
             timeLabel: SessionTimeFormatter.format(timestamp),
@@ -238,7 +228,8 @@ enum SessionTimeFormatter {
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return timeFormatter.string(from: date) }
         if calendar.isDateInYesterday(date) { return String(localized: "yesterday") }
-        return KrakiFormat.relative(date)
+        let days = calendar.dateComponents([.day], from: date, to: Date()).day ?? 0
+        return String(localized: "\(max(days, 2))d ago")
     }
 }
 

@@ -852,8 +852,8 @@
 }
 .dark .kround { color: #fbbf24; }
 .kround svg { width: 18px; height: 18px; stroke-width: 2.5; }
-.kround[aria-label="Jump to latest"] { color: #7c3aed; }
-.dark .kround[aria-label="Jump to latest"] { color: #c4b5fd; }
+.kround.is-latest { color: #7c3aed; }
+.dark .kround.is-latest { color: #c4b5fd; }
 @media (min-width: 768px) {
   .kjump { right: 16px; }
   .kjump .kround {

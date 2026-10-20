@@ -44,7 +44,7 @@ struct SessionPendingPreview: Equatable {
         case .sending: status = isOnline ? .sending : .queued
         }
         let content = message.content?.collapseWhitespace() ?? ""
-        let fallback = message.payload["attachments"] != nil ? String(localized: "[image]") : "…"
+        let fallback = message.payload["attachments"] != nil ? "[image]" : "…"
         let preview = content.isEmpty ? fallback : content
         let text: String
         switch status {

@@ -21,7 +21,7 @@ struct AgentInstallLink: Identifiable {
 }
 
 struct NoAgentsGuide: View {
-    let deviceName: String
+    let deviceName: String?
     /// True when the device is this Mac's own tentacle.
     var isThisMac: Bool = false
     /// Re-detect agents (restarts the local tentacle). nil for remote devices.
@@ -30,10 +30,16 @@ struct NoAgentsGuide: View {
     @Environment(\.openURL) private var openURL
     @State private var checking = false
 
+    private var title: String {
+        if isThisMac { return String(localized: "No coding agent on this Mac") }
+        if let deviceName { return String(localized: "No coding agent on \(deviceName)") }
+        return String(localized: "No coding agent on this computer")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(isThisMac ? String(localized: "No coding agent on this Mac") : String(localized: "No coding agent on \(deviceName)"))
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)
                 Text(isThisMac

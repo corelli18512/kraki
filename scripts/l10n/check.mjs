@@ -76,7 +76,7 @@ function walk(dir, ext, skip) {
 // Hidden/debug surfaces stay English (user decision): diag, mocks, tests,
 // Mac regression/benchmark harnesses and the Diagnostics feature.
 const skipWeb = (p) => /\.test\.|\/mock\/|\/test\/|\/e2e\/|\/components\/diag\/|\/lib\/diag\//.test(p);
-const skipSwift = (p) => /Tests?\.swift$|\/Diagnostics\/|Mac(AppDelegate\+|Automation|Bubble Test|BubbleTest|ChatMock|ChatScenario|ChatTestPages|MockData)|Regression|Benchmark/.test(p);
+const skipSwift = (p) => /Tests?\.swift$|\/Diagnostics\/|Mac(AppDelegate\+|Automation|Bubble Test|BubbleTest|ChatMock|ChatScenario|ChatTestPages|MockData)|Regression|Benchmark|ChatPlaceholderView\+macOS/.test(p);
 const english = /[A-Za-z]{2,}[^A-Za-z]*[A-Za-z]/; // at least a word-ish run
 function countWeb(file) {
   const src = readFileSync(file, 'utf8').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');

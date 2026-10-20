@@ -282,7 +282,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
             <Row label={t('sessionInfo.cacheRead')}>{formatTokens(usage.cacheReadTokens)}</Row>
             <Row label={t('sessionInfo.cacheWrite')}>{formatTokens(usage.cacheWriteTokens)}</Row>
             <hr className="border-border-primary" />
-            <Row label={t('sessionInfo.cost')}>{formatNumber(usage.totalCost, { style: 'currency', currency: 'USD', minimumFractionDigits: usage.totalCost < 0.01 ? 4 : 3, maximumFractionDigits: usage.totalCost < 0.01 ? 4 : 3, useGrouping: false })}</Row>
+            <Row label={t('sessionInfo.cost')}>{`$${usage.totalCost.toFixed(usage.totalCost < 0.01 ? 4 : 3)}`}</Row>
             <Row label={t('sessionInfo.duration')}>
               {usage.totalDurationMs < 60000
                 ? t('sessionInfo.seconds', { seconds: formatNumber(usage.totalDurationMs / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }) })

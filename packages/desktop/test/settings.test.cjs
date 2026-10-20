@@ -70,11 +70,14 @@ test('global usage shortcut never captures plain typing keys or Escape', () => {
 test('settings presence IPC keeps ownership and returns errors instead of claiming success', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'kraki-settings-ipc-'));
   const handlers = new Map();
+  const dialogs = [];
+  const i18n = require('../src/i18n.cjs');
   const electron = {
     app: { setAppUserModelId: () => {}, requestSingleInstanceLock: () => true, on: () => {}, whenReady: () => new Promise(() => {}), getPath: () => dir, getLoginItemSettings: () => ({ openAtLogin: false }) },
     ipcMain: { on: () => {}, handle: (name, fn) => handlers.set(name, fn) },
     protocol: { registerSchemesAsPrivileged: () => {} },
     Notification: { isSupported: () => true },
+    dialog: { showOpenDialog: async (_win, options) => { dialogs.push(options); return { canceled: true }; } },
   };
   const { createRequire } = require('node:module');
   const mainPath = path.join(__dirname, '../src/main.cjs');
@@ -84,7 +87,7 @@ test('settings presence IPC keeps ownership and returns errors instead of claimi
     require: (name) => name === 'electron' ? electron : mainRequire(name),
     __dirname: path.dirname(mainPath),
     process: { platform: 'win32', env: {}, argv: [], execPath: 'C:\Kraki.exe' },
-    __builtin: { home: () => dir, launchAtLogin: async () => false, enable: async () => { calls.push('enable'); }, disable: async (opts) => { calls.push(opts); } },
+    __builtin: { marker: () => ({}), home: () => dir, launchAtLogin: async () => false, enable: async () => { calls.push('enable'); }, disable: async (opts) => { calls.push(opts); } },
   });
   try {
     vm.runInContext(readFileSync(mainPath, 'utf8'), context);
@@ -107,5 +110,31 @@ test('settings presence IPC keeps ownership and returns errors instead of claimi
     assert.equal((await handlers.get('kraki:settings-tray')(undefined, false)).ok, true);
     assert.equal((await handlers.get('kraki:settings-state')()).keepRunningInTray, false);
     assert.ok(readFileSync(mainPath, 'utf8').includes("if (pref('keepRunningInTray') === false) void quitFromTray();"));
-  } finally { rmSync(dir, { recursive: true }); }
+    for (const [language, title, filter, managed, cancelled] of [
+      ['en', 'Locate kraki manually', 'Kraki executable', 'The built-in Kraki manages this PC.', 'Selection cancelled.'],
+      ['zh-Hans', '定位 kraki 可执行文件', 'Kraki 可执行文件', '内置 Kraki 正在管理这台电脑。', '已取消选择。'],
+    ]) {
+      i18n.setLanguage(language);
+      const locate = await handlers.get('kraki:settings-locate-cli')();
+      assert.equal(locate.ok, false);
+      assert.equal(locate.error, cancelled);
+      assert.equal(dialogs.at(-1).title, title);
+      assert.equal(dialogs.at(-1).filters[0].name, filter);
+      const presence = await handlers.get('kraki:builtin-external-presence')(undefined, 'start');
+      assert.equal(presence.ok, false);
+      assert.equal(presence.error, managed);
+    }
+  } finally { i18n.setLanguage('en'); rmSync(dir, { recursive: true }); }
+});
+
+test('external CLI version errors follow shell language without translating CLI output', { skip: process.platform === 'win32' }, async () => {
+  const i18n = require('../src/i18n.cjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'kraki-settings-l10n-'));
+  const file = path.join(dir, 'kraki');
+  try {
+    writeFileSync(file, '#!/bin/sh\necho "not a version"\n', { mode: 0o755 });
+    await assert.rejects(probeCli(file), { message: 'The selected CLI did not report a Kraki version.' });
+    i18n.setLanguage('zh-Hans');
+    await assert.rejects(probeCli(file), { message: '所选 CLI 未报告 Kraki 版本。' });
+  } finally { i18n.setLanguage('en'); rmSync(dir, { recursive: true }); }
 });

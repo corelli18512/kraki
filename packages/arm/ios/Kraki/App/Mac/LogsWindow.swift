@@ -111,7 +111,7 @@ struct LogsWindow: View {
         let data = (try? handle.readToEnd()) ?? Data()
         var text = String(decoding: data, as: UTF8.self)
         if start > 0, let firstNewline = text.firstIndex(of: "\n") {
-            text = String(localized: "… (showing the end of the log)\n") + text[text.index(after: firstNewline)...]
+            text = String(localized: "… (showing the end of the log)") + "\n" + text[text.index(after: firstNewline)...]
         }
         return text
     }

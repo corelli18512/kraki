@@ -35,3 +35,15 @@ it('interpolates versions/device names and passes through remote update errors',
   fireEvent.click(screen.getByRole('button', { name: '关闭' }));
   expect(screen.queryByTestId('device-update')).not.toBeInTheDocument();
 });
+
+it('uses complete rollback sentences with and without a previous version', async () => {
+  useStore.getState().setUpdateProgress('pc', { phase: 'rolled_back', from: '0.35.0', at: Date.now() });
+  render(<DeviceUpdateBox device={device} />);
+  expect(screen.getByText('The new version didn’t start on My PC, so it went back to 0.35.0.')).toBeInTheDocument();
+  await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+  expect(screen.getByText('新版本未能在 My PC 上启动，因此已恢复至 0.35.0。')).toBeInTheDocument();
+  act(() => { useStore.getState().setUpdateProgress('pc', { phase: 'rolled_back', at: Date.now() }); });
+  expect(screen.getByText('新版本未能在 My PC 上启动，因此已恢复至上一个版本。')).toBeInTheDocument();
+  await act(async () => { await i18next.changeLanguage('en'); });
+  expect(screen.getByText('The new version didn’t start on My PC, so it went back to the previous version.')).toBeInTheDocument();
+});

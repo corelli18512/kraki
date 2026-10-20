@@ -863,9 +863,9 @@ private struct InspectorPane: View {
 
     private func modeTitle(_ mode: SessionMode) -> String {
         switch mode {
-        case .safe: String(localized: "safe")
-        case .auto: String(localized: "auto")
-        case .delegate: String(localized: "delegate")
+        case .safe: String(localized: "safe", comment: "Session mode name (lowercase), Inspector")
+        case .auto: String(localized: "auto", comment: "Session mode name (lowercase), Inspector")
+        case .delegate: String(localized: "delegate", comment: "Session mode name (lowercase), Inspector")
         }
     }
 

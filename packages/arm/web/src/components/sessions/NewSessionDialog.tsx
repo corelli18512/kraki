@@ -319,7 +319,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                           : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
                       }`}
                     >
-                      {t(`newDialog.effort.${effort}`)}
+                      {t(`newDialog.effort.${effort}`, { defaultValue: effort })}
                     </button>
                   ))}
                 </div>

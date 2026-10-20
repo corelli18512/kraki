@@ -7,6 +7,7 @@ vi.mock('../../lib/desktop', async (orig) => ({
   desktop: { builtIn: { connectPhone: async () => ({ ok: true, url: 'https://app.kraki.chat/?relay=x&token=t', expiresAt: new Date(Date.now() + 300_000).toISOString() }) } },
 }));
 
+import { desktop } from '../../lib/desktop';
 import { CONNECT_PHONE_EVENT, ConnectPhoneHost } from './ConnectPhoneCard';
 
 describe('Connect your phone card', () => {
@@ -26,4 +27,23 @@ describe('Connect your phone card', () => {
     }
     expect(screen.queryByTestId('connect-phone')).toBeNull();
   });
+});
+
+it.each(['daemon_not_running', 'relay_failure'])('updates a pairing error after a language switch (%s)', async (error) => {
+  const { i18next } = await import('../../i18n');
+  const mock = vi.spyOn(desktop!.builtIn!, 'connectPhone').mockResolvedValue({ ok: false, error });
+  render(<ConnectPhoneHost />);
+  await act(async () => { window.dispatchEvent(new Event(CONNECT_PHONE_EVENT)); });
+  expect(screen.getByText(error === 'daemon_not_running'
+    ? 'Kraki isn’t running on this PC. Turn on “Run agents on this PC” in Settings, then try again.'
+    : 'Couldn’t get a code from the relay. Check your connection and try again.')).toBeInTheDocument();
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText(error === 'daemon_not_running'
+      ? '这台电脑上的 Kraki 未运行。请在设置中开启“在这台电脑上运行 Agent”，然后重试。'
+      : '无法从中继服务器获取配对码。请检查连接后重试。')).toBeInTheDocument();
+  } finally {
+    mock.mockRestore();
+    await act(async () => { await i18next.changeLanguage('en'); });
+  }
 });

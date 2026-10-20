@@ -32,10 +32,31 @@ describe('UsagePanel localization', () => {
     expect(lastUpdatedText(account, now)).toBe('更新于2分钟前');
     expect(readStatus({ ...account, error: 'auth' }, now)).toBe('需要登录');
     expect(readStatus({ ...account, error: 'rate_limited', retryAt: new Date(now + 150_000).toISOString() }, now)).toBe('已达速率限制 · 3分钟后重试');
-    expect(shortReset(new Date(now + 7_500_000).toISOString(), now)).toBe('2小时 5分钟');
+    expect(shortReset(new Date(now + 7_500_000).toISOString(), now)).toBe('2小时5分钟');
+    expect(readStatus({ ...account, fetchedAt: new Date(now - 3_600_000).toISOString() }, now)).toBe('数据未按时更新');
     expect(windowName({ id: 'w', kind: 'weekly', remainingPercent: 50 })).toBe('每周');
     expect(windowName({ id: 'w', kind: 'other', title: 'Provider text', remainingPercent: 50 })).toBe('Provider text');
-    expect(usageUpdateHint([device('Mac'), device('PC'), device('Other')])).toBe('更新 Mac 和另外 2 台设备 上的 Kraki 以查看其账户');
+    expect(usageUpdateHint([device('Mac')])).toBe('更新以下设备上的 Kraki 以查看其账户：Mac');
+    expect(usageUpdateHint([device('Mac'), device('PC')])).toBe('更新以下设备上的 Kraki 以查看其账户：Mac和PC');
+    expect(usageUpdateHint([device('Mac'), device('PC'), device('Other')])).toBe('更新以下设备上的 Kraki 以查看其账户：Mac 和另外 2 台设备');
+  });
+
+  it.each([
+    [undefined, '—'],
+    ['invalid', '—'],
+    [new Date(Date.now() - 60_000).toISOString(), '现在'],
+  ])('labels a reset of %s without appending 后 to %s', async (resetsAt, resetText) => {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    useStore.setState({
+      devices: new Map([['Mac', device('Mac')]]),
+      deviceUsage: new Map([['Mac', {
+        accounts: [{ ...account, windows: [{ id: 'w', kind: 'weekly', remainingPercent: 50, resetsAt }] }],
+        receivedAt: now,
+      }]]),
+    });
+    render(<MemoryRouter><UsagePanel /></MemoryRouter>);
+    act(() => { window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); });
+    expect(screen.getByTitle(`每周 剩余 50%，重置：${resetText}`)).toBeInTheDocument();
   });
 
   it('updates an already-open empty usage panel when the language changes', async () => {

@@ -100,7 +100,7 @@ enum KrakiDevice {
         if let name = Host.current().localizedName, !name.isEmpty { return name }
         return Host.current().name ?? ProcessInfo.processInfo.hostName
         #else
-        return String(localized: "Unknown")
+        return "Unknown"
         #endif
     }
 }

@@ -5,6 +5,14 @@
 // with the same keys (test/i18n.test.cjs checks keys and placeholders).
 
 const en = {
+  'dialog.locateTitle': 'Locate kraki manually',
+  'dialog.executable': 'Kraki executable',
+  'error.builtInManagesPC': 'The built-in Kraki manages this PC.',
+  'error.selectExecutable': 'Select an existing kraki executable.',
+  'error.cliVersion': 'The selected CLI did not report a Kraki version.',
+  'error.builtInMissing': 'The built-in Kraki is missing from this installation.',
+  'error.startFailed': 'Kraki did not start. See the logs in {path}',
+  'error.startupApps': 'Windows could not add Kraki to Startup apps. Open Settings → Apps → Startup, then try again.',
   'window.signIn': 'Sign in with GitHub',
   'window.logs': 'Kraki Logs',
   'logs.empty': 'No logs yet. Path: {path}',
@@ -46,6 +54,14 @@ const en = {
 };
 
 const zhHans = {
+  'dialog.locateTitle': '定位 kraki 可执行文件',
+  'dialog.executable': 'Kraki 可执行文件',
+  'error.builtInManagesPC': '内置 Kraki 正在管理这台电脑。',
+  'error.selectExecutable': '请选择现有的 kraki 可执行文件。',
+  'error.cliVersion': '所选 CLI 未报告 Kraki 版本。',
+  'error.builtInMissing': '此安装中缺少内置 Kraki。',
+  'error.startFailed': 'Kraki 未能启动。请查看 {path} 中的日志。',
+  'error.startupApps': 'Windows 无法将 Kraki 添加到启动应用。请打开“设置 → 应用 → 启动”，然后重试。',
   'window.signIn': '使用 GitHub 登录',
   'window.logs': 'Kraki 日志',
   'logs.empty': '暂无日志。路径：{path}',

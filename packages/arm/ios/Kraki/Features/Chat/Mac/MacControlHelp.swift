@@ -95,7 +95,8 @@ enum MacControlHelp {
     }
 
     static func primary(_ action: Primary, canSend: Bool, deviceReachable: Bool, deviceName: String?) -> String {
-        let offline = String(localized: "\(deviceName ?? String(localized: "The computer")) is offline")
+        let offline = deviceName.map { String(localized: "\($0) is offline") }
+            ?? String(localized: "The computer is offline")
         switch action {
         case let .stop(stopping):
             if stopping { return String(localized: "Stopping…") }

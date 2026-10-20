@@ -1,4 +1,4 @@
-import { t as translate } from '../../i18n';
+import { i18next, t as translate } from '../../i18n';
 import { useTranslation } from 'react-i18next';
 import { diag } from '../../lib/diag';
 import { useEffect, useRef, useState } from 'react';
@@ -217,16 +217,19 @@ export function SettingsPanel({
     saveNotificationsEnabled(on);
     setNotificationsEnabled(on);
   }
-  const diagnostics = [
-    [t('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
-    [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
-    ...[...state.devices.values()]
-      .filter((d) => d.role === 'tentacle')
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : t('about.offlineSuffix')}`]),
-    [t('about.relay'), `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
-    ...(state.deviceId ? [[t('about.deviceId'), state.deviceId]] : []),
-  ];
+  const diagnostics = (english = false) => {
+    const labels = english ? i18next.getFixedT('en', 'settings') : t;
+    return [
+      [labels('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
+      [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
+      ...[...state.devices.values()]
+        .filter((d) => d.role === 'tentacle')
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : labels('about.offlineSuffix')}`]),
+      [labels('about.relay'), `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
+      ...(state.deviceId ? [[labels('about.deviceId'), state.deviceId]] : []),
+    ];
+  };
   const general = (
     <>
       <SettingsSection title={t('general.appearance')}>
@@ -511,7 +514,7 @@ export function SettingsPanel({
         </p>
       </div>
       <dl className="mt-1.5 space-y-[3px]">
-        {diagnostics.map(([label, value]) => (
+        {diagnostics().map(([label, value]) => (
           <div className="kp-diagnostic" key={label}>
             <dt>{label.toUpperCase()}</dt>
             <dd>{value}</dd>
@@ -523,7 +526,7 @@ export function SettingsPanel({
         className="kp-button"
         onClick={() => {
           void navigator.clipboard
-            .writeText(diagnostics.map(([label, value]) => `${label}: ${value}`).join('\n'))
+            .writeText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
             .then(() => setDiagCopied(true))
             .catch(() => setError(t('errors.copyDiagnostics')));
         }}

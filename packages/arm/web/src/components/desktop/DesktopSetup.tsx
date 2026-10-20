@@ -13,7 +13,6 @@
  * Every step derives from live state (config, owner, daemon), so reopening
  * the app resumes at the right place.
  */
-import { t as translate } from '../../i18n';
 import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KrakiLogo } from '../KrakiLogo';
@@ -241,7 +240,7 @@ type SignInPhase =
   | { kind: 'waiting' }
   | { kind: 'code'; code: string; uri: string }
   | { kind: 'configuring'; username: string }
-  | { kind: 'failed'; message: string };
+  | { kind: 'failed'; message?: string };
 
 function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again: 'expired' | 'signedOut' | null; onDone: () => void }) {
   const { t } = useTranslation('desktop');
@@ -265,7 +264,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
     }).then((result) => {
       if (current !== attempt.current) return;
       if (result.ok) onDone();
-      else setPhase((p) => (p.kind === 'failed' ? p : { kind: 'failed', message: translate('desktop:setup.signInFailed') }));
+      else setPhase((p) => (p.kind === 'failed' ? p : { kind: 'failed' }));
     });
   }, [builtIn, forceLogin, onDone]);
 
@@ -325,7 +324,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
           {t('setup.github')}
         </button>
         {phase.kind === 'failed' && <>
-          <div className="ds-warning">{phase.message}</div>
+          <div className="ds-warning">{phase.message ?? t('setup.signInFailed')}</div>
           <button type="button" className="ds-link" onClick={() => start(true)}>{t('setup.useCode')}</button>
         </>}
       </div>
@@ -335,7 +334,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
 
 function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStarted: () => Promise<void> }) {
   const { t } = useTranslation('desktop');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
@@ -343,13 +342,13 @@ function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStar
     void builtIn.enable().then(async (r) => {
       if (!live) return;
       if (r.ok) await onStarted();
-      else setError(r.error ?? translate('desktop:setup.startFailed'));
+      else setError({ message: r.error });
     });
     return () => { live = false; };
   }, [builtIn, onStarted, attempt]);
   if (!error) return <Progress label={t('setup.bringingOnline')} />;
   return (
-    <StepCard title={t('setup.couldNotStart')} detail={error}>
+    <StepCard title={t('setup.couldNotStart')} detail={error.message ?? t('setup.startFailed')}>
       <div className="ds-row">
         <button type="button" className="ds-button ds-button-primary" onClick={() => setAttempt((n) => n + 1)}>{t('setup.tryAgain')}</button>
         <button type="button" className="ds-button" onClick={() => builtIn.openLogs()}>{t('setup.showLogs')}</button>
@@ -361,14 +360,14 @@ function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStar
 export function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBridge; version: string | null; onChosen: (o: Owner) => void }) {
   const { t } = useTranslation('desktop');
   const [switching, setSwitching] = useState<Owner | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const choose = async (o: Owner) => {
     if (switching) return;
     setSwitching(o);
     setError(null);
     if (o === 'builtIn') {
       const r = await builtIn.enable();
-      if (!r.ok) { setError(r.error ?? translate('desktop:setup.switchFailed')); setSwitching(null); return; }
+      if (!r.ok) { setError({ message: r.error }); setSwitching(null); return; }
     }
     setSwitching(null);
     onChosen(o);
@@ -392,7 +391,7 @@ export function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBr
         {option('builtIn', t('setup.useWindows'), t('setup.recommended'), t('setup.windowsDetail'))}
         {option('external', t('setup.keepCLI'), null, t('setup.cliDetail'))}
       </div>
-      {error && <div className="ds-warning">{error}</div>}
+      {error && <div className="ds-warning">{error.message ?? t('setup.switchFailed')}</div>}
       <div className="ds-muted">{t('setup.changeLater')}</div>
     </div>
   );

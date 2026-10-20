@@ -167,10 +167,7 @@ enum SubagentSteps {
     static func formatDuration(_ ms: Int?) -> String? {
         guard let ms else { return nil }
         let s = Int((Double(ms) / 1000).rounded())
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = s < 60 ? [.second] : [.minute, .second]
-        formatter.unitsStyle = .abbreviated
-        return formatter.string(from: TimeInterval(s))
+        return s < 60 ? String(localized: "\(s)s") : String(localized: "\(s / 60)m \(s % 60)s")
     }
 
     static func formatTokens(_ n: Int?) -> String? {
@@ -178,8 +175,8 @@ enum SubagentSteps {
         if n < 1000 { return String(localized: "\(n) tokens") }
         let k = Double(n) / 1000
         let value = n >= 10_000
-            ? k.formatted(.number.precision(.fractionLength(0)))
-            : k.formatted(.number.precision(.fractionLength(1)))
+            ? "\(Int(k.rounded()))"
+            : String(format: "%.1f", k)
         return String(localized: "\(value)k tokens")
     }
 

@@ -865,21 +865,33 @@ private struct MacSessionInfoSheet: View {
         .contentShape(Rectangle())
     }
 
+    // Keep in sync with Shared/Helpers.swift (iOS-only).
     private func macFormatTokenCount(_ count: Int) -> String {
-        count.formatted(.number.notation(.compactName))
+        if count < 1_000 { return "\(count)" }
+        if count < 1_000_000 {
+            let k = Double(count) / 1_000
+            return k < 10 ? String(format: "%.1fK", k) : String(format: "%.0fK", k)
+        }
+        let m = Double(count) / 1_000_000
+        return m < 10 ? String(format: "%.1fM", m) : String(format: "%.0fM", m)
     }
 
     private func macFormatCost(_ cost: Double) -> String {
-        cost.formatted(.currency(code: "USD").precision(.fractionLength(cost < 0.01 ? 4 : 3)))
+        if cost < 0.01 {
+            return String(format: "$%.4f", cost)
+        }
+        return String(format: "$%.3f", cost)
     }
 
     private func macFormatDuration(_ milliseconds: Double) -> String {
-        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" } // peer value: Int() would trap
-        let seconds = min(milliseconds / 1_000, 1e12)
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = seconds < 60 ? [.second] : [.minute, .second]
-        formatter.unitsStyle = .abbreviated
-        return formatter.string(from: seconds) ?? "—"
+        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" }
+        let totalSeconds = min(milliseconds / 1_000, 1e12)
+        if totalSeconds < 60 {
+            return String(format: String(localized: "%.1fs"), totalSeconds)
+        }
+        let minutes = Int(totalSeconds) / 60
+        let seconds = Int(totalSeconds) % 60
+        return String(localized: "\(minutes)m \(seconds)s")
     }
 
     private func contextBandColor(_ ratio: Double) -> Color {

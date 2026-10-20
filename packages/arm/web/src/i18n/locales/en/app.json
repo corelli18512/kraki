@@ -43,12 +43,6 @@
     "back": "Go back",
     "pointAt": "Point at the QR code from <command>kraki connect</command>"
   },
-  "crypto": {
-    "keyGeneration": "Key pair generation failed",
-    "keysNotReady": "Keys not initialized",
-    "recipientRequired": "At least one recipient required",
-    "noDeviceKey": "No encrypted key found for device \"{{deviceId}}\""
-  },
   "pairing": {
     "confirmTitle": "Connect to a self-hosted server?",
     "confirmDetail": "This code asks to connect to <b></b>, which is not a Kraki server. Continue only if you set up this server yourself.",

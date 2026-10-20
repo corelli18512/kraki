@@ -30,13 +30,12 @@ enum UsageRingState {
 enum UsageFormat {
     static func shortReset(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }
-        let remaining = max(0, date.timeIntervalSince(now))
-        guard remaining > 60 else { return String(localized: "now") }
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.day, .hour, .minute]
-        formatter.unitsStyle = .abbreviated
-        formatter.maximumUnitCount = 2
-        return formatter.string(from: remaining) ?? "—"
+        let s = Int(date.timeIntervalSince(now))
+        guard s > 60 else { return String(localized: "now") }
+        let d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60
+        if d > 0 { return h > 0 ? String(localized: "\(d)d \(h)h") : String(localized: "\(d)d") }
+        if h > 0 { return m > 0 ? String(localized: "\(h)h \(m)m") : String(localized: "\(h)h") }
+        return String(localized: "\(m)m")
     }
 
     static func windowName(_ w: AccountUsageWindow) -> String {
@@ -496,35 +495,36 @@ struct AccountUsageRefreshModel {
         busy = connected && ids.contains { store.usageRefreshes[$0]?.finished == false }
         ready = connected && ids.contains { store.canRefreshUsage($0, now: now) }
         available = connected && !ids.isEmpty
-        status = Self.status(store: store, ids: ids, deviceIds: deviceIds, connected: connected, busy: busy, ready: ready)
-        // Per-account failures already show on their rows.
-        isNotice = !busy && ![String(localized: "Provider rate limits apply"), String(localized: "Just updated"), String(localized: "Some accounts couldn't be updated")].contains(status)
+        let result = Self.status(store: store, ids: ids, deviceIds: deviceIds, connected: connected, busy: busy, ready: ready)
+        status = result.text
+        isNotice = !busy && !result.routine
     }
 
     @MainActor
     private static func status(store: DeviceStore, ids: [String], deviceIds: Set<String>?,
-                               connected: Bool, busy: Bool, ready: Bool) -> String {
-        if !connected { return String(localized: "Connect to refresh") }
-        if busy { return String(localized: "Refreshing…") }
+                               connected: Bool, busy: Bool, ready: Bool) -> (text: String, routine: Bool) {
+        if !connected { return (String(localized: "Connect to refresh"), false) }
+        if busy { return (String(localized: "Refreshing…"), true) }
         if ids.isEmpty {
             let online = store.devices.values.contains {
                 $0.role == .tentacle && $0.online && (deviceIds?.contains($0.id) ?? true)
             }
-            return online ? String(localized: "Update or enable account usage on your device to refresh") : String(localized: "No device online")
+            return (online ? String(localized: "Update or enable account usage on your device to refresh") : String(localized: "No device online"), false)
         }
         if let error = ids.compactMap({ store.usageRefreshes[$0]?.error }).first {
             switch error {
-            case "timeout": return String(localized: "Refresh timed out. Try again.")
-            case "offline", "connection": return String(localized: "Connection lost. Try again.")
-            case "disabled": return String(localized: "Enable account usage on the device.")
-            case "busy": return String(localized: "Device is already refreshing. Try again shortly.")
-            default: return String(localized: "Couldn't refresh. Try again.")
+            case "timeout": return (String(localized: "Refresh timed out. Try again."), false)
+            case "offline", "connection": return (String(localized: "Connection lost. Try again."), false)
+            case "disabled": return (String(localized: "Enable account usage on the device."), false)
+            case "busy": return (String(localized: "Device is already refreshing. Try again shortly."), false)
+            default: return (String(localized: "Couldn't refresh. Try again."), false)
             }
         }
         if ids.contains(where: { store.deviceUsage[$0]?.accounts.contains(where: { $0.error != nil }) == true }) {
-            return String(localized: "Some accounts couldn't be updated")
+            // Per-account failures already show on their rows.
+            return (String(localized: "Some accounts couldn't be updated"), true)
         }
-        return ready ? String(localized: "Provider rate limits apply") : String(localized: "Just updated")
+        return (ready ? String(localized: "Provider rate limits apply") : String(localized: "Just updated"), true)
     }
 }
 

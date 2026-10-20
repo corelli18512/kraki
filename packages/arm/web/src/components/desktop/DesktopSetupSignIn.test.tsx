@@ -62,3 +62,33 @@ it('detecting uses independent launch logo and activity, not a setup card', () =
   expect(screen.getByTestId('desktop-launch').querySelector('.ds-launch-logo')).not.toBeNull();
   expect(document.querySelector('.ds-card')).toBeNull();
 });
+
+it.each([undefined, 'CLI sign-in error'])('updates fallback sign-in errors live and preserves CLI text (%s)', async (message) => {
+  const { i18next } = await import('../../i18n');
+  const { b, emit, completion } = bridge();
+  render(<DesktopSetup builtIn={b} />);
+  fireEvent.click(await screen.findByText('Sign in with GitHub'));
+  if (message) emit({ event: 'error', message });
+  await act(async () => { completion()({ ok: false }); });
+  expect(screen.getByText(message ?? 'Sign-in did not finish. Try again.')).toBeInTheDocument();
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText(message ?? '登录未完成。请重试。')).toBeInTheDocument();
+  } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
+});
+
+it.each(['background', 'owner'])('updates %s fallback errors live without retrying the operation', async (step) => {
+  const { i18next } = await import('../../i18n');
+  const { b } = bridge();
+  const initial = await b.state();
+  b.state = async () => ({ ...initial, configured: true, owned: step === 'background', cliDaemon: step === 'owner' });
+  b.enable = vi.fn(async () => ({ ok: false }));
+  render(<DesktopSetup builtIn={b} />);
+  if (step === 'owner') fireEvent.click(await screen.findByTestId('desktop-owner-builtIn'));
+  await screen.findByText(step === 'background' ? 'Kraki could not start.' : 'Could not switch.');
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText(step === 'background' ? 'Kraki 无法启动。' : '无法切换。')).toBeInTheDocument();
+    expect(b.enable).toHaveBeenCalledTimes(1);
+  } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
+});

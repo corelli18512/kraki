@@ -4,7 +4,7 @@
     "turnFailed": "本轮失败",
     "stopped": "已停止",
     "approvalCaption": "需要你批准 · 安全模式",
-    "proposedChange": "拟议更改",
+    "proposedChange": "建议的更改",
     "alwaysAllowed": "始终允许",
     "denied": "已拒绝",
     "approved": "已批准",
@@ -23,7 +23,7 @@
     "report": "报告",
     "image": "图片",
     "loading": "正在加载",
-    "openGallery": "打开图库",
+    "openGallery": "浏览图片",
     "openPreview": "打开图片预览",
     "attachment": "附件",
     "invalidImage": "无效图片",
@@ -40,7 +40,7 @@
       "mimeChanged": "传输期间附件 MIME 类型发生变化",
       "invalidBase64": "附件分块不是有效的 base64",
       "readFailed": "读取附件数据失败",
-      "noBytes": "附件数据未生成字节",
+      "noBytes": "无法读取附件数据",
       "mimeMismatch": "附件 MIME 类型不匹配：应为 {{expected}}，实际为 {{actual}}",
       "chunkCountChanged": "附件分块数量从 {{before}} 变为 {{after}}",
       "sizeExceeded": "附件超过声明的大小 {{size}}",
@@ -54,7 +54,7 @@
   },
   "bubble": {
     "showSteps": "显示步骤",
-    "systemNotice": "系统通知",
+    "systemNotice": "系统提示",
     "correctingOptions": "正在校正语音输入。点击查看选项",
     "unconfirmedOptions": "正在等待确认。点击重试或删除",
     "failedOptions": "未送达。点击重试或删除",
@@ -100,7 +100,7 @@
     "open": "打开表格",
     "matchIndex": "{{index}} / {{total}}",
     "dimensions": "{{rows}} · {{columns}}",
-    "preview": "显示 {{shown}} / {{rows}} · {{columns}}",
+    "preview": "显示 {{shown}} 行，共 {{rows}} · {{columns}}",
     "scroll_other": "{{count}} 列 · 滚动查看更多",
     "rows_other": "{{count}} 行",
     "columns_other": "{{count}} 列"
@@ -123,7 +123,7 @@
     "send": "发送消息",
     "replaceImage": "替换图片",
     "attachImage": "添加图片",
-    "attached": "已添加",
+    "attached": "已添加的图片",
     "removeImage": "移除图片",
     "clear": "清空草稿",
     "placeholder": {
@@ -203,7 +203,7 @@
     "failed": "失败",
     "stopped": "已停止",
     "done": "已完成",
-    "working": "正在工作…上报的步骤将显示在这里。",
+    "working": "正在工作… 子 Agent 上报的步骤会显示在这里。",
     "noSubagentSteps": "Agent 未上报此子 Agent 的步骤。",
     "report": "报告",
     "loadFailed": "无法加载：{{error}}",
@@ -254,21 +254,20 @@
     },
     "failedPreview": "发送失败 · {{text}}",
     "queuedPreview": "正在等待连接 · {{text}}",
-    "unconfirmedPreview": "正在等待确认 · {{text}}",
-    "image": "[图片]"
+    "unconfirmedPreview": "正在等待确认 · {{text}}"
   },
   "subagent": {
     "count_other": "{{count}} 个子 Agent",
     "steps_other": "{{count}} 个步骤",
     "seconds": "{{seconds}} 秒",
     "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
-    "thousandTokens": "{{value}} 千 token",
+    "thousandTokens": "{{value}}k token",
     "tokens_other": "{{count}} 个 token"
   },
   "router": {
     "sessionCreated": "会话已创建",
     "turnFailed": "本轮失败",
-    "userAborted": "用户已中止",
-    "systemNotice": "系统通知"
+    "userAborted": "已停止",
+    "systemNotice": "系统提示"
   }
 }

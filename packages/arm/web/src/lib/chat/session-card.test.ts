@@ -1,5 +1,6 @@
 import { outbox, checkDeadlines } from './outbox';
 import { describe, expect, it } from 'vitest';
+import { i18next } from '../../i18n';
 import { sessionTimeLabel, sessionTimestamp, sessionPendingPreview, type SessionPendingInput } from './session-card';
 
 const pending = (values: Partial<SessionPendingInput> = {}): SessionPendingInput => ({
@@ -39,6 +40,14 @@ describe('sessionPendingPreview (SessionPendingPreview.select)', () => {
     expect(sessionPendingPreview([pending({ text: '', attachments: [{ type: 'image', data: 'abc', mimeType: 'image/png' }] })], 's', true)?.text).toBe('[image]');
     expect(sessionPendingPreview([pending({ text: '' })], 's', true)?.text).toBe('…');
     expect(sessionPendingPreview([], 's', true)).toBeUndefined();
+  });
+  it('keeps the raw image placeholder in Chinese', async () => {
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      expect(sessionPendingPreview([pending({ text: '', attachments: [{ type: 'image', data: 'abc', mimeType: 'image/png' }] })], 's', true)?.text).toBe('[image]');
+    } finally {
+      await i18next.changeLanguage('en');
+    }
   });
   it('is ready for native unconfirmed and correcting states without treating local correction as transport', () => {
     expect(sessionPendingPreview([pending({ state: 'unconfirmed' })], 's', false)?.text).toBe('Awaiting confirmation · hello world');

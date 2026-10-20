@@ -322,6 +322,7 @@ extension VoiceTerm {
 
 enum VoiceVocabularyCopy {
     static let title = String(localized: "Custom Words")
+    // Keep this copy and translation aligned with the counted footer in VoiceVocabularyPage.
     static let explanation = String(localized: "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate.")
     static let emptyTitle = String(localized: "No custom words yet")
     static let recognizedAs = String(localized: "Often recognized as")
@@ -371,6 +372,7 @@ struct VoiceVocabularyPage: View {
                         Button { add() } label: { Label("Add Word", systemImage: "plus") }
                     }
                 } footer: {
+                    // Keep this copy and translation aligned with VoiceVocabularyCopy.explanation.
                     Text(store.canEdit ? String(localized: "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate. \(store.savedCount) of \(VoiceVocabulary.maxEntries).")
                          : VoiceVocabularyCopy.signedOut)
                 }

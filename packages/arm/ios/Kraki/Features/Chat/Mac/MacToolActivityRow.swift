@@ -211,7 +211,7 @@ struct MacToolActivityRow: View {
             case .awaitingChunks(let received, let total):
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text(total.map { String(localized: "Loading \(received)/\($0)…") } ?? "Loading…")
+                    Text(total.map { String(localized: "Loading \(received)/\($0)…") } ?? String(localized: "Loading…"))
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }

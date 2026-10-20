@@ -223,14 +223,11 @@
     "about": "App versions, diagnostics, and support."
   },
   "auth": {
-    "browser": "Browser",
     "signInAgain": "Authentication failed. Please sign in again or scan a new pairing QR code.",
     "scanAgain": "Authentication failed. Please scan a new pairing QR code.",
     "reconnecting": "Authentication temporarily unavailable. Reconnecting…",
     "signIn": "Authentication failed. Sign in with GitHub or scan a pairing QR code.",
-    "scan": "Authentication failed. Scan a pairing QR code.",
-    "browserOnOS": "{{browser}} on {{os}}",
-    "webBrowser": "Web {{browser}}"
+    "scan": "Authentication failed. Scan a pairing QR code."
   },
   "performanceNotice": {
     "title": "Help Improve Kraki",

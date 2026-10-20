@@ -260,8 +260,7 @@
     },
     "failedPreview": "Send failed · {{text}}",
     "queuedPreview": "Waiting for connection · {{text}}",
-    "unconfirmedPreview": "Awaiting confirmation · {{text}}",
-    "image": "[image]"
+    "unconfirmedPreview": "Awaiting confirmation · {{text}}"
   },
   "subagent": {
     "count_one": "{{count}} subagent",

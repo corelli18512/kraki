@@ -948,7 +948,7 @@ final class CommandSender {
             appState.sessionStore.addPendingSession(placeholderId)
             let source = appState.sessionStore.sessions[sessionId]
             if let title = source?.title ?? source?.autoTitle, !title.isEmpty {
-                appState.sessionStore.pendingSessionTitles[placeholderId] = title.hasPrefix("Fork") ? title : String(localized: "Fork of \(title)")
+                appState.sessionStore.pendingSessionTitles[placeholderId] = title.hasPrefix("Fork") ? title : "Fork of \(title)"
             }
             // A fork is usually ready within a round trip: open it directly
             // then. Only a slow fork shows the "Copying…" page first, so the

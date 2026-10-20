@@ -457,7 +457,7 @@ ipcMain.handle('kraki:builtin-logs-path', () => path.join(builtIn.home(), 'logs'
 ipcMain.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
 ipcMain.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
-  if (builtIn.marker()) throw new Error('The built-in Kraki manages this PC.');
+  if (builtIn.marker()) throw new Error(i18n.t('error.builtInManagesPC'));
   await settings.exec(pref('externalCliPath') || builtIn.bin, [action]);
 }));
 ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
@@ -515,7 +515,7 @@ ipcMain.handle('kraki:settings-go-offline', safely(() => changePresence('stoppin
 ipcMain.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
 ipcMain.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
 ipcMain.handle('kraki:settings-locate-cli', safely(async () => {
-  const result = await dialog.showOpenDialog(win, { title: 'Locate kraki manually', properties: ['openFile'], filters: [{ name: 'Kraki executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
+  const result = await dialog.showOpenDialog(win, { title: i18n.t('dialog.locateTitle'), properties: ['openFile'], filters: [{ name: i18n.t('dialog.executable'), extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
   if (result.canceled) throw new Error(i18n.t('error.selectionCancelled'));
   const cli = await settings.probeCli(result.filePaths[0]);
   pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);

@@ -491,13 +491,15 @@ struct NewSessionComposer: View {
             case .connecting:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("Connecting to \(selectedDevice?.name ?? String(localized: "the computer"))…")
+                    Text(selectedDevice.map { String(localized: "Connecting to \($0.name)…") }
+                         ?? String(localized: "Connecting to the computer…"))
                         .font(.system(size: 11.5)).foregroundStyle(Color.textMuted)
                 }.padding(.leading, 4)
             case .offline:
-                hint("moon.zzz", String(localized: "\(selectedDevice?.name ?? String(localized: "This computer")) is offline. Pick another one above."))
+                hint("moon.zzz", selectedDevice.map { String(localized: "\($0.name) is offline. Pick another one above.") }
+                     ?? String(localized: "This computer is offline. Pick another one above."))
             case .noAgents:
-                NoAgentsGuide(deviceName: selectedIsThisMac ? String(localized: "this Mac") : (selectedDevice?.name ?? String(localized: "this computer")),
+                NoAgentsGuide(deviceName: selectedDevice?.name,
                               isThisMac: selectedIsThisMac,
                               checkAgain: selectedIsThisMac ? { await recheckLocalAgents() } : nil)
                     .padding(14)

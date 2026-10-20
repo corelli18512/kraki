@@ -36,7 +36,7 @@ struct ChatPlaceholderView: View {
                             Image(systemName: "tray")
                                 .font(.system(size: 24, weight: .light))
                                 .foregroundStyle(Color.textMuted)
-                            Text("No messages yet.")
+                            Text(verbatim: "No messages yet.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(Color.textSecondary)
                         }
@@ -129,7 +129,7 @@ struct ChatPlaceholderView: View {
             Image(systemName: "hammer.fill")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color(hex: 0xFBBF24))
-            Text("Chat UI under construction — sharing iOS ChatListViewController once it stabilizes.")
+            Text(verbatim: "Chat UI under construction — sharing iOS ChatListViewController once it stabilizes.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.textSecondary)
             Spacer()
@@ -171,10 +171,10 @@ struct ChatPlaceholderView: View {
 
     private var inputStub: some View {
         HStack(spacing: 8) {
-            TextField("Send a message (disabled — placeholder UI)", text: .constant(""))
+            TextField(String("Send a message (disabled — placeholder UI)"), text: .constant(""))
                 .disabled(true)
                 .textFieldStyle(.roundedBorder)
-                .help("Input UI ships with M2 chat work.")
+                .help(String("Input UI ships with M2 chat work."))
             Button("Send") {}
                 .disabled(true)
                 .buttonStyle(.borderedProminent)
@@ -199,10 +199,10 @@ struct ChatPlaceholderView: View {
 
     private func roleLabel(for msg: ChatMessage) -> String {
         switch msg.type {
-        case "user_message": return String(localized: "USER")
-        case "tool_start", "tool_complete", "tool_error": return String(localized: "TOOL")
-        case "permission_request", "permission_response": return String(localized: "PERM")
-        case "agent_text", "agent_message": return String(localized: "AGENT")
+        case "user_message": return "USER"
+        case "tool_start", "tool_complete", "tool_error": return "TOOL"
+        case "permission_request", "permission_response": return "PERM"
+        case "agent_text", "agent_message": return "AGENT"
         default: return msg.type.uppercased()
         }
     }

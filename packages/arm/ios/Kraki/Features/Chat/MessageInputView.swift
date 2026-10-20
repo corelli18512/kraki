@@ -165,8 +165,10 @@ struct MessageInputView: View {
         guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
-            let name = device?.name ?? session?.deviceName ?? String(localized: "Device")
-            return String(localized: "\(name) is offline — message will deliver when it reconnects.")
+            if let name = device?.name ?? session?.deviceName {
+                return String(localized: "\(name) is offline — message will deliver when it reconnects.")
+            }
+            return String(localized: "Device is offline — message will deliver when it reconnects.")
         }
         // Reconnecting is silent here (the title says "Connecting…"); input
         // keeps working and queues until the connection is back.

@@ -1,4 +1,3 @@
-import { t } from '../i18n';
 /**
  * App-side E2E encryption + challenge-response auth.
  *
@@ -171,7 +170,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
     }
 
     if (!this.encryptKeyPair || !this.signKeyPair) {
-      throw new Error(t('app:crypto.keyGeneration'));
+      throw new Error('Key pair generation failed');
     }
 
     // The public key we send to the head is the ENCRYPTION public key
@@ -186,17 +185,17 @@ export class BrowserAppKeyStore implements AppKeyStore {
   }
 
   async getPublicKey(): Promise<string> {
-    if (!this.encryptPublicKeyBase64) throw new Error(t('app:crypto.keysNotReady'));
+    if (!this.encryptPublicKeyBase64) throw new Error('Keys not initialized');
     return this.encryptPublicKeyBase64;
   }
 
   async getSigningPublicKey(): Promise<string> {
-    if (!this.signPublicKeyBase64) throw new Error(t('app:crypto.keysNotReady'));
+    if (!this.signPublicKeyBase64) throw new Error('Keys not initialized');
     return this.signPublicKeyBase64;
   }
 
   async signChallenge(nonce: string): Promise<string> {
-    if (!this.signKeyPair) throw new Error(t('app:crypto.keysNotReady'));
+    if (!this.signKeyPair) throw new Error('Keys not initialized');
 
     const encoder = new TextEncoder();
     const data = encoder.encode(nonce);
@@ -214,11 +213,11 @@ export class BrowserAppKeyStore implements AppKeyStore {
     payload: { iv: string; ciphertext: string; tag: string; keys: Record<string, string> },
     deviceId: string,
   ): Promise<string> {
-    if (!this.encryptKeyPair) throw new Error(t('app:crypto.keysNotReady'));
+    if (!this.encryptKeyPair) throw new Error('Keys not initialized');
 
     const wrappedKeyB64 = payload.keys[deviceId];
     if (!wrappedKeyB64) {
-      throw new Error(t('app:crypto.noDeviceKey', { deviceId }));
+      throw new Error(`No encrypted key found for device "${deviceId}"`);
     }
 
     // 1. Unwrap AES key with our RSA-OAEP private key
@@ -259,7 +258,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
   }
 
   async encrypt(plaintext: string, recipients: RecipientKey[]): Promise<EncryptedPayload> {
-    if (recipients.length === 0) throw new Error(t('app:crypto.recipientRequired'));
+    if (recipients.length === 0) throw new Error('At least one recipient required');
 
     // 1. Generate random AES-256 key and IV
     const aesKeyRaw = crypto.getRandomValues(new Uint8Array(32));

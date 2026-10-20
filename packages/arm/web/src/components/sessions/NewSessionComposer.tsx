@@ -398,15 +398,15 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
                 <div className="ns-pill-wrap">
                   <PillButton open={openPill === 'effort'} onOpen={() => setOpenPill('effort')} testId="new-session-effort">
                     <EffortGauge effort={effort} />
-                    <span className="ns-pill-text">{effort ? t(`composer.effortThinking.${effort}`) : t('composer.thinking')}</span>
+                    <span className="ns-pill-text">{effort ? t(`composer.effortThinking.${effort}`, { defaultValue: effort }) : t('composer.thinking')}</span>
                   </PillButton>
                   {openPill === 'effort' && (
                     <Popover onClose={close}>
                       {efforts.map((e) => (
                         <ChoiceRow
                           key={e}
-                          title={t(`composer.effort.${e}`)}
-                          detail={t(`composer.effortDetail.${e}`)}
+                          title={t(`composer.effort.${e}`, { defaultValue: e })}
+                          detail={t(`composer.effortDetail.${e}`, { defaultValue: e })}
                           selected={e === effort}
                           mark={<span className="ns-muted-mark"><EffortGauge effort={e} /></span>}
                           onClick={() => { setEffort(e); if (model) writeJson(EFFORT_PREF_KEY, model, e); close(); }}
@@ -444,12 +444,12 @@ function StatusLine({ anyOnline, availability, deviceName, isThisPC }: {
   }
   if (availability === 'ready') return null;
   if (availability === 'connecting') {
-    return <div className="ns-hint"><span className="ns-spinner" />{t('composer.connecting', { deviceName: deviceName ?? t('composer.theComputer') })}</div>;
+    return <div className="ns-hint"><span className="ns-spinner" />{deviceName === undefined ? t('composer.connectingUnknown') : t('composer.connecting', { deviceName })}</div>;
   }
   if (availability === 'offline') {
-    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{t('composer.deviceOffline', { deviceName: deviceName ?? t('composer.thisComputer') })}</div>;
+    return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{deviceName === undefined ? t('composer.thisComputerOffline') : t('composer.deviceOffline', { deviceName })}</div>;
   }
-  return <NoAgentsGuide deviceName={isThisPC ? t('composer.thisPcLower') : deviceName ?? t('composer.thisComputerLower')} isThisPC={isThisPC} />;
+  return <NoAgentsGuide deviceName={deviceName} isThisPC={isThisPC} />;
 }
 
 const INSTALL_LINKS = [
@@ -460,12 +460,12 @@ const INSTALL_LINKS = [
 ];
 
 /** NoAgentsGuide on Mac: the selected computer runs, but has no coding agent. */
-function NoAgentsGuide({ deviceName, isThisPC }: { deviceName: string; isThisPC: boolean }) {
+function NoAgentsGuide({ deviceName, isThisPC }: { deviceName?: string; isThisPC: boolean }) {
   const { t } = useTranslation('sessions');
   const [checking, setChecking] = useState(false);
   return (
     <div className="ns-noagents" data-testid="new-session-no-agents">
-      <div className="ns-noagents-title">{t('composer.noAgent', { deviceName })}</div>
+      <div className="ns-noagents-title">{isThisPC ? t('composer.noAgentThisPc') : deviceName === undefined ? t('composer.noAgentThisComputer') : t('composer.noAgent', { deviceName })}</div>
       <div className="ns-noagents-detail">
         {isThisPC
           ? t('composer.installLocal')

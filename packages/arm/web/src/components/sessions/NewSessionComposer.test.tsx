@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import type { ReasoningEffort } from '@kraki/protocol';
 import { i18next } from '../../i18n';
+import { NewSessionDialog } from './NewSessionDialog';
 import { NewSessionComposer } from './NewSessionComposer';
 import { useStore } from '../../hooks/useStore';
 
@@ -14,6 +16,57 @@ beforeEach(() => { useStore.getState().reset(); localStorage.clear(); });
 afterEach(async () => { await i18next.changeLanguage('en'); });
 
 describe('NewSessionComposer', () => {
+  it('shows raw unknown reasoning efforts instead of translation keys in both pickers', async () => {
+    const unknownEffort = 'future-effort' as ReasoningEffort;
+    useStore.getState().setDevices([{ id: 'computer', name: 'Office PC', role: 'tentacle', online: true }]);
+    useStore.getState().setDeviceAgents('computer', [{
+      type: 'code', id: 'copilot', models: ['model'], modelDetails: [{
+        id: 'model', name: 'Model', supportsReasoningEffort: true,
+        supportedReasoningEfforts: [unknownEffort], defaultReasoningEffort: unknownEffort,
+      }],
+    }]);
+    const composer = render(<NewSessionComposer />);
+    expect(screen.getByTestId('new-session-effort')).toHaveTextContent('future-effort');
+    fireEvent.click(screen.getByTestId('new-session-effort'));
+    expect(screen.getByRole('option')).toHaveTextContent('future-effortfuture-effort');
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByTestId('new-session-effort')).toHaveTextContent('future-effort');
+    expect(screen.getByRole('option')).toHaveTextContent('future-effortfuture-effort');
+    composer.unmount();
+    const scrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    try {
+      render(<NewSessionDialog open onClose={() => {}} />);
+      expect(screen.getByRole('button', { name: 'future-effort' })).toBeInTheDocument();
+    } finally {
+      if (scrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scrollIntoView);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    }
+  });
+
+  it.each([
+    ['connecting', 'Connecting to the computer…', '正在连接电脑…'],
+    ['noAgents', 'No coding agent on this computer', '这台电脑上没有编程 Agent'],
+  ])('uses a full sentence for an unnamed %s computer', async (availability, english, chinese) => {
+    // A newly discovered computer may not have supplied its name yet.
+    useStore.getState().setDevices([{ id: 'unnamed', name: undefined as unknown as string, role: 'tentacle', online: true }]);
+    if (availability === 'noAgents') useStore.getState().setDeviceAgents('unnamed', []);
+    render(<NewSessionComposer />);
+    expect(screen.getByText(english)).toBeInTheDocument();
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText(chinese)).toBeInTheDocument();
+  });
+
+  it('keeps a named computer in localized status sentences', async () => {
+    useStore.getState().setDevices([{ id: 'computer', name: 'Office PC', role: 'tentacle', online: true }]);
+    render(<NewSessionComposer />);
+    expect(screen.getByText('Connecting to Office PC…')).toBeInTheDocument();
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByText('正在连接 Office PC…')).toBeInTheDocument();
+    act(() => { useStore.getState().setDeviceAgents('computer', []); });
+    expect(screen.getByText('Office PC 上没有编程 Agent')).toBeInTheDocument();
+  });
+
   it('updates its default placeholder and empty state when the language changes', async () => {
     render(<NewSessionComposer />);
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'Describe a task, e.g. “Fix the failing tests in my-app”');

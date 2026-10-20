@@ -111,6 +111,10 @@ enum VoiceInputError: LocalizedError, Equatable {
     case leaseDenied(VoiceLeaseDeniedReason, String?)
     case gateway(String)
 
+    // Shared raw reasons keep diagnostics stable and UI localization in sync with callers.
+    static let accountResetReason = "Voice input was reset for this account. Please try again."
+    static let audioSessionStartFailedReason = "The microphone audio session couldn't be started."
+
     var errorDescription: String? {
         switch self {
         case .unavailable:
@@ -142,9 +146,9 @@ enum VoiceInputError: LocalizedError, Equatable {
         case .leaseDenied(.invalidRequest, let detail):
             return detail ?? String(localized: "The voice authorization request was rejected.")
         // Keep raw gateway reasons stable for diagnostics; localize only the UI copy.
-        case .gateway("Voice input was reset for this account. Please try again."):
+        case .gateway(Self.accountResetReason):
             return String(localized: "Voice input was reset for this account. Please try again.")
-        case .gateway("The microphone audio session couldn't be started."):
+        case .gateway(Self.audioSessionStartFailedReason):
             return String(localized: "The microphone audio session couldn't be started.")
         case .gateway(let reason):
             return reason

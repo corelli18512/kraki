@@ -173,7 +173,7 @@ final class MacChatBubbleCell: NSView {
         imageHost.layoutSubtreeIfNeeded()
         func collectButtons(in view: NSView, into result: inout [NSButton]) {
             if let button = view as? NSButton,
-               ["Open image preview", "Open image gallery"].contains(button.accessibilityLabel()) {
+               [String(localized: "Open image preview"), String(localized: "Open image gallery")].contains(button.accessibilityLabel()) {
                 result.append(button)
             }
             for child in view.subviews {

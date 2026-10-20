@@ -16,14 +16,14 @@ export function browserDeviceName(ua: string): string {
   const browser = /Edg\//.test(ua) ? 'Edge'
     : /Firefox\//.test(ua) ? 'Firefox'
       : /(Chrome|CriOS)\//.test(ua) ? 'Chrome'
-        : /Safari/.test(ua) ? 'Safari' : t('settings:auth.browser');
+        : /Safari/.test(ua) ? 'Safari' : 'Browser';
   const os = /iPhone/.test(ua) ? 'iPhone'
     : /iPad/.test(ua) ? 'iPad'
       : /Android/.test(ua) ? 'Android'
         : /Windows/.test(ua) ? 'Windows'
           : /Mac OS X|Macintosh/.test(ua) ? 'Mac'
             : /Linux/.test(ua) ? 'Linux' : '';
-  return os ? t('settings:auth.browserOnOS', { browser, os }) : t('settings:auth.webBrowser', { browser });
+  return os ? `${browser} on ${os}` : `Web ${browser}`;
 }
 
 /** Send the initial auth message. Returns true if a pairing token was consumed. */

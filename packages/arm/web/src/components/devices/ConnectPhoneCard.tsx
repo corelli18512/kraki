@@ -6,7 +6,6 @@
  *
  * Open it by dispatching `kraki:connect-phone` on window.
  */
-import { t as translate } from '../../i18n';
 import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
@@ -40,7 +39,7 @@ function Card({ onClose }: { onClose: () => void }) {
   const devices = useStore((s) => s.devices);
   const myDeviceId = useStore((s) => s.deviceId);
   const [payload, setPayload] = useState<{ url: string; expiresAt: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<'notRunning' | 'relayError' | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [connected, setConnected] = useState<string | null>(null);
@@ -77,8 +76,8 @@ function Card({ onClose }: { onClose: () => void }) {
       setPayload({ url: r.url, expiresAt: r.expiresAt ? Date.parse(r.expiresAt) : Date.now() + 5 * 60_000 });
     } else {
       setError(r?.error === 'daemon_not_running'
-        ? translate('devices:connectPhone.notRunning')
-        : translate('devices:connectPhone.relayError'));
+        ? 'notRunning'
+        : 'relayError');
     }
     setLoading(false);
   }, []);
@@ -168,7 +167,7 @@ function Card({ onClose }: { onClose: () => void }) {
               )}
             </div>
             {error ? (
-              <div className="cp-error-text">{error}</div>
+              <div className="cp-error-text">{t(`connectPhone.${error}`)}</div>
             ) : (
               <div className="cp-footer">
                 <span className="cp-waiting"><span className="cp-spinner cp-spinner-mini" />{t('connectPhone.waiting')}</span>

@@ -54,7 +54,7 @@ export interface ChatViewProps {
 }
 
 export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArtifact }: ChatViewProps) {
-  const { t } = useTranslation('chat');
+  const { t, i18n } = useTranslation('chat');
   const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
   const session = useStore((s) => s.sessions.get(sessionId));
   const rawCard = useStore((s) => s.cards.get(sessionId));
@@ -98,11 +98,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const answerKey = pendingAnswerTo.join(',');
   const spine = useMemo(
     () => spineRows(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead],
+    [messages, answerKey, atHead, i18n.language],
   );
   const questions = useMemo(
     () => openQuestions(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead],
+    [messages, answerKey, atHead, i18n.language],
   );
 
   const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
@@ -134,7 +134,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       const key = rowKey(item);
       const cached = cache.get(key);
       const row: ChatRow = cached && cached.kind === 'spine' && cached.item.message === item.message
-        && cached.item.question?.state === item.question?.state ? cached : { kind: 'spine', key, item };
+        && cached.item.question?.state === item.question?.state
+        && cached.item.question?.outcome?.message === item.question?.outcome?.message ? cached : { kind: 'spine', key, item };
       nextCache.set(key, row);
       return row;
     });
@@ -506,7 +507,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         ><ChevronUp aria-hidden /></button>
         <button
           type="button"
-          className={`kround ${!atBottom && rows.length > 0 ? 'is-visible' : ''}`}
+          className={`kround is-latest ${!atBottom && rows.length > 0 ? 'is-visible' : ''}`}
           aria-label={t('view.latest')}
           tabIndex={!atBottom ? 0 : -1}
           onClick={() => scrollToBottom(true)}

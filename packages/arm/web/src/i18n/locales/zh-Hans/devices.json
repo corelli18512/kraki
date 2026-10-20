@@ -2,7 +2,7 @@
   "connectPhone": {
     "qr": "配对二维码",
     "notRunning": "这台电脑上的 Kraki 未运行。请在设置中开启“在这台电脑上运行 Agent”，然后重试。",
-    "relayError": "无法从中继服务器获取代码。请检查连接后重试。",
+    "relayError": "无法从中继服务器获取配对码。请检查连接后重试。",
     "title": "连接手机",
     "closeShortcut": "关闭（Esc）",
     "close": "关闭",
@@ -27,7 +27,7 @@
     "copyFailed": "无法复制会话 ID。",
     "agent": "Agent",
     "model": "模型",
-    "thinking": "思考",
+    "thinking": "推理强度",
     "contextTier": "上下文级别",
     "default": "默认",
     "longContext": "100 万 token",
@@ -51,8 +51,8 @@
     "delete": "删除",
     "deleteTitle": "删除会话",
     "deleteBody": "这将永久删除此会话及其所有消息。",
-    "thousands": "{{value}} 千",
-    "millions": "{{value}} 百万",
+    "thousands": "{{value}}K",
+    "millions": "{{value}}M",
     "idLabel": "会话 ID {{id}}",
     "seconds": "{{seconds}} 秒",
     "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
@@ -118,8 +118,8 @@
     "installing": "正在安装 Kraki{{version}}…",
     "restarting": "正在重启 {{name}} 上的 Kraki…",
     "updated": "✓ 已更新至 Kraki{{version}}",
-    "rolledBackDetail": "新版本未能在 {{name}} 上启动，因此已恢复至{{from}}。",
-    "previousVersion": "上一个版本"
+    "rolledBackDetail": "新版本未能在 {{name}} 上启动，因此已恢复至 {{from}}。",
+    "rolledBackDetailPrevious": "新版本未能在 {{name}} 上启动，因此已恢复至上一个版本。"
   },
   "updateHelp": {
     "mac": "在那台 Mac 上打开 Kraki，选择“Kraki → 检查更新…”。",

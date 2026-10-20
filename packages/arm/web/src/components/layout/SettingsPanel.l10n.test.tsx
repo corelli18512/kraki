@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { i18next } from '../../i18n';
 import { useStore } from '../../hooks/useStore';
 import { browserDeviceName } from '../../lib/auth';
@@ -20,11 +21,35 @@ afterEach(async () => { await act(async () => { await i18next.changeLanguage('en
 const chinese = async () => { await act(async () => { await i18next.changeLanguage('zh-Hans'); }); };
 
 describe('SettingsPanel localization', () => {
-  it('localizes browser device descriptions at call time without translating product names', async () => {
+  it('keeps relay device names in English after a language switch', async () => {
     expect(browserDeviceName('Mozilla/5.0 (Macintosh) Chrome/130')).toBe('Chrome on Mac');
     await chinese();
-    expect(browserDeviceName('Mozilla/5.0 (Macintosh) Chrome/130')).toBe('Mac 上的 Chrome');
-    expect(browserDeviceName('unknown')).toBe('浏览器（网页版）');
+    expect(browserDeviceName('Mozilla/5.0 (Macintosh) Chrome/130')).toBe('Chrome on Mac');
+    expect(browserDeviceName('unknown')).toBe('Web Browser');
+    expect(browserDeviceName('Mozilla/5.0 (Linux)')).toBe('Browser on Linux');
+  });
+
+  it('copies English diagnostics while showing translated labels and offline status', async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+    useStore.setState({
+      deviceId: 'self',
+      relayVersion: '1.2.3',
+      devices: new Map([['mac', { id: 'mac', name: 'My Mac', role: 'tentacle', online: false }]]),
+      deviceVersions: new Map([['mac', '4.5.6']]),
+    });
+    await chinese();
+    render(<SettingsPanel open onClose={vi.fn()} />);
+    await user.click(screen.getByRole('tab', { name: '关于' }));
+    expect(screen.getByText('后台服务')).toBeInTheDocument();
+    expect(screen.getByText('中继服务器')).toBeInTheDocument();
+    expect(screen.getByText('设备 ID')).toBeInTheDocument();
+    expect(screen.getByText('Kraki 4.5.6 · 离线')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '复制诊断信息' }));
+    expect(write).toHaveBeenCalledTimes(1);
+    const text = write.mock.calls[0][0];
+    expect(text).toMatch(/^Background Service: —\nKraki Web: [^\n]+\nMy Mac: Kraki 4\.5\.6 · offline\nRelay: localhost · 1\.2\.3\nDevice ID: self$/);
+    write.mockRestore();
   });
   it('switches an open panel, tabs and destructive confirmations without changing identities', async () => {
     render(<SettingsPanel open onClose={vi.fn()} />);
@@ -56,6 +81,7 @@ describe('SettingsPanel localization', () => {
     expect(screen.getByRole('button', { name: '移除 PostgreSQL' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '添加词汇' }));
     expect(screen.getByRole('textbox', { name: '自定义词汇' })).toHaveAttribute('placeholder', '例如 PostgreSQL');
+    expect(screen.getByRole('textbox', { name: '常被识别为', exact: true })).toBeInTheDocument();
   });
 
   it('translates build metadata labels while preserving provenance URLs and identifiers', async () => {

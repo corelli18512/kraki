@@ -2,11 +2,11 @@
   "status": {
     "signIn": "需要登录",
     "unavailable": "不可用",
-    "stale": "已过期",
+    "stale": "数据已过时",
     "offline": "设备离线",
     "rateLimited": "已达速率限制 · 请尝试刷新",
     "failed": "无法刷新",
-    "overdue": "更新已逾期",
+    "overdue": "数据未按时更新",
     "notUpdated": "尚未更新",
     "updatedNow": "刚刚更新",
     "retryIn": "已达速率限制 · {{time}}后重试",
@@ -32,12 +32,12 @@
   "currentSession": "当前会话",
   "title": "账户用量",
   "spentByCurrent": "当前会话使用此账户",
-  "windowTooltip": "{{name}} 剩余 {{percent}}%，{{time}}后重置",
+  "windowTooltip": "{{name}} 剩余 {{percent}}%，重置：{{time}}",
   "deviceOffline": "{{name}}（离线）",
   "moreDevices_other": " +{{number}}",
   "reset": {
     "now": "现在",
-    "pair": "{{first}} {{second}}"
+    "pair": "{{first}}{{second}}"
   },
   "window": {
     "fiveHour": "5 小时",
@@ -46,6 +46,6 @@
   },
   "update": {
     "more_other": "{{name}} 和另外 {{number}} 台设备",
-    "hint_other": "更新 {{list}} 上的 Kraki 以查看其账户"
+    "hint_other": "更新以下设备上的 Kraki 以查看其账户：{{list}}"
   }
 }

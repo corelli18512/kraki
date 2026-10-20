@@ -80,7 +80,7 @@ enum PermissionPromptCopy {
         let base = (message.toolDescription ?? String(localized: "Run \(message.toolName ?? String(localized: "tool"))"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard message.payload["decision"]?.stringValue == nil else { return base }
-        return base.hasSuffix("?") ? base : String(localized: "\(base)?")
+        return base.hasSuffix("?") || base.hasSuffix("？") ? base : String(localized: "\(base)?")
     }
     static let caption = String(localized: "Needs your approval · Safe mode")
 }

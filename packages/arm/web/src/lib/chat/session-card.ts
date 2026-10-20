@@ -79,7 +79,7 @@ export function sessionPendingPreview(entries: SessionPendingInput[], sessionId:
     a.timestamp.localeCompare(b.timestamp) || a.clientId.localeCompare(b.clientId)).at(-1);
   if (!pending) return undefined;
   const status: SessionDeliveryStatus = pending.state === 'sending' ? (online ? 'sending' : 'queued') : pending.state;
-  const text = collapseWhitespace(pending.text) || (pending.attachments?.length ? t('chat:sessionCard.image') : '…');
+  const text = collapseWhitespace(pending.text) || (pending.attachments?.length ? '[image]' : '…');
   const preview = status === 'failed' ? t('chat:sessionCard.failedPreview', { text }) : status === 'queued' ? t('chat:sessionCard.queuedPreview', { text }) : status === 'unconfirmed' ? t('chat:sessionCard.unconfirmedPreview', { text }) : text;
   return { text: preview, timestamp: pending.timestamp, status };
 }

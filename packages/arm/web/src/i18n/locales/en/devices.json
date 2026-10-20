@@ -121,7 +121,7 @@
     "restarting": "Restarting Kraki on {{name}}…",
     "updated": "✓ Updated to Kraki{{version}}",
     "rolledBackDetail": "The new version didn’t start on {{name}}, so it went back to {{from}}.",
-    "previousVersion": "the previous version"
+    "rolledBackDetailPrevious": "The new version didn’t start on {{name}}, so it went back to the previous version."
   },
   "updateHelp": {
     "mac": "Open Kraki on that Mac and choose Kraki → Check for Updates…",
