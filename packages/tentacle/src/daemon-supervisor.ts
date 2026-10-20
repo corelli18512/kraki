@@ -22,7 +22,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export const SUPERVISED_ENV = 'KRAKI_SUPERVISED';
@@ -33,23 +33,6 @@ export const SUPERVISE_ENV = 'KRAKI_SUPERVISE';
 /** A worker exit code meaning "restarting won't help" (no config): the
  *  supervisor stops instead of retrying forever. EX_CONFIG from sysexits.h. */
 export const PERMANENT_EXIT_CODE = 78;
-
-/** Supervisor exit code when its own executable was replaced or deleted
- *  (EX_TEMPFAIL): launchd's KeepAlive starts the job again from the new file. */
-export const BINARY_REPLACED_EXIT_CODE = 75;
-
-/** How often the supervisor checks whether its executable was replaced. */
-export const BINARY_CHECK_INTERVAL_MS = 30_000;
-
-/** Identity of the file at `path` (device + inode), or null when it is gone. */
-export function executableIdentity(path: string): string | null {
-  try {
-    const s = statSync(path);
-    return `${s.dev}:${s.ino}`;
-  } catch {
-    return null;
-  }
-}
 
 /** Restart delay after the n-th consecutive quick failure (1s, 2s, 4s … 60s). */
 export function restartDelayMs(consecutiveFailures: number): number {
@@ -70,22 +53,6 @@ export interface SupervisorOptions {
   logFile?: string;
   /** Record this supervisor's PID here while it runs (`kraki stop` reads it). */
   pidFile?: string;
-  /**
-   * Exit with BINARY_REPLACED_EXIT_CODE once this file is replaced or deleted.
-   *
-   * Why: macOS TCC attributes the worker's (and every agent's) file access to
-   * this launchd-spawned process. When an app update (Sparkle) swaps the
-   * bundle while we run, our executable no longer exists on disk; once TCC's
-   * cached decisions expire, tccd fails to build the attribution chain
-   * ("proc_pidpath_audittoken() failed … No such file or directory") and
-   * denies Documents/Desktop/Full Disk Access even though access is granted.
-   * Sparkle puts the new file at the same path, so compare the inode, not
-   * just existence. Two consecutive mismatches are required so a check that
-   * lands mid-swap does not trigger a restart.
-   */
-  watchExecutable?: string;
-  /** For tests: binary check interval. */
-  binaryCheckMs?: number;
   /** For tests: stop after this many worker starts. */
   maxStarts?: number;
   delay?: (n: number) => number;
@@ -103,15 +70,12 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
   let failures = 0;
   let starts = 0;
   let timer: NodeJS.Timeout | null = null;
-  let binaryTimer: NodeJS.Timeout | null = null;
-  let stopCode = 0;
 
   if (opts.pidFile) {
     try { mkdirSync(dirname(opts.pidFile), { recursive: true }); writeFileSync(opts.pidFile, String(process.pid)); } catch { /* best effort */ }
   }
   return new Promise((resolve) => {
     const finish = (code: number) => {
-      if (binaryTimer) { clearInterval(binaryTimer); binaryTimer = null; }
       for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.removeListener(s, onSignal);
       if (opts.pidFile) {
         try { if (readFileSync(opts.pidFile, 'utf8').trim() === String(process.pid)) unlinkSync(opts.pidFile); } catch { /* gone */ }
@@ -129,28 +93,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
     };
     for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(s, onSignal);
 
-    const watched = opts.watchExecutable;
-    const initialIdentity = watched ? executableIdentity(watched) : null;
-    if (watched && initialIdentity) {
-      let mismatches = 0;
-      binaryTimer = setInterval(() => {
-        if (stopping) return;
-        const now = executableIdentity(watched);
-        mismatches = now === initialIdentity ? 0 : mismatches + 1;
-        if (mismatches < 2) return;
-        stopping = true;
-        stopCode = BINARY_REPLACED_EXIT_CODE;
-        if (timer) { clearTimeout(timer); timer = null; }
-        log(`executable ${now ? 'replaced' : 'deleted'} (${watched}); stopping worker so launchd restarts the new one`);
-        if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-        else finish(stopCode);
-      }, opts.binaryCheckMs ?? BINARY_CHECK_INTERVAL_MS);
-      binaryTimer.unref();
-    }
-
     const start = () => {
       timer = null;
-      if (stopping) { finish(stopCode); return; }
+      if (stopping) { finish(0); return; }
       starts++;
       const startedAt = Date.now();
       child = spawn(opts.command, opts.args, {
@@ -163,7 +108,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         child = null;
         if (stopping || isCleanExit(code, signal)) {
           log(`worker exited cleanly (code=${code} signal=${signal})`);
-          finish(stopCode);
+          finish(0);
           return;
         }
         if (code === PERMANENT_EXIT_CODE) {

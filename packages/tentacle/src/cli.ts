@@ -111,9 +111,6 @@ async function main(): Promise<void> {
         args: _isSEA ? [cmd] : [...process.execArgv, process.argv[1], cmd],
         logFile: join(getLogsDir(), 'daemon-supervisor.log'),
         ...(cliSupervised && !appManaged && { pidFile: getDaemonSupervisorPidPath() }),
-        // Kraki for Mac: an app update replaces this binary under us; restart
-        // onto the new one or TCC starts denying protected folders.
-        ...(process.platform === 'darwin' && isMacAppManagedWorker() && _isSEA && { watchExecutable: process.execPath }),
       });
       process.exit(code);
     }
