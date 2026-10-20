@@ -302,7 +302,6 @@ final class TentacleCLIManager {
         let daemon = json["daemon"] as? [String: Any]
         let running = daemon?["running"] as? Bool ?? false
         let pid = daemon?["pid"] as? Int
-        let supervisorPid = daemon?["supervisorPid"] as? Int
         fdaStatus = daemon?["fda"] as? String
         relayState = daemon?["relayState"] as? String
         runningDaemonVersion = daemon?["daemonVersion"] as? String
@@ -333,26 +332,7 @@ final class TentacleCLIManager {
                     return
                 }
             }
-            // After a Sparkle update the old daemon keeps running from memory.
-            // Restart it once onto the tentacle this app now ships.
-            if running, let shipped = builtIn.version, let live = runningDaemonVersion,
-               shipped != live, restartedForVersion != shipped, builtIn.ownershipMarkerExists {
-                restartedForVersion = shipped
-                KLog.diag("[Tentacle] restarting built-in daemon \(live) → \(shipped)")
-                builtIn.kickstart()
-            } else if running, !restartedForStaleBinary, builtIn.ownershipMarkerExists,
-                      let stale = Self.staleDaemonBinary(
-                          pids: [supervisorPid, pid].compactMap { $0 },
-                          expectedPath: builtIn.binaryPath) {
-                // Same version number, new build: the update replaced the
-                // helper but the daemon still runs the old, now deleted, file.
-                // macOS then denies it (and every agent) Documents/Desktop/Full
-                // Disk Access once TCC's cache expires, because tccd cannot
-                // resolve the responsible process's executable. Restart once.
-                restartedForStaleBinary = true
-                KLog.diag("[Tentacle] built-in daemon runs a replaced binary (\(stale)); restarting")
-                builtIn.kickstart()
-            }
+            if running { restartDaemonIfOutdated(daemon, pid: pid) }
         }
         // Self-heal: the job is registered and should run, yet nothing runs.
         // After an app update launchd can refuse the new helper binary against
@@ -587,38 +567,6 @@ final class TentacleCLIManager {
         program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
     }
 
-    /// Executable path of a live process, or nil when it can't be resolved.
-    /// `proc_pidpath` fails once the process's executable was deleted.
-    nonisolated static func executablePath(ofPid pid: Int) -> String? {
-        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        let length = proc_pidpath(pid_t(pid), &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        return String(cString: buffer)
-    }
-
-    /// Description of the first daemon process that no longer runs the
-    /// helper at `expectedPath` (its executable was deleted or lives
-    /// elsewhere), or nil when every live one does. Processes that already
-    /// exited are skipped: gone is not stale.
-    nonisolated static func staleDaemonBinary(
-        pids: [Int],
-        expectedPath: String,
-        isAlive: (Int) -> Bool = { kill(pid_t($0), 0) == 0 },
-        pathOf: (Int) -> String? = { executablePath(ofPid: $0) }
-    ) -> String? {
-        let expected = URL(fileURLWithPath: expectedPath).resolvingSymlinksInPath().path
-        for pid in pids where pid > 0 && isAlive(pid) {
-            guard let path = pathOf(pid) else {
-                // Re-check: the process may have exited between the calls.
-                if isAlive(pid) { return "pid \(pid): executable deleted" }
-                continue
-            }
-            let actual = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            if actual != expected { return "pid \(pid): \(path)" }
-        }
-        return nil
-    }
-
     /// Register the built-in daemon with SMAppService.
     ///
     /// Refuses from a translocated/disk-image location (the registration would
@@ -775,6 +723,67 @@ struct TentacleCLIError: Error, LocalizedError {
     let message: String
     init(_ m: String) { message = m }
     var errorDescription: String? { message }
+}
+
+// MARK: - Restart a daemon left behind by an app update
+
+extension TentacleCLIManager {
+    /// After a Sparkle update the old daemon keeps running from memory.
+    /// Restart it once onto the tentacle this app now ships: when its version
+    /// differs, or when the same version was rebuilt and the daemon still
+    /// runs the replaced, now deleted, file. In that state macOS denies it
+    /// (and every agent) Documents/Desktop/Full Disk Access once TCC's cache
+    /// expires, because tccd cannot resolve the responsible process's
+    /// executable ("Failed to create attribution chain").
+    func restartDaemonIfOutdated(_ daemon: [String: Any]?, pid: Int?) {
+        guard builtIn.ownershipMarkerExists else { return }
+        if let shipped = builtIn.version, let live = runningDaemonVersion,
+           shipped != live, restartedForVersion != shipped {
+            restartedForVersion = shipped
+            KLog.diag("[Tentacle] restarting built-in daemon \(live) → \(shipped)")
+            builtIn.kickstart()
+            return
+        }
+        guard !restartedForStaleBinary else { return }
+        let pids = [daemon?["supervisorPid"] as? Int, pid].compactMap { $0 }
+        if let stale = Self.staleDaemonBinary(pids: pids, expectedPath: builtIn.binaryPath) {
+            restartedForStaleBinary = true
+            KLog.diag("[Tentacle] built-in daemon runs a replaced binary (\(stale)); restarting")
+            builtIn.kickstart()
+        }
+    }
+
+    /// Executable path of a live process, or nil when it can't be resolved.
+    /// `proc_pidpath` fails once the process's executable was deleted.
+    nonisolated static func executablePath(ofPid pid: Int) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let length = proc_pidpath(pid_t(pid), &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Description of the first daemon process that no longer runs the
+    /// helper at `expectedPath` (its executable was deleted or lives
+    /// elsewhere), or nil when every live one does. Processes that already
+    /// exited are skipped: gone is not stale.
+    nonisolated static func staleDaemonBinary(
+        pids: [Int],
+        expectedPath: String,
+        isAlive: (Int) -> Bool = { kill(pid_t($0), 0) == 0 },
+        pathOf: (Int) -> String? = { executablePath(ofPid: $0) }
+    ) -> String? {
+        let expected = URL(fileURLWithPath: expectedPath).resolvingSymlinksInPath().path
+        for pid in pids where pid > 0 && isAlive(pid) {
+            guard let path = pathOf(pid) else {
+                // Re-check: the process may have exited between the calls.
+                if isAlive(pid) { return "pid \(pid): executable deleted" }
+                continue
+            }
+            let actual = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            if actual != expected { return "pid \(pid): \(path)" }
+        }
+        return nil
+    }
 }
 
 #endif
