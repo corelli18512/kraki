@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { restartDelayMs, isCleanExit, runSupervisor, PERMANENT_EXIT_CODE } from '../daemon-supervisor.js';
+import { restartDelayMs, isCleanExit, runSupervisor, PERMANENT_EXIT_CODE, BINARY_REPLACED_EXIT_CODE, executableIdentity } from '../daemon-supervisor.js';
+import { renameSync, rmSync } from 'node:fs';
 
 describe('daemon supervisor', () => {
   it('backs off 1s, 2s, 4s … capped at 60s', () => {
@@ -82,5 +83,75 @@ describe('daemon supervisor', () => {
     process.emit('SIGTERM', 'SIGTERM');
     expect(await done).toBe(0);
     expect(existsSync(marker)).toBe(true);
+  });
+
+  describe('executable watch (app update replaced the binary)', () => {
+    // A worker that runs until SIGTERM, then exits cleanly.
+    const longWorker = (dir: string) => {
+      const worker = join(dir, 'worker.mjs');
+      writeFileSync(worker, `process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`);
+      return worker;
+    };
+
+    it('identifies a file by inode, so a same-path replacement is detected', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+      const bin = join(dir, 'kraki');
+      writeFileSync(bin, 'old');
+      const before = executableIdentity(bin);
+      renameSync(bin, join(dir, 'kraki.old'));
+      expect(executableIdentity(bin)).toBeNull();
+      writeFileSync(bin, 'new');
+      expect(executableIdentity(bin)).not.toBeNull();
+      expect(executableIdentity(bin)).not.toBe(before);
+    });
+
+    it('stops the worker and exits with the replaced code when the binary is swapped', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+      const bin = join(dir, 'kraki');
+      writeFileSync(bin, 'old');
+      const done = runSupervisor({
+        command: process.execPath, args: [longWorker(dir)], logFile: join(dir, 'sup.log'),
+        watchExecutable: bin, binaryCheckMs: 50, delay: () => 10,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      // Sparkle-style: move the old bundle away, put the new file at the same path.
+      renameSync(bin, join(dir, 'kraki.old'));
+      rmSync(join(dir, 'kraki.old'));
+      writeFileSync(bin, 'new');
+      expect(await done).toBe(BINARY_REPLACED_EXIT_CODE);
+      expect(readFileSync(join(dir, 'sup.log'), 'utf8')).toMatch(/executable replaced/);
+    });
+
+    it('exits when the binary is deleted', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+      const bin = join(dir, 'kraki');
+      writeFileSync(bin, 'old');
+      const done = runSupervisor({
+        command: process.execPath, args: [longWorker(dir)], logFile: join(dir, 'sup.log'),
+        watchExecutable: bin, binaryCheckMs: 50, delay: () => 10,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      rmSync(bin);
+      expect(await done).toBe(BINARY_REPLACED_EXIT_CODE);
+      expect(readFileSync(join(dir, 'sup.log'), 'utf8')).toMatch(/executable deleted/);
+    });
+
+    it('ignores a single mid-swap miss when the original file comes back', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+      const bin = join(dir, 'kraki');
+      writeFileSync(bin, 'old');
+      const done = runSupervisor({
+        command: process.execPath, args: [longWorker(dir)], logFile: join(dir, 'sup.log'),
+        watchExecutable: bin, binaryCheckMs: 200, delay: () => 10,
+      });
+      await new Promise((r) => setTimeout(r, 250));
+      renameSync(bin, join(dir, 'kraki.tmp'));
+      await new Promise((r) => setTimeout(r, 200));
+      renameSync(join(dir, 'kraki.tmp'), bin);
+      await new Promise((r) => setTimeout(r, 600));
+      process.emit('SIGTERM', 'SIGTERM');
+      expect(await done).toBe(0);
+      expect(readFileSync(join(dir, 'sup.log'), 'utf8')).not.toMatch(/executable (replaced|deleted)/);
+    });
   });
 });
