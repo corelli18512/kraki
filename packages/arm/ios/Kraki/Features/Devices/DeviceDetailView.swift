@@ -47,7 +47,8 @@ struct DeviceDetailView: View {
     }
 
     private var canRemove: Bool {
-        !device.online && !isCurrentDevice
+        // Offline in the middle of an update is a restart, not a dead computer.
+        !device.online && !isCurrentDevice && appState.deviceStore.updateProgress[device.id]?.isActive != true
     }
 
     private var statusLabel: String {
@@ -79,9 +80,8 @@ struct DeviceDetailView: View {
                 }
             }
 
-            if appState.deviceStore.availableUpdate(for: device.id) != nil
-                || appState.deviceStore.updateProgress[device.id] != nil {
-                Section { DeviceUpdateControl(device: device).padding(.vertical, 2) }
+            if DeviceUpdateSection.isShown(appState.deviceStore, device.id) {
+                DeviceUpdateSection(device: device)
             }
 
             // Subscription accounts signed in on this device. Each account's card in
