@@ -88,6 +88,8 @@ Building in Xcode updates the catalog automatically; on the command line run
 2. Windows shell: add a dictionary to `packages/desktop/src/i18n.cjs` and
    extend `matchLanguage`.
 3. Apple: add a case to `AppLanguage` and translate the catalogs (Xcode adds
-   the region; `xcodegen` picks it up from the catalogs).
+   the region; `xcodegen` picks it up from the catalogs). Add SwiftUI's
+   localized "File" menu title to `MacAppDelegate.removeUnwantedMenus`
+   (from SwiftUI's `MainMenu.loctable`, e.g. zh_CN 文件).
 4. Extend the glossary, run `pnpm l10n:check --strict`, and check layouts with
    screenshots (`packages/arm/web/e2e/settings-language.check.mjs`).
