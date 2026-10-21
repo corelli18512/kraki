@@ -162,6 +162,42 @@ final class DeviceTrustTests: XCTestCase {
         }
     }
 
+    /// Computer→app replay: an exact repeat of an accepted signed message is
+    /// dropped; a late one (Pulse store-and-forward) still arrives.
+    func testReplayGuardDropsExactRepeatsButNotLateMessages() throws {
+        let computer = Curve25519.Signing.PrivateKey()
+        pin("dev_t", key: computer)
+        let guardian = DeviceTrustReplayGuard()
+        func checked(_ plaintext: String) -> String? {
+            switch DeviceTrustInbound.check(plaintext: plaintext, src: "dev_t", selfId: "me", store: store, replayGuard: guardian) {
+            case .message(let data): return String(decoding: data, as: UTF8.self)
+            case .rejected: return nil
+            }
+        }
+        let msg: [String: Any] = ["type": "permission", "deviceId": "dev_t", "sessionId": "s"]
+        let once = try signed(msg, from: "dev_t", key: computer)
+        XCTAssertNotNil(checked(once))
+        XCTAssertNil(checked(once), "exact repeat is a replay")
+        // Same content, new signature: a new message.
+        XCTAssertNotNil(checked(try signed(msg, from: "dev_t", key: computer)))
+        // Signed hours ago (app was offline): still accepted.
+        let body = String(decoding: try JSONSerialization.data(withJSONObject: msg), as: UTF8.self)
+        let old = try DeviceTrustWire.sign(body: body, from: "dev_t", to: "me", key: computer,
+                                           ts: Int64(Date().addingTimeInterval(-6 * 3600).timeIntervalSince1970 * 1000))
+        XCTAssertNotNil(checked(String(decoding: try JSONSerialization.data(withJSONObject: old), as: UTF8.self)))
+        // A forged repeat (bad signature) never reaches the guard.
+        XCTAssertNil(checked(try signed(msg, from: "dev_t", key: Curve25519.Signing.PrivateKey())))
+    }
+
+    func testReplayGuardForgetsOldestBeyondCapacity() {
+        let guardian = DeviceTrustReplayGuard()
+        XCTAssertTrue(guardian.accept(from: "t", nonce: "first"))
+        for i in 0..<DeviceTrustReplayGuard.capacity { XCTAssertTrue(guardian.accept(from: "t", nonce: "n\(i)")) }
+        XCTAssertTrue(guardian.accept(from: "t", nonce: "first"), "oldest forgotten")
+        XCTAssertFalse(guardian.accept(from: "t", nonce: "n\(DeviceTrustReplayGuard.capacity - 1)"))
+        XCTAssertTrue(guardian.accept(from: "other", nonce: "first"), "keyed by signer")
+    }
+
     func testAcceptsOnlyThePinnedSigner() throws {
         let computer = Curve25519.Signing.PrivateKey()
         pin("dev_t", key: computer)

@@ -66,6 +66,8 @@ final class EncryptionHandler {
         qos: .userInitiated
     )
     private let keyStateLock = NSLock()
+    /// Drops exact repeats of signed computer messages (DeviceTrust.swift).
+    private let replayGuard = DeviceTrustReplayGuard()
     private var keyAvailabilityConfirmed = false
     private var cachedEncryptionKeyPair: (privateKey: SecKey, publicKey: SecKey)?
 
@@ -209,7 +211,8 @@ final class EncryptionHandler {
     /// sender-stamp and stale-route checks.
     private func authenticate(_ plaintext: String, envelope json: [String: Any], deviceId: String) throws -> (message: Data, sessionId: String?) {
         let messageData: Data
-        switch DeviceTrustInbound.check(plaintext: plaintext, src: json["src"] as? String, selfId: deviceId) {
+        switch DeviceTrustInbound.check(plaintext: plaintext, src: json["src"] as? String, selfId: deviceId,
+                                         replayGuard: replayGuard) {
         case .message(let data):
             messageData = data
         case .rejected(let reason):

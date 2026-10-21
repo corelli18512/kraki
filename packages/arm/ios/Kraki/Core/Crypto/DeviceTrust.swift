@@ -424,11 +424,14 @@ enum DeviceTrustInbound {
     static let signedByKey = "__krakiSignedBy"
 
     /// Authenticate a decrypted payload. `src` is the relay/link sender stamp.
+    /// With `replayGuard`, an exact repeat of an accepted signed message is
+    /// rejected as `replay`.
     static func check(
         plaintext: String,
         src: String?,
         selfId: String,
-        store: TentacleTrustStore = .shared
+        store: TentacleTrustStore = .shared,
+        replayGuard: DeviceTrustReplayGuard? = nil
     ) -> Outcome {
         guard let data = plaintext.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -460,6 +463,7 @@ enum DeviceTrustInbound {
             inner[signedByKey] = signed.from
             inner.removeValue(forKey: unsignedKey)
             guard let out = try? JSONSerialization.data(withJSONObject: inner) else { return .rejected("bad_body") }
+            if let replayGuard, !replayGuard.accept(from: signed.from, nonce: signed.nonce) { return .rejected("replay") }
             return .message(out)
         }
         // Unsigned: legacy computers only. Anything attributable to a pinned
@@ -484,6 +488,43 @@ enum DeviceTrustInbound {
         marked[unsignedKey] = true
         guard let out = try? JSONSerialization.data(withJSONObject: marked) else { return .rejected("bad_json") }
         return .message(out)
+    }
+}
+
+/// Computer→app replay check: remembers the (signer, nonce) of signed
+/// messages already accepted and rejects an exact repeat. Unlike the
+/// tentacle's ReplayGuard (packages/crypto/src/trust.ts) it has no age limit:
+/// Pulse may hand an app a message long after it was signed (store-and-forward
+/// for an offline or suspended app), and a pending permission or question must
+/// still show. Ordering of state snapshots is handled where they are applied
+/// (session_list timestamps, SessionStore). In memory and per identity (one per
+/// EncryptionHandler): after a relaunch, redelivered messages are processed
+/// again, which is what rebuilds the app's state. See docs/e2e-trust.md.
+final class DeviceTrustReplayGuard {
+    /// Remembered messages; the oldest is forgotten first.
+    static let capacity = 20_000
+
+    private let lock = NSLock()
+    private var seen = Set<String>()
+    private var order: [String] = []
+    private var oldest = 0
+
+    /// Records the message; false when it was already accepted.
+    func accept(from: String, nonce: String) -> Bool {
+        let key = "\(from)\n\(nonce)"
+        lock.lock()
+        defer { lock.unlock() }
+        guard seen.insert(key).inserted else { return false }
+        order.append(key)
+        if order.count - oldest > Self.capacity {
+            seen.remove(order[oldest])
+            oldest += 1
+            if oldest >= Self.capacity {
+                order.removeFirst(oldest)
+                oldest = 0
+            }
+        }
+        return true
     }
 }
 

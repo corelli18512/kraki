@@ -169,6 +169,20 @@ extension DeviceTrustBoundaryTests {
         XCTAssertEqual(app.trustState(for: computer), .paired)
     }
 
+    /// A relay re-delivering a captured signed notice (same signature and
+    /// nonce) through the production decrypt path changes nothing.
+    func testReplayedSignedNoticeIsDropped() throws {
+        pin()
+        try seedSession()
+        let notice = try signedEnvelope(message("trust_revoked", device: computer, payload: ["enforced": false]), key: signer)
+        try route(notice)
+        XCTAssertEqual(app.trustState(for: computer), .failed("revoked"))
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "t", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.trustState(for: computer), .paired)
+        try route(notice)
+        XCTAssertEqual(app.trustState(for: computer), .paired, "replayed notice dropped")
+    }
+
     /// PR review: a relay-assigned app id never becomes a path outside local-enroll.
     func testFileSafeIds() {
         XCTAssertTrue(DeviceTrustWire.isFileSafeId("dev_c0e1672f-92d"))
