@@ -86,6 +86,7 @@
 		19CA747DB138002EC77A49F7 /* ChatPerfListVC+BufferedPaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC5BF5FABC01B6E3D09D950 /* ChatPerfListVC+BufferedPaging.swift */; };
 		19CF90B36548AF7EB6E1DA2E /* SessionStore+UnreadEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A8B53F3551A54A856D00DF /* SessionStore+UnreadEntry.swift */; };
 		1A1CEAF1830AC9ED006678D7 /* MacChatScrollView+LiveCardMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = E133442F93166369D6FA2876 /* MacChatScrollView+LiveCardMove.swift */; };
+		1A4B64E1F8B2DDF921610ECD /* CommandSender+DeliveryPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B64D707FD87A4F9859C8A40 /* CommandSender+DeliveryPath.swift */; };
 		1A4C89EEDAE089C7889C708C /* ChatPerfListVC+Streaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59BBEF7E63321D2B55D25F62 /* ChatPerfListVC+Streaming.swift */; };
 		1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */; };
 		1AB14C06C1A69F4C222671E3 /* MacChatScrollView+ScrollAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E95F198E48647A1FD91245C6 /* MacChatScrollView+ScrollAnimation.swift */; };
@@ -268,6 +269,7 @@
 		5C84A7024B48EF2DE6194D83 /* MacNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C024AE6690757FB0A6916CEE /* MacNotifications.swift */; };
 		5DB28A4F984B48C07D1B790A /* UsagePeekHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C72F9E868EE4A250EB16AC4 /* UsagePeekHotKey.swift */; };
 		5DD452F9F5F5D32C05AB458C /* MacChatScrollView+BubbleActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4F9C2453545401375A2F74C /* MacChatScrollView+BubbleActions.swift */; };
+		5E948CF983601183C90234A2 /* CommandSender+DeliveryPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B64D707FD87A4F9859C8A40 /* CommandSender+DeliveryPath.swift */; };
 		5EBF50BA43E1F185CF93A1E1 /* LocalAgentsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0D3BD8FC6A18700879AEC /* LocalAgentsWindow.swift */; };
 		5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		5F12A9C932DE5DC89674F952 /* MacMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9684E802464B9754C3FE6FA3 /* MacMarkdown.swift */; };
@@ -970,6 +972,7 @@
 		794DE366645A1E810EC0A0A0 /* MacChatFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatFormat.swift; sourceTree = "<group>"; };
 		7A84BF94261411BEF2B51101 /* LazyImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyImageView.swift; sourceTree = "<group>"; };
 		7B237CA6F4416BC4603A4614 /* PhotoAttachmentLoad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAttachmentLoad.swift; sourceTree = "<group>"; };
+		7B64D707FD87A4F9859C8A40 /* CommandSender+DeliveryPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommandSender+DeliveryPath.swift"; sourceTree = "<group>"; };
 		7CB7622112E2FF32556A3550 /* SessionListHeaderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListHeaderUITests.swift; sourceTree = "<group>"; };
 		7CEA6A534E6C629E191BE060 /* VoiceVocabularySync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceVocabularySync.swift; sourceTree = "<group>"; };
 		7EDC4E7B0132390BF839CB68 /* AccountDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountDeletionTests.swift; sourceTree = "<group>"; };
@@ -1324,6 +1327,7 @@
 				59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */,
 				77E056700BA106FD1E130382 /* AttachmentStore.swift */,
 				2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */,
+				7B64D707FD87A4F9859C8A40 /* CommandSender+DeliveryPath.swift */,
 				A1DAF876E96DDCBAC9E1A874 /* CommandSender+DeviceRequests.swift */,
 				ED676C714352477F09920C60 /* CommandSender+DurableText.swift */,
 				E7635B3827574C0F3685DEC6 /* CommandSender+QueuedPrompt.swift */,
@@ -2532,6 +2536,7 @@
 				7A7EEBE855E6DBDCDBCB3EBD /* ChatTable.swift in Sources */,
 				2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */,
 				E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */,
+				5E948CF983601183C90234A2 /* CommandSender+DeliveryPath.swift in Sources */,
 				CD03E1325888186ACB97A8B9 /* CommandSender+DeviceRequests.swift in Sources */,
 				A75D9AFED81BD7B02653DDE9 /* CommandSender+DurableText.swift in Sources */,
 				1009FC86DFBF9B08ADB39B4B /* CommandSender+QueuedPrompt.swift in Sources */,
@@ -2816,6 +2821,7 @@
 				1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */,
 				E258FB9E7CCA508B1EE30AB2 /* ChatTable.swift in Sources */,
 				D3DB9479B022E80246E32AD4 /* ChatViewModel.swift in Sources */,
+				1A4B64E1F8B2DDF921610ECD /* CommandSender+DeliveryPath.swift in Sources */,
 				2F476221B7E810C4A0FE4602 /* CommandSender+DeviceRequests.swift in Sources */,
 				2490AC630BA16594047FCF41 /* CommandSender+DurableText.swift in Sources */,
 				3251E949F9D67D6469CBB46C /* CommandSender+QueuedPrompt.swift in Sources */,

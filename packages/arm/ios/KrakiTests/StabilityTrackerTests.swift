@@ -365,6 +365,27 @@ final class DiagnosticsSummaryWiringTests: XCTestCase {
         AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
     }
 
+    func testVoiceSentIntoANewSessionOnAnOnlineTentacleIsNotOffline() throws {
+        let app = try makeApp()
+        let sender = try XCTUnwrap(app.commandSender)
+        app.connectionStatus = .connected
+        app.deviceStore.devices["dev"] = DeviceSummary(id: "dev", name: "Mac", role: .tentacle, kind: .desktop,
+                                                       publicKey: nil, encryptionKey: nil, online: true,
+                                                       lastSeen: nil, createdAt: nil)
+        let request = sender.createSession(targetDeviceId: "dev", agentId: "pi", model: "m", voice: true)
+        let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[request])
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: placeholder, text: "start the build"))
+        app.sendMetrics.finished(clientId, .delivered)
+        XCTAssertEqual(app.sendMetrics.summaries.last?.offlineAtSend, false, "reported offline=true while online")
+
+        app.deviceStore.devices["dev"]?.online = false
+        let offlineRequest = sender.createSession(targetDeviceId: "dev", agentId: "pi", model: "m", voice: true)
+        let offlinePlaceholder = try XCTUnwrap(sender.pendingPlaceholderIds[offlineRequest])
+        let offlineClient = try XCTUnwrap(sender.stageInput(sessionId: offlinePlaceholder, text: "later"))
+        app.sendMetrics.finished(offlineClient, .delivered)
+        XCTAssertEqual(app.sendMetrics.summaries.last?.offlineAtSend, true, "its Tentacle is offline")
+    }
+
     func testColdOpeningBeforeTheFirstConnectionKnowsHowThePreviousRunEnded() throws {
         // The Mac becomes active (handleForegroundRehydrate → noteVisible)
         // before it first connects; the cold record had no previousExit.
