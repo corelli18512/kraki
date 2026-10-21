@@ -635,25 +635,37 @@ export class HeadServer {
   }
 
   /** The account service no longer accepts a device here (removed elsewhere,
-   *  account deleted, moved region). Tell it the way a fresh sign-in would
-   *  have, and close; drop this edge's copy unless it only moved region. */
+   *  account deleted, moved region, new key or account). Tell it the way a
+   *  fresh sign-in would have, and close; drop this edge's copy unless the
+   *  device itself is still valid (moved region: its mirror serves the
+   *  redirect; new key: the next sign-in refreshes it remotely). */
   revokeDevice(revocation: EdgeRevocation): void {
-    const { deviceId, code } = revocation;
+    const { deviceId } = revocation;
+    // A fresh challenge for a removed device answers `unknown_device`, which
+    // every client handles (a Tentacle re-signs in with its token).
+    const code = revocation.code === 'device_not_found' ? 'unknown_device' : revocation.code;
+    const keepsDevice = code === 'wrong_region' || code === 'key_changed';
     getLogger().warn('Revoking locally trusted device', { deviceId, code });
-    if (code !== 'wrong_region') {
+    if (!keepsDevice) {
       try { this.storage.deleteDevice(deviceId); } catch { /* storage may be closed */ }
       try { this.storage.deletePushTokensForDevice(deviceId); } catch { /* same */ }
     }
     const ws = this.connections.get(deviceId);
     if (!ws) {
-      if (code !== 'wrong_region') this.pulseHub.forgetDevice(deviceId);
+      if (!keepsDevice) this.pulseHub.forgetDevice(deviceId);
       return;
     }
-    sendAuthError(this, ws, code as AuthErrorCode, revocation.message, revocation.redirect);
+    // Key or account changed: no error, just a reconnect, which signs in at
+    // the account service (that one rejects an outdated key itself).
+    if (code !== 'key_changed') sendAuthError(this, ws, code as AuthErrorCode, revocation.message, revocation.redirect);
     // Graceful close so the auth_error is flushed first; the close handler
     // does the usual cleanup. Force it if the peer never completes the close.
-    ws.once('close', () => { if (code !== 'wrong_region') this.pulseHub.forgetDevice(deviceId); });
-    try { ws.close(1008, 'revoked'); } catch { /* already closing */ }
+    ws.once('close', () => {
+      // The device may have signed in again on a new socket meanwhile: its
+      // Pulse state belongs to that connection now.
+      if (!keepsDevice && !this.connections.has(deviceId)) this.pulseHub.forgetDevice(deviceId);
+    });
+    try { ws.close(code === 'key_changed' ? 1012 : 1008, code === 'key_changed' ? 'reauthenticate' : 'revoked'); } catch { /* already closing */ }
     const force = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } }, 2_000);
     force.unref?.();
     ws.once('close', () => clearTimeout(force));

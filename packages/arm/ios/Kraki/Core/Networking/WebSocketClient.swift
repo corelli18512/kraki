@@ -362,10 +362,26 @@ final class WebSocketClient: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + currentAuthReplyTimeout, execute: work)
     }
 
-    /// Any inbound frame while an auth reply is pending proves the downlink.
-    private func noteInboundDuringAuth() {
+    /// The pending sign-in got its answer (challenge, ok or error). Other
+    /// frames (a pong, a presence frame) do not satisfy it.
+    private func noteInboundDuringAuth(_ message: URLSessionWebSocketTask.Message) {
         guard authReplyDeadline != nil else { return }
+        let text: String?
+        switch message {
+        case .string(let value): text = value
+        case .data(let data): text = String(data: data, encoding: .utf8)
+        @unknown default: text = nil
+        }
+        guard let text, Self.isAuthReplyFrame(text) else { return }
         authReplyDeadline?.cancel(); authReplyDeadline = nil
+    }
+
+    static func isAuthReplyFrame(_ string: String) -> Bool {
+        guard string.contains("\"auth_"),
+              let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else { return false }
+        return type == "auth_challenge" || type == "auth_ok" || type == "auth_error" || type == "auth_info_response"
     }
 
     func setAuthenticated(_ value: Bool) {
@@ -492,7 +508,7 @@ final class WebSocketClient: NSObject {
                 switch result {
                 case .success(let message):
                     self.recordInboundActivity()
-                    self.noteInboundDuringAuth()
+                    self.noteInboundDuringAuth(message)
                     switch message {
                     case .string(let text):
                         if let data = text.data(using: .utf8) { self.onMessage?(data) }

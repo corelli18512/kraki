@@ -297,4 +297,14 @@ extension StabilityTrackerTests {
         XCTAssertEqual(open.outcome, .current)
         XCTAssertEqual(try XCTUnwrap(open.currentMs), 1200, accuracy: 1)
     }
+
+    func testAnOpenDuringAReconnectDoesNotCancelTheOpeningTimeout() throws {
+        tracker.appVisible(hasCachedContent: true, viewing: false)
+        tracker.connecting()
+        advance(1)
+        tracker.conversationOpened(sessionId: "s1", lastSeq: 5, localSeq: 3, online: false)
+        advance(StabilityTracker.readyTimeout)
+        XCTAssertEqual(tracker.readies.last?.outcome, .timeout, "the reconnect never finished: still reported")
+        XCTAssertEqual(tracker.opens.last?.outcome, .timeout)
+    }
 }

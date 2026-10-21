@@ -10,7 +10,7 @@ import { Storage } from '../storage.js';
 import { LocalAuthBackend } from '../local-auth-backend.js';
 import { RemoteAuthBackend, type EdgeRevocation } from '../remote-auth-backend.js';
 import { AccountApi } from '../account-api.js';
-import { EdgeAuthCache } from '../edge-auth-cache.js';
+import { EdgeAuthCache, keyFingerprint } from '../edge-auth-cache.js';
 import type { AuthResult } from '../auth-backend.js';
 import { Logger, setGlobalLogger } from '../logger.js';
 import { WebSocket } from 'ws';
@@ -126,8 +126,8 @@ describe('edge-local challenge auth', () => {
     expect((await remote.verifyChallenge('phone', challenge.nonce, signature, 'enc-1')).ok).toBe(true);
     calls = [];
     const replay = await remote.verifyChallenge('phone', challenge.nonce, signature, 'enc-1');
-    expect(replay.ok && replay.local, 'a replay is not accepted locally').toBeFalsy();
-    expect(calls).toContain('/api/auth/verify');
+    expect(replay.ok, 'a replayed local nonce is rejected').toBe(false);
+    expect(calls, 'and never handed to the account service').toEqual([]);
   });
 
   it('a new encryption key goes to the account service before auth_ok', async () => {
@@ -145,7 +145,7 @@ describe('edge-local challenge auth', () => {
     await signIn();
     account.deleteDevice('phone');
     await remote.pollDeviceStatus();
-    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'device_not_found' })]);
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
     expect(cache.lookup('phone')).toBeUndefined();
     calls = [];
     const again = await remote.startChallenge('phone', 'enc-1');
@@ -199,10 +199,16 @@ describe('edge-local challenge auth', () => {
     account.setUserRegion('u1', 'china');
     const backend = new LocalAuthBackend({ storage: account, authProviders: new Map(), region: 'us',
       regionUrls: { us: 'wss://us.example.com', china: 'wss://cn.example.com' } });
-    expect(backend.deviceStatuses(['phone', 'missing'], 'china')).toEqual({ phone: 'ok', missing: 'device_not_found' });
-    expect(backend.deviceStatuses(['phone'], 'us')).toEqual({ phone: 'wrong_region' });
+    const st = (devices: Array<{ id: string; userId?: string; keyFingerprint?: string }>, region: string) =>
+      ({ ...backend.deviceStatuses(devices, region).statuses });
+    expect(st([{ id: 'phone' }, { id: 'missing' }], 'china')).toEqual({ phone: 'ok', missing: 'unknown_device' });
+    expect(st([{ id: 'phone' }], 'us')).toEqual({ phone: 'wrong_region' });
+    expect({ ...backend.deviceStatuses([{ id: 'phone' }], 'us').redirects }).toEqual({ phone: 'wss://cn.example.com' });
+    expect(st([{ id: 'phone', userId: 'someone-else' }], 'china')).toEqual({ phone: 'key_changed' });
+    expect(st([{ id: 'phone', keyFingerprint: 'other' }], 'china')).toEqual({ phone: 'key_changed' });
+    expect(st([{ id: 'phone', userId: 'u1', keyFingerprint: keyFingerprint(exportPublicKey(keys.publicKey)) }], 'china')).toEqual({ phone: 'ok' });
     account.deleteUser('u1');
-    expect(backend.deviceStatuses(['phone'], 'china')).toEqual({ phone: 'account_deleted' });
+    expect(st([{ id: 'phone' }], 'china')).toEqual({ phone: 'account_deleted' });
   });
 });
 
@@ -269,7 +275,7 @@ describe('edge HeadServer with local challenge auth', () => {
       account.deleteDevice('phone');
       await remote.pollDeviceStatus();
       await second.until(() => second.isClosed());
-      expect(second.messages.some((m) => m.type === 'auth_error' && m.code === 'device_not_found')).toBe(true);
+      expect(second.messages.some((m) => m.type === 'auth_error' && m.code === 'unknown_device')).toBe(true);
       expect(edgeStorage.getDevice('phone')).toBeFalsy();
     } finally {
       remote.stopLocalChallenge();

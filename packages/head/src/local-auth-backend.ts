@@ -5,6 +5,7 @@
 
 import { randomBytes } from 'crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
+import { keyFingerprint } from './edge-auth-cache.js';
 import { v4 as uuid } from 'uuid';
 import type { AuthMethod, DeviceInfo, DeviceSummary } from '@kraki/protocol';
 import { deviceSummary } from './device-summary.js';
@@ -211,18 +212,36 @@ export class LocalAuthBackend implements AuthBackend {
 
   /**
    * Whether each device may still sign in at `headRegion`: `ok`,
-   * `device_not_found`, `account_deleted` or `wrong_region`. Edges that
+   * `unknown_device` (removed, or no signing key), `account_deleted`,
+   * `wrong_region` (with `redirects[id]`), or `key_changed` (the edge holds
+   * another account or signing key for it than this service). Edges that
    * accept known devices locally (EdgeAuthCache) poll this for revocations.
+   * Null-prototype maps: device ids are caller-supplied.
    */
-  deviceStatuses(deviceIds: string[], headRegion?: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const deviceId of deviceIds) {
-      if (this.storage.isDeletedDevice(deviceId)) { out[deviceId] = 'account_deleted'; continue; }
-      const device = this.storage.getDevice(deviceId);
-      if (!device || !device.publicKey) { out[deviceId] = 'device_not_found'; continue; }
-      out[deviceId] = this.checkRegion(device.userId, headRegion) ? 'wrong_region' : 'ok';
+  deviceStatuses(
+    devices: Array<{ id: string; userId?: string; keyFingerprint?: string }>,
+    headRegion?: string,
+  ): { statuses: Record<string, string>; redirects: Record<string, string> } {
+    const statuses: Record<string, string> = Object.create(null);
+    const redirects: Record<string, string> = Object.create(null);
+    for (const { id, userId, keyFingerprint: fingerprint } of devices) {
+      if (this.storage.isDeletedDevice(id)) { statuses[id] = 'account_deleted'; continue; }
+      const device = this.storage.getDevice(id);
+      if (!device || !device.publicKey) { statuses[id] = 'unknown_device'; continue; }
+      if ((userId !== undefined && userId !== device.userId)
+        || (fingerprint !== undefined && fingerprint !== keyFingerprint(device.publicKey))) {
+        statuses[id] = 'key_changed';
+        continue;
+      }
+      const region = this.checkRegion(device.userId, headRegion);
+      if (region) {
+        statuses[id] = 'wrong_region';
+        if (region.redirect) redirects[id] = region.redirect;
+        continue;
+      }
+      statuses[id] = 'ok';
     }
-    return out;
+    return { statuses, redirects };
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {

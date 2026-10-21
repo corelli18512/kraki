@@ -176,6 +176,7 @@ final class MessageProvider {
                 KLog.d("🧹 setTentacleInfo(\(sessionId.prefix(12))): store=\(storeLastSeq) > tentacle=\(lastSeq) — purging stale tail")
                 appState.messageStore.dropMessagesAboveSeq(sessionId, seq: lastSeq)
             }
+            appState.messageStore.lowerCaughtUp(sessionId, to: lastSeq)
         }
         let oldLastSeq = tentacleLastSeq[sessionId]
         if oldLastSeq != lastSeq { tentacleLastSeq[sessionId] = lastSeq } // no-op writes notify observers
@@ -351,7 +352,9 @@ final class MessageProvider {
         }
         guard let appState else { return false }
 
-        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
+        // The acknowledged head (a caught-up reply may end in seqs clients
+        // never store), not SQLite's highest row: else every self-heal asks again.
+        let storeLastSeq = appState.messageStore.persistedHead(sessionId)
         KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq) reason=\(reason)")
 
         // No-op if our cache is already at head — nothing to fetch.
@@ -383,7 +386,7 @@ final class MessageProvider {
             return
         }
 
-        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
+        let storeLastSeq = appState.messageStore.persistedHead(sessionId)
         let totalLastSeq = tentacleLastSeq[sessionId] ?? 0
         if totalLastSeq > 0 && storeLastSeq >= totalLastSeq {
             KLog.d("✅ [2/history ensureLoaded] session=\(sessionId.prefix(12)) skip=atHead store=\(storeLastSeq) tentacle=\(totalLastSeq) reason=\(reason) — no WS fetch")

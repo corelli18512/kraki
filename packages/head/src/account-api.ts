@@ -249,13 +249,21 @@ export class AccountApi {
    *  edge is always checked against its own region. */
   private async handleDeviceStatus(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
     const body = await readBody(req);
-    const ids = body?.deviceIds;
-    if (!Array.isArray(ids) || ids.length > 2000 || !ids.every((id) => typeof id === 'string')) {
-      this.json(res, 400, { ok: false, code: 'bad_request', message: 'deviceIds (string[]) required' });
+    // `devices` (id + the account and key the edge trusts) is what current
+    // edges send; bare `deviceIds` only checks existence and region.
+    const rawDevices = Array.isArray(body?.devices)
+      ? body.devices
+      : Array.isArray(body?.deviceIds) ? (body.deviceIds as unknown[]).map((id) => ({ id })) : undefined;
+    const valid = rawDevices !== undefined && rawDevices.length <= 500 && rawDevices.every((d) =>
+      typeof d === 'object' && d !== null && typeof (d as { id?: unknown }).id === 'string'
+      && ['userId', 'keyFingerprint'].every((k) => (d as Record<string, unknown>)[k] === undefined || typeof (d as Record<string, unknown>)[k] === 'string'));
+    if (!valid) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'devices ({id, userId?, keyFingerprint?}[] up to 500) required' });
       return true;
     }
     const region = caller.admin ? (typeof body?.headRegion === 'string' ? body.headRegion : undefined) : caller.region;
-    this.json(res, 200, { ok: true, statuses: this.backend.deviceStatuses(ids as string[], region) });
+    const { statuses, redirects } = this.backend.deviceStatuses(rawDevices as Array<{ id: string; userId?: string; keyFingerprint?: string }>, region);
+    this.json(res, 200, { ok: true, statuses, redirects });
     return true;
   }
 

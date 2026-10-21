@@ -267,6 +267,7 @@ extension AppState {
         #endif
         #if os(macOS)
         let hasCredentials = isSigningInWithCredentials
+        if launchResolvingCredentials, !hasCompletedInitialConnect { return }
         #else
         let hasCredentials = hasStoredCredentials
         #endif

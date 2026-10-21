@@ -33,6 +33,9 @@ final class BackgroundSocketGrace {
     private let hooks: Hooks
     private var timer: Task<Void, Never>?
     private var token: Int?
+    /// Bumped on every begin/resume/expiry: a timer or OS expiration handler
+    /// from an earlier background visit must not end a newer one.
+    private var visit = 0
     private(set) var isActive = false
 
     init(hooks: Hooks) { self.hooks = hooks }
@@ -40,12 +43,18 @@ final class BackgroundSocketGrace {
     /// Called instead of the immediate teardown. Returns false (caller tears
     /// down now) when the socket cannot be kept.
     func begin(grace: Duration = grace) -> Bool {
+        // A second background notification while one grace runs: keep it.
+        if isActive { return true }
         cancelTimer()
         guard hooks.canKeep() else { return false }
+        visit += 1
+        let thisVisit = visit
         guard let token = hooks.beginTask({ [weak self] in
             // UIKit calls this on the main thread right before suspending:
             // close now, a hop to the next runloop turn might never run.
-            if Thread.isMainThread { self?.expire() } else { DispatchQueue.main.async { self?.expire() } }
+            if Thread.isMainThread { self?.expire(visit: thisVisit) } else {
+                DispatchQueue.main.async { self?.expire(visit: thisVisit) }
+            }
         }) else { return false }
         self.token = token
         isActive = true
@@ -53,7 +62,7 @@ final class BackgroundSocketGrace {
         timer = Task { @MainActor [weak self] in
             try? await Task.sleep(for: grace)
             guard !Task.isCancelled else { return }
-            self?.expire()
+            self?.expire(visit: thisVisit)
         }
         return true
     }
@@ -65,6 +74,7 @@ final class BackgroundSocketGrace {
         guard isActive else { return false }
         cancelTimer()
         isActive = false
+        visit += 1
         hooks.setVisible(true)
         endTask()
         return true
@@ -72,13 +82,14 @@ final class BackgroundSocketGrace {
 
     /// The kept socket dropped: reconnecting from the background is
     /// pointless, close everything as a plain background would.
-    func abandon() { expire() }
+    func abandon() { expire(visit: visit) }
 
     /// Grace period over (or the OS took our background time back).
-    private func expire() {
-        guard isActive else { return }
+    private func expire(visit expiring: Int) {
+        guard isActive, expiring == visit else { return }
         cancelTimer()
         isActive = false
+        visit += 1
         hooks.teardown()
         endTask()
     }

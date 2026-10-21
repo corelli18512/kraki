@@ -208,6 +208,7 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
   }
 
   server.storage.deleteDevice(targetDeviceId);
+  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(targetDeviceId);
   server.deviceRenamedAt.delete(targetDeviceId);
   server.storage.deletePushTokensForDevice(targetDeviceId);
   // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
@@ -265,6 +266,7 @@ export async function handleDeleteAccount(server: HeadServer, ws: WebSocket, sta
     logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
 
     for (const id of deviceIds) {
+      if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(id);
       const socket = server.connections.get(id);
       if (socket) {
         // Detach before closing so the close handler doesn't announce

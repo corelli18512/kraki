@@ -117,6 +117,9 @@ final class StabilityTracker {
     private var awaitingList = false
     private var target: (sessionId: String, seq: Int)?
     private var generation = 0
+    /// Separate from `generation`: an open during a reconnect must not cancel
+    /// the opening/outage deadlines (and vice versa).
+    private var openGeneration = 0
 
     // MARK: - Lifecycle
 
@@ -264,10 +267,10 @@ final class StabilityTracker {
         var open = Open(gap: max(0, lastSeq - localSeq))
         open.reconnecting = reconnecting
         opening = (sessionId, t, lastSeq, open)
-        generation += 1
-        let token = generation
+        openGeneration += 1
+        let token = openGeneration
         schedule(Self.readyTimeout) { [weak self] in
-            guard let self, self.generation == token else { return }
+            guard let self, self.openGeneration == token else { return }
             self.finishOpen(.timeout)
         }
     }

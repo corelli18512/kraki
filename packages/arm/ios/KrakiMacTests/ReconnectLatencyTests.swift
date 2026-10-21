@@ -52,6 +52,31 @@ final class ReconnectLatencyTests: XCTestCase {
         XCTAssertEqual(requests.count, 1, "the self-heal asks immediately, not after the 5 s head timeout")
     }
 
+    /// A Tentacle restored from a backup reports a lower head than this
+    /// device counted itself caught up to: catch-up must run again.
+    func testALowerTentacleHeadClearsTheCaughtUpMark() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sid = "rl-lower-head"
+        addSession(app, sid, lastSeq: 9)
+        app.connectionStatus = .connected
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        let provider = try XCTUnwrap(app.messageProvider)
+        app.messageStore.markCaughtUp(sid, through: 9)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 8, deviceId: "rl-tentacle")
+        XCTAssertLessThan(app.messageStore.persistedHead(sid), 8)
+        provider.ensureLoaded(sessionId: sid, reason: "test")
+        XCTAssertTrue(provider.isLoadingHead(sid))
+    }
+
+    func testOnlyAuthRepliesSatisfyTheAuthDeadline() {
+        XCTAssertTrue(WebSocketClient.isAuthReplyFrame(#"{"type":"auth_challenge","nonce":"n"}"#))
+        XCTAssertTrue(WebSocketClient.isAuthReplyFrame(#"{"type":"auth_ok","deviceId":"d"}"#))
+        XCTAssertTrue(WebSocketClient.isAuthReplyFrame(#"{"type":"auth_error","code":"x"}"#))
+        XCTAssertFalse(WebSocketClient.isAuthReplyFrame(#"{"type":"pong"}"#))
+        XCTAssertFalse(WebSocketClient.isAuthReplyFrame(#"{"type":"unicast","pulse":"auth_ok"}"#))
+    }
+
     // MARK: - Auth reply deadline
 
     func testOnlyReusableCredentialsAreRetriedOnAFreshSocket() {

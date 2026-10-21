@@ -26,7 +26,7 @@
  */
 
 import type Database from 'better-sqlite3';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
 import type { AuthResult } from './auth-backend.js';
 
@@ -49,15 +49,30 @@ export interface CachedDevice {
 
 export const DEFAULT_MAX_STALE_MS = 7 * 24 * 3600_000;
 export const DEFAULT_REVALIDATE_MS = 60_000;
-const NONCE_TTL_MS = 5 * 60_000;
+/** Longer than the Head's longest auth deadline (10 min on the login screen),
+ *  so a socket still allowed to authenticate never holds an expired nonce. */
+const NONCE_TTL_MS = 11 * 60_000;
+
+/** What `takeNonce` found: `local` = issued here for this device and unused. */
+export type NonceCheck = 'local' | 'expired' | 'foreign' | 'unknown';
+
+/** Short, stable fingerprint of a signing key, for status polls. */
+export function keyFingerprint(publicKey: string): string {
+  return createHash('sha256').update(publicKey).digest('base64url').slice(0, 22);
+}
 
 export class EdgeAuthCache {
   readonly maxStaleMs: number;
   readonly revalidateMs: number;
   private readonly now: () => number;
-  /** Nonces this edge issued itself (not the account service). */
-  private readonly localNonces = new Map<string, { deviceId: string; expiresAt: number }>();
+  /** Nonces this edge issued itself (not the account service). Kept (marked
+   *  used) until twice their lifetime so a reuse is recognised, not mistaken
+   *  for an account-service nonce. */
+  private readonly localNonces = new Map<string, { deviceId: string; expiresAt: number; used: boolean }>();
   private readonly lastRevalidation = new Map<string, number>();
+  /** Bumped whenever a device's trust is dropped: an account-service answer
+   *  requested before the drop must not bring it back. */
+  private readonly epochs = new Map<string, number>();
 
   constructor(private readonly db: Database.Database, options: EdgeAuthCacheOptions = {}) {
     this.maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
@@ -73,14 +88,23 @@ export class EdgeAuthCache {
     )`);
   }
 
-  /** The account service accepted this device (challenge or token auth). */
-  remember(result: AuthResult): void {
+  /** Current trust epoch of a device (see `remember`). */
+  epoch(deviceId: string): number { return this.epochs.get(deviceId) ?? 0; }
+
+  /**
+   * The account service accepted this device (challenge or token auth).
+   * `epochAtRequest` (from `epoch()` before the request was sent) makes a
+   * late answer that crossed a revocation a no-op; returns whether stored.
+   */
+  remember(result: AuthResult, epochAtRequest?: number): boolean {
+    if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return false;
     const self = result.devices.find((d) => d.id === result.deviceId);
-    if (!self?.publicKey) return; // no signing key: cannot do challenge auth anyway
+    if (!self?.publicKey) return false; // no signing key: cannot do challenge auth anyway
     this.db.prepare(`INSERT OR REPLACE INTO edge_auth_cache
       (device_id, user_id, public_key, encryption_key, result_json, verified_at) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(result.deviceId, result.userId, self.publicKey, self.encryptionKey ?? null,
         JSON.stringify(result), this.now());
+    return true;
   }
 
   /** A fresh entry, or undefined. */
@@ -91,10 +115,13 @@ export class EdgeAuthCache {
     } | undefined;
     if (!row) return undefined;
     if (this.now() - row.verified_at > this.maxStaleMs) return undefined;
-    // The local mirror is what removals on this edge delete: no mirror, no trust.
-    const mirrored = this.db.prepare('SELECT public_key FROM devices WHERE id = ?').get(deviceId) as
-      { public_key: string | null } | undefined;
-    if (!mirrored || mirrored.public_key !== row.public_key) return undefined;
+    // The local mirror is what removals on this edge delete: no mirror, no
+    // trust. It must still be the same key and the same account (a removed
+    // device id may be registered again under another account).
+    const mirrored = this.db.prepare('SELECT public_key, user_id FROM devices WHERE id = ?').get(deviceId) as
+      { public_key: string | null; user_id: string } | undefined;
+    if (!mirrored || mirrored.public_key !== row.public_key || mirrored.user_id !== row.user_id) return undefined;
+    if (this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined) return undefined;
     let result: AuthResult;
     try { result = JSON.parse(row.result_json) as AuthResult; } catch { return undefined; }
     return {
@@ -106,6 +133,7 @@ export class EdgeAuthCache {
   forget(deviceId: string): void {
     this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?').run(deviceId);
     this.lastRevalidation.delete(deviceId);
+    this.epochs.set(deviceId, this.epoch(deviceId) + 1);
   }
 
   deviceIds(): string[] {
@@ -113,19 +141,31 @@ export class EdgeAuthCache {
       .map((r) => r.device_id);
   }
 
+  /** Cached devices with their key fingerprints (status poll payload). */
+  entries(): Array<{ deviceId: string; userId: string; keyFingerprint: string }> {
+    return (this.db.prepare('SELECT device_id, user_id, public_key FROM edge_auth_cache').all() as
+      Array<{ device_id: string; user_id: string; public_key: string }>)
+      .map((r) => ({ deviceId: r.device_id, userId: r.user_id, keyFingerprint: keyFingerprint(r.public_key) }));
+  }
+
   issueNonce(deviceId: string): string {
     this.sweepNonces();
     const nonce = randomBytes(32).toString('hex');
-    this.localNonces.set(nonce, { deviceId, expiresAt: this.now() + NONCE_TTL_MS });
+    this.localNonces.set(nonce, { deviceId, expiresAt: this.now() + NONCE_TTL_MS, used: false });
     return nonce;
   }
 
-  /** Consume a nonce this edge issued for `deviceId`. */
-  takeNonce(nonce: string, deviceId: string): boolean {
+  /**
+   * Consume a nonce. `unknown` means this edge did not issue it (an
+   * account-service nonce); anything but `local` and `unknown` must be
+   * rejected, never passed on to the account service.
+   */
+  takeNonce(nonce: string, deviceId: string): NonceCheck {
     const entry = this.localNonces.get(nonce);
-    if (!entry) return false;
-    this.localNonces.delete(nonce);
-    return entry.deviceId === deviceId && entry.expiresAt >= this.now();
+    if (!entry) return 'unknown';
+    if (entry.used || entry.deviceId !== deviceId) { entry.used = true; return 'foreign'; }
+    entry.used = true;
+    return entry.expiresAt >= this.now() ? 'local' : 'expired';
   }
 
   verifySignature(entry: CachedDevice, nonce: string, signature: string): boolean {
@@ -146,12 +186,14 @@ export class EdgeAuthCache {
 
   private sweepNonces(): void {
     const now = this.now();
-    for (const [nonce, entry] of this.localNonces) if (entry.expiresAt < now) this.localNonces.delete(nonce);
+    for (const [nonce, entry] of this.localNonces) {
+      if (entry.expiresAt + NONCE_TTL_MS < now) this.localNonces.delete(nonce);
+    }
   }
 }
 
 /** Account-service answers that mean "this device may not sign in here". */
 export function isDefinitiveRejection(code: string | undefined): boolean {
   return code !== undefined && code !== 'service_unavailable' && code !== 'internal_error'
-    && code !== 'rate_limited' && code !== 'bad_request';
+    && code !== 'rate_limited' && code !== 'bad_request' && code !== 'not_supported' && code !== 'auth_unavailable';
 }

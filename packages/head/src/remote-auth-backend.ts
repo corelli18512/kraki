@@ -40,6 +40,9 @@ export class RemoteAuthBackend implements AuthBackend {
   private edgeRegion?: string;
   private localAuthReady = false;
   private statusTimer?: ReturnType<typeof setInterval>;
+  /** Bumped by start/stop: in-flight polls and re-verifications of an older
+   *  lifecycle are dropped when they land. */
+  private lifecycle = 0;
   /** The account service rejected a device that may be connected here. */
   onRevoked?: (revocation: EdgeRevocation) => void;
   /** A background re-verification returned a fresher result (devices, prefs).
@@ -55,51 +58,86 @@ export class RemoteAuthBackend implements AuthBackend {
 
   /** Turn on edge-local challenge auth. Starts the device status poll. */
   enableLocalChallenge(cache: EdgeAuthCache, region: string | undefined, pollMs = DEVICE_STATUS_POLL_MS): Promise<void> {
+    this.stopLocalChallenge();
     this.edgeCache = cache;
     this.edgeRegion = region;
-    if (this.statusTimer) clearInterval(this.statusTimer);
+    const lifecycle = this.lifecycle;
     this.statusTimer = setInterval(() => { void this.pollDeviceStatus(); }, pollMs);
     this.statusTimer.unref?.();
-    return this.pollDeviceStatus();
+    return lifecycle === this.lifecycle ? this.pollDeviceStatus() : Promise.resolve();
   }
 
+  /** Turn edge-local auth off. Work still in flight is ignored when it lands. */
   stopLocalChallenge(): void {
     if (this.statusTimer) clearInterval(this.statusTimer);
     this.statusTimer = undefined;
     this.localAuthReady = false;
+    this.edgeCache = undefined;
+    this.lifecycle++;
   }
 
   get localChallengeActive(): boolean { return this.localAuthReady && this.edgeCache !== undefined; }
+
+  /** This edge dropped a device (removed here, account deleted): never trust
+   *  it locally again until the account service vouches for it afresh. */
+  forgetLocalTrust(deviceId: string): void {
+    this.edgeCache?.forget(deviceId);
+  }
 
   /** Ask the account service about every cached device; forget and kick the
    *  ones it no longer accepts here. */
   async pollDeviceStatus(): Promise<void> {
     const cache = this.edgeCache;
     if (!cache) return;
-    const deviceIds = cache.deviceIds();
-    const statuses: Record<string, string> = {};
+    const lifecycle = this.lifecycle;
+    const entries = cache.entries();
+    const statuses = new Map<string, { status: string; redirect?: string }>();
     // Always at least one request (an empty list still proves support).
-    for (let i = 0; i === 0 || i < deviceIds.length; i += 1000) {
-      const res = await this.post<{ ok?: boolean; statuses?: Record<string, string>; code?: string }>(
-        '/api/devices/status', { deviceIds: deviceIds.slice(i, i + 1000), headRegion: this.edgeRegion },
-      );
+    // ~130 bytes per device: 300 stays well under the account API body limit.
+    for (let i = 0; i === 0 || i < entries.length; i += 300) {
+      const chunk = entries.slice(i, i + 300);
+      const epochs = chunk.map((e) => cache.epoch(e.deviceId));
+      const res = await this.post<{ ok?: boolean; statuses?: unknown; redirects?: unknown; code?: string }>('/api/devices/status', {
+        devices: chunk.map((e) => ({ id: e.deviceId, userId: e.userId, keyFingerprint: e.keyFingerprint })),
+        headRegion: this.edgeRegion,
+      });
+      if (lifecycle !== this.lifecycle) return; // stopped meanwhile
       if (!res || typeof res.statuses !== 'object' || res.statuses === null) {
-        // Unreachable keeps the current mode (entries still age out after
-        // maxStaleMs); an account service without the endpoint never enables it.
-        if (res?.code !== 'service_unavailable' && this.localAuthReady) {
-          getLogger().warn('Account service has no device status endpoint; edge-local auth off');
+        // Unreachable or failing keeps the current mode (entries still age
+        // out after maxStaleMs); an account service without the endpoint
+        // (404/405, or a 200 without statuses) switches local trust off.
+        const transient = res?.code === 'service_unavailable' || res?.code === 'internal_error' || res?.code === 'rate_limited';
+        if (!transient && this.localAuthReady) {
+          getLogger().warn('Account service has no device status endpoint; edge-local auth off', { code: res?.code });
           this.localAuthReady = false;
         }
         return;
       }
-      Object.assign(statuses, res.statuses);
+      const answered = res.statuses as Record<string, unknown>;
+      const redirects = (typeof res.redirects === 'object' && res.redirects !== null ? res.redirects : {}) as Record<string, unknown>;
+      chunk.forEach((e, j) => {
+        // Only answers for exactly what was asked (own properties: an id like
+        // `__proto__` must not slip through), and only if the device was not
+        // dropped while the request was out.
+        if (epochs[j] !== cache.epoch(e.deviceId)) return;
+        const raw = Object.prototype.hasOwnProperty.call(answered, e.deviceId) ? answered[e.deviceId] : undefined;
+        const redirect = Object.prototype.hasOwnProperty.call(redirects, e.deviceId) ? redirects[e.deviceId] : undefined;
+        statuses.set(e.deviceId, {
+          // No answer for a device: not proof of anything, but no basis to
+          // keep trusting it locally either.
+          status: typeof raw === 'string' ? raw : 'unanswered',
+          redirect: typeof redirect === 'string' ? redirect : undefined,
+        });
+      });
     }
-    if (!this.localAuthReady) getLogger().info('Edge-local challenge auth enabled', { cached: deviceIds.length });
+    if (!this.localAuthReady) getLogger().info('Edge-local challenge auth enabled', { cached: entries.length });
     this.localAuthReady = true;
-    for (const [deviceId, status] of Object.entries(statuses)) {
+    for (const [deviceId, { status, redirect }] of statuses) {
       if (status === 'ok') continue;
       cache.forget(deviceId);
-      this.onRevoked?.({ deviceId, code: status, message: 'Device no longer accepted' });
+      if (status === 'unanswered') continue;
+      metrics().inc('auth.localRevoked');
+      this.onRevoked?.({ deviceId, code: status, message: 'Device no longer accepted', redirect });
     }
   }
 
@@ -109,9 +147,15 @@ export class RemoteAuthBackend implements AuthBackend {
     headRegion?: string,
     clientIp?: string,
   ): Promise<AuthOutcome> {
+    const cache = this.edgeCache;
+    const epoch = device.deviceId && cache ? cache.epoch(device.deviceId) : undefined;
     // The account service throttles failed logins per client IP; forward the
     // end user's address, not this edge's.
-    return this.post('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
+    const result = await this.post<AuthOutcome>('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
+    // A token / pairing sign-in is as authoritative as a verified challenge:
+    // the next reconnect of this device can be local.
+    if (result.ok && cache === this.edgeCache) cache?.remember(result, device.deviceId === result.deviceId ? epoch : undefined);
+    return result;
   }
 
   async startChallenge(
@@ -135,43 +179,57 @@ export class RemoteAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
-    if (cache?.takeNonce(nonce, deviceId)) {
-      const cached = this.localChallengeActive ? cache.lookup(deviceId) : undefined;
+    const check = cache?.takeNonce(nonce, deviceId) ?? 'unknown';
+    if (check === 'expired' || check === 'foreign') {
+      // Issued by this edge, but stale, reused or for another device. The
+      // account service never saw it; retryable so the client asks again.
+      return { ok: false, code: 'service_unavailable', message: 'Challenge expired, sign in again' };
+    }
+    if (check === 'local') {
+      const cached = this.localChallengeActive ? cache!.lookup(deviceId) : undefined;
       const sameKeys = cached !== undefined && (encryptionKey === undefined || encryptionKey === cached.encryptionKey);
-      if (cached && sameKeys && cache.verifySignature(cached, nonce, signature)) {
+      if (cached && sameKeys && cache!.verifySignature(cached, nonce, signature)) {
         metrics().inc('auth.localVerify');
-        if (cache.claimRevalidation(deviceId)) {
-          void this.revalidate(deviceId, nonce, signature, encryptionKey, headRegion);
+        if (cache!.claimRevalidation(deviceId)) {
+          void this.revalidate(cached.userId, deviceId, nonce, signature, encryptionKey, headRegion);
         }
         return { ...cached.result, authMethod: 'challenge', local: true };
       }
       // New encryption key, rotated signing key, or trust lapsed meanwhile:
       // the account service decides (the edge nonce is just as signable).
     }
+    const epoch = cache?.epoch(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
-    if (result.ok) cache?.remember(result);
-    else if (isDefinitiveRejection(result.code)) cache?.forget(deviceId);
+    if (cache && cache === this.edgeCache) {
+      if (result.ok) cache.remember(result, epoch);
+      else if (isDefinitiveRejection(result.code)) cache.forget(deviceId);
+    }
     return result;
   }
 
   /** Background re-check of a locally accepted signature. */
-  private async revalidate(deviceId: string, nonce: string, signature: string, encryptionKey?: string, headRegion?: string): Promise<void> {
-    const context = this.revalidationContext?.();
-    const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
+  private async revalidate(userId: string, deviceId: string, nonce: string, signature: string, encryptionKey?: string, headRegion?: string): Promise<void> {
     const cache = this.edgeCache;
     if (!cache) return;
-    if (result.ok) {
-      cache.remember(result);
-      this.onRefreshed?.(result, context);
+    const lifecycle = this.lifecycle;
+    const epoch = cache.epoch(deviceId);
+    const context = this.revalidationContext?.();
+    const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
+    // Stopped, or the device was dropped while this was out: a late answer
+    // must neither revive it nor act on it.
+    if (lifecycle !== this.lifecycle || epoch !== cache.epoch(deviceId)) return;
+    if (result.ok && result.userId === userId) {
+      if (cache.remember(result, epoch)) this.onRefreshed?.(result, context);
       return;
     }
-    if (!isDefinitiveRejection(result.code)) return;
+    const code = result.ok ? 'device_not_found' : result.code;
+    if (!result.ok && !isDefinitiveRejection(code)) return;
     metrics().inc('auth.localRevoked');
-    getLogger().warn('Account service rejected a locally accepted device', { deviceId, code: result.code });
+    getLogger().warn('Account service rejected a locally accepted device', { deviceId, code });
     cache.forget(deviceId);
     this.onRevoked?.({
-      deviceId, code: result.code, message: result.message,
-      redirect: result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined,
+      deviceId, code, message: result.ok ? 'Device belongs to another account' : result.message,
+      redirect: !result.ok && result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined,
     });
   }
 
@@ -274,8 +332,16 @@ export class RemoteAuthBackend implements AuthBackend {
         signal: AbortSignal.timeout(this.timeout),
       });
 
-      const data = await response.json();
-      return data as T;
+      const text = await response.text();
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        // Not JSON: an endpoint this account service does not have (404/405)
+        // is different from a transient failure.
+        const unsupported = response.status === 404 || response.status === 405;
+        if (!unsupported) logger.error('Account service returned non-JSON', { path, status: response.status });
+        return { ok: false, code: unsupported ? 'not_supported' : 'service_unavailable', message: `HTTP ${response.status}` } as T;
+      }
     } catch (err) {
       logger.error('Account service request failed', { path, error: (err as Error).message });
       return { ok: false, code: 'service_unavailable', message: 'Account service unavailable' } as T;
