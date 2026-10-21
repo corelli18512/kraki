@@ -92,6 +92,13 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         check(DiagRunLoop.busyFields(120, phase: .active).count == 1, "active busy untagged")
         if case .tag(let tag)? = DiagRunLoop.busyFields(120, phase: .inactive)[.phase] { check(tag == "inactive", "inactive busy tagged") }
         else { check(false, "inactive busy tagged") }
+        // A sid outside the collector's format is sent as no session, not as-is.
+        let sids = DiagRecorder(capacity: 10, perSecond: 100)
+        sids.record(.voice, session: "kraki.new-session-draft")
+        sids.record(.voice, session: "mvd7jvld-r1jpirgw")
+        sids.record(.voice, session: "pending-65dffad4-8a1f-4b96-a45e-43761c728805")
+        sids.record(.voice, session: String(repeating: "a", count: 129))
+        check(sids.drain().events.map(\.sid) == [nil, "mvd7jvld-r1jpirgw", "pending-65dffad4-8a1f-4b96-a45e-43761c728805", nil], "sid format")
         r.setEnabled(false); r.record(.launch)
         check(r.drain().events.isEmpty, "off means no event")
         let limited = DiagRecorder(capacity: 10, perSecond: 1)

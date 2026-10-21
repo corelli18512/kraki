@@ -119,8 +119,19 @@ final class DiagRecorder: @unchecked Sendable {
         self.capacity = capacity; self.perSecond = perSecond
         pending.reserveCapacity(capacity)
     }
+    /// The collector's `sid` format (`[A-Za-z0-9_-]{1,128}`). Anything else —
+    /// e.g. the new-session voice draft id `kraki.new-session-draft`, which
+    /// is not a session — is sent without a session (it cost whole batches
+    /// before the collector stopped rejecting them).
+    static func sessionTag(_ session: String?) -> String? {
+        guard let session, !session.isEmpty, session.utf8.count <= 128,
+              session.utf8.allSatisfy({ $0 == 0x2D || $0 == 0x5F || (0x30...0x39).contains($0)
+                  || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) }) else { return nil }
+        return session
+    }
     @discardableResult
     func record(_ name: DiagEventName, session: String? = nil, _ fields: [DiagField: DiagValue] = [:]) -> Bool {
+        let session = Self.sessionTag(session)
         guard lock.try() else {
             contended.wrappingAdd(1, ordering: .relaxed)
             return false
@@ -133,7 +144,7 @@ final class DiagRecorder: @unchecked Sendable {
         guard pending.count < capacity, admitted < perSecond else { dropped &+= 1; return false }
         admitted += 1
         pending.append(DiagEvent(t: Date().timeIntervalSince1970 * 1000, m: mono * 1000,
-            seq: sequence, ev: name, sid: session.map { String($0.prefix(128)) },
+            seq: sequence, ev: name, sid: session,
             d: Dictionary(uniqueKeysWithValues: fields.map { ($0.key.rawValue, $0.value) })))
         return true
     }
