@@ -420,6 +420,28 @@ describe('daemon-worker: startWorker()', () => {
     }
   });
 
+  it('warns about missing Full Disk Access only when the state changed since the previous run', async () => {
+    const checks = await import('../checks.js');
+    mockPlatform = 'darwin';
+    vi.mocked(checks.probeFdaDetailed).mockResolvedValue({ status: 'denied', blockedPath: 'Library/Safari', code: 'EPERM' });
+    try {
+      mockRunStart = { previous: { pid: 1, version: 'x', startedAt: '', lastSeenAt: '', fda: 'denied' }, previousUnclean: false, startReason: 'after-clean-exit', bootedSincePrevious: false };
+      let { shutdown } = await startWorker();
+      expect(mockLoggerFns.info).toHaveBeenCalledWith({ fda: 'denied' }, 'Full Disk Access still not granted');
+      expect(mockLoggerFns.warn).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Full Disk Access not granted'));
+      await shutdown();
+
+      mockRunStart = { ...mockRunStart, previous: { pid: 1, version: 'x', startedAt: '', lastSeenAt: '', fda: 'granted' } };
+      ({ shutdown } = await startWorker());
+      expect(mockLoggerFns.warn).toHaveBeenCalledWith({ fda: 'denied' }, expect.stringContaining('Full Disk Access not granted'));
+      await shutdown();
+    } finally {
+      vi.mocked(checks.probeFdaDetailed).mockResolvedValue({ status: 'granted' });
+      mockPlatform = null;
+      mockRunStart = { previous: null, previousUnclean: false, startReason: 'first-run', bootedSincePrevious: false };
+    }
+  });
+
   it('a SIGTERM during startup stops the agent runtimes already started and logs it (log audit 2026-10-22)', async () => {
     // Only this worker's handlers: earlier tests' workers registered theirs.
     const saved = { SIGTERM: process.listeners('SIGTERM'), SIGINT: process.listeners('SIGINT'), uncaught: process.listeners('uncaughtException') };
