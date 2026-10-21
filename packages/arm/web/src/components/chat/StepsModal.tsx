@@ -10,6 +10,9 @@ import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
 import { StepsList } from './StepsList';
 
+/** Minimum spacing of live Steps re-pulls (each one re-sends the whole trace). */
+const LIVE_TRACE_REFRESH_MS = 2500;
+
 const isTrace = (t: string) =>
   t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
   t === 'permission' || t === 'error';
@@ -107,6 +110,11 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     if (openedSeq < 0 && targetSeq >= 0) setOpenedSeq(targetSeq);
   }, [openedSeq, targetSeq]);
 
+  const liveAction = useStore((s) => s.cards.get(sessionId)?.action ?? null);
+  const seenAction = useRef(liveAction);
+  const lastRefresh = useRef(0);
+  const trailing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
   const loaded = useSyncExternalStore(messageProvider.subscribeTurnTraces,
     () => messageProvider.isTurnTraceLoaded(sessionId, targetSeq));
 
@@ -114,17 +122,29 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     if (targetSeq < 0) return;
     if (live) messageProvider.invalidateTurnTrace(sessionId, targetSeq);
     messageProvider.requestTurnTrace(sessionId, targetSeq);
+    lastRefresh.current = Date.now();
   }, [sessionId, targetSeq, live]);
 
-  // A running turn keeps its Steps (and any open subagent page) current.
+  // A running turn keeps its Steps (and any open subagent page) current. Every
+  // tool start/complete (subagent steps included) and permission change folds
+  // into the card's action slot, so refresh when it changes (iOS/Mac
+  // `liveActionKey`) instead of re-downloading an unchanged trace on a timer;
+  // at most once per LIVE_TRACE_REFRESH_MS, with a trailing pull for a burst.
   useEffect(() => {
-    if (!live || targetSeq < 0) return;
-    const timer = setInterval(() => {
+    if (seenAction.current === liveAction) return;
+    seenAction.current = liveAction;
+    if (!live || targetSeq < 0 || trailing.current !== undefined) return;
+    const refresh = () => {
+      trailing.current = undefined;
+      lastRefresh.current = Date.now();
       messageProvider.invalidateTurnTrace(sessionId, targetSeq);
       messageProvider.requestTurnTrace(sessionId, targetSeq);
-    }, 2500);
-    return () => clearInterval(timer);
-  }, [sessionId, targetSeq, live]);
+    };
+    const wait = lastRefresh.current + LIVE_TRACE_REFRESH_MS - Date.now();
+    if (wait <= 0) refresh();
+    else trailing.current = setTimeout(refresh, wait);
+  }, [sessionId, targetSeq, live, liveAction]);
+  useEffect(() => () => clearTimeout(trailing.current), []);
 
   // Subagent pages pushed on top of the turn's Steps (dispatch toolCallIds).
   const [path, setPath] = useState<string[]>([]);
