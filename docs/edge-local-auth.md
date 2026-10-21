@@ -24,7 +24,7 @@ key still matches this edge's device mirror:
 3. In the background (at most once a minute per device) the edge asks
    `/api/devices/status` about that one device (the account service only
    verifies answers to nonces it issued itself, so the edge's nonce cannot
-   be re-verified there). `ok` refreshes the answer's age; a rejection
+   be re-verified there). `ok` does not extend the answer's age; a rejection
    (`unknown_device`, `account_deleted`, `wrong_region`, `key_changed`)
    forgets the device and closes its socket, as the 5-minute poll below
    does. Transient errors change nothing.

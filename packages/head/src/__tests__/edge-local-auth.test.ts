@@ -294,3 +294,40 @@ describe('edge HeadServer with local challenge auth', () => {
     }
   });
 });
+
+describe('signing key changed on a warm edge (fix/main-after-577 review)', () => {
+  it('a device announcing another signing key gets an account-service challenge and a real verdict', async () => {
+    const keys = generateKeyPair();
+    const account = new Storage(':memory:');
+    const edge = new Storage(':memory:');
+    account.upsertUser('u1', 'alice', 'open');
+    account.upsertDevice('t1', 'u1', 'Mac', 'tentacle', 'desktop', exportPublicKey(keys.publicKey));
+    const calls: string[] = [];
+    const api = new AccountApi({ authBackend: new LocalAuthBackend({ storage: account, authProviders: new Map() }), serviceKey: SERVICE_KEY });
+    const http = createServer(async (req, res) => { calls.push(req.url ?? ''); if (!(await api.handleRequest(req, res))) { res.writeHead(404); res.end(); } });
+    await new Promise<void>((r) => http.listen(0, r));
+    const remote = new RemoteAuthBackend({ accountUrl: `http://localhost:${(http.address() as AddressInfo).port}`, serviceKey: SERVICE_KEY });
+    try {
+      await remote.enableLocalChallenge(new EdgeAuthCache(edge.rawDb), undefined, 600_000);
+      const c1 = await remote.startChallenge('t1', undefined, undefined, exportPublicKey(keys.publicKey));
+      if (!c1.ok) throw new Error('challenge');
+      const first = await remote.verifyChallenge('t1', c1.nonce, signChallenge(c1.nonce, keys.privateKey));
+      expect(first.ok).toBe(true);
+      if (first.ok) { edge.upsertUser('u1', 'alice', 'open'); for (const d of first.devices) edge.upsertDevice(d.id, 'u1', d.name, d.role, d.kind, d.publicKey, d.encryptionKey); }
+      // Same key: local.
+      calls.length = 0;
+      expect((await remote.startChallenge('t1', undefined, undefined, exportPublicKey(keys.publicKey))).ok).toBe(true);
+      expect(calls).toEqual([]);
+      // New signing key: the account service issues the challenge and gives
+      // the verdict the Tentacle needs (invalid_signature → token sign-in).
+      const other = generateKeyPair();
+      const c2 = await remote.startChallenge('t1', undefined, undefined, exportPublicKey(other.publicKey));
+      expect(calls).toEqual(['/api/auth/challenge']);
+      if (!c2.ok) throw new Error('challenge');
+      const r = await remote.verifyChallenge('t1', c2.nonce, signChallenge(c2.nonce, other.privateKey));
+      expect(!r.ok && r.code).toBe('invalid_signature');
+    } finally {
+      remote.stopLocalChallenge(); http.close(); account.close(); edge.close();
+    }
+  });
+});
