@@ -8,6 +8,7 @@ import { Storage } from './storage.js';
 import { PulseHub } from './pulse-hub.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
 import { getLogger, LogThrottle } from './logger.js';
+import { HealthLog } from './health-log.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
@@ -42,6 +43,7 @@ export class HeadServer {
    *  be visible), capped per IP. */
   readonly authFailureLog = new LogThrottle();
   private readonly preAuthCloseLog = new LogThrottle();
+  private readonly healthLog = new HealthLog();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
@@ -153,8 +155,8 @@ export class HeadServer {
       try { this.storage.pruneForegroundActivity(); }
       catch { getLogger().warn('Failed to prune foreground usage counters'); }
 
-      // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
-      // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
+      // Periodic health snapshot — ALWAYS on (not trace-gated). Sampled every
+      // 30s, logged on change / stall or every 5 min (HealthLog); the canary for the OOM / event-loop-stall class of bugs
       // that recurred across the pulse PRs. rss/heap from process.memoryUsage;
       // endpointCount + durable-row total reflect the pulse-hub memory state.
       const mem = process.memoryUsage();
@@ -165,7 +167,7 @@ export class HeadServer {
       const metricsNow = metrics();
       metricsNow.lastHealthAt = Date.now();
       const loop = metricsNow.takeLoopDelay();
-      getLogger().info('health', {
+      const health = this.healthLog.next({
         conns: this.connections.size,
         endpoints: this.pulseHub.endpointCount(),
         durableRows,
@@ -174,7 +176,9 @@ export class HeadServer {
         heapTotalMb: Math.round(mem.heapTotal / 1048576),
         evlLagMs: loop?.p99Ms,
         evlMaxMs: loop?.maxMs,
-      });
+      }, { requests: metricsNow.get('api.requests'), errors: metricsNow.get('api.errors') },
+      Math.floor((Date.now() - metricsNow.startedAt) / 1000));
+      if (health) getLogger().info('health', health);
     }, HeadServer.PING_INTERVAL);
   }
 

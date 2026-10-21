@@ -51,6 +51,23 @@ export class LatencyHistogram {
   }
 }
 
+/** Sampling interval of the event-loop delay monitor. */
+export const LOOP_MONITOR_RESOLUTION_MS = 20;
+
+/**
+ * Node records the time between two ticks of its sampling timer, so every
+ * value includes the sampling interval itself (an idle loop reads ~21 ms).
+ * The delay is what exceeds the interval: an idle loop reads ~1 ms.
+ */
+export function loopDelayFromHistogram(
+  h: Pick<IntervalHistogram, 'percentile' | 'max'>,
+  resolutionMs = LOOP_MONITOR_RESOLUTION_MS,
+): { p50Ms: number; p99Ms: number; maxMs: number } {
+  const ms = (ns: number) => Math.max(0, Math.round(ns / 1e4) / 100 - resolutionMs);
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return { p50Ms: round(ms(h.percentile(50))), p99Ms: round(ms(h.percentile(99))), maxMs: round(ms(h.max)) };
+}
+
 /** Every counter the relay keeps. A fixed list: a typo fails to compile. */
 export const COUNTERS = [
   'auth.ok', 'auth.fail', 'auth.localChallenge', 'auth.localVerify', 'auth.localRevoked',
@@ -99,7 +116,7 @@ export class RelayMetrics {
   /** Start sampling event-loop delay (call once; cheap, 20 ms resolution). */
   startLoopMonitor(): void {
     if (this.loopDelay) return;
-    this.loopDelay = monitorEventLoopDelay({ resolution: 20 });
+    this.loopDelay = monitorEventLoopDelay({ resolution: LOOP_MONITOR_RESOLUTION_MS });
     this.loopDelay.enable();
   }
 
@@ -112,8 +129,7 @@ export class RelayMetrics {
   takeLoopDelay(): { p50Ms: number; p99Ms: number; maxMs: number } | null {
     const h = this.loopDelay;
     if (!h || h.count === 0) return null;
-    const ms = (ns: number) => Math.round(ns / 1e4) / 100;
-    const out = { p50Ms: ms(h.percentile(50)), p99Ms: ms(h.percentile(99)), maxMs: ms(h.max) };
+    const out = loopDelayFromHistogram(h);
     h.reset();
     return out;
   }
