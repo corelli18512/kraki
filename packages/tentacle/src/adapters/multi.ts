@@ -144,7 +144,12 @@ export interface MultiAgentAdapterOptions {
   attachmentStore?: import('../attachment-store.js').AttachmentStore;
   /** Kraki MCP server info (optional). */
   krakiMcp?: { urlForSession: (sid: string) => string; tokenForSession: (sessionId: string) => string };
+  /** Test-only: replaces detectAvailableAgents. */
+  detectAgents?: () => Promise<AgentId[]>;
 }
+
+const NO_AGENTS_MESSAGE = 'No coding agents available. Install Copilot CLI (gh auth login) '
+  + 'or Claude Code, pi, or Codex CLI to get started.';
 
 /**
  * Build the adapter for one agent (not started). Shared by the daemon and by
@@ -203,18 +208,21 @@ export class MultiAgentAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
-    const ids = this.opts.agentIds ?? await detectAvailableAgents();
-    if (ids.length === 0) {
-      throw new Error(
-        'No coding agents available. Install Copilot CLI (gh auth login) ' +
-        'or Claude Code, pi, or Codex CLI to get started.',
-      );
-    }
-
     const adapterOpts = {
       attachmentStore: this.opts.attachmentStore,
       ...(this.opts.krakiMcp && { krakiMcp: this.opts.krakiMcp }),
     };
+    const ids = this.opts.agentIds ?? await this.detectAgents();
+    if (ids.length === 0) {
+      if (this.opts.agentIds) throw new Error(NO_AGENTS_MESSAGE);
+      // Detection can fail transiently at login (PATH/shell env not ready, an
+      // agent being installed or updated). Keep looking instead of running
+      // agent-less until the user restarts the daemon.
+      logger.warn({ err: NO_AGENTS_MESSAGE }, 'No coding agents detected; re-detecting in the background');
+      this.redetecting = true;
+      this.scheduleAgentRetry(adapterOpts, 60_000);
+      return;
+    }
 
     // Start agents in parallel: each one spawns its CLI and lists models, and
     // the sum easily exceeded the daemon's readiness window on a cold machine.
@@ -232,6 +240,16 @@ export class MultiAgentAdapter extends AgentAdapter {
 
   /** Agents that were detected but failed to start (e.g. signed out). */
   private failedAgentIds = new Set<AgentId>();
+  /** Startup detection found no agent: each retry detects again. */
+  private redetecting = false;
+
+  private detectAgents(): Promise<AgentId[]> {
+    const detect = this.opts.detectAgents ?? detectAvailableAgents;
+    return detect().catch((err) => {
+      logger.warn({ err: (err as Error).message }, 'Agent detection failed');
+      return [];
+    });
+  }
   private agentRetryTimer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
 
@@ -260,6 +278,15 @@ export class MultiAgentAdapter extends AgentAdapter {
     if (this.stopped) return;
     this.agentRetryTimer = setTimeout(async () => {
       this.agentRetryTimer = undefined;
+      if (this.redetecting) {
+        const found = await this.detectAgents();
+        if (this.stopped) return;
+        if (found.length > 0) {
+          this.redetecting = false;
+          logger.info({ agents: found }, 'Coding agents detected after startup');
+          for (const id of found) if (!this.adapters.has(id)) this.failedAgentIds.add(id);
+        }
+      }
       let recovered = false;
       for (const id of [...this.failedAgentIds]) {
         if (await this.startAgent(id, adapterOpts)) {
@@ -268,7 +295,7 @@ export class MultiAgentAdapter extends AgentAdapter {
         }
       }
       if (recovered) this.onCapabilitiesChanged?.();
-      if (this.failedAgentIds.size > 0) this.scheduleAgentRetry(adapterOpts, Math.min(delayMs * 2, 15 * 60_000));
+      if (this.redetecting || this.failedAgentIds.size > 0) this.scheduleAgentRetry(adapterOpts, Math.min(delayMs * 2, 15 * 60_000));
     }, delayMs);
     this.agentRetryTimer.unref?.();
   }
