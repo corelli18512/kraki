@@ -205,6 +205,7 @@ extension ChatPerfListVC {
                 chatPerfLog.log("[txn \(txn.id)] STALE older gen=\(gen) cur=\(self.pagingGeneration) — drop")
                 return
             }
+            defer { self.scheduleUnderfilledHistoryCheck() }
             chatPerfLog.log("[txn \(txn.id)] raw top \(winBefore)→\(self.vm.windowTopSeq) moved=\(self.yn(moved)) dt=\(self.f1(txn.lap()))")
             guard moved else {
                 chatPerfLog.log("[txn \(txn.id)] END noop moved=false total=\(self.f1(txn.total()))")

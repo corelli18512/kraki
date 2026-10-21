@@ -200,6 +200,7 @@ extension ChatPerfListVC {
                 self.collectionView.contentOffset.y += newFrame.minY - anchor.1
             }
             self.appliedHeightIDs.formUnion(applicableIDs)
+            self.scheduleUnderfilledHistoryCheck()
             let layoutMs = (CFAbsoluteTimeGetCurrent() - layoutStarted) * 1_000
             let changed = paths.reduce(into: 0) { count, path in
                 let old = oldHeights[path] ?? -1

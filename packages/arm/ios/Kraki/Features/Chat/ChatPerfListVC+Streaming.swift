@@ -160,7 +160,9 @@ extension ChatPerfListVC {
         // sent while older history was waiting to be shown). The front shift
         // below keeps the reading position; if the reader was at the bottom,
         // the new rows must also be followed, or they land under the composer.
-        let followNewTail = iB > 0 && followingBottom
+        // An automatic fill can prepend into a short, top-aligned window.
+        // Preserve its tail latch atomically rather than leaving an overscroll.
+        let followNewTail = (takeUnderfilledTailFollow() || iB > 0) && followingBottom
             && !collectionView.isDragging && !collectionView.isDecelerating
 
         UIView.performWithoutAnimation {
