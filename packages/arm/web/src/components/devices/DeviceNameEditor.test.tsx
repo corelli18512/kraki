@@ -34,6 +34,11 @@ describe('DeviceNameEditor', () => {
     expect(commands.renameDevice).toHaveBeenLastCalledWith('dev-t', '');
   });
 
+  it('limits the name to 64 code points, so emoji count once', () => {
+    edit(laptop, '😀'.repeat(70));
+    expect(commands.renameDevice).toHaveBeenCalledWith('dev-t', '😀'.repeat(64));
+  });
+
   it('sends nothing when the name did not change or on Escape', () => {
     edit(renamed, 'Work laptop');
     document.body.innerHTML = '';

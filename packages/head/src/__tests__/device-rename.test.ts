@@ -227,6 +227,45 @@ describe('rename_device through the account service (edge mode)', () => {
     expect(china.storage.getDevice(laptop.deviceId)?.displayName).toBeNull();
   });
 
+  it('a sign-in whose device list predates a rename does not revert it', async () => {
+    // Found by review: the account service answers an edge's auth with the
+    // device list as it was then; if a rename completes on the edge before
+    // that answer is applied, mirroring the list would put the old name back.
+    let release!: () => void;
+    let held = false;
+    class SlowBackend extends RemoteAuthBackend {
+      override async authenticate(...args: Parameters<RemoteAuthBackend['authenticate']>) {
+        const result = await super.authenticate(...args);
+        if (held) await new Promise<void>((r) => { release = r; });
+        return result;
+      }
+    }
+    const storage = new Storage(':memory:');
+    const head = await startHead(storage, new SlowBackend({ accountUrl, serviceKey: SERVICE_KEY }));
+    const e = { storage, head };
+    edges.push(e);
+    const phone = await connect(e, 'Kraki iOS', 'app');
+    const laptop = await connect(e, 'corelli-mbp', 'tentacle');
+    const laptopId = laptop.deviceId;
+    laptop.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The laptop signs in again; its answer (old device list) is held back.
+    held = true;
+    const back = connect(e, 'corelli-mbp', 'tentacle', { deviceId: laptopId });
+    await new Promise((r) => setTimeout(r, 200));
+    held = false;
+    phone.send({ type: 'rename_device', deviceId: laptopId, name: 'Work laptop' });
+    expect(await next(phone, 'device_renamed')).toMatchObject({ name: 'Work laptop' });
+    release();
+
+    const laptopAgain = await back;
+    expect(listed(laptopAgain, laptopId)).toMatchObject({ name: 'Work laptop', defaultName: 'corelli-mbp' });
+    expect(storage.getDevice(laptopId)).toMatchObject({ name: 'Work laptop', reportedName: 'corelli-mbp' });
+    const mac = await connect(e, 'Kraki Mac', 'app');
+    expect(listed(mac, laptopId)?.name).toBe('Work laptop');
+  });
+
   it('changes nothing when the account service cannot store it', async () => {
     const tokyo = await edge();
     const phone = await connect(tokyo, 'Kraki iOS', 'app');

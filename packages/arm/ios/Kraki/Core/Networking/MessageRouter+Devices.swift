@@ -10,6 +10,7 @@ extension MessageRouter {
             if let deviceDict = json["device"] as? [String: Any],
                let summary = DeviceSummary(json: deviceDict) {
                 appState?.deviceStore.addDevice(summary)
+                appState?.sessionStore.relabelSessions(deviceId: summary.id, deviceName: summary.name)
                 // A Tentacle that was away may have missed inputs the Relay
                 // could not hold; re-send what is still waiting for it.
                 if summary.role == .tentacle {

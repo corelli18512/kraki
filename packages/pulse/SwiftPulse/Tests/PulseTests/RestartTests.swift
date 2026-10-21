@@ -73,4 +73,34 @@ final class RestartTests: XCTestCase {
         for i in 0..<3 { link.send("m\(i)") }
         XCTAssertEqual(link.delivered, ["m0", "m1", "m2"])
     }
+
+    /// The restarted peer's stream may continue far beyond the old cursor
+    /// (more than `maxResetJump`); a new epoch is not a jump within a stream.
+    func testANewEpochResetFarAheadOfTheOldCursorIsAccepted() {
+        let far: UInt64 = (1 << 24) + 1000
+        let relay = Endpoint(
+            epoch: "relay:new",
+            restore: Snapshot(
+                epoch: "relay:new", sendSeq: far, outboxBase: far, outbox: [],
+                recvCursor: 0, peerEpoch: "computer:1", disconnectedAtMs: nil),
+            durable: DurableConfig(supported: true))
+        let computer = Endpoint(
+            epoch: "computer:1",
+            restore: Snapshot(
+                epoch: "computer:1", sendSeq: 0, outboxBase: 0, outbox: [],
+                recvCursor: 17, peerEpoch: "relay:old", disconnectedAtMs: nil))
+        var delivered: [String] = []
+        func toComputer(_ effects: [Effect]) {
+            for case .transmit(let bytes) in effects {
+                for case .deliver(_, let payload, _, _) in computer.onBytes(bytes, 1) {
+                    delivered.append(String(decoding: payload, as: UTF8.self))
+                }
+            }
+        }
+        let relayHello = relay.onConnected(1)
+        for case .transmit(let bytes) in computer.onConnected(1) { toComputer(relay.onBytes(bytes, 1)) }
+        toComputer(relayHello)
+        toComputer(relay.send(Array("m".utf8)).effects)
+        XCTAssertEqual(delivered, ["m"])
+    }
 }

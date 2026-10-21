@@ -414,20 +414,23 @@ public final class Endpoint {
     }
 
     private func onReset(epoch: String, oldest: UInt64) -> [Effect] {
-        // `oldest` is untrusted: 0 would underflow `oldest - 1`, and a huge
-        // jump would make every later frame look like a duplicate (a silent
-        // black hole). A real gap is bounded by what a peer can have dropped.
-        guard oldest > 0, oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
-            return []
-        }
+        guard oldest > 0 else { return [] }  // `oldest - 1` would underflow
         // A RESET naming an epoch we have not seen starts a new send stream:
         // replace the cursor (it refers to the old stream), do not just raise
         // it. Normally the peer's HELLO has already zeroed it; this covers a
-        // RESET that wins the race. Mirrors the TS endpoint.
+        // RESET that wins the race. Checked before the jump guard below,
+        // which bounds gaps WITHIN one stream; a new stream may start
+        // anywhere relative to the old cursor. Mirrors the TS endpoint.
         if epoch != peerEpoch {
             peerEpoch = epoch
             recvCursor = oldest - 1
             return [.resetInbound(fromSeq: oldest, peerEpoch: epoch)]
+        }
+        // `oldest` is untrusted: a huge jump would make every later frame
+        // look like a duplicate (a silent black hole). A real gap is bounded
+        // by what a peer can have dropped.
+        guard oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
+            return []
         }
         peerEpoch = epoch
         if oldest > recvCursor &+ 1 {

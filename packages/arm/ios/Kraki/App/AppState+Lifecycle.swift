@@ -331,6 +331,8 @@ extension AppState {
         pulseManager?.onConnected()
 
         deviceStore.setDevices(devices)
+        // A device renamed while this app was away: its sessions follow.
+        for device in devices { sessionStore.relabelSessions(deviceId: device.id, deviceName: device.name) }
         // Pair with computers pinned from a QR code or from this Mac.
         deviceTrustDevicesChanged()
 

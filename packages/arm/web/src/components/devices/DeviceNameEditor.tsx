@@ -31,7 +31,9 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
         aria-label="Device name"
         value={draft}
         placeholder={ownName}
-        onChange={(e) => setDraft(e.target.value)}
+        // Limit by code points like the relay (HTML maxLength counts UTF-16
+        // units, so an emoji would count twice).
+        onChange={(e) => setDraft([...e.target.value].slice(0, MAX_DEVICE_NAME_LENGTH).join(''))}
         onBlur={save}
         onKeyDown={(e) => {
           if (e.key === 'Enter') save();
@@ -40,7 +42,6 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
             setEditing(false);
           }
         }}
-        maxLength={MAX_DEVICE_NAME_LENGTH}
         className="ksi-title-input min-w-0 flex-1 text-sm"
       />
     );

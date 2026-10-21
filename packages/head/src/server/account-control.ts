@@ -169,6 +169,7 @@ export async function handleRenameDevice(server: HeadServer, ws: WebSocket, stat
 
   // The device may have been removed while the account service answered.
   if (!server.storage.setDeviceDisplayName(targetDeviceId, displayName)) return;
+  server.deviceRenamedAt.set(targetDeviceId, ++server.renameClock);
   const renamed = server.storage.getDevice(targetDeviceId);
   if (!renamed) return;
   logger.info('Device renamed', { deviceId: targetDeviceId, byDevice: state.deviceId, custom: displayName !== null });
@@ -200,6 +201,7 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
   }
 
   server.storage.deleteDevice(targetDeviceId);
+  server.deviceRenamedAt.delete(targetDeviceId);
   server.storage.deletePushTokensForDevice(targetDeviceId);
   // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
   // rows too. Otherwise they outlive the device record forever, and

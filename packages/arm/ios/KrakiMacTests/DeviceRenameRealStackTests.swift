@@ -126,5 +126,9 @@ final class DeviceRenameRealStackTests: XCTestCase {
         try await waitUntil(30, "B reconnected with the name") {
             b.connectionStatus == .connected && self.name(b, computer) == "Renamed while away"
         }
+        // …and its session list labels the computer's session with it.
+        try await waitUntil(5, "B's session relabelled") {
+            b.sessionStore.sessions[self.stack.sessionId]?.deviceName == "Renamed while away"
+        }
     }
 }

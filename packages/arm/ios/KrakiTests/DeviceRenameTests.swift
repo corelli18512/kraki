@@ -76,6 +76,19 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.sessions["s1"]?.deviceName, "corelli-mbp")
     }
 
+    /// Renamed while this app was away: the device list it gets on its next
+    /// sign-in relabels its sessions, and a card shows the live name.
+    func testSignInRelabelsSessionsAndCardsPreferTheLiveName() throws {
+        app.sessionStore.sessions = ["s1": session("s1", on: "t", named: "corelli-mbp")]
+        let renamed = DeviceSummary(id: "t", name: "Work laptop", role: .tentacle, online: true, defaultName: "corelli-mbp")
+        app.onAuthenticated(deviceId: "me", user: nil, devices: [renamed], githubClientId: nil, relayVersion: nil)
+        XCTAssertEqual(app.sessionStore.sessions["s1"]?.deviceName, "Work laptop")
+
+        let stale = session("s2", on: "t", named: "corelli-mbp")
+        XCTAssertEqual(SessionCardProjection.make(session: stale, device: renamed, preview: nil, draft: nil).machineName, "Work laptop")
+        XCTAssertEqual(SessionCardProjection.make(session: stale, device: nil, preview: nil, draft: nil).machineName, "corelli-mbp")
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")
