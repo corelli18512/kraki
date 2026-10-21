@@ -1521,7 +1521,7 @@ export class RelayClient {
   }
 
   /** Set by the daemon when remote update is wired (remote-update.ts). */
-  onUpdateRequest: ((requestId: string, when?: 'now' | 'idle') => Promise<void>) | null = null;
+  onUpdateRequest: ((requestId: string, when: 'now' | 'idle' | undefined, fromDeviceId: string) => Promise<void>) | null = null;
 
   /** Progress/outcome of a remote update, to every online app. */
   sendUpdateStatus(payload: { phase: DeviceUpdatePhase; requestId?: string; from?: string; to?: string; progress?: number; runningSessions?: number; error?: string }): void {
@@ -1542,8 +1542,12 @@ export class RelayClient {
    *  the session, as it does for a session whose agent already stopped. A
    *  waiting permission does count — it is not persisted. */
   runningSessionCount(): number {
+    return this.runningSessionIds().length;
+  }
+
+  runningSessionIds(): string[] {
     return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active'
-      && !(this.openQuestions.get(s.id)?.size && !this.openPermissions.get(s.id)?.size)).length;
+      && !(this.openQuestions.get(s.id)?.size && !this.openPermissions.get(s.id)?.size)).map((s) => s.id);
   }
 
   private updateInfo: DeviceUpdateInfo | null = null;

@@ -569,11 +569,12 @@ export async function startWorker(): Promise<WorkerResult> {
     },
     refresh: () => updateWatch.checkNow(),
     runningSessions: () => relay.runningSessionCount(),
+    runningSessionIds: () => relay.runningSessionIds(),
     emit: (p) => relay.sendUpdateStatus(p),
   });
-  relay.onUpdateRequest = async (requestId, when) => {
+  relay.onUpdateRequest = async (requestId, when, fromDeviceId) => {
     // The updater checks for the newest release itself before acting.
-    await updater.request(requestId, when);
+    await updater.request(requestId, when, fromDeviceId);
   };
   const announceUpdateResult = () => {
     const r = remoteUpdate.takeUnannouncedResult();

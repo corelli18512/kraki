@@ -1888,7 +1888,7 @@ describe('RelayClient tool message lazy-load shape', () => {
       client.onUpdateRequest = async (...args) => { calls.push(args); };
       send({ requestId: 'r2', when: 'idle' });
       send({ requestId: 'bad id!', when: 'whenever' });
-      expect(calls).toEqual([['r2', 'idle'], ['', undefined]]);
+      expect(calls).toEqual([['r2', 'idle', 'consumer-dev'], ['', undefined, 'consumer-dev']]);
     } finally { cleanup(); }
   });
 
