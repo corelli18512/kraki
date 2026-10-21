@@ -307,7 +307,7 @@ Real dev-stack Playwright (`real browser Arm ⇄ real Head ⇄ real Tentacle`):
 - `packages/arm/web/src/lib/ws-client.ts`
 - `packages/arm/web/src/pages/SessionPage.tsx`
 - `packages/arm/web/e2e/real-stack/session-subscription.spec.ts`
-- `scripts/pulse-realstack-server.ts`
+- `scripts/pulse-realstack-server.mts`
 - `scripts/validate-e2e-recipient-scaling.ts`
 - `scripts/validate-fanout.ts`
 - `docs/session-subscription-protocol-proposal.md`

@@ -24,7 +24,9 @@ export default defineConfig({
   },
   webServer: {
     // Orchestrator lives at repo root and needs workspace packages, so run from there.
-    command: 'pnpm exec tsx scripts/pulse-realstack-server.ts',
+    // .mts: runs as ESM. @kraki/protocol only exports `import`, which a CJS
+    // run of this script cannot load.
+    command: 'pnpm exec tsx scripts/pulse-realstack-server.mts',
     cwd: '../../..',
     // The control plane is the last thing to come up → readiness signal.
     url: 'http://localhost:4710/killed',
