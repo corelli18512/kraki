@@ -341,10 +341,7 @@ export class Endpoint {
 
     // (a) Peer resuming against an epoch we no longer have (we cold-started).
     if (f.recvEpoch !== '' && f.recvEpoch !== this.epoch) {
-      effects.push(
-        this.transmit({ t: 'reset', epoch: this.epoch, oldest: this.outboxBase + 1n }, now),
-      );
-      this.resendFrom(this.outboxBase + 1n, effects, now);
+      this.resetPeerToFirstDeliverable(effects, now);
       return effects;
     }
 
@@ -355,12 +352,30 @@ export class Endpoint {
       this.resendWithGapAnnounce(f.recvCursor + 1n, effects, now);
     } else {
       // Peer is behind our oldest retained seq — we pruned what it needs.
-      effects.push(
-        this.transmit({ t: 'reset', epoch: this.epoch, oldest: this.outboxBase + 1n }, now),
-      );
-      this.resendFrom(this.outboxBase + 1n, effects, now);
+      this.resetPeerToFirstDeliverable(effects, now);
     }
     return effects;
+  }
+
+  /**
+   * Tell the peer where our stream continues, then resend from there.
+   *
+   * `oldest` must be a seq we can actually deliver: the oldest retained entry,
+   * or — nothing retained — the next seq we will send. Announcing
+   * `outboxBase + 1` instead is wrong whenever entries above the base were
+   * dropped: after a restart from a durable-only snapshot (non-durable sends
+   * since the snapshot are gone, so `sendSeq` is ahead of the base) or after a
+   * purge. The peer then waits for a seq that will never come, holds every
+   * later frame as a hole, and — once a stale piggybacked ack from its previous
+   * connection has advanced our base past its new cursor — its repair ACKs are
+   * ignored as stale. A relay restart left a computer deaf to all relay
+   * control this way (kraki 2026-10-21).
+   */
+  private resetPeerToFirstDeliverable(effects: Effect[], now: number): void {
+    let oldest = this.sendSeq + 1n;
+    for (const e of this.outbox) if (e.seq < oldest) oldest = e.seq;
+    effects.push(this.transmit({ t: 'reset', epoch: this.epoch, oldest }, now));
+    this.resendFrom(oldest, effects, now);
   }
 
   private onData(f: Extract<Frame, { t: 'data' }>, now: number): Effect[] {
@@ -462,6 +477,16 @@ export class Endpoint {
   }
 
   private onReset(f: Extract<Frame, { t: 'reset' }>): Effect[] {
+    // A RESET naming an epoch we have not seen starts a new send stream (the
+    // peer restarted). Our cursor refers to the old stream, so it is replaced,
+    // not merely raised: a cursor left above `oldest` would drop the new
+    // stream's frames as duplicates. Normally the peer's HELLO arrives first
+    // and has already zeroed it; this covers a RESET that wins the race.
+    if (f.epoch !== this.peerEpoch && f.oldest > 0n) {
+      this.peerEpoch = f.epoch;
+      this.recvCursor = f.oldest - 1n;
+      return [{ t: 'reset-inbound', fromSeq: f.oldest, peerEpoch: f.epoch }];
+    }
     this.peerEpoch = f.epoch;
     if (f.oldest > this.recvCursor + 1n) {
       // Unavoidable gap: (recvCursor+1 .. oldest-1) are gone forever.

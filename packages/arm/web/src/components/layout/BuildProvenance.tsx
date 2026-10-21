@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { DesktopBuildInfo } from '../../lib/desktop';
 
 export function buildLinks(info?: DesktopBuildInfo) {
@@ -12,19 +13,20 @@ export function buildLinks(info?: DesktopBuildInfo) {
 }
 
 export function BuildProvenance({ info }: { info?: DesktopBuildInfo }) {
+  const { t } = useTranslation('settings');
   const links = buildLinks(info);
   const rows = links ? [
-    ['GitHub Run ID', `${info?.runId}${info?.runAttempt === '1' ? '' : ` · attempt ${info?.runAttempt}`}`, links.run],
-    ['Source commit', info?.commit?.slice(0, 8), links.source],
-    ...(links.provenance ? [['Build provenance', 'View on GitHub', links.provenance]] : []),
+    [t('build.runId'), `${info?.runId}${info?.runAttempt === '1' ? '' : t('build.attempt', { attempt: info?.runAttempt })}`, links.run],
+    [t('build.commit'), info?.commit?.slice(0, 8), links.source],
+    ...(links.provenance ? [[t('build.provenance'), t('build.view'), links.provenance]] : []),
   ] : [];
   return (
-    <div className="kp-build-source" aria-label="Build source">
+    <div className="kp-build-source" aria-label={t('build.source')}>
       {rows.length ? rows.map(([label, value, href]) => (
         <a key={label} href={href} target="_blank" rel="noreferrer">
           <span>{label}</span><span>{value}<span aria-hidden="true"> ↗</span></span>
         </a>
-      )) : <div><span>Build</span><span>{info?.channel === 'local' ? 'Local build' : 'Build record unavailable'}</span></div>}
+      )) : <div><span>{t('build.label')}</span><span>{info?.channel === 'local' ? t('build.local') : t('build.unavailable')}</span></div>}
     </div>
   );
 }

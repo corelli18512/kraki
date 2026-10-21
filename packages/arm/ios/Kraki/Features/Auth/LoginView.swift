@@ -150,23 +150,23 @@ struct LoginView: View {
     /// what's actually happening rather than echoing an internal state
     /// name.
     private var statusHeadline: String {
-        if appState.isOAuthInFlight { return "Signing you in…" }
+        if appState.isOAuthInFlight { return String(localized: "Signing you in…") }
         switch appState.connectionStatus {
-        case .connecting:     return "Connecting to relay…"
-        case .authenticating: return "Signing you in…"
+        case .connecting:     return String(localized: "Connecting to relay…")
+        case .authenticating: return String(localized: "Signing you in…")
         default:              return ""
         }
     }
 
     private var statusSubline: String {
         if appState.isOAuthInFlight {
-            return "Opening GitHub to confirm your sign-in."
+            return String(localized: "Opening GitHub to confirm your sign-in.")
         }
         switch appState.connectionStatus {
         case .connecting:
-            return "Establishing a secure channel to your relay."
+            return String(localized: "Establishing a secure channel to your relay.")
         case .authenticating:
-            return "Verifying your account and pairing this device."
+            return String(localized: "Verifying your account and pairing this device.")
         default:
             return ""
         }
@@ -238,9 +238,9 @@ struct LoginView: View {
                 .frame(maxWidth: 320)
 
             HStack(spacing: 4) {
-                Text("Run")
+                Text("Run", comment: "Before the kraki connect code badge in the pairing QR instruction")
                     .foregroundStyle(Color.secondary.opacity(0.6))
-                Text("kraki connect")
+                Text(verbatim: "kraki connect")
                     .monospaced()
                     .foregroundStyle(Color.textTitle.opacity(0.85))
                     .padding(.horizontal, 6)
@@ -253,10 +253,12 @@ struct LoginView: View {
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
                     )
-                Text("to generate a new one.")
+                Text("to generate a new one.", comment: "After the kraki connect code badge; generates a new pairing QR code")
                     .foregroundStyle(Color.secondary.opacity(0.6))
             }
             .font(.system(size: 12))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Run kraki connect to generate a new one.")
         }
         .opacity(showInstructions ? 1 : 0)
         .offset(y: showInstructions ? 0 : 8)

@@ -24,7 +24,7 @@ struct AvailableUpdateNotice: View {
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(Color.krakiPrimary)
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(update.isMacApp ? "Kraki for Mac" : "Kraki") \(update.latest) is available")
+                Text("\(update.isMacApp ? String(localized: "Kraki for Mac") : "Kraki") \(update.latest) is available")
                     .font(.system(size: 13, weight: .medium))
                 if let checkForUpdates {
                     Button("Check for Updates…", action: checkForUpdates)
@@ -74,7 +74,7 @@ struct DeviceUpdateControl: View {
 
     private var busyTitle: String {
         let n = store.updateProgress[device.id]?.runningSessions ?? 0
-        return n == 1 ? "1 session is running" : "\(n) sessions are running"
+        return String(localized: "\(n) sessions are running")
     }
 
     @ViewBuilder
@@ -91,7 +91,7 @@ struct DeviceUpdateControl: View {
     }
 
     private func label(_ u: AvailableUpdate) -> String {
-        "\(u.isMacApp ? "Kraki for Mac" : "Kraki") \(u.latest) is available"
+        String(localized: "\(u.isMacApp ? String(localized: "Kraki for Mac") : "Kraki") \(u.latest) is available")
     }
 
     @ViewBuilder
@@ -112,7 +112,7 @@ struct DeviceUpdateControl: View {
                         .tint(.krakiPrimary)
                         .disabled(!device.online)
                         .accessibilityIdentifier("device.update.button")
-                    Text(device.online ? "Kraki restarts on \(device.name); about a minute." : "Available when \(device.name) is online.")
+                    Text(device.online ? String(localized: "Kraki restarts on \(device.name); about a minute.") : String(localized: "Available when \(device.name) is online."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             } else {
@@ -125,8 +125,8 @@ struct DeviceUpdateControl: View {
 
     private func blockedText(_ u: AvailableUpdate) -> String {
         switch store.deviceUpdates[device.id]?.remoteBlock {
-        case "disabled": return "Updating from other devices is turned off on that computer. \(u.howTo)"
-        case "not_writable": return "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer."
+        case "disabled": return String(localized: "Updating from other devices is turned off on that computer. \(u.howTo)")
+        case "not_writable": return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
         default: return u.howTo
         }
     }
@@ -136,42 +136,43 @@ struct DeviceUpdateControl: View {
         let to = p.to.map { " \($0)" } ?? ""
         switch p.phase {
         case .requested:
-            row(spinner: true, title: "Asking \(device.name) to update…") { EmptyView() }
+            row(spinner: true, title: String(localized: "Asking \(device.name) to update…")) { EmptyView() }
         case .busy:
             row(icon: "exclamationmark.circle.fill", tint: .orange, title: busyTitle) {
                 Button("Choose…") { askBusy = true }.controlSize(.small)
             }
         case .waiting_idle:
-            row(spinner: true, title: "Will update when the running sessions finish") {
+            row(spinner: true, title: String(localized: "Will update when the running sessions finish")) {
                 Text("Kraki\(to) installs on \(device.name) as soon as nothing is running.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         case .downloading:
-            row(spinner: true, title: "Downloading Kraki\(to)…") {
+            row(spinner: true, title: String(localized: "Downloading Kraki\(to)…")) {
                 if let f = p.progress { ProgressView(value: f).frame(maxWidth: 220) }
             }
         case .installing:
             if now.timeIntervalSince(p.at) > 180 {
-                row(icon: "exclamationmark.triangle.fill", tint: .orange, title: "\(device.name) isn’t back online yet") {
+                row(icon: "exclamationmark.triangle.fill", tint: .orange, title: String(localized: "\(device.name) isn’t back online yet")) {
                     Text("If it doesn’t return, check Kraki on that computer.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             } else {
-                row(spinner: true, title: device.online ? "Installing Kraki\(to)…" : "Restarting Kraki on \(device.name)…") {
+                row(spinner: true, title: device.online ? String(localized: "Installing Kraki\(to)…") : String(localized: "Restarting Kraki on \(device.name)…")) {
                     Text("It will be back online in a moment.").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
         case .updated:
-            row(icon: "checkmark.circle.fill", tint: .green, title: "Updated to Kraki\(to)") { EmptyView() }
+            row(icon: "checkmark.circle.fill", tint: .green, title: String(localized: "Updated to Kraki\(to)")) { EmptyView() }
         case .rolled_back:
-            row(icon: "arrow.uturn.backward.circle.fill", tint: .orange, title: "Update didn’t work, so nothing changed") {
-                Text("The new version didn’t start on \(device.name), so it went back to\(p.from.map { " \($0)" } ?? " the previous version").")
+            row(icon: "arrow.uturn.backward.circle.fill", tint: .orange, title: String(localized: "Update didn’t work, so nothing changed")) {
+                Text(p.from.map { String(localized: "The new version didn’t start on \(device.name), so it went back to \($0).") }
+                         ?? String(localized: "The new version didn’t start on \(device.name), so it went back to the previous version."))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         case .failed:
-            row(icon: "xmark.circle.fill", tint: .red, title: "Couldn’t update") {
+            row(icon: "xmark.circle.fill", tint: .red, title: String(localized: "Couldn’t update")) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(p.error ?? "Something went wrong. Nothing was changed.")
+                    Text(p.error ?? String(localized: "Something went wrong. Nothing was changed."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Button("Dismiss") { store.setUpdateProgress(device.id, nil) }.controlSize(.small)
                 }

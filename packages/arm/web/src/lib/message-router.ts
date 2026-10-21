@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, DeviceUpdateStatusMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction, CompactingMessage, SessionState } from '@kraki/protocol';
 import { normalizeSessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
@@ -255,7 +256,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           readSeq: msg.payload.lastSeq ?? 0,
         });
         // Set an initial preview so new sessions sort to the top of the list
-        updatePreview(sid, { text: 'Session created', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
+        updatePreview(sid, { text: t('chat:router.sessionCreated'), type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       }
       // Clear pending state — session is now real
       store.removePendingSession(sid);
@@ -335,7 +336,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';
       const failed = msg.payload.action?.type === 'failed';
       updatePreview(sid, {
-        text: truncPreview(draft || (failed ? 'Turn failed' : 'User aborted')),
+        text: truncPreview(draft || (failed ? t('chat:router.turnFailed') : t('chat:router.userAborted'))),
         type: failed ? 'error' : 'agent',
         timestamp: msg.timestamp,
       }, !replaying);
@@ -347,7 +348,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';
       const failed = msg.payload.reason === 'process_lost';
       updatePreview(sid, {
-        text: truncPreview(draft || (failed ? 'Turn failed' : 'User aborted')),
+        text: truncPreview(draft || (failed ? t('chat:router.turnFailed') : t('chat:router.userAborted'))),
         type: failed ? 'error' : 'agent',
         timestamp: msg.timestamp,
       }, !replaying);
@@ -362,7 +363,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // A steps-only turn (kind no_reply) has no text of its own: keep the
       // previous preview rather than inventing a "No reply" line.
       if (msg.payload.kind !== 'no_reply' || msg.payload.content) {
-        const label = msg.payload.content ?? 'System notice';
+        const label = msg.payload.content ?? t('chat:router.systemNotice');
         updatePreview(sid, { text: truncPreview(label), type: 'agent', timestamp: msg.timestamp }, !replaying);
       }
       break;

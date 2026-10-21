@@ -28,7 +28,7 @@ private final class MacHTMLArtifactButton: NSButton {
 
         iconView.image = NSImage(
             systemSymbolName: "doc.richtext",
-            accessibilityDescription: "Report"
+            accessibilityDescription: String(localized: "Report")
         )
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
         iconView.contentTintColor = NSColor.controlAccentColor
@@ -46,7 +46,7 @@ private final class MacHTMLArtifactButton: NSButton {
 
         openIcon.image = NSImage(
             systemSymbolName: "arrow.up.right",
-            accessibilityDescription: "Open report"
+            accessibilityDescription: String(localized: "Open report")
         )
         openIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
         openIcon.contentTintColor = .tertiaryLabelColor
@@ -62,12 +62,12 @@ private final class MacHTMLArtifactButton: NSButton {
         self.onOpen = onOpen
         let displayTitle = [artifact.caption, artifact.name]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty } ?? "Report"
+            .first { !$0.isEmpty } ?? String(localized: "Report")
         titleLabel.stringValue = displayTitle
-        detailLabel.stringValue = "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
+        detailLabel.stringValue = String(localized: "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Open report \(displayTitle)")
+        setAccessibilityLabel(String(localized: "Open report \(displayTitle)"))
         toolTip = MacControlHelp.report(displayTitle)
         needsDisplay = true
     }

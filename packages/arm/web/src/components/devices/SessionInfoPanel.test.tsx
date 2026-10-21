@@ -58,3 +58,32 @@ describe('SessionInfoPanel native sheet parity', () => {
     expect(commands.renameSession).not.toHaveBeenCalled();
   });
 });
+
+it('updates session labels, effort choices, durations, tokens and accessibility copy without changing user content', async () => {
+  const { i18next } = await import('../../i18n');
+  const { act } = await import('@testing-library/react');
+  render(<SessionInfoPanel session={{ ...session, title: 'User title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} />);
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByRole('heading', { name: '会话信息' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '复制会话 ID' })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: '上下文用量' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '高' })).toBeInTheDocument();
+    expect(screen.getByText('1 分 15 秒')).toBeInTheDocument();
+    expect([999, 9100, 32300, 1000000].map(formatTokens)).toEqual(['999', '9.1K', '32K', '1.0M']);
+    expect(screen.getByText('$0.0040')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: '推理强度' })).toBeInTheDocument();
+    expect(screen.getByText('User title')).toBeInTheDocument();
+    expect(screen.getByText('Model One')).toBeInTheDocument();
+  } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
+});
+
+it('keeps USD notation and precision in Chinese for ordinary costs', async () => {
+  const { i18next } = await import('../../i18n');
+  const { act } = await import('@testing-library/react');
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    render(<SessionInfoPanel session={session} usage={{ ...usage, totalCost: .042 }} onClose={close} />);
+    expect(screen.getByText('$0.042')).toBeInTheDocument();
+  } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
+});

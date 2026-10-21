@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { LocalAuthBackend } from './local-auth-backend.js';
+import { normalizeDeviceName } from '@kraki/protocol';
 import { safeEqual } from './auth.js';
 import { getLogger } from './logger.js';
 import { clientIp } from './client-ip.js';
@@ -104,6 +105,9 @@ export class AccountApi {
           break;
         case '/api/devices/remove':
           if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
+          break;
+        case '/api/devices/rename':
+          if (req.method === 'POST') return await this.handleRenameDevice(req, res, caller!);
           break;
         case '/api/account/delete':
           if (req.method === 'POST') return await this.handleDeleteAccount(req, res, caller!);
@@ -247,6 +251,29 @@ export class AccountApi {
     if (!this.mayActForUser(caller, body.userId, res)) return true;
     const removed = await this.backend.removeDevice(body.userId, body.deviceId);
     this.json(res, removed ? 200 : 404, removed ? { ok: true } : { ok: false, code: 'not_found', message: 'Device not found' });
+    return true;
+  }
+
+  /** Service-key route: an edge forwards a user's device rename here. */
+  private async handleRenameDevice(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    const raw = body?.displayName;
+    if (typeof body?.userId !== 'string' || typeof body?.deviceId !== 'string' || (raw !== null && typeof raw !== 'string')) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId, deviceId and displayName (string or null) required' });
+      return true;
+    }
+    const normalized = raw === null ? '' : normalizeDeviceName(raw);
+    if (normalized === null) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'Name too long' });
+      return true;
+    }
+    if (!this.mayActForUser(caller, body.userId, res)) return true;
+    if (!this.backend.renameDevice) {
+      this.json(res, 501, { ok: false, code: 'not_supported', message: 'Renaming devices is not supported' });
+      return true;
+    }
+    const renamed = await this.backend.renameDevice(body.userId, body.deviceId, normalized || null);
+    this.json(res, renamed ? 200 : 404, renamed ? { ok: true } : { ok: false, code: 'not_found', message: 'Device not found' });
     return true;
   }
 

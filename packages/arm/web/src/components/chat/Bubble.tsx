@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { CircleHelp, AudioLines } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
@@ -58,6 +59,7 @@ export const Bubble = memo(function Bubble({ row, ctx }: { row: ChatRow; ctx: Bu
 });
 
 function SystemRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
+  const { t } = useTranslation('chat');
   if (row.kind !== 'spine') return null;
   const message = row.item.message;
   const attachments = attachmentsOf(message);
@@ -72,11 +74,11 @@ function SystemRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   if (anchorsSteps && !hasMedia) {
     return (
       <div className="krow krow-agent" data-row-key={row.key} data-testid="steps-only-turn">
-        <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>
+        <button type="button" className="ksteps" aria-label={t('bubble.showSteps')} onClick={() => ctx.onOpenSteps?.(seq)}>···</button>
       </div>
     );
   }
-  const text = content.trim() ? content : hasMedia ? '' : 'System notice';
+  const text = content.trim() ? content : hasMedia ? '' : t('bubble.systemNotice');
   const steps = payloadOf(message).steps;
   const hasSteps = anchorsSteps || (typeof steps === 'number' && steps > 0);
   return (
@@ -89,7 +91,7 @@ function SystemRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
           </MessageBubble>
         )}
         {images.length > 0 && <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>}
-        {hasSteps && <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>}
+        {hasSteps && <button type="button" className="ksteps" aria-label={t('bubble.showSteps')} onClick={() => ctx.onOpenSteps?.(seq)}>···</button>}
       </div>
     </div>
   );
@@ -126,6 +128,7 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
 
 /** Pending input actions mirror Mac's delivery-status menu. */
 function PendingMark({ clientId, state, ctx }: { clientId: string; state: PendingInput['state']; ctx: BubbleContext }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -139,15 +142,15 @@ function PendingMark({ clientId, state, ctx }: { clientId: string; state: Pendin
       <button
         type="button"
         className={`kfailed-mark is-${state}`}
-        aria-label={state === 'correcting' ? 'Correcting voice input. Click for options' : state === 'unconfirmed' ? 'Awaiting confirmation. Click to retry or delete' : 'Not delivered. Click to retry or delete'}
-        title={state === 'correcting' ? 'Correcting voice input' : state === 'unconfirmed' ? 'Delivery not confirmed yet. Retry uses the same message ID.' : 'Not delivered'}
+        aria-label={state === 'correcting' ? t('bubble.correctingOptions') : state === 'unconfirmed' ? t('bubble.unconfirmedOptions') : t('bubble.failedOptions')}
+        title={state === 'correcting' ? t('bubble.correcting') : state === 'unconfirmed' ? t('bubble.unconfirmed') : t('bubble.notDelivered')}
         onClick={() => setOpen((v) => !v)}
       >{state === 'correcting' ? <AudioLines aria-hidden /> : state === 'unconfirmed' ? <CircleHelp aria-hidden /> : '!'}</button>
       {open && (
         <div className="kmenu" role="menu">
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>{state === 'correcting' ? 'Send Original' : 'Retry'}</button>
-          {state === 'correcting' && <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onEditPending?.(clientId); }}>Edit</button>}
-          <button type="button" role="menuitem" className="is-destructive" onClick={() => { setOpen(false); ctx.onDelete?.(clientId); }}>Delete</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>{state === 'correcting' ? t('bubble.sendOriginal') : t('bubble.retry')}</button>
+          {state === 'correcting' && <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onEditPending?.(clientId); }}>{t('bubble.edit')}</button>}
+          <button type="button" role="menuitem" className="is-destructive" onClick={() => { setOpen(false); ctx.onDelete?.(clientId); }}>{t('bubble.delete')}</button>
         </div>
       )}
     </div>
@@ -155,6 +158,7 @@ function PendingMark({ clientId, state, ctx }: { clientId: string; state: Pendin
 }
 
 function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
+  const { t } = useTranslation('chat');
   let text = '';
   let action: SlotAction | undefined;
   let attachments: Attachment[] = [];
@@ -193,7 +197,7 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
     return live ? (
       <div className="krow krow-agent" data-row-key={row.key}>
         <div className="kbubble kbubble-agent kbubble-typing" style={palette}>
-          <span className="ktyping" aria-label="Agent is working"><i /><i /><i /></span>
+          <span className="ktyping" aria-label={t('bubble.working')}><i /><i /><i /></span>
         </div>
       </div>
     ) : null;
@@ -224,7 +228,7 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
           <button
             type="button"
             className="ksteps"
-            aria-label="Show steps"
+            aria-label={t('bubble.showSteps')}
             onClick={() => ctx.onOpenSteps?.(live ? null : stepsSeq)}
           >···</button>
         )}

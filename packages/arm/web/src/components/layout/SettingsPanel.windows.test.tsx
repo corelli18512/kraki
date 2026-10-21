@@ -109,7 +109,7 @@ describe('SettingsPanel Windows-scoped rounded design', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Press a shortcut…' }), { key: 'F8' });
     expect(await screen.findByRole('alert')).toHaveTextContent('Shortcut unavailable.');
     expect(useUsageShortcut.getState().shortcut).toBe('F6');
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Archive After' }), { target: { value: '30' } });
     expect(commands.setAutoArchiveDays).toHaveBeenCalledWith('pc', 30);
     tab('Notifications');
     expect(screen.getByText('Granted')).toBeInTheDocument();

@@ -166,25 +166,27 @@ final class WindowSizeObserver {
 
 /// Format a date as a relative time string: "2m ago", "1h ago", "3d ago", etc.
 func relativeTimestamp(_ date: Date) -> String {
+    // Compact copy; each form is a catalog key ("%lldm ago" → "%lld 分钟前").
     let seconds = Int(-date.timeIntervalSinceNow)
-    if seconds < 5 { return "just now" }
-    if seconds < 60 { return "\(seconds)s ago" }
+    if seconds < 5 { return String(localized: "just now") }
+    if seconds < 60 { return String(localized: "\(seconds)s ago") }
     let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes)m ago" }
+    if minutes < 60 { return String(localized: "\(minutes)m ago") }
     let hours = minutes / 60
-    if hours < 24 { return "\(hours)h ago" }
+    if hours < 24 { return String(localized: "\(hours)h ago") }
     let days = hours / 24
-    if days < 30 { return "\(days)d ago" }
+    if days < 30 { return String(localized: "\(days)d ago") }
     let months = days / 30
-    if months < 12 { return "\(months)mo ago" }
+    if months < 12 { return String(localized: "\(months)mo ago") }
     let years = months / 12
-    return "\(years)y ago"
+    return String(localized: "\(years)y ago")
 }
 
 // MARK: - Token Counts
 
 /// Format a token count: 1234 → "1.2K", 45300 → "45.3K", etc.
 func formatTokenCount(_ count: Int) -> String {
+    // Compact K/M notation reads the same in every supported language.
     if count < 1_000 { return "\(count)" }
     if count < 1_000_000 {
         let k = Double(count) / 1_000
@@ -212,11 +214,11 @@ func formatDuration(_ ms: Double) -> String {
     guard ms.isFinite, ms >= 0 else { return "—" }
     let totalSeconds = min(ms / 1_000, 1e12)
     if totalSeconds < 60 {
-        return String(format: "%.1fs", totalSeconds)
+        return String(format: String(localized: "%.1fs"), totalSeconds)
     }
     let minutes = Int(totalSeconds) / 60
     let seconds = Int(totalSeconds) % 60
-    return "\(minutes)m \(seconds)s"
+    return String(localized: "\(minutes)m \(seconds)s")
 }
 
 // MARK: - Truncation

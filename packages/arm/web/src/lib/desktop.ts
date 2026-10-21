@@ -116,6 +116,8 @@ export interface KrakiDesktopBridge {
   /** Origin GitHub redirects back to after OAuth (the shell intercepts it). */
   oauthRedirectOrigin: string;
   notify: (n: { title: string; body: string; sessionId?: string }) => void;
+  /** Older shells lack it; they keep English tray/dialog text. */
+  setLanguage?: (code: string) => void;
   setBadge: (count: number) => void;
   onOpenSession: (handler: (sessionId: string) => void) => () => void;
   /** Sessions waiting on you, for the tray menu (Kraki for Windows). */

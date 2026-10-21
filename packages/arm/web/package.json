@@ -17,11 +17,12 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@kraki/pulse": "workspace:*",
     "@kraki/protocol": "workspace:*",
+    "@kraki/pulse": "workspace:*",
     "dompurify": "3.4.17",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "highlight.js": "^11.10.0",
+    "i18next": "^26.5.2",
     "idb": "^8.0.3",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.577.0",
@@ -29,6 +30,7 @@
     "react": "^19.0.0",
     "react-diff-viewer-continued": "^4.2.0",
     "react-dom": "^19.0.0",
+    "react-i18next": "^17.1.0",
     "react-markdown": "^9.0.0",
     "react-router": "^7.0.0",
     "rehype-highlight": "^7.0.0",

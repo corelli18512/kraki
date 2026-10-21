@@ -22,6 +22,7 @@ interface DeviceRow {
   kind: string | null;
   public_key: string | null;
   encryption_key: string | null;
+  display_name: string | null;
   last_seen: string;
   created_at: string;
 }
@@ -58,7 +59,12 @@ interface EdgeServiceRow {
 export interface StoredDevice {
   id: string;
   userId: string;
+  /** Name to show: `displayName` when set, else `reportedName`. */
   name: string;
+  /** The name the device reports for itself on every auth. */
+  reportedName: string;
+  /** The user's custom name (`rename_device`), or null. Never written by auth. */
+  displayName: string | null;
   role: string;
   kind: string | null;
   publicKey: string | null;
@@ -97,7 +103,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 /**
  * Audio a live broker connection may run ahead of its last usage report.
@@ -466,6 +472,15 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 15) {
+      // A user-chosen device name. Kept apart from `name` because every auth
+      // overwrites `name` with what the device reports for itself.
+      const cols = this.db.prepare('PRAGMA table_info(devices)').all() as Array<{ name: string }>;
+      if (cols.length > 0 && !cols.some((c) => c.name === 'display_name')) {
+        this.db.exec('ALTER TABLE devices ADD COLUMN display_name TEXT');
+      }
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
     this.sweepDeletedDevices();
   }
@@ -741,7 +756,7 @@ export class Storage {
 
   getDevice(id: string): StoredDevice | undefined {
     const row = this.stmt(
-      'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE id = ?'
+      'SELECT id, user_id, name, role, kind, public_key, encryption_key, display_name, last_seen, created_at FROM devices WHERE id = ?'
     ).get(id) as DeviceRow | undefined;
     if (!row) return undefined;
     return this.mapDeviceRow(row);
@@ -749,7 +764,7 @@ export class Storage {
 
   getDevicesByUser(userId: string): StoredDevice[] {
     const rows = this.stmt(
-      'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE user_id = ?'
+      'SELECT id, user_id, name, role, kind, public_key, encryption_key, display_name, last_seen, created_at FROM devices WHERE user_id = ?'
     ).all(userId) as DeviceRow[];
     return rows.map(row => this.mapDeviceRow(row));
   }
@@ -757,7 +772,7 @@ export class Storage {
   /** Every device, grouped by user id (one query; for admin stats). */
   getAllDevicesByUser(): Map<string, StoredDevice[]> {
     const rows = this.stmt(
-      'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices'
+      'SELECT id, user_id, name, role, kind, public_key, encryption_key, display_name, last_seen, created_at FROM devices'
     ).all() as DeviceRow[];
     const byUser = new Map<string, StoredDevice[]>();
     for (const row of rows) {
@@ -770,7 +785,8 @@ export class Storage {
 
   private mapDeviceRow(row: DeviceRow): StoredDevice {
     return {
-      id: row.id, userId: row.user_id, name: row.name,
+      id: row.id, userId: row.user_id, name: row.display_name ?? row.name,
+      reportedName: row.name, displayName: row.display_name,
       role: row.role, kind: row.kind, publicKey: row.public_key,
       encryptionKey: row.encryption_key,
       lastSeen: row.last_seen, createdAt: row.created_at,
@@ -806,6 +822,12 @@ export class Storage {
   /** Forget tombstones older than `days` (default 180). */
   sweepDeletedDevices(days = 180): number {
     return this.db.prepare(`DELETE FROM deleted_devices WHERE deleted_at < datetime('now', ?)`).run(`-${days} days`).changes;
+  }
+
+  /** Set (or with null, clear) a device's custom name. False if unknown. */
+  setDeviceDisplayName(id: string, displayName: string | null): boolean {
+    const result = this.db.prepare('UPDATE devices SET display_name = ? WHERE id = ?').run(displayName, id);
+    return result.changes > 0;
   }
 
   deleteDevice(id: string): boolean {

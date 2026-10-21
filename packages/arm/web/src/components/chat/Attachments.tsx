@@ -1,3 +1,6 @@
+import { t } from '../../i18n';
+import { formatNumber } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { AlertTriangle, ArrowUpRight } from 'lucide-react';
 import { RichTextDocumentIcon } from './RichTextDocumentIcon';
@@ -12,23 +15,24 @@ const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
 
 /** File-style decimal units, as in the native report card/header. */
 export function formatReportBytes(n: number): string {
-  if (n < 1000) return `${n} bytes`;
-  if (n < 1_000_000) return `${Math.round(n / 1000)} KB`;
-  return `${(n / 1_000_000).toFixed(1)} MB`;
+  if (n < 1000) return t('chat:attachments.bytes', { count: n });
+  if (n < 1_000_000) return t('chat:attachments.kilobytes', { size: formatNumber(Math.round(n / 1000), { useGrouping: false }) });
+  return t('chat:attachments.megabytes', { size: formatNumber(n / 1_000_000, { useGrouping: false, minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
 }
 
 export function htmlArtifactTitle(artifact: ContentRef): string {
-  return artifact.caption?.trim() || artifact.name?.trim() || 'Report';
+  return artifact.caption?.trim() || artifact.name?.trim() || t('chat:attachments.report');
 }
 
 export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onOpen?: (artifact: ContentRef) => void }) {
+  const { t } = useTranslation('chat');
   return (
     <div className="kreport-cards" data-html-artifacts={artifacts.length}>
       {artifacts.map((artifact) => {
         const title = htmlArtifactTitle(artifact);
-        return <button key={artifact.id} type="button" className="kreport-card" onClick={() => onOpen?.(artifact)} aria-label={`Open report ${title}`} disabled={!onOpen}>
+        return <button key={artifact.id} type="button" className="kreport-card" onClick={() => onOpen?.(artifact)} aria-label={t('attachments.openReport', { title })} disabled={!onOpen}>
           <span className="kreport-card-icon"><RichTextDocumentIcon /></span>
-          <span className="kreport-card-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
+          <span className="kreport-card-text"><strong>{title}</strong><small>{t('attachments.reportSize', { size: formatReportBytes(artifact.size) })}</small></span>
           <ArrowUpRight className="kreport-card-chevron" />
         </button>;
       })}
@@ -38,6 +42,7 @@ export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef
 
 type ImageAttachment = Attachment & ({ type: 'image' } | { type: 'content_ref' });
 export function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
+  const { t } = useTranslation('chat');
   const openPreview = useOpenImagePreview();
   const [resolvedRefs, setResolvedRefs] = useState<Record<string, string>>({});
   const images = attachments?.filter((a): a is ImageAttachment => a.type === 'image' || (a.type === 'content_ref' && a.mimeType.startsWith('image/'))) ?? [];
@@ -49,7 +54,7 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
     const resolved = images.flatMap((attachment, i) => {
       const url = attachment.type === 'image' ? `data:${attachment.mimeType};base64,${attachment.data}` : resolvedRefs[attachment.id];
       const state = attachment.type === 'content_ref' ? getState(attachment.id) : undefined;
-      return url ? [{ url, blob: state?.kind === 'ready' ? state.blob : undefined, title: attachment.type === 'image' ? `Image ${i + 1}` : attachment.caption ?? attachment.name ?? 'Image', originalIndex: i }] : [];
+      return url ? [{ url, blob: state?.kind === 'ready' ? state.blob : undefined, title: attachment.type === 'image' ? t('attachments.numberedImage', { number: formatNumber(i + 1) }) : attachment.caption ?? attachment.name ?? t('attachments.image'), originalIndex: i }] : [];
     });
     if (resolved.length) openPreview?.({ items: resolved, initialIndex: Math.max(0, resolved.findIndex((item) => item.originalIndex === index)) });
   };
@@ -80,26 +85,28 @@ function onImageLoad(event: React.SyntheticEvent<HTMLImageElement>): void {
 function AttachmentTile({ attachment, sessionId, gallery, onReady, onExpand }: {
   attachment: ImageAttachment; sessionId?: string; gallery: boolean; onReady: (url: string) => void; onExpand: () => void;
 }) {
+  const { t } = useTranslation('chat');
   if (attachment.type === 'content_ref') {
-    return sessionId ? <RefImageTile ref_={attachment} sessionId={sessionId} gallery={gallery} onReady={onReady} onExpand={onExpand} /> : <div className="kimage-placeholder" style={gallery ? undefined : refImageSize(attachment)}><span className="kspinner" aria-label="Loading" /></div>;
+    return sessionId ? <RefImageTile ref_={attachment} sessionId={sessionId} gallery={gallery} onReady={onReady} onExpand={onExpand} /> : <div className="kimage-placeholder" style={gallery ? undefined : refImageSize(attachment)}><span className="kspinner" aria-label={t('attachments.loading')} /></div>;
   }
   const src = `data:${attachment.mimeType};base64,${attachment.data}`;
-  return <button type="button" aria-label={gallery ? 'Open image gallery' : 'Open image preview'} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-binary'}`} onClick={onExpand}>
-    <img src={src} alt={attachment.caption ?? attachment.name ?? 'Attachment'} onLoad={onImageLoad} />
+  return <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-binary'}`} onClick={onExpand}>
+    <img src={src} alt={attachment.caption ?? attachment.name ?? t('attachments.attachment')} onLoad={onImageLoad} />
   </button>;
 }
 
 function RefImageTile({ ref_, sessionId, gallery, onReady, onExpand }: {
   ref_: ContentRef; sessionId: string; gallery: boolean; onReady: (url: string) => void; onExpand: () => void;
 }) {
+  const { t } = useTranslation('chat');
   const { status, url, error, retry } = useAttachment(ref_, sessionId, ATTACHMENT_PULL);
   const [invalidUrl, setInvalidUrl] = useState<string | null>(null);
   const style = gallery ? undefined : refImageSize(ref_);
   if (status === 'error' || (url && invalidUrl === url)) return <button type="button" className={`kimage-placeholder is-error ${gallery ? 'is-gallery' : ''}`} style={style} onClick={() => { setInvalidUrl(null); retry(); }}>
-    <AlertTriangle /><span>{error || 'Invalid image'}</span><small>Click to retry</small>
+    <AlertTriangle /><span>{error || t('attachments.invalidImage')}</span><small>{t('attachments.retry')}</small>
   </button>;
-  if (status === 'ready' && url) return <button type="button" aria-label={gallery ? 'Open image gallery' : 'Open image preview'} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-ref'}`} style={style} onClick={onExpand}>
-    <img src={url} alt={ref_.caption ?? ref_.name ?? 'Attachment'} onLoad={(event) => { onReady(url); onImageLoad(event); }} onError={() => setInvalidUrl(url)} />
+  if (status === 'ready' && url) return <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-ref'}`} style={style} onClick={onExpand}>
+    <img src={url} alt={ref_.caption ?? ref_.name ?? t('attachments.attachment')} onLoad={(event) => { onReady(url); onImageLoad(event); }} onError={() => setInvalidUrl(url)} />
   </button>;
-  return <div className={`kimage-placeholder ${gallery ? 'is-gallery' : ''}`} style={style}><span className="kspinner" aria-label="Loading" /></div>;
+  return <div className={`kimage-placeholder ${gallery ? 'is-gallery' : ''}`} style={style}><span className="kspinner" aria-label={t('attachments.loading')} /></div>;
 }

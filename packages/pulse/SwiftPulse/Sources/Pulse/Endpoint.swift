@@ -328,8 +328,7 @@ public final class Endpoint {
 
         // (a) Peer resuming against an epoch we no longer have.
         if !recvEpoch.isEmpty, recvEpoch != self.epoch {
-            effects.append(transmit(.reset(epoch: self.epoch, oldest: outboxBase + 1), now: now))
-            resendFrom(outboxBase + 1, &effects, now)
+            resetPeerToFirstDeliverable(&effects, now)
             return effects
         }
 
@@ -343,10 +342,21 @@ public final class Endpoint {
             pruneOutbox(peerCursor, &effects)
             resendWithGapAnnounce(peerCursor + 1, &effects, now)
         } else {
-            effects.append(transmit(.reset(epoch: self.epoch, oldest: outboxBase + 1), now: now))
-            resendFrom(outboxBase + 1, &effects, now)
+            resetPeerToFirstDeliverable(&effects, now)
         }
         return effects
+    }
+
+    /// Tell the peer where our stream continues, then resend from there.
+    /// `oldest` must be a seq we can deliver: the oldest retained entry, or —
+    /// nothing retained — the next seq we will send. `outboxBase + 1` is wrong
+    /// whenever entries above the base were dropped (restart from a
+    /// durable-only snapshot, purge): the peer would wait for a seq that never
+    /// comes and hold every later frame as a hole. Mirrors the TS endpoint.
+    private func resetPeerToFirstDeliverable(_ effects: inout [Effect], _ now: Int) {
+        let oldest = outbox.map(\.seq).min() ?? (sendSeq &+ 1)
+        effects.append(transmit(.reset(epoch: self.epoch, oldest: oldest), now: now))
+        resendFrom(oldest, &effects, now)
     }
 
     private func onData(seq: UInt64, ack: UInt64, payload: [UInt8], durable: Bool, coalesceKey: String?, now: Int) -> [Effect] {
@@ -404,10 +414,22 @@ public final class Endpoint {
     }
 
     private func onReset(epoch: String, oldest: UInt64) -> [Effect] {
-        // `oldest` is untrusted: 0 would underflow `oldest - 1`, and a huge
-        // jump would make every later frame look like a duplicate (a silent
-        // black hole). A real gap is bounded by what a peer can have dropped.
-        guard oldest > 0, oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
+        guard oldest > 0 else { return [] }  // `oldest - 1` would underflow
+        // A RESET naming an epoch we have not seen starts a new send stream:
+        // replace the cursor (it refers to the old stream), do not just raise
+        // it. Normally the peer's HELLO has already zeroed it; this covers a
+        // RESET that wins the race. Checked before the jump guard below,
+        // which bounds gaps WITHIN one stream; a new stream may start
+        // anywhere relative to the old cursor. Mirrors the TS endpoint.
+        if epoch != peerEpoch {
+            peerEpoch = epoch
+            recvCursor = oldest - 1
+            return [.resetInbound(fromSeq: oldest, peerEpoch: epoch)]
+        }
+        // `oldest` is untrusted: a huge jump would make every later frame
+        // look like a duplicate (a silent black hole). A real gap is bounded
+        // by what a peer can have dropped.
+        guard oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
             return []
         }
         peerEpoch = epoch

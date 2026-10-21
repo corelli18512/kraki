@@ -39,7 +39,10 @@
     "lint": "biome lint",
     "validate": "pnpm lint && pnpm build && pnpm test",
     "reset": "pnpm dev:reset",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "l10n:check": "node scripts/l10n/check.mjs",
+    "l10n:extract:apple": "node scripts/l10n/apple-extract.mjs",
+    "l10n:apply:apple": "node scripts/l10n/apple-apply.mjs"
   },
   "engines": {
     "node": ">=22.19.0",

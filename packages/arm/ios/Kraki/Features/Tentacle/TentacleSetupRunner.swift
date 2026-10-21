@@ -75,7 +75,7 @@ final class TentacleSetupRunner {
             return .done(username: json["username"] as? String ?? "")
         case "error":
             if json["code"] as? String == "cancelled" { return .idle }
-            return .failed(message: json["message"] as? String ?? "Setup failed.")
+            return .failed(message: json["message"] as? String ?? String(localized: "Setup failed."))
         default:
             return nil
         }
@@ -132,7 +132,7 @@ final class TentacleSetupRunner {
         } catch {
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            phase = .failed(message: "Could not start Kraki on this Mac: \(error.localizedDescription)")
+            phase = .failed(message: String(localized: "Could not start Kraki on this Mac: \(error.localizedDescription)"))
         }
     }
 
@@ -266,8 +266,9 @@ final class TentacleSetupRunner {
         if isRunning {
             let lastError = String(decoding: stderrTail, as: UTF8.self)
                 .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
-            phase = status == 0 ? phase : .failed(message: "Setup stopped unexpectedly (exit \(status))."
-                + (lastError.map { " \($0)" } ?? ""))
+            phase = status == 0 ? phase : .failed(message:
+                lastError.map { String(localized: "Setup stopped unexpectedly (exit \(status)). \($0)") }
+                    ?? String(localized: "Setup stopped unexpectedly (exit \(status))."))
         }
     }
 }

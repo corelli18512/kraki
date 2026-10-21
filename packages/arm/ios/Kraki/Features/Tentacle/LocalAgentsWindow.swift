@@ -89,9 +89,9 @@ struct LocalAgentsWindow: View {
         let ready = Set(check.displayedAgents.filter { $0.status == .ready }.map(\.id))
         let offered = Set(runningAgents.keys)
         guard Self.needsRestart(ready: ready, offered: offered) else { return }
-        applied = "Updating Kraki to use these agents…"
+        applied = String(localized: "Updating Kraki to use these agents…")
         await tentacleCLI.restartDaemon()
-        applied = "Kraki now uses the agents that are ready."
+        applied = String(localized: "Kraki now uses the agents that are ready.")
     }
 
     /// Pure for testing. Only a newly ready agent is worth a restart: a

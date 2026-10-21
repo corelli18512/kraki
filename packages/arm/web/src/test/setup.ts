@@ -1,4 +1,7 @@
 import '@testing-library/jest-dom/vitest';
+// Tests assert English copy: pin the UI language regardless of the host locale.
+import { i18next } from '../i18n';
+void i18next.changeLanguage('en');
 
 // Mock WebSocket globally
 class MockWebSocket {

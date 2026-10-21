@@ -12,6 +12,7 @@ const { pathToFileURL } = require('node:url');
 const os = require('node:os');
 const { BuiltInKraki, readLocalLinkDiscovery } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
+const i18n = require('./i18n.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
 const windowsTitleBar = require('./windows-titlebar.cjs');
@@ -202,7 +203,7 @@ function createWindow() {
     }
     if (p.isEditable) items.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' });
     else if (p.selectionText) items.push({ role: 'copy' });
-    if (p.linkURL && /^https?:/i.test(p.linkURL)) items.push({ label: 'Open Link in Browser', click: () => shell.openExternal(p.linkURL) });
+    if (p.linkURL && /^https?:/i.test(p.linkURL)) items.push({ label: i18n.t('menu.openLink'), click: () => shell.openExternal(p.linkURL) });
     if (items.length) Menu.buildFromTemplate(items).popup();
   });
   // Keyboard: reload, dev tools (debug), zoom.
@@ -250,7 +251,7 @@ function updateTray() {
   const icon = presence.trayIcon(status, needsYou.length);
   const iconKey = `${icon}-${trayTheme()}`;
   if (iconKey !== shownIcon) { shownIcon = iconKey; tray.setImage(trayImage(icon)); }
-  const tip = [presence.TITLE[status], unread > 0 ? `${unread} unread` : null].filter(Boolean).join(' · ');
+  const tip = [presence.TITLE[status], unread > 0 ? i18n.t('tray.unread', { count: unread }) : null].filter(Boolean).join(' · ');
   tray.setToolTip(`Kraki — ${tip}`);
   const key = JSON.stringify([status, managed, needsYou]);
   if (key !== shownMenu) {
@@ -290,12 +291,12 @@ async function quitFromTray() {
       const r = await dialog.showMessageBox(win && win.isVisible() ? win : undefined, {
         type: 'question',
         title: 'Kraki',
-        message: 'Quit Kraki and take this PC offline?',
-        detail: "Your phone and other computers won't be able to use the agents on this PC until you open Kraki again.\n\nTo keep this PC online, just close the window. Kraki stays in the tray.",
-        buttons: ['Quit and Go Offline', 'Cancel'],
+        message: i18n.t('quit.message'),
+        detail: i18n.t('quit.detail'),
+        buttons: [i18n.t('quit.confirm'), i18n.t('quit.cancel')],
         defaultId: 0,
         cancelId: 1,
-        checkboxLabel: "Don't ask again",
+        checkboxLabel: i18n.t('quit.dontAsk'),
         noLink: true,
       });
       if (r.response !== 0) return;
@@ -319,13 +320,21 @@ function stillOnlineHintOnce() {
   if (!presence.managesPresence(currentState()) || lastStatus !== 'online') return;
   pref('closeHintShown', true);
   const n = new Notification({
-    title: 'Kraki is still online',
-    body: 'Your phone can keep using this PC. Open Kraki from the tray any time; quit it there to take this PC offline.',
+    title: i18n.t('stillOnline.title'),
+    body: i18n.t('stillOnline.body'),
     icon: toastIcon(),
   });
   n.on('click', showWindow);
   n.show();
 }
+
+// The Web client owns the language choice (Settings › Language) and reports
+// the resolved language on load and on every change.
+ipcMain.on('kraki:language', (event, code) => {
+  if (!win || event.sender !== win.webContents) return;
+  pref('language', String(code));
+  if (i18n.setLanguage(String(code))) { shownMenu = null; updateTray(); }
+});
 
 ipcMain.on('kraki:needs-you', (_e, list) => {
   needsYou = Array.isArray(list) ? list.map((s) => ({ id: String(s.id), title: String(s.title), reason: String(s.reason) })) : [];
@@ -381,7 +390,7 @@ function openSignInWindow(url) {
       modal: !!win,
       width: 520,
       height: 720,
-      title: 'Sign in with GitHub',
+      title: i18n.t('window.signIn'),
       autoHideMenuBar: true,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, partition: 'persist:github-signin' },
     });
@@ -448,7 +457,7 @@ ipcMain.handle('kraki:builtin-logs-path', () => path.join(builtIn.home(), 'logs'
 ipcMain.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
 ipcMain.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
-  if (builtIn.marker()) throw new Error('The built-in Kraki manages this PC.');
+  if (builtIn.marker()) throw new Error(i18n.t('error.builtInManagesPC'));
   await settings.exec(pref('externalCliPath') || builtIn.bin, [action]);
 }));
 ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
@@ -456,11 +465,11 @@ ipcMain.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.creden
 ipcMain.on('kraki:builtin-open-logs', () => {
   if (!builtIn) return;
   const logs = path.join(builtIn.home(), 'logs');
-  const viewer = new BrowserWindow({ width: 900, height: 600, title: 'Kraki Logs', autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const viewer = new BrowserWindow({ width: 900, height: 600, title: i18n.t('window.logs'), autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
   const files = require('node:fs').existsSync(logs) ? require('node:fs').readdirSync(logs).filter((name) => /\.log$/.test(name)) : [];
   const escape = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const text = files.map((name) => { try { return name + '\n' + readFileSync(path.join(logs, name), 'utf8').slice(-100000); } catch { return ''; } }).join('\n\n');
-  void viewer.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>Kraki Logs</title><pre style="white-space:pre-wrap;font:12px monospace">' + escape(text || 'No logs yet. Path: ' + logs) + '</pre>'));
+  void viewer.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>' + escape(i18n.t('window.logs')) + '</title><pre style="white-space:pre-wrap;font:12px monospace">' + escape(text || i18n.t('logs.empty', { path: logs })) + '</pre>'));
 });
 
 // ── Device OS preferences (Settings bridge) ──
@@ -468,7 +477,7 @@ let registeredUsageShortcut = null;
 function registerUsageShortcut(shortcut, enabled) {
   if (enabled && shortcut !== registeredUsageShortcut) {
     if (!globalShortcut.register(shortcut, () => { showWindow(); send('kraki:open-usage'); })) {
-      throw new Error('This shortcut is already in use or is not supported.');
+      throw new Error(i18n.t('error.shortcutInUse'));
     }
   }
   if (registeredUsageShortcut && (!enabled || registeredUsageShortcut !== shortcut)) globalShortcut.unregister(registeredUsageShortcut);
@@ -488,26 +497,26 @@ ipcMain.handle('kraki:settings-state', async () => ({
   externalCliVersion: pref('externalCliVersion') ?? null,
 }));
 ipcMain.handle('kraki:settings-shortcut', safely((_e, shortcut, enabled) => {
-  if (!settings.isSafeUsageShortcut(shortcut)) throw new Error('Use a function key or a shortcut with Control or Alt.');
+  if (!settings.isSafeUsageShortcut(shortcut)) throw new Error(i18n.t('error.shortcutUnsafe'));
   registerUsageShortcut(shortcut, !!enabled);
   pref('usageShortcut', shortcut); pref('usageShortcutEnabled', !!enabled);
 }));
 ipcMain.handle('kraki:settings-login', safely(async (_e, enabled) => {
   if (process.platform === 'win32') {
     await builtIn.setLoginItem(!!enabled);
-    if (await builtIn.launchAtLogin() !== !!enabled) throw new Error('Windows could not change the login item.');
+    if (await builtIn.launchAtLogin() !== !!enabled) throw new Error(i18n.t('error.loginItem'));
     return;
   }
   app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath, args: ['--login'] });
-  if (app.getLoginItemSettings().openAtLogin !== !!enabled) throw new Error('Windows could not change the login item.');
+  if (app.getLoginItemSettings().openAtLogin !== !!enabled) throw new Error(i18n.t('error.loginItem'));
 }));
 ipcMain.handle('kraki:settings-go-online', safely(() => changePresence('starting', () => builtIn.enable())));
 ipcMain.handle('kraki:settings-go-offline', safely(() => changePresence('stopping', () => builtIn.disable({ keepOwnership: true }))));
 ipcMain.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
 ipcMain.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
 ipcMain.handle('kraki:settings-locate-cli', safely(async () => {
-  const result = await dialog.showOpenDialog(win, { title: 'Locate kraki manually', properties: ['openFile'], filters: [{ name: 'Kraki executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
-  if (result.canceled) throw new Error('Selection cancelled.');
+  const result = await dialog.showOpenDialog(win, { title: i18n.t('dialog.locateTitle'), properties: ['openFile'], filters: [{ name: i18n.t('dialog.executable'), extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
+  if (result.canceled) throw new Error(i18n.t('error.selectionCancelled'));
   const cli = await settings.probeCli(result.filePaths[0]);
   pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
 }));
@@ -516,9 +525,9 @@ ipcMain.handle('kraki:settings-recheck-cli', safely(async () => {
   pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
 }));
 ipcMain.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
-  if (!readConfig()) throw new Error('Set up Kraki on this PC first.');
+  if (!readConfig()) throw new Error(i18n.t('error.setupFirst'));
   await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']);
-  if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error('Kraki could not change its update policy.');
+  if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error(i18n.t('error.updatePolicy'));
 }));
 
 ipcMain.on('kraki:notify', (_e, n) => {
@@ -546,6 +555,9 @@ app.on('activate', showWindow);
 app.on('will-quit', () => globalShortcut.unregisterAll());
 
 app.whenReady().then(async () => {
+  // Last language the Web client reported; before that, the OS languages.
+  const saved = pref('language');
+  i18n.setLanguage(i18n.isLanguage(saved) ? saved : i18n.resolveLanguage(app.getPreferredSystemLanguages()));
   // The microphone (voice input) and clipboard writes (Copy buttons) for the
   // app itself only; nothing else (permissions.cjs).
   const { session } = require('electron');

@@ -1,0 +1,30 @@
+{
+  "translations": {
+    "%@ can now see and run your sessions. Sessions you start on either one show up on both.": "%@ 现在可以查看和运行你的会话。在任意一端开始的会话都会同时显示在两端。",
+    "%@ didn’t start, so %@ went back to %@. Nothing changed.": "%1$@ 未能启动，所以 %2$@ 已回退到 %3$@，没有任何改动。",
+    "%@ installs as soon as nothing is running on %@.": "%2$@ 上没有运行中的任务后，就会安装 %1$@。",
+    "%@ is back online but still runs Kraki %@.": "%1$@ 已重新上线，但仍在运行 Kraki %2$@。",
+    "%@ is back online, but %@ wasn’t installed.": "%1$@ 已重新上线，但 %2$@ 未安装。",
+    "%@ is up to date.": "%@ 已是最新版本。",
+    "Downloading %@…": "正在下载 %@…",
+    "If it doesn’t return, open Kraki on that computer.": "如果一直没有恢复，请在那台电脑上打开 Kraki。",
+    "Installing %@…": "正在安装 %@…",
+    "Kraki %@ is available": "Kraki %@ 已可用",
+    "Kraki for Mac %@ is available": "Kraki for Mac %@ 已可用",
+    "Kraki is restarting on %@.": "Kraki 正在 %@ 上重新启动。",
+    "Kraki restarts on %@. This takes about a minute; running sessions are asked about first.": "Kraki 会在 %@ 上重新启动，大约需要一分钟；如有运行中的会话，会先询问你。",
+    "Scan with your phone’s camera to follow sessions and approve actions from anywhere. No Kraki on your iPhone yet? The code takes you to the App Store.": "用手机相机扫码，就能随时随地查看会话、批准操作。iPhone 上还没装 Kraki？扫码会带你前往 App Store。",
+    "Skip for Now": "暂时跳过",
+    "Start Using Kraki": "开始使用 Kraki",
+    "The update didn’t finish": "更新没有完成",
+    "Update didn’t work": "更新未成功",
+    "Updated to %@": "已更新到 %@",
+    "Updating restarts Kraki and stops them.": "更新会重新启动 Kraki 并停止这些会话。",
+    "Waiting for sessions to finish": "正在等待会话结束",
+    "You’re all set": "一切就绪",
+    "Rename %@": "重命名 %@",
+    "Rename Device": "重命名设备",
+    "Shown on all your devices. Leave it empty to use \"%@\".": "会显示在你的所有设备上。留空则使用“%@”。",
+    "Name": "名称"
+  }
+}

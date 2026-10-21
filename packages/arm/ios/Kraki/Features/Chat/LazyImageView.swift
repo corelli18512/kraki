@@ -44,10 +44,10 @@ struct LazyImageView: View {
                         .frame(maxWidth: .infinity, maxHeight: maxRenderedHeight, alignment: .leading)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else {
-                    errorPlaceholder(label: "Invalid image")
+                    errorPlaceholder(label: String(localized: "Invalid image"))
                 }
             case .error(let reason):
-                errorPlaceholder(label: reason.isEmpty ? "Couldn't load image" : reason)
+                errorPlaceholder(label: reason.isEmpty ? String(localized: "Couldn't load image") : reason)
             case .awaitingChunks, .fetching, .none:
                 loadingPlaceholder()
             }

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 /**
  * Chat tables — the Mac/iOS ChatTable design (6a83a59f) for the Web:
  *
@@ -201,6 +202,7 @@ function SideScroll({ children, onOverflow }: { children: ReactNode; onOverflow?
 }
 
 function TableWindow({ model, components, onClose }: { model: TableModel; components: Record<string, unknown>; onClose: () => void }) {
+  const { t } = useTranslation('chat');
   const [sort, setSort] = useState<{ column: number; ascending: boolean } | null>(null);
   const [query, setQuery] = useState('');
   const [matchIndex, setMatchIndex] = useState(0);
@@ -249,24 +251,24 @@ function TableWindow({ model, components, onClose }: { model: TableModel; compon
 
   return createPortal(
     <div className="ktable-window-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="ktable-window" role="dialog" aria-modal="true" aria-label="Table" data-testid="table-window">
+      <div className="ktable-window" role="dialog" aria-modal="true" aria-label={t('table.title')} data-testid="table-window">
         <div className="ktable-window-bar">
           <label className="ktable-search">
             <Search aria-hidden />
             <input
               autoFocus
               value={query}
-              placeholder="Search"
+              placeholder={t('table.search')}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && matches.length) setMatchIndex((i) => (i + (e.shiftKey ? matches.length - 1 : 1)) % matches.length); }}
             />
-            {q && <span className="ktable-count">{matches.length ? `${(matchIndex % matches.length) + 1} of ${matches.length}` : 'No matches'}</span>}
+            {q && <span className="ktable-count">{matches.length ? t('table.matchIndex', { index: (matchIndex % matches.length) + 1, total: matches.length }) : t('table.noMatches')}</span>}
           </label>
           <span className="ktable-spacer" />
-          <span className="ktable-meta">{model.plainBody.length} rows · {model.columnCount} columns</span>
-          <button type="button" className="ktable-btn" onClick={() => copy('Markdown')}>{copied === 'Markdown' ? 'Copied' : 'Copy Markdown'}</button>
-          <button type="button" className="ktable-btn" onClick={() => copy('TSV')}>{copied === 'TSV' ? 'Copied' : 'Copy TSV'}</button>
-          <button type="button" className="ktable-close" aria-label="Close" title="Close (Esc)" onClick={onClose}><X /></button>
+          <span className="ktable-meta">{t('table.dimensions', { rows: t('table.rows', { count: model.plainBody.length }), columns: t('table.columns', { count: model.columnCount }) })}</span>
+          <button type="button" className="ktable-btn" onClick={() => copy('Markdown')}>{copied === 'Markdown' ? t('table.copied') : t('table.copyMarkdown')}</button>
+          <button type="button" className="ktable-btn" onClick={() => copy('TSV')}>{copied === 'TSV' ? t('table.copied') : t('table.copyTsv')}</button>
+          <button type="button" className="ktable-close" aria-label={t('table.close')} title={t('table.closeHint')} onClick={onClose}><X /></button>
         </div>
         <div className="ktable-window-body" ref={bodyRef}>
           <Grid
@@ -287,6 +289,7 @@ function TableWindow({ model, components, onClose }: { model: TableModel; compon
 }
 
 export function ChatTable({ node, components }: { node: Element; components: Record<string, unknown> }) {
+  const { t } = useTranslation('chat');
   const model = useMemo(() => tableModel(node), [node]);
   const [overflows, setOverflows] = useState(false);
   const [open, setOpen] = useState(false);
@@ -294,8 +297,8 @@ export function ChatTable({ node, components }: { node: Element; components: Rec
   const hidden = model.body.length - previewRows;
   const rows = useMemo(() => Array.from({ length: previewRows }, (_, i) => i), [previewRows]);
   const footer = hidden > 0
-    ? `Showing ${previewRows} of ${model.body.length} rows · ${model.columnCount} columns`
-    : overflows ? `${model.columnCount} columns · scroll for more` : '';
+    ? t('table.preview', { shown: previewRows, rows: t('table.rows', { count: model.body.length }), columns: t('table.columns', { count: model.columnCount }) })
+    : overflows ? t('table.scroll', { count: model.columnCount }) : '';
 
   return (
     <div className="ktable" data-testid="chat-table" data-copy-text={toTSV(model)}>
@@ -305,7 +308,7 @@ export function ChatTable({ node, components }: { node: Element; components: Rec
       {footer && (
         <div className="ktable-footer">
           <span>{footer}</span>
-          <button type="button" className="ktable-open" onClick={() => setOpen(true)}>Open table</button>
+          <button type="button" className="ktable-open" onClick={() => setOpen(true)}>{t('table.open')}</button>
         </div>
       )}
       {open && <TableWindow model={model} components={components} onClose={() => setOpen(false)} />}

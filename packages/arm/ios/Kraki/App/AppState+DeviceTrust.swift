@@ -113,16 +113,16 @@ enum PairingFeedback: Equatable, Identifiable {
 enum PairingFailureText {
     static func describe(_ reason: String) -> String {
         switch reason {
-        case "bad_proof": return "The code was already used or has expired. Run `kraki connect` on the computer and scan the new code."
-        case "wrong_computer": return "The code belongs to a different computer."
-        case "no_local_enrollment": return "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again."
-        case "stale", "from_future": return "This device's clock is off. Check the date and time, then scan again."
-        case "trust_required": return "This computer only accepts paired devices. Scan its code to pair."
-        case "revoked": return "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust."
-        case "policy_conflict": return "The setting was just changed on the computer or another device. Check it and try again."
-        case "policy_unconfirmed": return "The computer didn't confirm the change. Check that it's online, then try again."
-        case "local_keys_missing": return "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again."
-        default: return "Pairing was refused (\(reason)). Run `kraki connect` on the computer and scan the new code."
+        case "bad_proof": return String(localized: "The code was already used or has expired. Run `kraki connect` on the computer and scan the new code.")
+        case "wrong_computer": return String(localized: "The code belongs to a different computer.")
+        case "no_local_enrollment": return String(localized: "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again.")
+        case "stale", "from_future": return String(localized: "This device's clock is off. Check the date and time, then scan again.")
+        case "trust_required": return String(localized: "This computer only accepts paired devices. Scan its code to pair.")
+        case "revoked": return String(localized: "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust.")
+        case "policy_conflict": return String(localized: "The setting was just changed on the computer or another device. Check it and try again.")
+        case "policy_unconfirmed": return String(localized: "The computer didn't confirm the change. Check that it's online, then try again.")
+        case "local_keys_missing": return String(localized: "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again.")
+        default: return String(localized: "Pairing was refused (\(reason)). Run `kraki connect` on the computer and scan the new code.")
         }
     }
 }
@@ -204,7 +204,7 @@ extension AppState {
     func pairWithComputer(_ link: PairingLink) {
         pinFromPairingLink(link)
         if let id = link.trust?.tentacleId {
-            deviceTrust.feedback = .pairing(name: deviceStore.devices[id]?.name ?? "your computer")
+            deviceTrust.feedback = .pairing(name: deviceStore.devices[id]?.name ?? String(localized: "your computer"))
         }
         deviceTrustDevicesChanged()
     }
@@ -298,7 +298,7 @@ extension AppState {
             if ok { updated.secret = nil }
             pin = updated
         }
-        let name = deviceStore.devices[tentacleId]?.name ?? (payload["name"] as? String) ?? "your computer"
+        let name = deviceStore.devices[tentacleId]?.name ?? (payload["name"] as? String) ?? String(localized: "your computer")
         let fromQR = TentacleTrustStore.shared.pin(tentacleId)?.via == "qr"
         if fromQR || deviceTrust.feedback != nil {
             deviceTrust.feedback = ok ? .paired(name: name) : .failed(name: name, reason: reason)
@@ -344,7 +344,7 @@ extension AppState {
     /// the next signed message from the computer restores the pairing.
     func handleTrustRevoked(_ dict: [String: Any]) {
         guard let tentacleId = dict["deviceId"] as? String, TentacleTrustStore.shared.pin(tentacleId) != nil else { return }
-        let name = deviceStore.devices[tentacleId]?.name ?? "your computer"
+        let name = deviceStore.devices[tentacleId]?.name ?? String(localized: "your computer")
         deviceTrust.info[tentacleId] = nil
         deviceTrust.stoppedSigning.remove(tentacleId)
         deviceTrust.dismissedBanners.remove(tentacleId)
@@ -372,7 +372,7 @@ extension AppState {
         if let pending = deviceTrust.info[tentacleId]?.pendingEnforce, pending != enforced {
             // Our request named an older revision: the setting was changed
             // elsewhere in the meantime and the computer kept that choice.
-            deviceTrust.feedback = .failed(name: deviceStore.devices[tentacleId]?.name ?? "your computer", reason: "policy_conflict")
+            deviceTrust.feedback = .failed(name: deviceStore.devices[tentacleId]?.name ?? String(localized: "your computer"), reason: "policy_conflict")
         }
         deviceTrust.info[tentacleId] = ComputerTrustInfo(
             enforced: enforced, policyLocked: payload["policyLocked"] as? Bool == true, devices: devices,

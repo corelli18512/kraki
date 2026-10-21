@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
@@ -48,6 +49,7 @@ export const SessionRow = memo(function SessionRow({
   openSwipeId?: string | null;
   setOpenSwipeId?: (id: string | null) => void;
 }) {
+  const { t } = useTranslation(['sessions', 'common']);
   const navigate = useNavigate();
   const device = useStore((s) => s.devices.get(session.deviceId));
   const deviceAgents = useStore((s) => s.deviceAgents.get(session.deviceId));
@@ -67,7 +69,8 @@ export const SessionRow = memo(function SessionRow({
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
   const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
-  const machine = session.deviceName || device?.name;
+  // The live device name first: it follows renames.
+  const machine = device?.name || session.deviceName;
   const time = sessionTimeLabel(sessionTimestamp(pending?.timestamp || preview?.timestamp, session.createdAt));
 
   const togglePin = () => wsClient.pinSession(session.id, !pinned);
@@ -105,10 +108,10 @@ export const SessionRow = memo(function SessionRow({
       <span className="ksr-body">
         <span className="ksr-line1">
           <span className="ksr-title">{title}</span>
-          {narrow && device && !device.online && <span className="ksr-offline">offline</span>}
-          {pinned && <Pin className="ksr-pin" aria-label="Pinned" />}
+          {narrow && device && !device.online && <span className="ksr-offline">{t('row.offline')}</span>}
+          {pinned && <Pin className="ksr-pin" aria-label={t('row.pinned')} />}
           <span className="ksr-spacer" />
-          {unread && <span className="ksr-unread" aria-label="Unread" />}
+          {unread && <span className="ksr-unread" aria-label={t('row.unread')} />}
           {time && <span className="ksr-time">{time}</span>}
         </span>
         {narrow ? <span className="ksr-line2">
@@ -120,12 +123,12 @@ export const SessionRow = memo(function SessionRow({
           )}
           {machine && session.model && <span className="ksr-sep" />}
           {session.model && <span className="ksr-model">{modelDisplayName(session.model, deviceAgents, session.agent)}</span>}
-        </span> : <SessionCardMetadata machine={machine} model={session.model ? modelDisplayName(session.model, deviceAgents, session.agent) : undefined} effort={session.reasoningEffort} />}
+        </span> : <SessionCardMetadata machine={machine} model={session.model ? modelDisplayName(session.model, deviceAgents, session.agent) : undefined} effort={session.reasoningEffort ? t(`row.effort.${session.reasoningEffort}`, { defaultValue: session.reasoningEffort }) : undefined} />}
         <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
           <span className="ksr-status-slot"><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText
             ? <span className="ksr-preview">{previewText}</span>
-            : <span className="ksr-preview is-empty">Session created</span>}
+            : <span className="ksr-preview is-empty">{t('row.created')}</span>}
         </span>
       </span>
     </button>
@@ -136,10 +139,10 @@ export const SessionRow = memo(function SessionRow({
       {narrow && !archived ? (
         <SwipeableCard
           actions={[
-            { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? 'Unpin' : 'Pin', bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
-            { icon: unread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />, label: unread ? 'Read' : 'Unread', bgClass: 'bg-blue-500', onClick: () => { toggleRead(); setOpenSwipeId?.(null); } },
-            { icon: <MoreHorizontal className="h-4 w-4" />, label: 'More', bgClass: 'bg-slate-500', onClick: () => { setOpenSwipeId?.(null); setMenu({ x: 16, y: Math.min(window.innerHeight - 280, 100) }); } },
-            { icon: <Trash2 className="h-4 w-4" />, label: 'Delete', bgClass: 'bg-red-500', onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); } },
+            { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? t('row.unpin') : t('row.pin'), bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
+            { icon: unread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />, label: unread ? t('row.read') : t('row.unread'), bgClass: 'bg-blue-500', onClick: () => { toggleRead(); setOpenSwipeId?.(null); } },
+            { icon: <MoreHorizontal className="h-4 w-4" />, label: t('row.more'), bgClass: 'bg-slate-500', onClick: () => { setOpenSwipeId?.(null); setMenu({ x: 16, y: Math.min(window.innerHeight - 280, 100) }); } },
+            { icon: <Trash2 className="h-4 w-4" />, label: t('common:action.delete'), bgClass: 'bg-red-500', onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); } },
           ]}
           isOpen={openSwipeId === session.id}
           onSwipeOpen={() => setOpenSwipeId?.(session.id)}
@@ -152,22 +155,22 @@ export const SessionRow = memo(function SessionRow({
       {menu && (
         <div className="ksr-menu" style={{ left: menu.x, top: menu.y }} role="menu">
           <button type="button" role="menuitem" onClick={() => { togglePin(); setMenu(null); }}>
-            {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
+            {pinned ? <PinOff /> : <Pin />} {pinned ? t('row.unpin') : t('row.pin')}
           </button>
           <button type="button" role="menuitem" onClick={() => { toggleRead(); setMenu(null); }}>
-            {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark Read' : 'Mark Unread'}
+            {unread ? <BellOff /> : <BellRing />} {unread ? t('row.markRead') : t('row.markUnread')}
           </button>
           {/* Mac: Rename lives in Session Info, opened over the selected chat. */}
-          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`); setMenu(null); }}><Pencil /> Rename…</button>
+          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`); setMenu(null); }}><Pencil /> {t('row.rename')}</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
-            <GitFork /> Fork
+            <GitFork /> {t('row.fork')}
           </button>
           <button type="button" role="menuitem" onClick={() => { wsClient.archiveSession(session.id, true); if (selected) navigate('/'); setMenu(null); }}>
-            <Archive /> Archive
+            <Archive /> {t('row.archive')}
           </button>
           <div className="ksr-menu-divider" role="separator" />
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setMenu(null); setConfirmDelete(true); }}>
-            <Trash2 /> Delete…
+            <Trash2 /> {t('row.delete')}
           </button>
         </div>
       )}
@@ -176,9 +179,9 @@ export const SessionRow = memo(function SessionRow({
         <SettingsAlert
           viewport
           stacked
-          title="Delete this session? This cannot be undone."
+          title={t('row.deleteConfirm')}
           body=""
-          confirm="Delete Session"
+          confirm={t('row.deleteSession')}
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); }}
         />

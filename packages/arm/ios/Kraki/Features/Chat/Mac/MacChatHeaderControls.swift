@@ -68,7 +68,7 @@ struct MacChatModePicker: View {
         } label: {
             HStack(spacing: 6) {
                 Circle().fill(Color.modeColor(currentMode)).frame(width: 7, height: 7)
-                Text(currentMode.rawValue.capitalized)
+                Text(currentMode.chatLocalizedTitle)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Color.textTitle)
             }
@@ -80,7 +80,7 @@ struct MacChatModePicker: View {
         .fixedSize()
         .modifier(MacGlassCapsule())
         .accessibilityIdentifier("mac.chat.mode.collapsed")
-        .accessibilityLabel("Session mode, \(currentMode.rawValue.capitalized)")
+        .accessibilityLabel("Session mode, \(currentMode.chatLocalizedTitle)")
         .help(MacControlHelp.modeCapsule(currentMode))
     }
 
@@ -92,7 +92,7 @@ struct MacChatModePicker: View {
                     if !selected { onSelect(mode) }
                     scheduleCollapse()
                 } label: {
-                    Text(mode.rawValue.capitalized)
+                    Text(mode.chatLocalizedTitle)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(selected ? Color.white : Color.textSecondary)
                         .padding(.horizontal, 13)

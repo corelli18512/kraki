@@ -49,7 +49,7 @@ struct SessionDetailView: View {
                         if !Task.isCancelled, isCatchingUp { showsSyncing = true }
                     }
             } else if sessionStore.isPending(sessionId) {
-                pageWithHeader(title: sessionStore.pendingSessionTitles[sessionId] ?? "New Session", opensInfo: false) { pendingView }
+                pageWithHeader(title: sessionStore.pendingSessionTitles[sessionId] ?? String(localized: "New Session"), opensInfo: false) { pendingView }
             } else {
                 pageWithHeader(title: "", opensInfo: false) { notFoundView }
             }
@@ -173,7 +173,7 @@ struct SessionDetailView: View {
         }
         // Pending / not-found routes: back + title only.
         return AnyView(HStack(spacing: 10) {
-            headerButton(systemName: "chevron.left", label: "Back") { dismiss() }
+            headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
             ZStack {
                 if !title.isEmpty {
                     titleCapsule(title, opensInfo: false)
@@ -190,7 +190,7 @@ struct SessionDetailView: View {
     /// spreads the four modes across the full width right of the back button.
     private func headerWithMode(title: String) -> some View {
         HStack(spacing: 8) {
-            headerButton(systemName: "chevron.left", label: "Back") { dismiss() }
+            headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
             if !modePickerExpanded {
                 ZStack {
                     if !title.isEmpty {
@@ -221,7 +221,7 @@ struct SessionDetailView: View {
             .buttonStyle(.plain)
             .disabled(!opensInfo)
             .accessibilityAddTraits(.isHeader)
-            .accessibilityHint(opensInfo ? "Shows session info" : "")
+            .accessibilityHint(opensInfo ? String(localized: "Shows session info") : "")
             .animation(.easeInOut(duration: 0.2), value: title)
         if #available(iOS 26.0, *) {
             button.glassEffect(.regular.interactive(), in: Capsule())
@@ -265,7 +265,7 @@ struct SessionDetailView: View {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 32))
                     .foregroundStyle(.red)
-                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? "Couldn't fork session" : "Couldn't start session")
+                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? String(localized: "Couldn't fork session") : String(localized: "Couldn't start session"))
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
@@ -278,7 +278,7 @@ struct SessionDetailView: View {
                 ProgressView()
                     .controlSize(.large)
                     .tint(.krakiPrimary)
-                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? "Copying session…" : "Starting session…")
+                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? String(localized: "Copying session…") : String(localized: "Starting session…"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -290,7 +290,7 @@ struct SessionDetailView: View {
 
     private var notFoundView: some View {
         VStack(spacing: 12) {
-            Text("🤷")
+            Text(verbatim: "🤷")
                 .font(.system(size: 48))
             Text("Session not found")
                 .font(.subheadline)
@@ -333,10 +333,18 @@ struct HeaderModePicker: View {
 
     private var current: SessionMode { appState.sessionStore.sessionModes[sessionId] ?? .auto }
 
+    private func modeTitle(_ mode: SessionMode) -> String {
+        switch mode {
+        case .safe: String(localized: "Safe")
+        case .auto: String(localized: "Auto")
+        case .delegate: String(localized: "Delegate")
+        }
+    }
+
     var body: some View {
         if expanded {
             TintedSegmentedControl(
-                items: Self.modes.map { $0.rawValue.capitalized },
+                items: Self.modes.map { modeTitle($0) },
                 selection: Binding(
                     get: { Self.modes.firstIndex(of: current) ?? 1 },
                     set: { index in
@@ -373,7 +381,7 @@ struct HeaderModePicker: View {
             } label: {
                 HStack(spacing: 6) {
                     Circle().fill(Color.modeColor(current)).frame(width: 7, height: 7)
-                    Text(current.rawValue.capitalized)
+                    Text(modeTitle(current))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Color.primary)
                 }
@@ -384,7 +392,7 @@ struct HeaderModePicker: View {
             .buttonStyle(.plain)
             .fixedSize()
             .modifier(GlassCapsule())
-            .accessibilityLabel("Session mode, \(current.rawValue.capitalized)")
+            .accessibilityLabel("Session mode, \(modeTitle(current))")
             .accessibilityHint("Shows the session modes")
             .accessibilityIdentifier("chat.mode.collapsed")
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))

@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next';
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
@@ -20,6 +21,7 @@ function useIsDesktop(): boolean {
 }
 
 export function DeviceGrid() {
+  const { t } = useTranslation('devices');
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
   const deviceVersions = useStore((s) => s.deviceVersions);
@@ -76,10 +78,9 @@ export function DeviceGrid() {
     return (
       <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
         <div className="text-4xl">📡</div>
-        <h3 className="mt-4 text-sm font-semibold text-text-primary">No devices connected</h3>
+        <h3 className="mt-4 text-sm font-semibold text-text-primary">{t('grid.none')}</h3>
         <p className="mt-2 max-w-sm text-xs text-text-secondary">
-          Run <code className="rounded bg-surface-secondary px-1 py-0.5">kraki connect</code> in
-          your terminal to pair a new device.
+          <Trans t={t} i18nKey="grid.pairInstructions" components={{ command: <code className="rounded bg-surface-secondary px-1 py-0.5" /> }} />
         </p>
       </div>
     );
@@ -127,7 +128,7 @@ export function DeviceGrid() {
         </div>
       ) : (
         <div className="hidden flex-1 items-center justify-center sm:flex">
-          <p className="text-sm text-text-muted">Select a device to view details</p>
+          <p className="text-sm text-text-muted">{t('grid.select')}</p>
         </div>
       )}
 
@@ -164,6 +165,7 @@ function DeviceButton({
   isSelf: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation('devices');
   const dotClass = device.online && hasGreeting
     ? 'bg-emerald-400'
     : device.online
@@ -182,11 +184,11 @@ function DeviceButton({
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{device.name}</span>
       {hasUpdate && (
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-kraki-500" title="A newer Kraki is available on this computer" aria-label="Update available" />
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-kraki-500" title={t('grid.updateHint')} aria-label={t('grid.update')} />
       )}
       {isSelf && (
         <span className="shrink-0 rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
-          You
+          {t('grid.you')}
         </span>
       )}
     </button>

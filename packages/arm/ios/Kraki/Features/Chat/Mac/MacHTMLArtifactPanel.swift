@@ -22,7 +22,7 @@ struct MacHTMLArtifactPanel: View {
         let name = selection.ref.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let caption, !caption.isEmpty { return caption }
         if let name, !name.isEmpty { return name }
-        return "Report"
+        return String(localized: "Report")
     }
 
     var body: some View {
@@ -34,7 +34,7 @@ struct MacHTMLArtifactPanel: View {
                     .frame(width: 20, height: 20)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
+                    Text(verbatim: title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.textTitle)
                         .lineLimit(1)
@@ -67,7 +67,7 @@ struct MacHTMLArtifactPanel: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.textSecondary)
-                    .help(expanded ? "Restore Split View" : "Expand Report")
+                    .help(expanded ? String(localized: "Restore Split View") : String(localized: "Expand Report"))
                 }
 
                 Button(action: onClose) {
@@ -130,12 +130,12 @@ struct MacHTMLArtifactPanel: View {
     @ViewBuilder
     private var artifactBody: some View {
         if selection.ref.size > HTMLArtifactSecurity.maxBytes {
-            errorState("This report exceeds the 10 MB safety limit.")
+            errorState(String(localized: "This report exceeds the 10 MB safety limit."))
         } else {
             switch appState.attachmentStore.state(for: selection.ref.id) {
             case .ready(let mimeType, let data):
                 if data.count > HTMLArtifactSecurity.maxBytes {
-                    errorState("This report exceeds the 10 MB safety limit.")
+                    errorState(String(localized: "This report exceeds the 10 MB safety limit."))
                 } else if mimeType == "text/html", let html = String(data: data, encoding: .utf8) {
                     MacHTMLArtifactWebView(
                         html: HTMLArtifactSecurity.securedHTML(html),
@@ -143,7 +143,7 @@ struct MacHTMLArtifactPanel: View {
                     )
                     .background(Color.white)
                 } else {
-                    errorState("This attachment is not a valid UTF-8 HTML report.")
+                    errorState(String(localized: "This attachment is not a valid UTF-8 HTML report."))
                 }
             case .error(let reason):
                 errorState(reason)
@@ -199,7 +199,7 @@ private struct MacHTMLArtifactWebView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.isInspectable = false
-        webView.setAccessibilityLabel("Report content")
+        webView.setAccessibilityLabel(String(localized: "Report content"))
         context.coordinator.load(html: html, artifactID: artifactID, into: webView)
         return webView
     }

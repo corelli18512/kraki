@@ -156,7 +156,7 @@ final class SessionSubscriptionController {
             if flight.sessionId == desiredSessionId {
                 blockedDesired = flight.sessionId
                 host?.reportSessionSubscriptionError(
-                    ack.errorMessage ?? "Cannot open the live session."
+                    ack.errorMessage ?? String(localized: "Cannot open the live session.")
                 )
             }
             drive()
@@ -231,7 +231,7 @@ final class SessionSubscriptionController {
                 inFlight = nil
                 blockedDesired = sessionId
                 host?.reportSessionSubscriptionError(
-                    "Cannot set live session subscription: target is unavailable."
+                    String(localized: "Cannot set live session subscription: target is unavailable.")
                 )
             }
             return

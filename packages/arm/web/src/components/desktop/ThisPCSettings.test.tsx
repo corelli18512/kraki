@@ -184,3 +184,25 @@ describe('ThisPCSettings capability-driven native parity', () => {
     expect(screen.queryByRole('heading', { name: 'Updates' })).toBeNull();
   });
 });
+
+it.each(['read', 'update', 'failed', 'bridge', 'external'])('updates local errors live but not bridge text (%s)', async (kind) => {
+  const { act } = await import('@testing-library/react');
+  const { i18next } = await import('../../i18n');
+  if (kind === 'read') vi.mocked(builtIn.state).mockRejectedValue(new Error('unavailable'));
+  if (kind === 'update') bridge.setLaunchAtLogin.mockRejectedValue(new Error('unavailable'));
+  if (kind === 'failed') bridge.setLaunchAtLogin.mockResolvedValue({ ok: false });
+  if (kind === 'bridge') bridge.setLaunchAtLogin.mockResolvedValue({ ok: false, error: 'Shell error' });
+  if (kind === 'external') {
+    localStorage.setItem('kraki-desktop.owner', 'external');
+    vi.mocked(builtIn.state).mockResolvedValue({ ...(await builtIn.state()), owned: false });
+  }
+  render(<ThisPCSettings builtIn={builtIn} />);
+  if (kind === 'external') fireEvent.click(await screen.findByRole('button', { name: 'Go Offline' }));
+  else if (kind !== 'read') fireEvent.click(await screen.findByRole('switch', { name: 'Start automatically at login' }));
+  await screen.findByRole('alert');
+  try {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    const expected = { read: '无法读取这台电脑的状态。', update: '无法更新这台电脑的状态。', failed: '出了点问题。', bridge: 'Shell error', external: '无法控制外部服务。' };
+    expect(screen.getByRole('alert')).toHaveTextContent(expected[kind as keyof typeof expected]);
+  } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
+});

@@ -342,7 +342,7 @@ private struct NewSessionIntro: View {
             if let deviceName {
                 Text(deviceName).font(.headline)
             }
-            Text([agent, model].compactMap { $0 }.joined(separator: " · "))
+            Text(verbatim: [agent, model].compactMap { $0 }.joined(separator: " · "))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text("Ask \(agent) to do something on this computer.")

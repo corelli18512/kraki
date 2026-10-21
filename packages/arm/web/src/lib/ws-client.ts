@@ -1,9 +1,10 @@
+import { t } from '../i18n';
 import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
 import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
-import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
+import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
@@ -114,7 +115,7 @@ export class KrakiWSClient {
   requestAccountDeletion(): void {
     const del = useAccountDeletion.getState();
     if (getStore().status !== 'connected') {
-      del.set({ kind: 'failed', message: 'Connect to Kraki first. The account is deleted on the server.' });
+      del.set({ kind: 'failed', message: t('app:errors.connectFirst') });
       return;
     }
     const attempt = Date.now();
@@ -123,7 +124,7 @@ export class KrakiWSClient {
     setTimeout(() => {
       const now = useAccountDeletion.getState().state;
       if (now.kind === 'deleting' && now.attempt === attempt) {
-        useAccountDeletion.getState().set({ kind: 'failed', message: "Kraki didn't answer. Check the connection and try again." });
+        useAccountDeletion.getState().set({ kind: 'failed', message: t('app:errors.noAnswer') });
       }
     }, DELETION_TIMEOUT_MS);
   }
@@ -404,7 +405,7 @@ export class KrakiWSClient {
     this.encryptOrdered(msg, this.targetFor(msg), () => this.encryption.encryptForTarget(msg), (enc) => {
       if (!enc) {
         traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-FAIL', type: msg.type as string, clientId });
-        getStore().setLastError('Cannot send: no target device for this session. Try reconnecting.');
+        getStore().setLastError(t('app:errors.noTarget'));
         onSeq?.(null);
         return;
       }
@@ -687,7 +688,7 @@ export class KrakiWSClient {
     // Could not even be dispatched (no key/target): roll back at once, as
     // Mac CommandSender does, instead of waiting for the confirmation timeout.
     const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg, (seq) => {
-      if (seq === null) rollback('Couldn’t send. Try again.');
+      if (seq === null) rollback(t('app:errors.permissionSend'));
     });
     if (decision === 'approve') {
       commands.approve(permissionId, sessionId, send);
@@ -701,7 +702,7 @@ export class KrakiWSClient {
         && (action.payload as { localPending?: boolean }).localPending;
       if (!stillLocal || settled) return;
       if (Date.now() - started < 20_000 || !this.isDeliveryPathUp(sessionId)) { setTimeout(check, 2_000); return; }
-      rollback('Not confirmed by the agent. Try again.');
+      rollback(t('app:errors.permissionUnconfirmed'));
     };
     setTimeout(check, 2_000);
   }
@@ -896,6 +897,10 @@ export class KrakiWSClient {
   }
   removeDevice(deviceId: string): void {
     this.sendToHead({ type: 'remove_device', deviceId });
+  }
+  /** Give a device of this account a custom name; '' goes back to its own. */
+  renameDevice(deviceId: string, name: string): void {
+    this.sendToHead({ type: 'rename_device', deviceId, name });
   }
   registerPushToken(payload: { provider: string; token: string }): void {
     this.sendToHead({ type: 'register_push_token', payload });
@@ -1351,7 +1356,7 @@ export class KrakiWSClient {
         const serverErr = msg as ServerErrorMessage;
         // A server error while a deletion is pending is its answer.
         const del = useAccountDeletion.getState();
-        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || "Couldn't delete the account. Try again." });
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || t('app:errors.deleteAccount') });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
@@ -1388,6 +1393,14 @@ export class KrakiWSClient {
           this.invalidatePeerCrypto(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
+        }
+        break;
+      }
+
+      case 'device_renamed': {
+        const renamed = msg as DeviceRenamedMessage;
+        if (renamed.deviceId && typeof renamed.name === 'string') {
+          getStore().renameDevice(renamed.deviceId, renamed.name, renamed.defaultName);
         }
         break;
       }

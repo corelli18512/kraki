@@ -517,12 +517,12 @@ final class ChatTableGeometry {
             let hidden = table.bodyRowCount - previewRows
             showsFooter = !full && (hidden > 0 || overflows)
             if hidden > 0 {
-                footerText = "Showing \(previewRows) of \(table.bodyRowCount) rows · \(table.columnCount) columns"
+                footerText = String(localized: "Showing \(previewRows) of \(String(localized: "\(table.bodyRowCount) rows")) · \(String(localized: "\(table.columnCount) columns"))")
             } else if overflows {
                 #if os(iOS)
-                footerText = "\(table.columnCount) columns · swipe for more"
+                footerText = String(localized: "\(table.columnCount) columns · swipe for more")
                 #else
-                footerText = "\(table.columnCount) columns · scroll for more"
+                footerText = String(localized: "\(table.columnCount) columns · scroll for more")
                 #endif
             } else {
                 footerText = ""
@@ -582,7 +582,7 @@ final class ChatTableGeometry {
             var moreLine: CTLine?
             let moreY = fy + 1
             if hiddenPerCard > 0 {
-                let more = NSAttributedString(string: "+\(hiddenPerCard) more \(hiddenPerCard == 1 ? "field" : "fields") · Open table", attributes: [
+                let more = NSAttributedString(string: String(localized: "+\(hiddenPerCard) more fields · Open table"), attributes: [
                     .font: ChatTableStyle.system(ChatTableStyle.headerSize, .medium),
                     .foregroundColor: ChatTableStyle.link,
                 ])

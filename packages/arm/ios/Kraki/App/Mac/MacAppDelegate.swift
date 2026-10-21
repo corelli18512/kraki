@@ -374,10 +374,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// menu stays (trimmed in MacCommands): it carries ⌘W and ⌘M.
     private func removeUnwantedMenus() {
         guard let mainMenu = NSApp.mainMenu else { return }
-        for title in ["File"] {
-            if let item = mainMenu.items.first(where: { $0.submenu?.title == title }) {
-                mainMenu.removeItem(item)
-            }
+        // AppKit supplies this title; recognize both supported UI languages.
+        for item in mainMenu.items where ["File", "文件"].contains(item.submenu?.title ?? "") {
+            mainMenu.removeItem(item)
         }
     }
 

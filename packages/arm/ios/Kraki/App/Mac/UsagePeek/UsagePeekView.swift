@@ -87,7 +87,7 @@ private struct UsagePeekTitleBar: View {
             Image("KrakiLogo")
                 .resizable().scaledToFit()
                 .frame(width: 16, height: 16)
-            Text("Kraki").font(.system(size: 12, weight: .semibold))
+            Text(verbatim: "Kraki").font(.system(size: 12, weight: .semibold))
             Text("Account Usage").font(.system(size: 12)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -103,7 +103,7 @@ private struct UsagePeekEmpty: View {
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20)).foregroundStyle(.tertiary)
-            Text(outdated.isEmpty ? "No Claude or Codex accounts found on your devices" : UsageUpdateHint.text(outdated))
+            Text(outdated.isEmpty ? String(localized: "No Claude or Codex accounts found on your devices") : UsageUpdateHint.text(outdated))
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(.horizontal, 16)
@@ -131,13 +131,13 @@ private struct UsageDeviceLine: View {
     /// Two names fit; beyond that, the first (online) device and a count.
     private var names: Text {
         let shown: [DeviceSummary] = devices.count > 2 ? Array(devices.prefix(1)) : devices
-        var text = Text("")
+        var text = Text(verbatim: "")
         for (i, device) in shown.enumerated() {
-            if i > 0 { text = text + Text(" · ").foregroundColor(.secondary) }
+            if i > 0 { text = text + Text(verbatim: " · ").foregroundColor(.secondary) }
             let color: Color = device.online ? .secondary : Color.secondary.opacity(0.5)
-            text = text + Text(device.name).foregroundColor(color)
+            text = text + Text(verbatim: device.name).foregroundColor(color)
         }
-        if devices.count > 2 { text = text + Text(" +\(devices.count - 1)").foregroundColor(.secondary) }
+        if devices.count > 2 { text = text + Text(verbatim: " +\(devices.count - 1)").foregroundColor(.secondary) }
         return text
     }
     var body: some View {
@@ -148,7 +148,7 @@ private struct UsageDeviceLine: View {
             .font(.system(size: 10.5))
             .lineLimit(1).truncationMode(.tail)
         }
-        .help(devices.map { $0.name + ($0.online ? "" : " (offline)") }.joined(separator: "\n"))
+        .help(devices.map { $0.online ? $0.name : String(localized: "\($0.name) (offline)") }.joined(separator: "\n"))
     }
 }
 
@@ -184,7 +184,7 @@ struct UsagePeekCompact: View {
                                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .strokeBorder(isCurrent ? Color.krakiPrimary.opacity(0.55) : Color.primary.opacity(0.06),
                                                   lineWidth: isCurrent ? 1.2 : 0.5))
-                                .help(isCurrent ? "Spent by the current session" : "")
+                                .help(isCurrent ? String(localized: "Spent by the current session") : "")
                                 .modifier(UsageStaggerIn(index: i, active: entering))
                         }
                     }

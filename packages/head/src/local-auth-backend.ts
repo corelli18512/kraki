@@ -6,7 +6,8 @@
 import { randomBytes } from 'crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
 import { v4 as uuid } from 'uuid';
-import type { AuthMethod, DeviceInfo, DeviceSummary, DeviceRole, DeviceKind } from '@kraki/protocol';
+import type { AuthMethod, DeviceInfo, DeviceSummary } from '@kraki/protocol';
+import { deviceSummary } from './device-summary.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
 import type { AuthProvider, AuthUser } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
@@ -154,8 +155,9 @@ export class LocalAuthBackend implements AuthBackend {
 
     // Update encryption key if provided
     const updatedKey = encryptionKey ?? device.encryptionKey ?? undefined;
+    // The device's own name, not `name` (which is a custom name when set).
     this.storage.upsertDevice(
-      deviceId, device.userId, device.name, device.role,
+      deviceId, device.userId, device.reportedName, device.role,
       device.kind ?? undefined, device.publicKey ?? undefined, updatedKey,
     );
 
@@ -199,6 +201,12 @@ export class LocalAuthBackend implements AuthBackend {
   /** Delete the account and everything stored for it. Returns its device ids. */
   async deleteAccount(userId: string): Promise<string[]> {
     return this.storage.deleteUser(userId);
+  }
+
+  async renameDevice(userId: string, deviceId: string, displayName: string | null): Promise<boolean> {
+    const device = this.storage.getDevice(deviceId);
+    if (!device || device.userId !== userId) return false;
+    return this.storage.setDeviceDisplayName(deviceId, displayName);
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
@@ -611,17 +619,7 @@ export class LocalAuthBackend implements AuthBackend {
   }
 
   private getDeviceSummaries(userId: string): DeviceSummary[] {
-    const stored = this.storage.getDevicesByUser(userId);
-    return stored.map(d => ({
-      id: d.id,
-      name: d.name,
-      role: d.role as DeviceRole,
-      kind: (d.kind as DeviceKind) ?? undefined,
-      publicKey: d.publicKey ?? undefined,
-      encryptionKey: d.encryptionKey ?? undefined,
-      online: false, // HeadServer sets the correct online status
-      lastSeen: d.lastSeen,
-      createdAt: d.createdAt,
-    }));
+    // HeadServer sets the correct online status.
+    return this.storage.getDevicesByUser(userId).map((d) => deviceSummary(d, false));
   }
 }

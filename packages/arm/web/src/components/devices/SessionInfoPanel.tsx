@@ -1,3 +1,6 @@
+import { t } from '../../i18n';
+import { formatDateTime, formatNumber } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
@@ -9,9 +12,9 @@ import '../layout/settings.css';
 import './session-info.css';
 
 export function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
+  if (n < 1000) return formatNumber(n, { useGrouping: false });
   const value = n / (n < 1_000_000 ? 1000 : 1_000_000);
-  return `${value.toFixed(value < 10 ? 1 : 0)}${n < 1_000_000 ? 'K' : 'M'}`;
+  return t(n < 1_000_000 ? 'devices:sessionInfo.thousands' : 'devices:sessionInfo.millions', { value: formatNumber(value, { minimumFractionDigits: value < 10 ? 1 : 0, maximumFractionDigits: value < 10 ? 1 : 0, useGrouping: false }) });
 }
 function Row({ label, children, grow }: { label: string; children: React.ReactNode; grow?: boolean }) {
   return (
@@ -29,6 +32,7 @@ interface Props {
   onClose: () => void;
 }
 export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
+  const { t } = useTranslation('devices');
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -84,20 +88,20 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       }}
     >
       <div className="ksi-header">
-        <h2>Session Info</h2>
+        <h2>{t('sessionInfo.title')}</h2>
         <button type="button" onClick={onClose}>
-          Done
+          {t('sessionInfo.done')}
         </button>
       </div>
       <div className="ksi-body">
         <section>
-          <h3>Session</h3>
-          <Row label="Title" grow={editing}>
+          <h3>{t('sessionInfo.session')}</h3>
+          <Row label={t('sessionInfo.titleLabel')} grow={editing}>
             {editing ? (
               <input
                 autoFocus
                 onFocus={(e) => e.currentTarget.select()}
-                aria-label="Session title"
+                aria-label={t('sessionInfo.sessionTitle')}
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onBlur={saveTitle}
@@ -125,14 +129,14 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
               </button>
             )}
           </Row>
-          <Row label="Session ID">
+          <Row label={t('sessionInfo.id')}>
             <div className="ksi-id">
-              <span title={session.id} aria-label={`Session ID ${session.id}`}>
+              <span title={session.id} aria-label={t('sessionInfo.idLabel', { id: session.id })}>
                 {session.id}
               </span>
               <button
                 type="button"
-                aria-label={copied ? 'Session ID copied' : 'Copy Session ID'}
+                aria-label={copied ? t('sessionInfo.idCopied') : t('sessionInfo.copyId')}
                 onClick={() => {
                   void navigator.clipboard
                     .writeText(session.id)
@@ -148,7 +152,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 {copied ? (
                   <>
                     <Check size={11} />
-                    Copied
+                    {t('sessionInfo.copied')}
                   </>
                 ) : (
                   <Copy size={11} />
@@ -158,14 +162,14 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
           </Row>
           {copyError && (
             <p role="alert" className="text-xs text-red-500">
-              Couldn’t copy Session ID.
+              {t('sessionInfo.copyFailed')}
             </p>
           )}
-          <Row label="Agent">{session.agent}</Row>
-          <Row label="Model">
+          <Row label={t('sessionInfo.agent')}>{session.agent}</Row>
+          <Row label={t('sessionInfo.model')}>
             {models?.length ? (
               <select
-                aria-label="Model"
+                aria-label={t('sessionInfo.model')}
                 value={session.model ?? models[0]}
                 onChange={(e) => {
                   const next = modelDetails?.find((d) => d.id === e.target.value);
@@ -186,8 +190,8 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
             )}
           </Row>
           {efforts.length > 0 && (
-            <Row label="Thinking">
-              <div className="ksi-efforts" role="radiogroup" aria-label="Thinking">
+            <Row label={t('sessionInfo.thinking')}>
+              <div className="ksi-efforts" role="radiogroup" aria-label={t('sessionInfo.thinking')}>
                 {efforts.map((e) => (
                   <button
                     type="button"
@@ -204,16 +208,16 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                       );
                     }}
                   >
-                    {e === 'xhigh' ? 'XHigh' : e[0].toUpperCase() + e.slice(1)}
+                    {t(`sessionInfo.effort.${e}`)}
                   </button>
                 ))}
               </div>
             </Row>
           )}
           {detail?.supportedContextTiers && detail.supportedContextTiers.length > 1 && (
-            <Row label="Context tier">
+            <Row label={t('sessionInfo.contextTier')}>
               <select
-                aria-label="Context tier"
+                aria-label={t('sessionInfo.contextTier')}
                 value={contextTier}
                 onChange={(e) => {
                   const tier = e.target.value as ContextTier;
@@ -226,14 +230,14 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                   );
                 }}
               >
-                <option value="default">Default</option>
-                <option value="long_context">1M tokens</option>
+                <option value="default">{t('sessionInfo.default')}</option>
+                <option value="long_context">{t('sessionInfo.longContext')}</option>
               </select>
             </Row>
           )}
-          <Row label="Created">
+          <Row label={t('sessionInfo.created')}>
             {created && !Number.isNaN(created.getTime())
-              ? created.toLocaleString(undefined, {
+              ? formatDateTime(created, {
                   year: 'numeric',
                   month: 'short',
                   day: 'numeric',
@@ -245,19 +249,19 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
         </section>
         {usage && (
           <section>
-            <h3>Usage</h3>
+            <h3>{t('sessionInfo.usage')}</h3>
             {usage.contextTokens != null && (
               <>
-                <Row label="Context">
+                <Row label={t('sessionInfo.context')}>
                   {formatTokens(usage.contextTokens)}
                   {detail?.contextWindow
-                    ? ` / ${formatTokens(detail.contextWindow)}  ·  ${Math.round((contextRatio ?? 0) * 100)}%`
+                    ? ` / ${formatTokens(detail.contextWindow)}  ·  ${formatNumber(contextRatio ?? 0, { style: 'percent', maximumFractionDigits: 0 })}`
                     : ''}
                 </Row>
                 {contextRatio != null && (
                   <div
                     role="progressbar"
-                    aria-label="Context usage"
+                    aria-label={t('sessionInfo.contextUsage')}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={Math.round(contextRatio * 100)}
@@ -273,30 +277,30 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 )}
               </>
             )}
-            <Row label="Input tokens">{formatTokens(usage.inputTokens)}</Row>
-            <Row label="Output tokens">{formatTokens(usage.outputTokens)}</Row>
-            <Row label="Cache read">{formatTokens(usage.cacheReadTokens)}</Row>
-            <Row label="Cache write">{formatTokens(usage.cacheWriteTokens)}</Row>
+            <Row label={t('sessionInfo.input')}>{formatTokens(usage.inputTokens)}</Row>
+            <Row label={t('sessionInfo.output')}>{formatTokens(usage.outputTokens)}</Row>
+            <Row label={t('sessionInfo.cacheRead')}>{formatTokens(usage.cacheReadTokens)}</Row>
+            <Row label={t('sessionInfo.cacheWrite')}>{formatTokens(usage.cacheWriteTokens)}</Row>
             <hr className="border-border-primary" />
-            <Row label="Total cost">${usage.totalCost.toFixed(usage.totalCost < 0.01 ? 4 : 3)}</Row>
-            <Row label="Duration">
+            <Row label={t('sessionInfo.cost')}>{`$${usage.totalCost.toFixed(usage.totalCost < 0.01 ? 4 : 3)}`}</Row>
+            <Row label={t('sessionInfo.duration')}>
               {usage.totalDurationMs < 60000
-                ? `${(usage.totalDurationMs / 1000).toFixed(1)}s`
-                : `${Math.floor(usage.totalDurationMs / 60000)}m ${Math.floor(usage.totalDurationMs / 1000) % 60}s`}
+                ? t('sessionInfo.seconds', { seconds: formatNumber(usage.totalDurationMs / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }) })
+                : t('sessionInfo.minutesSeconds', { minutes: formatNumber(Math.floor(usage.totalDurationMs / 60000), { useGrouping: false }), seconds: formatNumber(Math.floor(usage.totalDurationMs / 1000) % 60, { useGrouping: false }) })}
             </Row>
           </section>
         )}
         {device && (
           <section>
-            <h3>Device</h3>
-            <Row label="Name">{device.name}</Row>
-            <Row label="Status">
+            <h3>{t('sessionInfo.device')}</h3>
+            <Row label={t('sessionInfo.name')}>{device.name}</Row>
+            <Row label={t('sessionInfo.status')}>
               <span className="flex items-center gap-1">
                 <i className={`h-1.5 w-1.5 rounded-full${device.online ? ' ksi-online-dot' : ''}`} style={device.online ? undefined : { background: '#808080' }} />
-                {device.online ? 'Online' : 'Offline'}
+                {device.online ? t('sessionInfo.online') : t('sessionInfo.offline')}
               </span>
             </Row>
-            {version && <Row label="Version">{version}</Row>}
+            {version && <Row label={t('sessionInfo.version')}>{version}</Row>}
           </section>
         )}
         <div className="ksi-actions">
@@ -308,19 +312,19 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
             }}
           >
             <GitFork size={16} />
-            Fork
+            {t('sessionInfo.fork')}
           </button>
           <button type="button" onClick={() => setConfirmDelete(true)}>
             <Trash2 size={16} />
-            Delete
+            {t('sessionInfo.delete')}
           </button>
         </div>
       </div>
       {confirmDelete && (
         <SettingsAlert
-          title="Delete Session"
-          body="This will permanently delete this session and all its messages."
-          confirm="Delete"
+          title={t('sessionInfo.deleteTitle')}
+          body={t('sessionInfo.deleteBody')}
+          confirm={t('sessionInfo.delete')}
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {
             wsClient.deleteSession(session.id);

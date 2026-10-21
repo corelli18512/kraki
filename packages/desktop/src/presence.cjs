@@ -24,21 +24,13 @@ function resolveStatus(s) {
   return 'offline';
 }
 
-const TITLE = {
-  checking: 'Checking this PC…',
-  online: 'This PC is online',
-  goingOnline: 'This PC is going online…',
-  goingOffline: 'This PC is going offline…',
-  offline: 'This PC is offline',
-  cli: 'This PC is online (command-line Kraki)',
-  controlsOthersOnly: 'This PC controls other computers',
-};
-const DETAIL = {
-  online: 'Your phone and other computers can use its agents',
-  offline: "Your phone can't use the agents on this PC",
-  cli: 'Managed by the command-line Kraki',
-  controlsOthersOnly: 'No agents run on this PC',
-};
+const { t } = require('./i18n.cjs');
+
+const STATUSES = ['checking', 'online', 'goingOnline', 'goingOffline', 'offline', 'cli', 'controlsOthersOnly'];
+const DETAILED = ['online', 'offline', 'cli', 'controlsOthersOnly'];
+/** Localized at read time, so a language switch only needs a tray refresh. */
+const TITLE = new Proxy({}, { get: (_o, k) => (STATUSES.includes(k) ? t(`status.${k}`) : undefined) });
+const DETAIL = new Proxy({}, { get: (_o, k) => (DETAILED.includes(k) ? t(`detail.${k}`) : undefined) });
 
 /** The app owns whether this PC is online (built-in Kraki, runs agents). */
 const managesPresence = (s) => !!(s && s.available && s.owned);
@@ -64,16 +56,16 @@ function trayMenu(status, managed, needsYou, act) {
   ];
   if (DETAIL[status]) items.push({ label: DETAIL[status], enabled: false });
   if (needsYou.length) {
-    items.push({ type: 'separator' }, { label: 'Needs You', enabled: false });
+    items.push({ type: 'separator' }, { label: t('tray.needsYou'), enabled: false });
     for (const s of needsYou.slice(0, 5)) items.push({ label: `${s.title} — ${s.reason}`, click: () => act.openSession(s.id) });
-    if (needsYou.length > 5) items.push({ label: `${needsYou.length - 5} more…`, click: act.open });
+    if (needsYou.length > 5) items.push({ label: t('tray.more', { count: needsYou.length - 5 }), click: act.open });
   }
-  items.push({ type: 'separator' }, { label: 'Open Kraki', click: act.open }, { label: 'Account Usage', click: act.usage });
+  items.push({ type: 'separator' }, { label: t('tray.open'), click: act.open }, { label: t('tray.usage'), click: act.usage });
   items.push({ type: 'separator' });
-  if (managed && canGoOffline(status)) items.push({ label: 'Take This PC Offline', click: act.goOffline });
-  else if (managed && canGoOnline(status)) items.push({ label: 'Bring This PC Online', click: act.goOnline });
-  items.push({ label: 'Settings…', click: act.settings });
-  items.push({ label: managed && canGoOffline(status) ? 'Quit Kraki and Go Offline…' : 'Quit Kraki', click: act.quit });
+  if (managed && canGoOffline(status)) items.push({ label: t('tray.goOffline'), click: act.goOffline });
+  else if (managed && canGoOnline(status)) items.push({ label: t('tray.goOnline'), click: act.goOnline });
+  items.push({ label: t('tray.settings'), click: act.settings });
+  items.push({ label: managed && canGoOffline(status) ? t('tray.quitOffline') : t('tray.quit'), click: act.quit });
   return items;
 }
 

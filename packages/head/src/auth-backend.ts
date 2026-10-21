@@ -100,6 +100,14 @@ export interface AuthBackend {
   removeDevice?(userId: string, deviceId: string): Promise<boolean>;
 
   /**
+   * Set (or with null, clear) a device's custom name in the account's source
+   * of truth. Edges call this before applying a rename so it survives the
+   * device list they re-mirror on every auth. False when the device is not
+   * the user's or the store could not be reached.
+   */
+  renameDevice?(userId: string, deviceId: string, displayName: string | null): Promise<boolean>;
+
+  /**
    * Delete an account at the account store (users, devices, push tokens,
    * voice usage) and tombstone its device ids. Returns the deleted device ids.
    * Must throw when the store could not be reached, so the relay never

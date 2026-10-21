@@ -285,7 +285,7 @@ struct MacChatView: View {
                 Button {
                     showInfo = true
                 } label: {
-                    Text(showsSyncing ? "Syncing…" : session.displayTitle)
+                    Text(showsSyncing ? String(localized: "Syncing…") : session.displayTitle)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(showsSyncing ? Color.textSecondary : Color.textTitle)
                         .lineLimit(1)
@@ -417,8 +417,8 @@ struct MacChatView: View {
                 .foregroundStyle(Color.textTitle)
             Text(
                 viewModel.isDeviceOnline
-                    ? "This session has no messages to display yet."
-                    : "The session device is offline and no cached conversation is available."
+                    ? String(localized: "This session has no messages to display yet.")
+                    : String(localized: "The session device is offline and no cached conversation is available.")
             )
             .font(.system(size: 12))
             .foregroundStyle(Color.textSecondary)
@@ -625,7 +625,7 @@ private struct MacSessionInfoSheet: View {
                         DispatchQueue.main.async { titleFocused = true }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(session.displayTitle).lineLimit(1).truncationMode(.middle)
+                            Text(verbatim: session.displayTitle).lineLimit(1).truncationMode(.middle)
                             LucideIcon(.pencil, size: 11, strokeWidth: 2, color: .secondary)
                         }
                     }
@@ -637,13 +637,13 @@ private struct MacSessionInfoSheet: View {
             infoRow("Agent", session.agent)
             infoRow(label: "Model") {
                 if availableModels.isEmpty {
-                    Text(modelName(liveSession.model) ?? "—")
+                    Text(verbatim: modelName(liveSession.model) ?? "—")
                 } else {
                     Picker("", selection: Binding(
                         get: { selectedModel },
                         set: { applyModel($0) }
                     )) {
-                        ForEach(availableModels, id: \.self) { Text(modelName($0) ?? $0).tag($0) }
+                        ForEach(availableModels, id: \.self) { Text(verbatim: modelName($0) ?? $0).tag($0) }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 250, alignment: .trailing)
@@ -714,18 +714,18 @@ private struct MacSessionInfoSheet: View {
 
     private func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .xhigh: return "XHigh"
-        case .max: return "Max"
+        case .low: return String(localized: "Low")
+        case .medium: return String(localized: "Medium")
+        case .high: return String(localized: "High")
+        case .xhigh: return String(localized: "XHigh")
+        case .max: return String(localized: "Max")
         }
     }
 
     private var sessionIDRow: some View {
         infoRow(label: "Session ID") {
             HStack(spacing: 7) {
-                Text(session.id)
+                Text(verbatim: session.id)
                     .font(.system(size: 12.5, weight: .regular, design: .monospaced))
                     .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
@@ -748,8 +748,8 @@ private struct MacSessionInfoSheet: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(sessionIDCopied ? "Session ID copied" : "Copy Session ID")
-                .accessibilityLabel(sessionIDCopied ? "Session ID copied" : "Copy Session ID")
+                .help(sessionIDCopied ? String(localized: "Session ID copied") : String(localized: "Copy Session ID"))
+                .accessibilityLabel(sessionIDCopied ? String(localized: "Session ID copied") : String(localized: "Copy Session ID"))
                 .accessibilityHint("Copies the complete Session ID to the clipboard")
             }
             .frame(maxWidth: 285, alignment: .trailing)
@@ -778,22 +778,22 @@ private struct MacSessionInfoSheet: View {
             if let used = usage.contextTokens {
                 if let ceiling = contextWindow, ceiling > 0 {
                     let ratio = min(1, Double(used) / Double(ceiling))
-                    let context = "\(macFormatTokenCount(used)) / \(macFormatTokenCount(ceiling))  ·  \(Int((ratio * 100).rounded()))%"
+                    let context = "\(MacChatFormat.tokenCount(used)) / \(MacChatFormat.tokenCount(ceiling))  ·  \(ratio.formatted(.percent.precision(.fractionLength(0))))"
                     VStack(alignment: .leading, spacing: 6) {
                         infoRow("Context", context)
                         ProgressView(value: ratio).tint(contextBandColor(ratio))
                     }
                 } else {
-                    infoRow("Context", macFormatTokenCount(used))
+                    infoRow("Context", MacChatFormat.tokenCount(used))
                 }
             }
-            infoRow("Input tokens", macFormatTokenCount(usage.inputTokens))
-            infoRow("Output tokens", macFormatTokenCount(usage.outputTokens))
-            infoRow("Cache read", macFormatTokenCount(usage.cacheReadTokens))
-            infoRow("Cache write", macFormatTokenCount(usage.cacheWriteTokens))
+            infoRow("Input tokens", MacChatFormat.tokenCount(usage.inputTokens))
+            infoRow("Output tokens", MacChatFormat.tokenCount(usage.outputTokens))
+            infoRow("Cache read", MacChatFormat.tokenCount(usage.cacheReadTokens))
+            infoRow("Cache write", MacChatFormat.tokenCount(usage.cacheWriteTokens))
             Divider()
-            infoRow("Total cost", macFormatCost(usage.totalCost))
-            infoRow("Duration", macFormatDuration(usage.totalDurationMs))
+            infoRow("Total cost", MacChatFormat.cost(usage.totalCost))
+            infoRow("Duration", MacChatFormat.duration(usage.totalDurationMs))
         }
     }
 
@@ -804,7 +804,7 @@ private struct MacSessionInfoSheet: View {
             infoRow(label: "Status") {
                 HStack(spacing: 4) {
                     Circle().fill(device.online ? Color.green : Color.gray).frame(width: 6, height: 6)
-                    Text(device.online ? "Online" : "Offline")
+                    Text(device.online ? String(localized: "Online") : String(localized: "Offline"))
                 }
             }
             if let version { infoRow("Version", version) }
@@ -841,19 +841,19 @@ private struct MacSessionInfoSheet: View {
         titleFocused = false
     }
 
-    private func sectionHeader(_ title: String) -> some View {
+    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.caption.weight(.semibold))
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
     }
 
-    private func infoRow(_ label: String, _ value: String) -> some View {
-        infoRow(label: label) { Text(value).multilineTextAlignment(.trailing) }
+    private func infoRow(_ label: LocalizedStringKey, _ value: String) -> some View {
+        infoRow(label: label) { Text(verbatim: value).multilineTextAlignment(.trailing) }
     }
 
     private func infoRow<Trailing: View>(
-        label: String,
+        label: LocalizedStringKey,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 8) {
@@ -863,26 +863,6 @@ private struct MacSessionInfoSheet: View {
         }
         .font(.system(size: 15))
         .contentShape(Rectangle())
-    }
-
-    private func macFormatTokenCount(_ count: Int) -> String {
-        if count < 1_000 { return "\(count)" }
-        if count < 1_000_000 {
-            let value = Double(count) / 1_000
-            return value < 10 ? String(format: "%.1fK", value) : String(format: "%.0fK", value)
-        }
-        let value = Double(count) / 1_000_000
-        return value < 10 ? String(format: "%.1fM", value) : String(format: "%.0fM", value)
-    }
-
-    private func macFormatCost(_ cost: Double) -> String {
-        cost < 0.01 ? String(format: "$%.4f", cost) : String(format: "$%.3f", cost)
-    }
-
-    private func macFormatDuration(_ milliseconds: Double) -> String {
-        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" } // peer value: Int() would trap
-        let seconds = min(milliseconds / 1_000, 1e12)
-        return seconds < 60 ? String(format: "%.1fs", seconds) : "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
     }
 
     private func contextBandColor(_ ratio: Double) -> Color {

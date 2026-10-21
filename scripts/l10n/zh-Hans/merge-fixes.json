@@ -1,0 +1,11 @@
+{
+  "translations": {
+    "just now": "刚刚",
+    "%llds ago": "%lld 秒前",
+    "%lldm ago": "%lld 分钟前",
+    "%lldh ago": "%lld 小时前",
+    "%lldd ago": "%lld 天前",
+    "%lldmo ago": "%lld 个月前",
+    "%lldy ago": "%lld 年前"
+  }
+}

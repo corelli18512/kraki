@@ -132,7 +132,7 @@ struct MacStepsView: View {
                 } label: {
                     HStack(spacing: 2) {
                         Image(systemName: "chevron.left")
-                        Text(subagentPath.count > 1 ? "Back" : "Steps")
+                        Text(subagentPath.count > 1 ? String(localized: "Back") : String(localized: "Steps"))
                     }
                     .font(.system(size: 14))
                     .foregroundStyle(Color.krakiPrimary)
@@ -142,7 +142,7 @@ struct MacStepsView: View {
                 .accessibilityLabel("Back")
                 Spacer()
             }
-            Text(subagentPath.last.flatMap { id in mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } } ?? (subagentPath.isEmpty ? "Steps" : "Subagent"))
+            Text(subagentPath.last.flatMap { id in mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } } ?? (subagentPath.isEmpty ? String(localized: "Steps") : String(localized: "Subagent")))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.textTitle)
                 .lineLimit(1)
@@ -204,7 +204,7 @@ struct MacStepsView: View {
                     .textSelection(.enabled)
             }
         case "error":
-            Label(message.content ?? message.result ?? "Error", systemImage: "exclamationmark.triangle")
+            Label(message.content ?? message.result ?? String(localized: "Error"), systemImage: "exclamationmark.triangle")
                 .font(.system(size: 15))
                 .foregroundStyle(.red)
         case "permission":

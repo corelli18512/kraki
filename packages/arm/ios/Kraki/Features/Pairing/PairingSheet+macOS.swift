@@ -4,6 +4,10 @@
 /// The code renews itself before it expires, and when a phone (or browser)
 /// joins the account while the card is open it turns into a check mark and
 /// closes on its own.
+///
+/// The same code area is also the optional last step of first-run setup
+/// (`.setupStep`): there it shows a skip button instead of a close button and
+/// stays on the check mark until the user continues.
 
 #if os(macOS)
 import SwiftUI
@@ -28,10 +32,19 @@ struct PairingSheet: View {
     @State private var loadAttempt = 0
     private var previewPayload: TentacleCLIManager.PairingPayload?
     private var previewConnected: DeviceSummary?
+    private let presentation: Presentation
 
-    init() {}
+    enum Presentation {
+        /// The "Connect Your Phone…" sheet.
+        case sheet
+        /// Last step of first-run setup; `onFinish` leaves the step.
+        case setupStep(onFinish: () -> Void)
+    }
+
+    init(presentation: Presentation = .sheet) { self.presentation = presentation }
     #if DEBUG
-    init(preview: TentacleCLIManager.PairingPayload, connected: DeviceSummary? = nil) {
+    init(preview: TentacleCLIManager.PairingPayload, connected: DeviceSummary? = nil, presentation: Presentation = .sheet) {
+        self.presentation = presentation
         previewPayload = preview
         previewConnected = connected
         _payload = State(initialValue: preview)
@@ -65,6 +78,35 @@ struct PairingSheet: View {
     }
 
     var body: some View {
+        Group {
+            switch presentation {
+            case .sheet: sheetBody
+            case .setupStep(let onFinish): setupStepBody(onFinish: onFinish)
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
+        .task(id: loadAttempt) {
+            baseline = Set(onlineApps.map(\.id))
+            if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
+            if previewPayload == nil { await renewLoop() }
+        }
+        .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
+            guard payload != nil else { return }
+            if let entries = trustedApps, let known = trustedBaseline,
+               let newId = Self.newlyPaired(entries, baseline: known) {
+                markConnected(newId)
+            }
+            guard let newId = Self.newlyConnected(ids, baseline: baseline) else { return }
+            markConnected(newId)
+        }
+        .onChange(of: trustedApps) { _, entries in
+            guard payload != nil, let entries, let known = trustedBaseline,
+                  let newId = Self.newlyPaired(entries, baseline: known) else { return }
+            markConnected(newId)
+        }
+    }
+
+    private var sheetBody: some View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 0) {
                 if let connected {
@@ -92,26 +134,41 @@ struct PairingSheet: View {
         }
         .background { cardBackground }
         .presentationBackground(.clear)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
-        .task(id: loadAttempt) {
-            baseline = Set(onlineApps.map(\.id))
-            if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
-            if previewPayload == nil { await renewLoop() }
-        }
-        .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
-            guard payload != nil else { return }
-            if let entries = trustedApps, let known = trustedBaseline,
-               let newId = Self.newlyPaired(entries, baseline: known) {
-                markConnected(newId)
+    }
+
+    /// First-run setup: same card language as the other setup steps.
+    private func setupStepBody(onFinish: @escaping () -> Void) -> some View {
+        VStack(spacing: 18) {
+            if let connected {
+                StepCard(
+                    title: String(localized: "You’re all set"),
+                    detail: String(localized: "\(connected.name) can now see and run your sessions. Sessions you start on either one show up on both.")
+                ) { EmptyView() }
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 54))
+                    .foregroundStyle(Color(hex: 0x34D399))
+                    .symbolEffect(.bounce, value: connected.id)
+                    .frame(height: 212)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                Button("Start Using Kraki", action: onFinish)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("mac.setup.phone.start")
+            } else {
+                StepCard(
+                    step: "Optional",
+                    title: String(localized: "Connect your phone"),
+                    detail: String(localized: "Scan with your phone’s camera to follow sessions and approve actions from anywhere. No Kraki on your iPhone yet? The code takes you to the App Store.")
+                ) { EmptyView() }
+                codeArea
+                Button("Skip for Now", action: onFinish)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("mac.setup.phone.skip")
             }
-            guard let newId = Self.newlyConnected(ids, baseline: baseline) else { return }
-            markConnected(newId)
         }
-        .onChange(of: trustedApps) { _, entries in
-            guard payload != nil, let entries, let known = trustedBaseline,
-                  let newId = Self.newlyPaired(entries, baseline: known) else { return }
-            markConnected(newId)
-        }
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("mac.setup.phone")
     }
 
     @ViewBuilder
@@ -139,7 +196,14 @@ struct PairingSheet: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            codeArea
+        }
+    }
 
+    /// QR code, status line and "Copy link" — shared by both presentations.
+    @ViewBuilder
+    private var codeArea: some View {
+        VStack(spacing: 18) {
             ZStack {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color.white)
@@ -183,7 +247,7 @@ struct PairingSheet: View {
                     Button {
                         if let p = payload { KrakiPasteboard.setString(p.url); copied = true }
                     } label: {
-                        Label(copied ? "Copied" : "Copy link", systemImage: copied ? "checkmark" : "link")
+                        Label(copied ? String(localized: "Copied") : String(localized: "Copy link"), systemImage: copied ? "checkmark" : "link")
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.krakiPrimary)
@@ -199,7 +263,9 @@ struct PairingSheet: View {
         guard connected == nil, previewPayload == nil,
               let device = appState.deviceStore.devices[id] else { return }
         connected = device
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { dismiss() }
+        if case .sheet = presentation {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { dismiss() }
+        }
     }
 
     private func success(_ device: DeviceSummary) -> some View {

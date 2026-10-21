@@ -67,6 +67,9 @@ jobs:
       WEB_DEPLOY_KNOWN_HOSTS: ${{ vars.WEB_DEPLOY_KNOWN_HOSTS }}
       WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
       VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://relay.kraki.chat' }}
+      # Set the repository variable IOS_APP_STORE_URL (https://apps.apple.com/app/id6799694476)
+      # once Kraki for iPhone is live; until then iPhone pairing links offer the browser.
+      VITE_IOS_APP_STORE_URL: ${{ vars.IOS_APP_STORE_URL }}
 
     steps:
       - name: Check out repository
@@ -149,6 +152,9 @@ jobs:
       WEB_DEPLOY_KNOWN_HOSTS: ${{ vars.WEB_DEPLOY_KNOWN_HOSTS }}
       WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
       VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://relay.kraki.chat' }}
+      # Set the repository variable IOS_APP_STORE_URL (https://apps.apple.com/app/id6799694476)
+      # once Kraki for iPhone is live; until then iPhone pairing links offer the browser.
+      VITE_IOS_APP_STORE_URL: ${{ vars.IOS_APP_STORE_URL }}
 
     steps:
       - name: Check out repository

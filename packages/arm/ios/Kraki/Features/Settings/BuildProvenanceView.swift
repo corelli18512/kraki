@@ -6,10 +6,10 @@ struct BuildProvenanceView: View {
 
     var body: some View {
         if let runURL = info.runURL, let sourceURL = info.sourceURL {
-            row("GitHub Run ID", value: info.runLabel, url: runURL)
-            row("Source commit", value: String((info.commit ?? "").prefix(8)), url: sourceURL)
+            row(String(localized: "GitHub Run ID"), value: info.runLabel, url: runURL)
+            row(String(localized: "Source commit"), value: String((info.commit ?? "").prefix(8)), url: sourceURL)
             if let provenanceURL = info.provenanceURL {
-                row("Build provenance", value: "View on GitHub", url: provenanceURL)
+                row(String(localized: "Build provenance"), value: String(localized: "View on GitHub"), url: provenanceURL)
             }
         } else {
             HStack {

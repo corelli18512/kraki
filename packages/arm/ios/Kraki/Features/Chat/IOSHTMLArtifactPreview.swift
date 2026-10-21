@@ -22,7 +22,7 @@ struct IOSHTMLArtifactPreview: View {
         let name = selection.ref.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let caption, !caption.isEmpty { return caption }
         if let name, !name.isEmpty { return name }
-        return "Report"
+        return String(localized: "Report")
     }
 
     var body: some View {
@@ -81,12 +81,12 @@ struct IOSHTMLArtifactPreview: View {
     @ViewBuilder
     private var artifactBody: some View {
         if selection.ref.size > HTMLArtifactSecurity.maxBytes {
-            errorState("This report exceeds the 10 MB safety limit.")
+            errorState(String(localized: "This report exceeds the 10 MB safety limit."))
         } else {
             switch appState.attachmentStore.state(for: selection.ref.id) {
             case .ready(let mimeType, let data):
                 if data.count > HTMLArtifactSecurity.maxBytes {
-                    errorState("This report exceeds the 10 MB safety limit.")
+                    errorState(String(localized: "This report exceeds the 10 MB safety limit."))
                 } else if mimeType == "text/html", let html = String(data: data, encoding: .utf8) {
                     ZStack {
                         IOSHTMLArtifactWebView(
@@ -107,7 +107,7 @@ struct IOSHTMLArtifactPreview: View {
                     .background(Color.white)
                     .ignoresSafeArea(.container, edges: .bottom)
                 } else {
-                    errorState("This attachment is not a valid UTF-8 HTML report.")
+                    errorState(String(localized: "This attachment is not a valid UTF-8 HTML report."))
                 }
             case .error(let reason):
                 errorState(reason)
@@ -182,7 +182,7 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.isInspectable = false
-        webView.accessibilityLabel = "Report content"
+        webView.accessibilityLabel = String(localized: "Report content")
         context.coordinator.load(html: html, artifactID: artifactID, into: webView)
         return webView
     }

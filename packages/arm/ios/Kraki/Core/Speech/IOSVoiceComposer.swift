@@ -388,8 +388,8 @@ protocol IOSVoiceComposerHost: AnyObject {
         }
     }
 
-    static let returnedToDraftDetail = "Nothing was sent; the text so far is back in the box."
-    static let keptUnsentDetail = "Not sent. Tap the message to retry or delete it."
+    static let returnedToDraftDetail = String(localized: "Nothing was sent; the text so far is back in the box.")
+    static let keptUnsentDetail = String(localized: "Not sent. Tap the message to retry or delete it.")
 
     private func dispatch(_ sessionID: String, _ clientID: String, _ text: String, _ delivery: CommandSender.InputDelivery) {
         guard host?.dispatchVoiceInput(sessionID: sessionID, clientID: clientID, text: text) == true else { return }

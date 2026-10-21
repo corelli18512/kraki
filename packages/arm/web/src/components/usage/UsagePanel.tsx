@@ -7,6 +7,8 @@
  * out while still holding and it shrinks back; release and it fades away.
  * "Account Usage" (sidebar) opens it pinned, in detail.
  */
+import { formatNumber } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useParams } from 'react-router';
 import type { AccountUsage, AccountUsageWindow, DeviceSummary } from '@kraki/protocol';
@@ -87,7 +89,7 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
       <div className="ur-label">
         {w ? (
           <span className={state === 'out' ? 'ur-num is-out' : stale ? 'ur-num is-stale' : 'ur-num'} style={{ fontSize: size * 0.3, letterSpacing: -size * 0.009 }}>
-            {Math.round(value)}<span className="ur-pct" style={{ fontSize: size * 0.3 * 0.42 }}>%</span>
+            {formatNumber(Math.round(value), { useGrouping: false })}<span className="ur-pct" style={{ fontSize: size * 0.3 * 0.42 }}>%</span>
           </span>
         ) : <span className="ur-dash" style={{ fontSize: size * 0.26 }}>—</span>}
       </div>
@@ -98,6 +100,7 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
 function AccountRings({ account, size, lineWidth, spacing, now, delay, animateIn }: {
   account: AccountUsage; size: number; lineWidth: number; spacing: number; now: number; delay: number; animateIn: boolean;
 }) {
+  const { t } = useTranslation('usage');
   const windows = ringWindows(account);
   const stale = isStale(account, now);
   const small = size < 70;
@@ -106,11 +109,11 @@ function AccountRings({ account, size, lineWidth, spacing, now, delay, animateIn
       {windows.length === 0 && (
         <div className="ua-ring-col">
           <UsageRing stale={stale} size={size} lineWidth={lineWidth} animateIn={false} />
-          <span className="ua-ring-note" style={{ fontSize: small ? 9.5 : 10.5 }}>{account.error === 'auth' ? 'Sign-in needed' : 'Unavailable'}</span>
+          <span className="ua-ring-note" style={{ fontSize: small ? 9.5 : 10.5 }}>{account.error === 'auth' ? t('status.signIn') : t('status.unavailable')}</span>
         </div>
       )}
       {windows.map((w, i) => (
-        <div key={w.id} className="ua-ring-col" title={`${windowName(w)} ${Math.round(w.remainingPercent)}% left, resets in ${shortReset(w.resetsAt, now)}`}>
+        <div key={w.id} className="ua-ring-col" title={t('windowTooltip', { name: windowName(w), percent: formatNumber(Math.round(w.remainingPercent), { useGrouping: false }), time: shortReset(w.resetsAt, now) })}>
           <UsageRing window={w} stale={stale} size={size} lineWidth={lineWidth} delay={delay + i * 0.06} animateIn={animateIn} />
           <div className="ua-ring-tags">
             <span className="ua-ring-name" style={{ fontSize: small ? 9.5 : 10.5 }}>{windowName(w)}</span>
@@ -129,6 +132,7 @@ function ProviderChip({ provider }: { provider: string }) {
 function AccountTile({ account, ringSize, lineWidth, showsPlan, shortName, delay, animateIn, now }: {
   account: AccountUsage; ringSize: number; lineWidth: number; showsPlan?: boolean; shortName?: boolean; delay: number; animateIn: boolean; now: number;
 }) {
+  const { t } = useTranslation('usage');
   const big = ringSize > 70;
   return (
     <div className="ua-tile" style={{ gap: big ? 10 : 8 }}>
@@ -141,7 +145,7 @@ function AccountTile({ account, ringSize, lineWidth, showsPlan, shortName, delay
         </div>
         <div className="ua-tile-badges">
           <ProviderChip provider={account.provider} />
-          {isStale(account, now) && account.windows.length > 0 && <span className="ua-stale">Stale</span>}
+          {isStale(account, now) && account.windows.length > 0 && <span className="ua-stale">{t('status.stale')}</span>}
         </div>
       </div>
       <AccountRings account={account} size={ringSize} lineWidth={lineWidth} spacing={big ? 18 : 14} now={now} delay={delay} animateIn={animateIn} />
@@ -150,20 +154,22 @@ function AccountTile({ account, ringSize, lineWidth, showsPlan, shortName, delay
 }
 
 function DeviceLine({ devices }: { devices: DeviceSummary[] }) {
+  const { t } = useTranslation('usage');
   const shown = devices.length > 2 ? devices.slice(0, 1) : devices;
   return (
-    <span className="ua-devices" title={devices.map((d) => d.name + (d.online ? '' : ' (offline)')).join('\n')}>
+    <span className="ua-devices" title={devices.map((d) => d.online ? d.name : t('deviceOffline', { name: d.name })).join('\n')}>
       <Laptop className="ua-devices-icon" />
       {shown.map((d, i) => (
         <span key={d.id}>{i > 0 && ' · '}<span className={d.online ? undefined : 'is-offline'}>{d.name}</span></span>
       ))}
-      {devices.length > 2 && ` +${devices.length - 1}`}
+      {devices.length > 2 && t('moreDevices', { count: devices.length - 1, number: formatNumber(devices.length - 1, { useGrouping: false }) })}
     </span>
   );
 }
 
 function ReadStatus({ account, offline, now }: { account: AccountUsage; offline: boolean; now: number }) {
-  const status = offline ? 'Device offline' : readStatus(account, now);
+  const { t } = useTranslation('usage');
+  const status = offline ? t('status.offline') : readStatus(account, now);
   return (
     <div className="ua-read">
       <span>{lastUpdatedText(account, now)}</span>
@@ -173,6 +179,7 @@ function ReadStatus({ account, offline, now }: { account: AccountUsage; offline:
 }
 
 function RefreshControls() {
+  const { t } = useTranslation('usage');
   const status = useStore((s) => s.status);
   const devices = useStore((s) => s.devices);
   const usage = useStore((s) => s.deviceUsage);
@@ -183,40 +190,42 @@ function RefreshControls() {
   const busy = connected && targets.some((id) => refreshes.get(id)?.finished === false);
   const ready = connected && targets.some((id) => { const r = refreshes.get(id); return !r || (r.finished && now - r.startedAt >= 60_000); });
   let text: string;
-  if (!connected) text = 'Connect to refresh';
-  else if (busy) text = 'Refreshing…';
-  else if (targets.length === 0) text = [...devices.values()].some((d) => d.role === 'tentacle' && d.online) ? 'Update or enable account usage on your device to refresh' : 'No device online';
+  if (!connected) text = t('refresh.connect');
+  else if (busy) text = t('refresh.busy');
+  else if (targets.length === 0) text = [...devices.values()].some((d) => d.role === 'tentacle' && d.online) ? t('refresh.updateDevice') : t('refresh.noDevice');
   else {
     const err = targets.map((id) => refreshes.get(id)?.error).find(Boolean);
-    if (err === 'timeout') text = 'Refresh timed out. Try again.';
-    else if (err === 'offline' || err === 'connection') text = 'Connection lost. Try again.';
-    else if (err === 'disabled') text = 'Enable account usage on the device.';
-    else if (err === 'busy') text = 'Device is already refreshing. Try again shortly.';
-    else if (err) text = "Couldn't refresh. Try again.";
-    else if (targets.some((id) => usage.get(id)?.accounts.some((a) => a.error))) text = "Some accounts couldn't be updated";
-    else text = ready ? 'Provider rate limits apply' : 'Refreshed recently · wait a moment';
+    if (err === 'timeout') text = t('refresh.timeout');
+    else if (err === 'offline' || err === 'connection') text = t('refresh.connectionLost');
+    else if (err === 'disabled') text = t('refresh.disabled');
+    else if (err === 'busy') text = t('refresh.deviceBusy');
+    else if (err) text = t('refresh.failed');
+    else if (targets.some((id) => usage.get(id)?.accounts.some((a) => a.error))) text = t('refresh.someFailed');
+    else text = ready ? t('refresh.rateLimits') : t('refresh.recent');
   }
   return (
     <div className="ua-refresh">
       {busy && <span className="ua-spinner" />}
       <span className="ua-refresh-text">{text}</span>
-      <button type="button" className="ua-refresh-btn" disabled={!ready || busy} title="Refresh readings without bypassing provider rate limits" onClick={() => wsClient.refreshAccountUsage()}>
-        <RotateCw />Refresh
+      <button type="button" className="ua-refresh-btn" disabled={!ready || busy} title={t('refresh.hint')} onClick={() => wsClient.refreshAccountUsage()}>
+        <RotateCw />{t('refresh.action')}
       </button>
     </div>
   );
 }
 
 function Empty({ outdated }: { outdated: DeviceSummary[] }) {
+  const { t } = useTranslation('usage');
   return (
     <div className="ua-empty">
       <Gauge className="ua-empty-icon" />
-      <span>{outdated.length ? usageUpdateHint(outdated) : 'No Claude or Codex accounts found on your devices'}</span>
+      <span>{outdated.length ? usageUpdateHint(outdated) : t('empty')}</span>
     </div>
   );
 }
 
 function Card({ merged, isCurrent, index, now, width }: { merged: MergedAccountUsage; isCurrent: boolean; index: number; now: number; width: number }) {
+  const { t } = useTranslation('usage');
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const size = ref.current?.getBoundingClientRect();
@@ -242,7 +251,7 @@ function Card({ merged, isCurrent, index, now, width }: { merged: MergedAccountU
       <div className="ua-card-foot">
         <DeviceLine devices={merged.devices} />
         <span className="ua-flex" />
-        {isCurrent && <span className="ua-current">Current session</span>}
+        {isCurrent && <span className="ua-current">{t('currentSession')}</span>}
       </div>
     </div>
   );
@@ -268,6 +277,7 @@ type Mode = 'closed' | 'compact' | 'detail';
 
 /** Mount once in the window. */
 export function UsagePanel() {
+  const { t } = useTranslation('usage');
   const [mode, setMode] = useState<Mode>('closed');
   const [pinned, setPinned] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -340,7 +350,7 @@ export function UsagePanel() {
         className={`ua-panel ${detailed ? 'is-detail' : 'is-compact'}${closing ? ' is-closing' : ''}`}
         role="dialog"
         style={detailed ? { width: layout.width } : undefined}
-        aria-label="Account Usage"
+        aria-label={t('title')}
         data-testid="usage-panel"
         onMouseEnter={() => { inside.current = true; if (held.current) setMode('detail'); }}
         onMouseLeave={() => { inside.current = false; if (held.current && !pinned) setMode('compact'); }}
@@ -358,7 +368,7 @@ export function UsagePanel() {
         ) : (
           <div className="ua-grid ua-grid-compact">
             {accounts.slice(0, 6).map((m, i) => (
-              <div key={m.id} className={`ua-compact-card${m.id === current ? ' is-current' : ''}`} style={{ animationDelay: `${0.06 + i * 0.035}s` }} title={m.id === current ? 'Spent by the current session' : undefined}>
+              <div key={m.id} className={`ua-compact-card${m.id === current ? ' is-current' : ''}`} style={{ animationDelay: `${0.06 + i * 0.035}s` }} title={m.id === current ? t('spentByCurrent') : undefined}>
                 <AccountTile account={m.account} ringSize={48} lineWidth={5} shortName delay={0.14 + i * 0.035} animateIn now={now} />
               </div>
             ))}

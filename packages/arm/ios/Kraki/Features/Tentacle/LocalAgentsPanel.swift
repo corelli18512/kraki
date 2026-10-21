@@ -87,11 +87,11 @@ struct LocalAgentsPanel: View {
     }
 
     private var agentsSummary: String {
-        if check.isRunning { return "Checking…" }
+        if check.isRunning { return String(localized: "Checking…") }
         switch check.readyCount {
-        case 0: return check.installedAgents.isEmpty ? "" : "No agent is ready yet."
-        case 1: return "Ready to use."
-        default: return "\(check.readyCount) agents ready."
+        case 0: return check.installedAgents.isEmpty ? "" : String(localized: "No agent is ready yet.")
+        case 1: return String(localized: "Ready to use.")
+        default: return String(localized: "\(check.readyCount) agents ready.")
         }
     }
 
@@ -100,11 +100,11 @@ struct LocalAgentsPanel: View {
             AgentStatusIcon(status: agent.status).frame(width: 14)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(agent.name)
+                    Text(verbatim: agent.name)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.textPrimary)
                     if let version = agent.version {
-                        Text(version).font(.system(size: 10.5)).foregroundStyle(Color.textMuted)
+                        Text(verbatim: version).font(.system(size: 10.5)).foregroundStyle(Color.textMuted)
                     }
                 }
                 if let line = Self.detailLine(agent) {
@@ -125,11 +125,10 @@ struct LocalAgentsPanel: View {
         switch agent.status {
         case .checking: return nil
         case .ready:
-            let noun = agent.models == 1 ? "model" : "models"
-            return "Ready · \(agent.models) \(noun)"
-        case .needsLogin: return "Not signed in. " + (agent.hint ?? "")
-        case .notInstalled: return "Not installed"
-        case .error: return agent.hint ?? "Couldn't start."
+            return String(localized: "Ready · \(agent.models) models")
+        case .needsLogin: return String(localized: "Not signed in. \(agent.hint ?? "")")
+        case .notInstalled: return String(localized: "Not installed")
+        case .error: return agent.hint ?? String(localized: "Couldn't start.")
         }
     }
 }
@@ -199,8 +198,8 @@ struct SupportedAgentsSheet: View {
             AgentStatusIcon(status: status).frame(width: 16).padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(entry.name).font(.system(size: 12.5, weight: .medium))
-                    Text(entry.maker).font(.system(size: 10.5)).foregroundStyle(Color.textMuted)
+                    Text(verbatim: entry.name).font(.system(size: 12.5, weight: .medium))
+                    Text(verbatim: entry.maker).font(.system(size: 10.5)).foregroundStyle(Color.textMuted)
                 }
                 Text(entry.blurb).font(.system(size: 11)).foregroundStyle(Color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -224,13 +223,13 @@ struct SupportedAgentsSheet: View {
     }
 
     private func statusLine(_ agent: LocalAgentsCheck.Agent?) -> String {
-        guard let agent else { return "Checking…" }
+        guard let agent else { return String(localized: "Checking…") }
         switch agent.status {
-        case .checking: return "Checking…"
-        case .notInstalled: return "Not installed on this Mac."
+        case .checking: return String(localized: "Checking…")
+        case .notInstalled: return String(localized: "Not installed on this Mac.")
         default:
             let version = agent.version.map { " \($0)" } ?? ""
-            return "Installed\(version) — " + (LocalAgentsPanel.detailLine(agent) ?? "")
+            return String(localized: "Installed\(version) — \(LocalAgentsPanel.detailLine(agent) ?? "")")
         }
     }
 }

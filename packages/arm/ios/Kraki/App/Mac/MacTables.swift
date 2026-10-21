@@ -156,7 +156,7 @@ private final class MacTableDocumentView: NSView {
 
 private final class MacTableFooterView: NSView {
     let label = NSTextField(labelWithString: "")
-    let button = NSButton(title: "Open table", target: nil, action: nil)
+    let button = NSButton(title: String(localized: "Open table"), target: nil, action: nil)
     override var isFlipped: Bool { true }
 
     override init(frame: NSRect) {
@@ -263,7 +263,7 @@ final class MacTableScrollView: NSScrollView, NSMenuItemValidation {
         }
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
-        setAccessibilityLabel("Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns")
+        setAccessibilityLabel(String(localized: "Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns"))
         setAccessibilityValue(layout.semanticText())
     }
 
@@ -447,15 +447,15 @@ final class MacTableScrollView: NSScrollView, NSMenuItemValidation {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        let markdown = NSMenuItem(title: "Copy Table", action: #selector(copyMarkdown), keyEquivalent: "")
+        let markdown = NSMenuItem(title: String(localized: "Copy Table"), action: #selector(copyMarkdown), keyEquivalent: "")
         markdown.target = self
-        let tsv = NSMenuItem(title: "Copy as TSV", action: #selector(copyTSV), keyEquivalent: "")
+        let tsv = NSMenuItem(title: String(localized: "Copy as TSV"), action: #selector(copyTSV), keyEquivalent: "")
         tsv.target = self
         menu.addItem(markdown)
         menu.addItem(tsv)
         if !fullTable {
             menu.addItem(.separator())
-            let open = NSMenuItem(title: "Open Table in Window", action: #selector(showAllRows), keyEquivalent: "")
+            let open = NSMenuItem(title: String(localized: "Open Table in Window"), action: #selector(showAllRows), keyEquivalent: "")
             open.target = self
             menu.addItem(open)
         }
@@ -511,7 +511,7 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: natural, height: 600),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
-        window.title = "Table"
+        window.title = String(localized: "Table")
         window.minSize = NSSize(width: 420, height: 260)
         window.isReleasedWhenClosed = false
         window.center()
@@ -526,15 +526,15 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
     private func buildContent() {
         guard let window else { return }
         let root = NSView()
-        search.placeholderString = "Search"
+        search.placeholderString = String(localized: "Search")
         search.delegate = self
         search.target = self
         search.action = #selector(searchSubmitted)
         search.sendsWholeSearchString = false
         matchLabel.font = .systemFont(ofSize: 12)
         matchLabel.textColor = .secondaryLabelColor
-        let copyMarkdown = NSButton(title: "Copy Markdown", target: scrollView, action: #selector(MacTableScrollView.copyMarkdown))
-        let copyTSV = NSButton(title: "Copy TSV", target: scrollView, action: #selector(MacTableScrollView.copyTSV))
+        let copyMarkdown = NSButton(title: String(localized: "Copy Markdown"), target: scrollView, action: #selector(MacTableScrollView.copyMarkdown))
+        let copyTSV = NSButton(title: String(localized: "Copy TSV"), target: scrollView, action: #selector(MacTableScrollView.copyTSV))
         [copyMarkdown, copyTSV].forEach { $0.bezelStyle = .rounded; $0.controlSize = .regular }
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -544,7 +544,7 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
         search.widthAnchor.constraint(equalToConstant: 220).isActive = true
 
-        let hint = NSTextField(labelWithString: "Click a header to sort · Drag a column edge to resize · ⌘C copies the table")
+        let hint = NSTextField(labelWithString: String(localized: "Click a header to sort · Drag a column edge to resize · ⌘C copies the table"))
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .tertiaryLabelColor
 
@@ -583,9 +583,11 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
     }
 
     private func updateSubtitle() {
-        var text = "\(table.bodyRowCount) rows × \(table.columnCount) columns"
-        if let column = table.sortColumn { text += " · sorted by \(table.plainHeader[column])" }
-        window?.subtitle = text
+        if let column = table.sortColumn {
+            window?.subtitle = String(localized: "\(table.bodyRowCount) rows × \(table.columnCount) columns · sorted by \(table.plainHeader[column])")
+        } else {
+            window?.subtitle = String(localized: "\(table.bodyRowCount) rows × \(table.columnCount) columns")
+        }
     }
 
     func controlTextDidChange(_ obj: Notification) { runSearch(scroll: true) }
@@ -616,11 +618,11 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
     private func showMatch(scroll: Bool = true) {
         guard !matches.isEmpty else {
             scrollView.currentRow = nil
-            matchLabel.stringValue = "No matches"
+            matchLabel.stringValue = String(localized: "No matches")
             return
         }
         scrollView.currentRow = matches[matchIndex]
-        matchLabel.stringValue = "\(matchIndex + 1) of \(matches.count)"
+        matchLabel.stringValue = String(localized: "\(matchIndex + 1) of \(matches.count)")
         if scroll { scrollView.scrollToRow(matches[matchIndex]) }
     }
 

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { desktop } from './desktop';
 import { notificationsEnabled } from './notification-prefs';
 
@@ -15,13 +16,13 @@ export function formatDesktopPreview(preview: Record<string, unknown>) {
   const steps = typeof preview.steps === 'number' ? preview.steps : 0;
   let body: string;
   switch (preview.type) {
-    case 'permission': body = `Needs approval: ${summary ?? 'Review the requested action.'}`; break;
-    case 'question': body = `Question: ${summary ?? 'Open the Session to respond.'}`; break;
-    case 'error': body = `Failed: ${summary ?? 'The turn did not finish.'}`; break;
+    case 'permission': body = t('desktop:notifications.permission', { summary: summary ?? t('desktop:notifications.review') }); break;
+    case 'question': body = t('desktop:notifications.question', { summary: summary ?? t('desktop:notifications.respond') }); break;
+    case 'error': body = t('desktop:notifications.error', { summary: summary ?? t('desktop:notifications.turnFailed') }); break;
     case 'idle': body = summary ?? (steps > 0
-      ? `Finished with ${steps} step${steps === 1 ? '' : 's'} and no reply.`
-      : 'Finished with no reply.'); break;
-    default: body = summary ?? 'Open Kraki to view the update.';
+      ? t('desktop:notifications.steps', { count: steps })
+      : t('desktop:notifications.noReply')); break;
+    default: body = summary ?? t('desktop:notifications.open');
   }
   return { title: normalized(preview.title) ?? 'Kraki', body,
     sessionId: typeof preview.sessionId === 'string' ? preview.sessionId : undefined };

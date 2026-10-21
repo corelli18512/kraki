@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { X } from 'lucide-react';
 import jsQR from 'jsqr';
@@ -12,6 +13,7 @@ interface QrScannerProps {
  * Uses getUserMedia for the camera feed and jsQR for decoding.
  */
 export function QrScanner({ onScan, onClose }: QrScannerProps) {
+  const { t } = useTranslation('app');
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
@@ -48,7 +50,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
         await video.play();
         scan();
       } catch {
-        if (mounted) setError('Camera access denied. Check your browser or device settings.');
+        if (mounted) setError('denied');
       }
     }
 
@@ -102,12 +104,12 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 
       {error ? (
         <div className="px-8 text-center">
-          <p className="text-sm text-white/80">{error}</p>
+          <p className="text-sm text-white/80">{t('scanner.denied')}</p>
           <button
             onClick={handleClose}
             className="mt-4 rounded-lg bg-white/10 px-4 py-2 text-sm text-white/80 transition-colors hover:bg-white/20"
           >
-            Go back
+            {t('scanner.back')}
           </button>
         </div>
       ) : (
@@ -132,7 +134,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
           </div>
 
           <p className="mt-6 text-sm text-white/60">
-            Point at the QR code from <code className="rounded bg-white/10 px-1.5 py-0.5">kraki connect</code>
+            <Trans t={t} i18nKey="scanner.pointAt" components={{ command: <code className="rounded bg-white/10 px-1.5 py-0.5" /> }} />
           </p>
         </>
       )}

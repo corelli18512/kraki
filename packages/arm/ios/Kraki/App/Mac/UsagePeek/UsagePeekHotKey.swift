@@ -115,7 +115,7 @@ final class UsagePeekHotKey: ObservableObject {
             }
             return noErr
         }, eventTypes.count, &eventTypes, Unmanaged.passUnretained(self).toOpaque(), &handler)
-        if status != noErr { error = "Couldn't install the global shortcut handler (\(status))." }
+        if status != noErr { error = String(localized: "Couldn't install the global shortcut handler (\(status)).") }
         else { registerSaved() }
         KLog.diag("[UsagePeek] hotkey \(shortcut.display) enabled=\(enabled) handler=\(status) registered=\(reference != nil)")
     }
@@ -133,7 +133,7 @@ final class UsagePeekHotKey: ObservableObject {
     private func registerSaved() {
         guard enabled, reference == nil, handler != nil else { return }
         let status = register(shortcut, output: &reference)
-        if status != noErr { error = "\(shortcut.display) is already in use (\(status)). Choose another shortcut." }
+        if status != noErr { error = String(localized: "\(shortcut.display) is already in use (\(status)). Choose another shortcut.") }
     }
 
     func beginRecording() {
@@ -153,7 +153,7 @@ final class UsagePeekHotKey: ObservableObject {
     @discardableResult
     func update(_ spec: UsageShortcut) -> Bool {
         guard spec.isSafeToRegister else {
-            error = "Use F1–F20, or a combination with ⌘, ⌃ or ⌥."
+            error = String(localized: "Use F1–F20, or a combination with ⌘, ⌃ or ⌥.")
             return false
         }
         let wasRecording = recording
@@ -169,7 +169,7 @@ final class UsagePeekHotKey: ObservableObject {
         var candidate: EventHotKeyRef?
         let status = register(spec, output: &candidate)
         guard status == noErr else {
-            error = "\(spec.display) can't be used (\(status)); the previous shortcut is kept."
+            error = String(localized: "\(spec.display) can't be used (\(status)); the previous shortcut is kept.")
             if !wasRecording { recording = false; registerSaved() }
             return false
         }
@@ -199,7 +199,7 @@ private final class UsageShortcutRecorderButton: NSButton {
     @objc private func startCapture() {
         manager?.beginRecording()
         isCapturing = true
-        title = "Press a shortcut… (Esc to cancel)"
+        title = String(localized: "Press a shortcut… (Esc to cancel)")
         window?.makeFirstResponder(self)
     }
     override func keyDown(with event: NSEvent) {
@@ -239,11 +239,11 @@ struct UsageShortcutRecorder: NSViewRepresentable {
         button.manager = manager
         button.bezelStyle = .rounded
         button.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        button.setAccessibilityLabel("Change the account usage shortcut")
+        button.setAccessibilityLabel(String(localized: "Change the account usage shortcut"))
         return button
     }
     func updateNSView(_ nsView: NSButton, context: Context) {
-        nsView.title = manager.recording ? "Press a shortcut… (Esc to cancel)" : manager.shortcut.display
+        nsView.title = manager.recording ? String(localized: "Press a shortcut… (Esc to cancel)") : manager.shortcut.display
     }
     static func dismantleNSView(_ nsView: NSButton, coordinator: ()) {
         (nsView as? UsageShortcutRecorderButton)?.manager?.cancelRecording()

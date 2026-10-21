@@ -15,3 +15,14 @@ describe('deviceLastOnline (DevicesPane)', () => {
     expect(deviceLastOnline('invalid', now)).toBeNull();
   });
 });
+
+it('uses the selected language for calendar labels and abbreviated dates', async () => {
+  const { i18next } = await import('../i18n');
+  const now = new Date(2026, 9, 13, 12);
+  try {
+    await i18next.changeLanguage('zh-Hans');
+    expect(deviceLastOnline(new Date(2026, 9, 13, 1).toISOString(), now)).toBe('今天');
+    expect(deviceLastOnline(new Date(2026, 9, 12, 1).toISOString(), now)).toBe('昨天');
+    expect(deviceLastOnline(new Date(2026, 8, 28, 12).toISOString(), now)).toBe(new Intl.DateTimeFormat('zh-Hans', { month: 'short', day: 'numeric' }).format(new Date(2026, 8, 28, 12)));
+  } finally { await i18next.changeLanguage('en'); }
+});

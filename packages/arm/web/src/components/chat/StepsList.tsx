@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { ContentRef } from '@kraki/protocol';
 import { ChevronRight, CheckCircle2, CircleSlash, Loader2, Lock, TriangleAlert, XCircle } from 'lucide-react';
 import {
@@ -14,12 +15,13 @@ const pull = (sid: string, ref: ContentRef): void => {
 
 /** One non-prose step: a tool chip, a permission record or an error. */
 function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessage; sessionId: string; forceExpanded?: boolean; cancelled?: boolean }) {
+  const { t } = useTranslation('chat');
   const p = msg.payload as Record<string, unknown>;
   if (msg.type === 'tool_start' || msg.type === 'tool_complete') {
     return (
       <ToolActivity
         type={msg.type === 'tool_start' ? 'start' : 'complete'}
-        toolName={String(p.toolName ?? 'tool')}
+        toolName={String(p.toolName ?? t('steps.tool'))}
         headline={String(p.headline ?? '')}
         args={p.args as Record<string, unknown> | undefined}
         argsRef={p.argsRef as ContentRef | undefined}
@@ -39,9 +41,9 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
     return (
       <div className="kstep-permission">
         <div className="kstep-note"><Lock className="kstep-icon kstep-permission-lock" preserveAspectRatio="none" aria-hidden />
-          <span>{String(p.description || (p.toolName ? `Run ${String(p.toolName)}` : 'Permission'))}</span>
+          <span>{String(p.description || (p.toolName ? t('steps.run', { tool: String(p.toolName) }) : t('steps.permission')))}</span>
         </div>
-        {decision && <span className={`kstep-outcome ${decision === 'deny' ? 'kstep-bad' : 'kstep-good'}`}>{decision === 'deny' ? (reason ? `Denied: ${reason}` : 'Denied') : decision === 'always_allow' ? 'Always allowed' : 'Approved'}</span>}
+        {decision && <span className={`kstep-outcome ${decision === 'deny' ? 'kstep-bad' : 'kstep-good'}`}>{decision === 'deny' ? (reason ? t('steps.deniedReason', { reason }) : t('steps.denied')) : decision === 'always_allow' ? t('steps.alwaysAllowed') : t('steps.approved')}</span>}
       </div>
     );
   }
@@ -49,7 +51,7 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
     return (
       <div className="kstep-note kstep-bad">
         <TriangleAlert className="kstep-icon" aria-hidden />
-        <span>{String(p.message ?? 'Error')}</span>
+        <span>{String(p.message ?? t('steps.error'))}</span>
       </div>
     );
   }
@@ -58,20 +60,21 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
 
 /** A step that dispatched a subagent: a card that opens the subagent's page. */
 export function SubagentCard({ msg, merged, onOpen }: { msg: ChatMessage; merged: ChatMessage[]; onOpen: (id: string) => void }) {
+  const { t } = useTranslation('chat');
   const id = callIdOf(msg) ?? '';
   const info = subagentOf(msg);
   const status = subagentStatus(msg);
   const meta = [
-    status === 'running' ? 'Running' : undefined,
+    status === 'running' ? t('steps.running') : undefined,
     contentsLabel(merged, id),
     formatDuration(info?.durationMs),
   ].filter(Boolean).join(' · ');
   const Icon = status === 'running' ? Loader2 : status === 'failed' ? XCircle : status === 'stopped' ? CircleSlash : CheckCircle2;
   return (
-    <button type="button" className="ksub-card" data-status={status} onClick={() => onOpen(id)} aria-label={`Open subagent ${info?.name ?? ''}`}>
+    <button type="button" className="ksub-card" data-status={status} onClick={() => onOpen(id)} aria-label={t('steps.openSubagent', { name: info?.name ?? '' })}>
       <span className={`ksub-status ksub-status-${status}`}><Icon aria-hidden /></span>
       <span className="ksub-text">
-        <span className="ksub-name">{info?.name ?? String((msg.payload as { toolName?: string }).toolName ?? 'subagent')}</span>
+        <span className="ksub-name">{info?.name ?? String((msg.payload as { toolName?: string }).toolName ?? t('steps.subagent'))}</span>
         {info?.task && <span className="ksub-task">{info.task}</span>}
       </span>
       {meta && <span className="ksub-meta">{meta}</span>}

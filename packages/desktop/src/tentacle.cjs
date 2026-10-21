@@ -7,6 +7,7 @@
 // The app owns the daemon (managed-by.json, by "kraki-windows"): it starts it
 // now and at every login (HKCU Run, through conhost --headless so no console
 // appears), and a separately installed CLI then defers to it.
+const i18n = require('./i18n.cjs');
 const { execFile, spawn } = require('node:child_process');
 const { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const os = require('node:os');
@@ -271,7 +272,7 @@ class BuiltInKraki {
 
   /** Take ownership and run the daemon now and at every login. */
   async enable() {
-    if (!this.available()) throw new Error('The built-in Kraki is missing from this installation.');
+    if (!this.available()) throw new Error(i18n.t('error.builtInMissing'));
     const home = krakiHome();
     mkdirSync(home, { recursive: true });
     // A standalone CLI daemon must stop first: one device id, one daemon.
@@ -305,7 +306,7 @@ class BuiltInKraki {
       const now = await this.state();
       if (now.running) return;
     }
-    throw new Error('Kraki did not start. See the logs in ' + path.join(krakiHome(), 'logs'));
+    throw new Error(i18n.t('error.startFailed', { path: path.join(krakiHome(), 'logs') }));
   }
 
   /** Stop for good: the supervisor (not just the worker) and the login entry. */
@@ -317,7 +318,7 @@ class BuiltInKraki {
     if (process.platform !== 'win32') return;
     if (on) {
       const result = await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
-      if (result === null) throw new Error('Windows could not add Kraki to Startup apps. Open Settings → Apps → Startup, then try again.');
+      if (result === null) throw new Error(i18n.t('error.startupApps'));
     }
     else await reg(['delete', RUN_KEY, '/v', APP_RUN_VALUE, '/f']);
   }

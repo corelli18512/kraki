@@ -108,7 +108,7 @@ struct MacBubbleImageGrid: View {
         let inline = inlineImages.enumerated().map { index, image in
             Entry.image(
                 id: "inline-\(index)",
-                item: MacImagePreviewItem(image: image, title: "Image \(index + 1)")
+                item: MacImagePreviewItem(image: image, title: String(localized: "Image \(index + 1)"))
             )
         }
         return inline + refs.map(Entry.ref)
@@ -122,7 +122,7 @@ struct MacBubbleImageGrid: View {
             case .image(let id, let item):
                 return (id, item)
             case .ref(let ref):
-                return (ref.id, MacImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? "Image"))
+                return (ref.id, MacImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? String(localized: "Image")))
             }
         }
     }
@@ -169,10 +169,10 @@ struct MacBubbleImageGrid: View {
                     previewButton(image: image, entryID: ref.id, cornerRadius: 10)
                         .frame(width: size.width, height: size.height)
                 } else {
-                    errorPlaceholder(ref, label: "Invalid image")
+                    errorPlaceholder(ref, label: String(localized: "Invalid image"))
                 }
             case .error(let reason):
-                errorPlaceholder(ref, label: reason.isEmpty ? "Couldn't load image" : reason)
+                errorPlaceholder(ref, label: reason.isEmpty ? String(localized: "Couldn't load image") : reason)
             case .awaitingChunks, .fetching, .none:
                 loadingPlaceholder(ref)
             }
@@ -195,7 +195,7 @@ struct MacBubbleImageGrid: View {
                     )
                     .zIndex(Double(visible.count - index))
             }
-            Text("\(entries.count)")
+            Text(verbatim: "\(entries.count)")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
@@ -232,10 +232,10 @@ struct MacBubbleImageGrid: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(cardBorder)
                 } else {
-                    stackedErrorCard(ref, label: "Invalid image", width: cardWidth)
+                    stackedErrorCard(ref, label: String(localized: "Invalid image"), width: cardWidth)
                 }
             case .error(let reason):
-                stackedErrorCard(ref, label: reason.isEmpty ? "Couldn't load image" : reason, width: cardWidth)
+                stackedErrorCard(ref, label: reason.isEmpty ? String(localized: "Couldn't load image") : reason, width: cardWidth)
             case .awaitingChunks, .fetching, .none:
                 Button { open(ref.id) } label: {
                     ZStack {
@@ -259,7 +259,7 @@ struct MacBubbleImageGrid: View {
             .allowsHitTesting(false)
     }
 
-    private var openLabel: String { entries.count > 1 ? "Open image gallery" : "Open image preview" }
+    private var openLabel: String { entries.count > 1 ? String(localized: "Open image gallery") : String(localized: "Open image preview") }
 
     private func previewButton(
         image: NSImage?,
@@ -503,35 +503,35 @@ struct MacImagePreviewOverlay: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if selection.items.count > 1 {
-                        Text("\(index + 1) / \(selection.items.count)")
+                        Text(verbatim: "\(index + 1) / \(selection.items.count)")
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.62))
                     }
                     Spacer()
                     if selection.items.count > 1 {
-                        previewButton("chevron.left", label: "Previous image") {
+                        previewButton("chevron.left", label: String(localized: "Previous image")) {
                             show(index - 1)
                         }
                         .disabled(index == 0)
-                        previewButton("chevron.right", label: "Next image") {
+                        previewButton("chevron.right", label: String(localized: "Next image")) {
                             show(index + 1)
                         }
                         .disabled(index == selection.items.count - 1)
                     }
-                    previewButton("minus.magnifyingglass", label: "Zoom out") {
+                    previewButton("minus.magnifyingglass", label: String(localized: "Zoom out")) {
                         zoom = Self.clamp(zoom / 1.25)
                     }
-                    Text(String(format: "%.1f×", zoom))
+                    Text(verbatim: "\(Double(zoom).formatted(.number.precision(.fractionLength(1))))×")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.72))
                         .frame(width: 48)
-                    previewButton("plus.magnifyingglass", label: "Zoom in") {
+                    previewButton("plus.magnifyingglass", label: String(localized: "Zoom in")) {
                         zoom = Self.clamp(zoom * 1.25)
                     }
-                    previewButton("arrow.down.right.and.arrow.up.left", label: "Fit to window") {
+                    previewButton("arrow.down.right.and.arrow.up.left", label: String(localized: "Fit to window")) {
                         zoom = 1
                     }
-                    previewButton("xmark", label: "Close image preview") {
+                    previewButton("xmark", label: String(localized: "Close image preview")) {
                         onClose()
                     }
                     .keyboardShortcut(.cancelAction)
@@ -592,7 +592,7 @@ struct MacImagePreviewOverlay: View {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.8))
-                Text(reason.isEmpty ? "Couldn't load image" : reason)
+                Text(reason.isEmpty ? String(localized: "Couldn't load image") : reason)
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.75))
                 Button("Retry") {
@@ -607,7 +607,7 @@ struct MacImagePreviewOverlay: View {
             case .awaitingChunks(let received, let total?) where total > 1:
                 ProgressView(value: Double(received) / Double(total))
                     .progressViewStyle(.circular)
-                Text("\(received * 100 / total)%")
+                Text(verbatim: (Double(received * 100 / total) / 100).formatted(.percent.precision(.fractionLength(0))))
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.7))
             default:

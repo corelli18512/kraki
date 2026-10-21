@@ -226,8 +226,8 @@ enum DeviceRole: String, Codable, Sendable {
     /// computer that runs their agents.
     var displayName: String {
         switch self {
-        case .tentacle: return "Computer"
-        case .app: return "App"
+        case .tentacle: return String(localized: "Computer")
+        case .app: return String(localized: "App")
         }
     }
 }
@@ -304,6 +304,7 @@ struct SessionDigest: Codable, Identifiable, Sendable {
 
 struct DeviceSummary: Codable, Identifiable, Equatable, Sendable {
     let id: String
+    /// Name to show: the user's custom name when set, else the device's own.
     var name: String
     var role: DeviceRole
     var kind: DeviceKind?
@@ -312,6 +313,40 @@ struct DeviceSummary: Codable, Identifiable, Equatable, Sendable {
     var online: Bool
     var lastSeen: String?
     var createdAt: String?
+    /// The name the device reports for itself; set only while the user gave
+    /// it a custom name (`rename_device`), which `name` then holds.
+    var defaultName: String? = nil
+
+    /// The device's own name, whether or not it was renamed.
+    var ownName: String { defaultName ?? name }
+}
+
+/// User-chosen device names (`rename_device`). Mirrors `normalizeDeviceName`
+/// in packages/protocol, which the relay applies too.
+enum DeviceName {
+    /// Longest custom name, in Unicode code points.
+    static let maxLength = 64
+
+    /// Control characters and runs of whitespace collapse to one space, the
+    /// ends are trimmed. `""` means "use the device's own name"; nil when the
+    /// name is too long.
+    static func normalize(_ raw: String) -> String? {
+        let scalars = raw.unicodeScalars.map { scalar -> Character in
+            let v = scalar.value
+            let control = v <= 0x1F || (0x7F...0x9F).contains(v) || v == 0x2028 || v == 0x2029
+            return control || CharacterSet.whitespacesAndNewlines.contains(scalar) ? " " : Character(scalar)
+        }
+        let cleaned = String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        return cleaned.unicodeScalars.count > maxLength ? nil : cleaned
+    }
+
+    /// What to send for `draft` typed over `device`'s name: `""` clears the
+    /// custom name, nil means nothing changed (or the name is too long).
+    static func renameValue(draft: String, for device: DeviceSummary) -> String? {
+        guard let name = normalize(draft) else { return nil }
+        let custom = name == device.ownName ? "" : name
+        return (custom.isEmpty ? device.ownName : custom) == device.name ? nil : custom
+    }
 }
 
 struct ModelDetail: Codable, Equatable, Sendable {

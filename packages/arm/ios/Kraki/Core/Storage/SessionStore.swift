@@ -38,7 +38,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
     /// "active" row. Cleared to `.none` on idle.
     var activity: SessionActivity = .none
 
-    var displayTitle: String { title ?? autoTitle ?? "New Session" }
+    var displayTitle: String { title ?? autoTitle ?? String(localized: "New Session") }
 
     // MARK: - Codable
     //
@@ -351,7 +351,7 @@ final class SessionStore {
     /// Schedules a debounced write of the current observable state to
     /// disk. Called after any mutation that changes a card-visible field.
     /// Safe to call frequently — the cache coalesces.
-    fileprivate func scheduleSave() {
+    func scheduleSave() {
         #if DEBUG
         snapshotScheduleCountForTesting += 1
         #endif

@@ -199,7 +199,7 @@ struct MainTabView: View {
             }
         }
         .background {
-            TabActionInterceptor(actionTitle: "New Session") { showNewSession = true }
+            TabActionInterceptor(actionTitle: String(localized: "New Session")) { showNewSession = true }
                 .frame(width: 0, height: 0)
         }
     }

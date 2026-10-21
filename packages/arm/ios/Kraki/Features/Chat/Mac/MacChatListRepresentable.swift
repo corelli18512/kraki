@@ -479,14 +479,26 @@ struct MacChatListRepresentable: NSViewRepresentable {
         combineVisibleText(card.text, into: &hasher)
         if let action = card.action {
             hasher.combine(action.type)
-            hasher.combine(action.toolCallId ?? "")
-            hasher.combine(action.headline ?? "")
-            hasher.combine(action.permissionId ?? "")
-            hasher.combine(action.questionId ?? "")
-            hasher.combine(action.payload["decision"]?.stringValue ?? "")
-            hasher.combine(action.payload["success"]?.boolValue ?? false)
+            hasher.combine(action.toolCallId)
+            hasher.combine(action.toolName)
+            hasher.combine(action.headline)
+            hasher.combine(action.permissionId)
+            hasher.combine(action.questionId)
+            // Keep the cached content/geometry in sync with everything the
+            // action slot and its natural-width measurement render.
+            hasher.combine(action.payload["running"]?.intValue ?? 0)
+            hasher.combine(action.toolDescription)
+            hasher.combine(action.choices)
+            hasher.combine(action.payload["message"]?.stringValue)
+            hasher.combine(action.payload["decision"]?.stringValue)
+            hasher.combine(action.payload["success"]?.boolValue ?? true)
             hasher.combine(action.payload["localPending"]?.boolValue ?? false)
-            hasher.combine(action.payload["localError"]?.stringValue ?? "")
+            hasher.combine(action.payload["localError"]?.stringValue)
+            if action.type == "permission", let args = action.args {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .sortedKeys
+                hasher.combine(try? encoder.encode(args))
+            }
         }
         return String(hasher.finalize())
     }

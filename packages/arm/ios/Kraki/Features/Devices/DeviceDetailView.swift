@@ -8,9 +8,16 @@ import SwiftUI
 
 struct DeviceDetailView: View {
     @Environment(AppState.self) private var appState
-    let device: DeviceSummary
+    private let initial: DeviceSummary
+
+    init(device: DeviceSummary) { initial = device }
+
+    /// Live from the store, so a rename (from here or any other device) shows.
+    private var device: DeviceSummary { appState.deviceStore.devices[initial.id] ?? initial }
 
     @State private var showRemoveConfirmation = false
+    @State private var showRename = false
+    @State private var nameDraft = ""
     @State private var modelsExpanded = false
 
     private var isCurrentDevice: Bool {
@@ -47,13 +54,14 @@ struct DeviceDetailView: View {
     }
 
     private var canRemove: Bool {
-        !device.online && !isCurrentDevice
+        // Offline in the middle of an update is a restart, not a dead computer.
+        !device.online && !isCurrentDevice && appState.deviceStore.updateProgress[device.id]?.isActive != true
     }
 
     private var statusLabel: String {
-        if device.online, let m = models, !m.isEmpty { return "Online" }
-        if device.online { return "Connecting…" }
-        return "Offline"
+        if device.online, let m = models, !m.isEmpty { return String(localized: "Online") }
+        if device.online { return String(localized: "Connecting…") }
+        return String(localized: "Offline")
     }
 
     private var statusColor: Color {
@@ -66,22 +74,35 @@ struct DeviceDetailView: View {
         List {
             // Info rows
             Section {
-                infoRow("Status", value: statusLabel, valueColor: statusColor)
+                Button {
+                    nameDraft = device.name
+                    showRename = true
+                } label: {
+                    HStack {
+                        Text("Name").foregroundStyle(.secondary)
+                        Spacer()
+                        Text(verbatim: device.name).foregroundStyle(.primary).lineLimit(1)
+                        Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                }
+                .accessibilityLabel("Rename \(device.name)")
+                .accessibilityIdentifier("device.rename")
+                infoRow(String(localized: "Status"), value: statusLabel, valueColor: statusColor)
                 if !agentNames.isEmpty {
-                    infoRow("Coding agents", value: agentNames)
+                    infoRow(String(localized: "Coding agents"), value: agentNames)
                 }
                 if DeviceDates.parse(device.createdAt) != nil {
-                    infoRow("Added", value: formatDate(device.createdAt))
+                    infoRow(String(localized: "Added"), value: formatDate(device.createdAt))
                 }
-                infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
+                infoRow(String(localized: "Last online"), value: device.online ? String(localized: "Now") : formatDate(device.lastSeen))
                 if let version {
-                    infoRow("Version", value: version)
+                    infoRow(String(localized: "Version"), value: version)
                 }
             }
 
-            if appState.deviceStore.availableUpdate(for: device.id) != nil
-                || appState.deviceStore.updateProgress[device.id] != nil {
-                Section { DeviceUpdateControl(device: device).padding(.vertical, 2) }
+            if DeviceUpdateSection.isShown(appState.deviceStore, device.id) {
+                DeviceUpdateSection(device: device)
             }
 
             // Subscription accounts signed in on this device. Each account's card in
@@ -105,7 +126,7 @@ struct DeviceDetailView: View {
                     DisclosureGroup(isExpanded: $modelsExpanded) {
                         FlowLayout(spacing: 6) {
                             ForEach(models, id: \.self) { model in
-                                Text(model)
+                                Text(verbatim: model)
                                     .font(.caption)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
@@ -135,7 +156,7 @@ struct DeviceDetailView: View {
                             HStack {
                                 AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm, status: session.state)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(session.displayTitle)
+                                    Text(verbatim: session.displayTitle)
                                         .font(.subheadline)
                                         .lineLimit(1)
                                     Text(sessionListTimestamp(for: session))
@@ -173,6 +194,22 @@ struct DeviceDetailView: View {
             SessionDetailView(sessionId: nav.id)
                 .id(nav.id)
                 .environment(appState)
+        }
+        .alert("Rename Device", isPresented: $showRename) {
+            TextField(device.ownName, text: $nameDraft)
+                .onChange(of: nameDraft) { _, value in
+                    if value.unicodeScalars.count > DeviceName.maxLength {
+                        nameDraft = String(String.UnicodeScalarView(value.unicodeScalars.prefix(DeviceName.maxLength)))
+                    }
+                }
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                if let name = DeviceName.renameValue(draft: nameDraft, for: device) {
+                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                }
+            }
+        } message: {
+            Text("Shown on all your devices. Leave it empty to use \"\(device.ownName)\".")
         }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}

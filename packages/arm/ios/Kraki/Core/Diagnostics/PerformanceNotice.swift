@@ -78,9 +78,9 @@ final class PerformanceNotice {
 }
 
 enum PerformanceNoticeCopy {
-    static let title = "Help Improve Kraki"
-    static let explanation = "Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments."
-    static let settingsHint = "You can change this anytime in Settings › Privacy."
+    static let title = String(localized: "Help Improve Kraki")
+    static let explanation = String(localized: "Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments.")
+    static let settingsHint = String(localized: "You can change this anytime in Settings › Privacy.")
 }
 
 /// Non-modal desktop card; the phone uses a system alert instead.
@@ -156,7 +156,7 @@ struct PerformanceNoticePresentation: ViewModifier {
             Button("OK") { notice.choose(share: true) }
                 .accessibilityIdentifier("performance-notice-ok")
         } message: {
-            Text("\(PerformanceNoticeCopy.explanation)\n\n\(PerformanceNoticeCopy.settingsHint)")
+            Text(verbatim: "\(PerformanceNoticeCopy.explanation)\n\n\(PerformanceNoticeCopy.settingsHint)")
         }
         #endif
     }

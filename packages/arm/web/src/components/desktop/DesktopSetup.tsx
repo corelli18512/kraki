@@ -13,6 +13,7 @@
  * Every step derives from live state (config, owner, daemon), so reopening
  * the app resumes at the right place.
  */
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KrakiLogo } from '../KrakiLogo';
 import { isDesktopSignedOut, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
@@ -53,6 +54,7 @@ function useStored<T extends string>(key: string, fallback: T): [T, (v: T) => vo
 let triedCredentials = false;
 
 export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
+  const { t } = useTranslation('desktop');
   const [state, setState] = useState<BuiltInState | null>(null);
   const [role, setRole] = useStored<Role>(ROLE_KEY, 'undecided');
   const [owner, setOwner] = useStored<Owner>(OWNER_KEY, 'undecided');
@@ -91,7 +93,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
   }
 
   if (step === 'detecting') return (
-    <div className="ds-page ds-launch" data-testid="desktop-launch" role="status" aria-label="Opening Kraki">
+    <div className="ds-page ds-launch" data-testid="desktop-launch" role="status" aria-label={t('setup.opening')}>
       <KrakiLogo className="ds-launch-logo" />
       <div className="ds-launch-activity" />
     </div>
@@ -113,7 +115,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
           {step === 'thisPC' && (
             <ThisPCStep
               builtIn={builtIn}
-              stepLabel={moved === '1' ? null : 'Step 1 of 2'}
+              stepLabel={moved === '1' ? null : t('setup.stepOne')}
               onContinue={() => { setRole('runsAgents'); setMoved('0'); }}
               onSkip={() => {
                 setMoved('0');
@@ -130,7 +132,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
             />
           )}
           {step === 'background' && <BackgroundStep builtIn={builtIn} onStarted={refresh} />}
-          {step === 'done' && <Progress label="Connecting…" />}
+          {step === 'done' && <Progress label={t('setup.connecting')} />}
         </div>
       </div>
     </div>
@@ -148,6 +150,7 @@ function Backdrop() {
 
 /** Kraki for Mac's MacSetupIntro: circle-clip logo reveal, wordmark, tagline. */
 function Intro({ onFinished }: { onFinished: () => void }) {
+  const { t } = useTranslation('desktop');
   const [leaving, setLeaving] = useState(false);
   const done = useRef(onFinished);
   done.current = onFinished;
@@ -169,7 +172,7 @@ function Intro({ onFinished }: { onFinished: () => void }) {
       <div className={leaving ? 'ds-intro ds-intro-leaving' : 'ds-intro'}>
         <KrakiLogo className="ds-intro-logo animate-logo-reveal" />
         <div className="ds-wordmark animate-fade-up">KRAKI</div>
-        <div className="ds-tagline animate-fade-up-d2">Your coding agents, on every device</div>
+        <div className="ds-tagline animate-fade-up-d2">{t('setup.tagline')}</div>
       </div>
     </div>
   );
@@ -204,25 +207,26 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function ThisPCStep({ builtIn, stepLabel, onContinue, onSkip }: {
   builtIn: BuiltInBridge; stepLabel: string | null; onContinue: () => void; onSkip: () => void;
 }) {
+  const { t } = useTranslation('desktop');
   const check = useAgentsCheck(builtIn);
   const blocking = check.readyCount === 0
-    ? (check.running ? 'Checking the agents on this PC…' : 'Set up at least one coding agent, then click Check Again.')
+    ? (check.running ? t('setup.checkingAgents') : t('setup.needAgent'))
     : null;
   return (
     <StepCard
       step={stepLabel}
-      title="Set up this PC"
-      detail="Kraki runs the coding agents installed on this PC, so you can use them from here, your phone and your other computers."
+      title={t('setup.thisPC')}
+      detail={t('setup.thisPCDetail')}
     >
       <div className="ds-stack">
-        <Section title="Coding agents"><AgentsPanel check={check} /></Section>
+        <Section title={t('setup.agents')}><AgentsPanel check={check} /></Section>
         <div className="ds-actions">
           <button type="button" className="ds-button ds-button-primary ds-button-wide" disabled={!!blocking} onClick={onContinue} data-testid="desktop-setup-continue">
-            Continue
+            {t('setup.continue')}
           </button>
           {blocking && <div className="ds-muted">{blocking}</div>}
           <button type="button" className="ds-link" onClick={onSkip} data-testid="desktop-setup-skip">
-            Skip — don't run agents on this PC, only control other computers
+            {t('setup.skip')}
           </button>
         </div>
       </div>
@@ -236,9 +240,10 @@ type SignInPhase =
   | { kind: 'waiting' }
   | { kind: 'code'; code: string; uri: string }
   | { kind: 'configuring'; username: string }
-  | { kind: 'failed'; message: string };
+  | { kind: 'failed'; message?: string };
 
 function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again: 'expired' | 'signedOut' | null; onDone: () => void }) {
+  const { t } = useTranslation('desktop');
   const forceLogin = again !== null;
   const [phase, setPhase] = useState<SignInPhase>({ kind: 'idle' });
   useEffect(() => () => builtIn.cancelSetup(), [builtIn]);
@@ -259,7 +264,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
     }).then((result) => {
       if (current !== attempt.current) return;
       if (result.ok) onDone();
-      else setPhase((p) => (p.kind === 'failed' ? p : { kind: 'failed', message: 'Sign-in did not finish. Try again.' }));
+      else setPhase((p) => (p.kind === 'failed' ? p : { kind: 'failed' }));
     });
   }, [builtIn, forceLogin, onDone]);
 
@@ -273,54 +278,54 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
     return () => { live = false; };
   }, [code, uri]);
 
-  if (phase.kind === 'starting') return <Progress label="Contacting GitHub…" />;
+  if (phase.kind === 'starting') return <Progress label={t('setup.contacting')} />;
   if (phase.kind === 'configuring') {
-    return <Progress label={phase.username ? `Signed in as ${phase.username}. Setting up…` : 'Setting up…'} />;
+    return <Progress label={phase.username ? t('setup.signedInAs', { username: phase.username }) : t('setup.configuring')} />;
   }
   if (phase.kind === 'waiting') {
     return (
-      <StepCard step="Step 2 of 2" title="Continue in the sign-in window" detail="Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click.">
+      <StepCard step={t('setup.stepTwo')} title={t('setup.signInWindow')} detail={t('setup.approveDetail')}>
         <div className="ds-actions">
-          <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />Waiting for GitHub…</div>
+          <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />{t('setup.waitingGitHub')}</div>
           <div className="ds-row">
-            <button type="button" className="ds-button" onClick={() => builtIn.showSignInWindow?.()}>Show Sign-in Window</button>
-            <button type="button" className="ds-button" onClick={cancel}>Cancel</button>
+            <button type="button" className="ds-button" onClick={() => builtIn.showSignInWindow?.()}>{t('setup.showSignIn')}</button>
+            <button type="button" className="ds-button" onClick={cancel}>{t('setup.cancel')}</button>
           </div>
-          <button type="button" className="ds-link" onClick={() => start(true)}>Sign in with a code instead</button>
+          <button type="button" className="ds-link" onClick={() => start(true)}>{t('setup.useCode')}</button>
         </div>
       </StepCard>
     );
   }
   if (phase.kind === 'code') {
     return (
-      <StepCard step="Step 2 of 2" title="Enter this code on GitHub" detail={copied ? "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki." : "Open GitHub in your browser, paste the code there and approve Kraki."}>
+      <StepCard step={t('setup.stepTwo')} title={t('setup.enterCode')} detail={copied ? t('setup.codeCopied') : t('setup.codeDetail')}>
         <div className="ds-actions">
           <div className="ds-device-code" data-testid="desktop-device-code">{phase.code}</div>
           <div className="ds-row">
-            <button type="button" className="ds-button" onClick={() => { void navigator.clipboard.writeText(phase.code).then(() => setCopied(true)).catch(() => {}); window.open(phase.uri, '_blank'); }}>Copy Code &amp; Open GitHub</button>
-            <button type="button" className="ds-button" onClick={cancel}>Cancel</button>
+            <button type="button" className="ds-button" onClick={() => { void navigator.clipboard.writeText(phase.code).then(() => setCopied(true)).catch(() => {}); window.open(phase.uri, '_blank'); }}>{t('setup.copyCode')}</button>
+            <button type="button" className="ds-button" onClick={cancel}>{t('setup.cancel')}</button>
           </div>
-          <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />Waiting for approval…</div>
+          <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />{t('setup.waitingApproval')}</div>
         </div>
       </StepCard>
     );
   }
   return (
     <StepCard
-      step={again ? null : 'Step 2 of 2'}
-      title={again === 'expired' ? 'Sign in again' : 'Sign in'}
+      step={again ? null : t('setup.stepTwo')}
+      title={again === 'expired' ? t('setup.signInAgain') : t('setup.signIn')}
       detail={again === 'expired'
-        ? 'Your sign-in has expired or was revoked. Sign in with GitHub to reconnect this PC.'
-        : 'Sign in with GitHub. The coding agents on this PC become available here, on your phone and on your other computers.'}
+        ? t('setup.expired')
+        : t('setup.signInDetail')}
     >
       <div className="ds-actions">
         <button type="button" className="ds-github" onClick={() => start()} data-testid="desktop-setup-signin">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
-          Sign in with GitHub
+          {t('setup.github')}
         </button>
         {phase.kind === 'failed' && <>
-          <div className="ds-warning">{phase.message}</div>
-          <button type="button" className="ds-link" onClick={() => start(true)}>Sign in with a code instead</button>
+          <div className="ds-warning">{phase.message ?? t('setup.signInFailed')}</div>
+          <button type="button" className="ds-link" onClick={() => start(true)}>{t('setup.useCode')}</button>
         </>}
       </div>
     </StepCard>
@@ -328,7 +333,8 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
 }
 
 function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStarted: () => Promise<void> }) {
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation('desktop');
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
@@ -336,31 +342,32 @@ function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStar
     void builtIn.enable().then(async (r) => {
       if (!live) return;
       if (r.ok) await onStarted();
-      else setError(r.error ?? 'Kraki could not start.');
+      else setError({ message: r.error });
     });
     return () => { live = false; };
   }, [builtIn, onStarted, attempt]);
-  if (!error) return <Progress label="Bringing this PC online…" />;
+  if (!error) return <Progress label={t('setup.bringingOnline')} />;
   return (
-    <StepCard title="Kraki couldn't start" detail={error}>
+    <StepCard title={t('setup.couldNotStart')} detail={error.message ?? t('setup.startFailed')}>
       <div className="ds-row">
-        <button type="button" className="ds-button ds-button-primary" onClick={() => setAttempt((n) => n + 1)}>Try Again</button>
-        <button type="button" className="ds-button" onClick={() => builtIn.openLogs()}>Show Logs</button>
+        <button type="button" className="ds-button ds-button-primary" onClick={() => setAttempt((n) => n + 1)}>{t('setup.tryAgain')}</button>
+        <button type="button" className="ds-button" onClick={() => builtIn.openLogs()}>{t('setup.showLogs')}</button>
       </div>
     </StepCard>
   );
 }
 
 export function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBridge; version: string | null; onChosen: (o: Owner) => void }) {
+  const { t } = useTranslation('desktop');
   const [switching, setSwitching] = useState<Owner | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const choose = async (o: Owner) => {
     if (switching) return;
     setSwitching(o);
     setError(null);
     if (o === 'builtIn') {
       const r = await builtIn.enable();
-      if (!r.ok) { setError(r.error ?? 'Could not switch.'); setSwitching(null); return; }
+      if (!r.ok) { setError({ message: r.error }); setSwitching(null); return; }
     }
     setSwitching(null);
     onChosen(o);
@@ -377,15 +384,15 @@ export function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBr
   return (
     <div className="ds-step">
       <div className="ds-step-head">
-        <div className="ds-step-title">Kraki is already set up on this PC</div>
-        <div className="ds-step-detail">The command-line version of Kraki{version ? ` (${version})` : ''} already runs your agents in the background. You only need one of them.</div>
+        <div className="ds-step-title">{t('setup.alreadySetUp')}</div>
+        <div className="ds-step-detail">{t('setup.existingCLI', { version: version ? ` (${version})` : '' })}</div>
       </div>
       <div className="ds-stack">
-        {option('builtIn', 'Use Kraki for Windows', 'Recommended', 'Kraki for Windows runs Kraki in the background and updates it with the app. Your sign-in and sessions carry over.')}
-        {option('external', 'Keep the command-line version', null, 'Kraki for Windows uses the install you already have. You keep updating it from a terminal.')}
+        {option('builtIn', t('setup.useWindows'), t('setup.recommended'), t('setup.windowsDetail'))}
+        {option('external', t('setup.keepCLI'), null, t('setup.cliDetail'))}
       </div>
-      {error && <div className="ds-warning">{error}</div>}
-      <div className="ds-muted">You can change this later in Settings → This PC.</div>
+      {error && <div className="ds-warning">{error.message ?? t('setup.switchFailed')}</div>}
+      <div className="ds-muted">{t('setup.changeLater')}</div>
     </div>
   );
 }

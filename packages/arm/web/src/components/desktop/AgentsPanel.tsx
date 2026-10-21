@@ -4,6 +4,8 @@
  * LocalAgentsPanel: installed agents only, each with its state and hint, and
  * every supported agent one click away in "Supported agents".
  */
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentCheckEvent, BuiltInBridge } from '../../lib/desktop';
 import { useDesktopSheet } from './useDesktopSheet';
@@ -22,11 +24,11 @@ export interface AgentResult {
 }
 
 export const AGENT_CATALOG = [
-  { id: 'claude', name: 'Claude Code', maker: 'Anthropic', blurb: "Anthropic's coding agent.", detect: 'Found as `claude` in a terminal.', installUrl: 'https://code.claude.com/docs/en/setup' },
-  { id: 'codex', name: 'Codex', maker: 'OpenAI', blurb: "OpenAI's coding agent.", detect: 'Found as `codex` in a terminal.', installUrl: 'https://developers.openai.com/codex/cli' },
-  { id: 'copilot', name: 'GitHub Copilot CLI', maker: 'GitHub', blurb: 'GitHub Copilot in the terminal. Needs a Copilot plan.', detect: 'Found as `copilot` in a terminal.', installUrl: 'https://github.com/features/copilot/cli' },
-  { id: 'pi', name: 'Pi', maker: 'Earendil', blurb: 'An open coding agent that works with many model providers and your own API keys.', detect: 'Found as `pi` in a terminal.', installUrl: 'https://github.com/earendil-works/pi#readme' },
-];
+  { id: 'claude', name: 'Claude Code', maker: 'Anthropic', blurbKey: 'agents.claudeBlurb', detectKey: 'agents.claudeDetect', installUrl: 'https://code.claude.com/docs/en/setup' },
+  { id: 'codex', name: 'Codex', maker: 'OpenAI', blurbKey: 'agents.codexBlurb', detectKey: 'agents.codexDetect', installUrl: 'https://developers.openai.com/codex/cli' },
+  { id: 'copilot', name: 'GitHub Copilot CLI', maker: 'GitHub', blurbKey: 'agents.copilotBlurb', detectKey: 'agents.copilotDetect', installUrl: 'https://github.com/features/copilot/cli' },
+  { id: 'pi', name: 'Pi', maker: 'Earendil', blurbKey: 'agents.piBlurb', detectKey: 'agents.piDetect', installUrl: 'https://github.com/earendil-works/pi#readme' },
+] as const;
 
 /** Hints from the CLI say "Terminal" (macOS wording); Windows has terminals. */
 const windowsHint = (hint?: string) => hint?.replace(/\bin Terminal\b/g, 'in a terminal');
@@ -71,46 +73,48 @@ export function useAgentsCheck(builtIn: BuiltInBridge) {
 export function detailLine(a: AgentResult): string | null {
   switch (a.status) {
     case 'checking': return null;
-    case 'ready': return `Ready · ${a.models} ${a.models === 1 ? 'model' : 'models'}`;
-    case 'needs_login': return `Not signed in. ${a.hint ?? ''}`.trim();
-    case 'not_installed': return 'Not installed';
-    case 'error': return a.hint ?? "Couldn't start.";
+    case 'ready': return t('desktop:agents.models', { count: a.models });
+    case 'needs_login': return t('desktop:agents.login', { hint: a.hint ?? '' }).trim();
+    case 'not_installed': return t('desktop:agents.notInstalled');
+    case 'error': return a.hint ?? t('desktop:agents.couldNotStart');
   }
 }
 
 export function StatusIcon({ status }: { status: AgentStatus }) {
-  if (status === 'checking') return <span className="ds-spinner ds-spinner-mini" aria-label="Checking" />;
+  const { t } = useTranslation('desktop');
+  if (status === 'checking') return <span className="ds-spinner ds-spinner-mini" aria-label={t('agents.checkingLabel')} />;
   if (status === 'ready') {
     return (
-      <svg className="ds-icon ds-icon-ready" viewBox="0 0 16 16" aria-label="Ready"><circle cx="8" cy="8" r="7.5" /><path d="M4.6 8.3l2.2 2.2 4.6-4.8" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <svg className="ds-icon ds-icon-ready" viewBox="0 0 16 16" aria-label={t('agents.ready')}><circle cx="8" cy="8" r="7.5" /><path d="M4.6 8.3l2.2 2.2 4.6-4.8" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
     );
   }
   if (status === 'not_installed') {
-    return <svg className="ds-icon ds-icon-dashed" viewBox="0 0 16 16" aria-label="Not installed"><circle cx="8" cy="8" r="6.5" /></svg>;
+    return <svg className="ds-icon ds-icon-dashed" viewBox="0 0 16 16" aria-label={t('agents.notInstalled')}><circle cx="8" cy="8" r="6.5" /></svg>;
   }
   return (
-    <svg className="ds-icon ds-icon-warn" viewBox="0 0 16 16" aria-label="Needs attention"><circle cx="8" cy="8" r="7.5" /><path d="M8 4.2v4.6" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" /><circle cx="8" cy="11.4" r="1" fill="#fff" /></svg>
+    <svg className="ds-icon ds-icon-warn" viewBox="0 0 16 16" aria-label={t('agents.attention')}><circle cx="8" cy="8" r="7.5" /><path d="M8 4.2v4.6" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" /><circle cx="8" cy="11.4" r="1" fill="#fff" /></svg>
   );
 }
 
 type Check = ReturnType<typeof useAgentsCheck>;
 
 export function AgentsPanel({ check }: { check: Check }) {
+  const { t } = useTranslation('desktop');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const closeCatalog = useCallback(() => setCatalogOpen(false), []);
-  const summary = check.running ? 'Checking…'
-    : check.readyCount === 0 ? (check.installed.length === 0 ? '' : 'No agent is ready yet.')
-      : check.readyCount === 1 ? 'Ready to use.' : `${check.readyCount} agents ready.`;
+  const summary = check.running ? t('agents.checking')
+    : check.readyCount === 0 ? (check.installed.length === 0 ? '' : t('agents.noneReady'))
+      : t('agents.readyCount', { count: check.readyCount });
 
   return (
     <div className="ds-agents">
       {!check.hasResults && check.installed.length === 0 ? (
-        <div className="ds-agents-loading"><span className="ds-spinner" /> Looking for coding agents on this PC…</div>
+        <div className="ds-agents-loading"><span className="ds-spinner" /> {t('agents.looking')}</div>
       ) : check.installed.length === 0 ? (
         <div className="ds-agents-none" data-testid="desktop-agents-none">
-          <div className="ds-strong">No coding agent found on this PC yet.</div>
-          <div className="ds-muted">Kraki runs agents like Claude Code, Codex, GitHub Copilot CLI or Pi. Install one, sign in to it, then click Check Again.</div>
-          <button type="button" className="ds-button ds-button-small" onClick={() => setCatalogOpen(true)}>Choose an agent to install…</button>
+          <div className="ds-strong">{t('agents.noneFound')}</div>
+          <div className="ds-muted">{t('agents.installHelp')}</div>
+          <button type="button" className="ds-button ds-button-small" onClick={() => setCatalogOpen(true)}>{t('agents.choose')}</button>
         </div>
       ) : (
         <div>
@@ -132,9 +136,9 @@ export function AgentsPanel({ check }: { check: Check }) {
         <span className="ds-muted">{summary}</span>
         <span className="ds-spacer" />
         {check.installed.length > 0 && (
-          <button type="button" className="ds-link" onClick={() => setCatalogOpen(true)}>Supported agents</button>
+          <button type="button" className="ds-link" onClick={() => setCatalogOpen(true)}>{t('agents.supported')}</button>
         )}
-        <button type="button" className="ds-button ds-button-small" disabled={check.running} onClick={check.run}>Check Again</button>
+        <button type="button" className="ds-button ds-button-small" disabled={check.running} onClick={check.run}>{t('agents.checkAgain')}</button>
       </div>
       {catalogOpen && <SupportedAgentsSheet check={check} onClose={closeCatalog} />}
     </div>
@@ -142,19 +146,20 @@ export function AgentsPanel({ check }: { check: Check }) {
 }
 
 function SupportedAgentsSheet({ check, onClose }: { check: Check; onClose: () => void }) {
+  const { t } = useTranslation('desktop');
   const sheet = useDesktopSheet(onClose);
   return (
     <div className="ds-sheet-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={sheet} tabIndex={-1} className="ds-sheet" role="dialog" aria-modal="true" aria-label="Supported coding agents">
-        <div className="ds-sheet-title">Supported coding agents</div>
-        <div className="ds-muted ds-sheet-detail">Kraki runs the agents you install on this PC, with your own accounts. Install an agent and sign in to it once in a terminal, then click Check Again.</div>
+      <div ref={sheet} tabIndex={-1} className="ds-sheet" role="dialog" aria-modal="true" aria-label={t('agents.supportedTitle')}>
+        <div className="ds-sheet-title">{t('agents.supportedTitle')}</div>
+        <div className="ds-muted ds-sheet-detail">{t('agents.supportedHelp')}</div>
         <div>
           {AGENT_CATALOG.map((entry, i) => {
             const a = check.agents.get(entry.id);
             const status: AgentStatus = a?.status ?? 'checking';
-            const line = !a || status === 'checking' ? 'Checking…'
-              : status === 'not_installed' ? 'Not installed on this PC.'
-                : `Installed${a.version ? ` ${a.version}` : ''} — ${detailLine(a) ?? ''}`;
+            const line = !a || status === 'checking' ? t('agents.checking')
+              : status === 'not_installed' ? t('agents.notInstalledHere')
+                : t('agents.installed', { version: a.version ? ` ${a.version}` : '', detail: detailLine(a) ?? '' });
             return (
               <div key={entry.id}>
                 {i > 0 && <div className="ds-divider" />}
@@ -162,12 +167,12 @@ function SupportedAgentsSheet({ check, onClose }: { check: Check; onClose: () =>
                   <StatusIcon status={status} />
                   <div className="ds-agent-text">
                     <div><span className="ds-agent-name">{entry.name}</span><span className="ds-agent-version">{entry.maker}</span></div>
-                    <div className="ds-agent-detail ds-agent-detail-ready">{entry.blurb}</div>
+                    <div className="ds-agent-detail ds-agent-detail-ready">{t(entry.blurbKey)}</div>
                     <div className={status === 'ready' ? 'ds-agent-detail ds-ok' : 'ds-agent-detail'}>{line}</div>
-                    {status === 'not_installed' && <div className="ds-agent-detail">{entry.detect}</div>}
+                    {status === 'not_installed' && <div className="ds-agent-detail">{t(entry.detectKey)}</div>}
                   </div>
                   {status === 'not_installed' && (
-                    <a className="ds-button ds-button-small" href={a?.installUrl ?? entry.installUrl} target="_blank" rel="noreferrer">Install guide</a>
+                    <a className="ds-button ds-button-small" href={a?.installUrl ?? entry.installUrl} target="_blank" rel="noreferrer">{t('agents.installGuide')}</a>
                   )}
                 </div>
               </div>
@@ -175,10 +180,10 @@ function SupportedAgentsSheet({ check, onClose }: { check: Check; onClose: () =>
           })}
         </div>
         <div className="ds-sheet-actions">
-          {check.running && <><span className="ds-spinner" /><span className="ds-muted">Checking…</span></>}
+          {check.running && <><span className="ds-spinner" /><span className="ds-muted">{t('agents.checking')}</span></>}
           <span className="ds-spacer" />
-          <button type="button" className="ds-button" disabled={check.running} onClick={check.run}>Check Again</button>
-          <button type="button" className="ds-button ds-button-primary ds-button-default" onClick={onClose}>Done</button>
+          <button type="button" className="ds-button" disabled={check.running} onClick={check.run}>{t('agents.checkAgain')}</button>
+          <button type="button" className="ds-button ds-button-primary ds-button-default" onClick={onClose}>{t('agents.done')}</button>
         </div>
       </div>
     </div>

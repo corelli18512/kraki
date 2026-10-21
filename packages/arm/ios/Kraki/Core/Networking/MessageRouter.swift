@@ -3,7 +3,7 @@
 /// Mirrors `message-router.ts`:
 /// - Receives raw WebSocket frames via `handleRawMessage(_:)`.
 /// - Routes **control messages** (auth_ok, auth_error, auth_challenge,
-///   device_joined, device_left, device_removed, server_error, pong, ping).
+///   device_joined, device_left, device_removed, device_renamed, server_error, pong, ping).
 /// - Routes **encrypted envelopes** (unicast, broadcast) through the
 ///   `EncryptionHandler`, then dispatches the decrypted inner payload via
 ///   `handleDataMessage(_:)`.
@@ -170,45 +170,13 @@ final class MessageRouter {
         case "auth_info_response":
             appState?.authManager?.handleAuthInfoResponse(message: json)
 
-        // ── Device lifecycle ─────────────────────────────────────────────
-        case "device_joined":
-            if let deviceDict = json["device"] as? [String: Any],
-               let summary = DeviceSummary(json: deviceDict) {
-                appState?.deviceStore.addDevice(summary)
-                // A Tentacle that was away may have missed inputs the Relay
-                // could not hold; re-send what is still waiting for it.
-                if summary.role == .tentacle {
-                    appState?.deviceTrustDevicesChanged()
-                    // A Tentacle that (re)connected forgot this app's features.
-                    if appState?.deviceStore.deviceFeatures[summary.id]?.contains(PayloadFragments.feature) == true {
-                        declareClientFeatures(to: summary.id)
-                    }
-                    appState?.commandSender?.resendPendingInputs(deviceId: summary.id, reason: "tentacle_online")
-                }
-            }
-
-        case "device_left":
-            if let deviceId = json["deviceId"] as? String {
-                appState?.deviceStore.setDeviceOnline(deviceId, online: false)
-                appState?.sessionSubscriptionController.onTentacleUnavailable(deviceId)
-            }
-
-        case "device_removed":
-            if let deviceId = json["deviceId"] as? String {
-                appState?.deviceStore.removeDevice(deviceId)
-                appState?.sessionSubscriptionController.onTentacleUnavailable(deviceId)
-            }
-
-        case "device_pending":
-            // Transient liveness signal: the relay sent a ping but hasn't had
-            // a pong back within the grace period. Resolved by a follow-up
-            // device_joined (recovered) or device_left (gone), so leave the
-            // device's online state untouched and just acknowledge.
-            break
+        // ── Device lifecycle (MessageRouter+Devices.swift) ───────────────
+        case "device_joined", "device_left", "device_removed", "device_renamed", "device_pending":
+            handleDeviceLifecycle(type, json)
 
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
-            let message = json["message"] as? String ?? "Unknown server error"
+            let message = json["message"] as? String ?? String(localized: "Unknown server error")
             if appState?.accountDeletionFailedIfPending(message) != true {
                 appState?.lastError = message
             }
@@ -485,7 +453,7 @@ final class MessageRouter {
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             appState.messageStore.endCardTurn(sessionId)
             let draft = payload?["draft"] as? String ?? ""
-            updatePreview(sessionId, text: draft.isEmpty ? "Stopped" : draft,
+            updatePreview(sessionId, text: draft.isEmpty ? String(localized: "Stopped") : draft,
                           type: "agent", timestamp: timestamp)
 
         case "system_message":
@@ -499,7 +467,7 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 updatePreview(sessionId, text: content, type: "agent", timestamp: timestamp)
             } else if (payload?["kind"] as? String) != "no_reply" {
-                updatePreview(sessionId, text: "System notice", type: "agent", timestamp: timestamp)
+                updatePreview(sessionId, text: String(localized: "System notice"), type: "agent", timestamp: timestamp)
             }
 
         case "agent_message_delta":
@@ -595,7 +563,7 @@ final class MessageRouter {
             // Not a turn boundary: a retrying turn can recover, and its card
             // (e.g. a pending permission) must stay. Turn end is signalled separately.
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            let errorText = payload?["message"] as? String ?? "Error"
+            let errorText = payload?["message"] as? String ?? String(localized: "Error")
             // If this error correlates to a pending create/fork/import
             // by requestId, fail the placeholder so the optimistic
             // view shows an error state instead of spinning forever.
@@ -913,7 +881,7 @@ final class MessageRouter {
                 ?? ISO8601DateFormatter().string(from: Date())
             updatePreview(
                 sessionId,
-                text: "Session created",
+                text: String(localized: "Session created"),
                 type: "session_created",
                 timestamp: timestamp,
                 notify: false

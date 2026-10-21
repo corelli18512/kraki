@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { ChatView } from './ChatView';
 import { useStore } from '../../hooks/useStore';
 import { agentNavigationColors } from '../../lib/color';
@@ -7,14 +7,18 @@ import { useOutbox } from '../../lib/chat/outbox';
 import { messageProvider } from '../../lib/message-provider';
 import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
+import type { ChatRow } from './Bubble';
+import { i18next } from '../../i18n';
 
 const viewport = vi.hoisted(() => ({ narrow: false }));
 vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
 
 vi.mock('./ChatScroller', () => ({
-  ChatScroller: ({ rows }: { rows: { kind: string; card?: { text: string } }[] }) => <>
+  ChatScroller: ({ rows }: { rows: ChatRow[] }) => <>
     <div data-testid="live-rows">{rows.filter((r) => r.kind === 'live').length}</div>
     <div data-testid="live-text">{rows.find((r) => r.kind === 'live')?.card?.text}</div>
+    {rows.map((row) => row.kind === 'spine' && row.item.question?.outcome?.message
+      ? <div key={row.key} data-testid="question-outcome">{row.item.question.outcome.message}</div> : null)}
   </>,
 }));
 
@@ -37,7 +41,17 @@ beforeEach(() => {
   useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map(), cardHoldUntil: new Map(), historyCaughtUpThrough: new Map() });
 });
 
+afterEach(async () => { cleanup(); await i18next.changeLanguage('en'); });
+
 describe('ChatView history navigation', () => {
+  it('keeps the latest-button styling hook when its accessible label changes', async () => {
+    render(<ChatView sessionId="s" topInset={40} />);
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toHaveClass('is-latest');
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByRole('button', { name: '跳至最新' })).toHaveClass('is-latest');
+    expect(screen.getByRole('button', { name: '上一条回复' })).not.toHaveClass('is-latest');
+  });
+
   it('sets the shared native session tint and fixed Mac clearance without changing mobile clearance', () => {
     const { container, rerender } = render(<ChatView sessionId="mv23g6gx-gq3i4yy8" topInset={40} />);
     const jump = container.querySelector<HTMLElement>('.kjump')!;
@@ -63,6 +77,23 @@ describe('ChatView pending question live-row visibility', () => {
       cards: new Map([['s', { text, action, closed: false } as never]]),
     });
   }
+
+  it('refreshes a frozen question outcome after a language switch without new messages', async () => {
+    waitingCard();
+    const messages = [question, { type: 'interrupted_turn', seq: 2, sessionId: 's', deviceId: 'd', timestamp: '',
+      payload: { reason: 'process_lost' } }] as ChatMessage[];
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'idle', lastSeq: 2 } as never]]),
+      messages: new Map([['s', messages]]),
+    });
+    render(<ChatView sessionId="s" topInset={40} />);
+    expect(screen.getByTestId('question-outcome')).toHaveTextContent('Agent process was lost');
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    expect(screen.getByTestId('question-outcome')).toHaveTextContent('Agent 进程已丢失');
+    expect(useStore.getState().messages.get('s')).toBe(messages);
+    await act(async () => { await i18next.changeLanguage('en'); });
+    expect(screen.getByTestId('question-outcome')).toHaveTextContent('Agent process was lost');
+  });
 
   it.each(['', ' \n '])('does not draw a typing row for blank draft %j under a pending question, even if the card reopened', (text) => {
     waitingCard(text);

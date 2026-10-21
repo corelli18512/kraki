@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
@@ -9,7 +11,7 @@ import { X, Maximize2, Minimize2, Compass, LoaderCircle, AlertTriangle } from 'l
 import { RichTextDocumentIcon } from './RichTextDocumentIcon';
 
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
-const SIZE_ERROR = 'This report exceeds the 10 MB safety limit.';
+
 const ATTACHMENT_PULL = (sessionId: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sessionId, ref));
 };
@@ -27,7 +29,7 @@ export function withArtifactCsp(html: string): string {
 export async function exportHtmlReport(html: string, name: string): Promise<void> {
   if (desktop?.exportHtmlReport) {
     const result = await desktop.exportHtmlReport(html, name);
-    if (!result.ok) throw new Error(result.error || 'Couldn’t open this report in the browser.');
+    if (!result.ok) throw new Error(result.error || t('chat:report.openFailed'));
     return;
   }
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -42,6 +44,7 @@ export async function exportHtmlReport(html: string, name: string): Promise<void
 export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = false, onToggleExpanded }: {
   artifact: ContentRef; sessionId: string; onClose: () => void; expanded?: boolean; onToggleExpanded?: () => void;
 }) {
+  const { t } = useTranslation('chat');
   const title = htmlArtifactTitle(artifact);
   const { status, text, error } = useAttachmentText(artifact, sessionId, ATTACHMENT_PULL, artifact.size <= MAX_REPORT_BYTES);
   const oversized = artifact.size > MAX_REPORT_BYTES || (text !== null && new TextEncoder().encode(text).byteLength > MAX_REPORT_BYTES);
@@ -69,21 +72,21 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   const ready = prepared?.id === artifact.id && prepared.sessionId === sessionId ? prepared : null;
-  const reason = oversized ? SIZE_ERROR : status === 'error' ? error : renderError;
-  const expansionLabel = expanded ? 'Restore Split View' : 'Expand Report';
-  return <aside className={`kreport-panel ${expanded ? 'is-expanded' : ''}`} aria-label="HTML report preview">
+  const reason = oversized ? t('report.sizeError') : status === 'error' ? error : renderError;
+  const expansionLabel = expanded ? t('report.restore') : t('report.expand');
+  return <aside className={`kreport-panel ${expanded ? 'is-expanded' : ''}`} aria-label={t('report.preview')}>
     <div className="kreport-header">
       <RichTextDocumentIcon className="kreport-header-icon" />
-      <span className="kreport-header-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
-      {ready && <button type="button" aria-label="Open in Browser" title="Open in Browser" onClick={() => {
+      <span className="kreport-header-text"><strong>{title}</strong><small>{t('attachments.reportSize', { size: formatReportBytes(artifact.size) })}</small></span>
+      {ready && <button type="button" aria-label={t('report.openBrowser')} title={t('report.openBrowser')} onClick={() => {
         void exportHtmlReport(ready.exportHtml, artifact.name || title).catch((reason: unknown) => setExportError(reason instanceof Error ? reason.message : String(reason)));
       }}><Compass /></button>}
       {onToggleExpanded && <button type="button" className="kreport-expand" onClick={onToggleExpanded} aria-label={expansionLabel} title={expansionLabel}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>}
-      <button type="button" onClick={onClose} aria-label="Close Report" title="Close Report"><X /></button>
+      <button type="button" onClick={onClose} aria-label={t('report.close')} title={t('report.close')}><X /></button>
     </div>
     {exportError && <p className="kreport-export-error" role="alert">{exportError}</p>}
-    {reason ? <div className="kreport-state is-error"><AlertTriangle /><strong>Couldn’t load this report</strong><p>{reason}</p></div>
+    {reason ? <div className="kreport-state is-error"><AlertTriangle /><strong>{t('report.loadFailed')}</strong><p>{reason}</p></div>
       : ready ? <iframe title={title} src={ready.url} sandbox="allow-scripts" referrerPolicy="no-referrer" className="kreport-frame" />
-        : <div className="kreport-state"><LoaderCircle className="animate-spin" /><p>Loading report…</p></div>}
+        : <div className="kreport-state"><LoaderCircle className="animate-spin" /><p>{t('report.loading')}</p></div>}
   </aside>;
 }

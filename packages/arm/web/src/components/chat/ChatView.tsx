@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { flushSync } from 'react-dom';
 import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
@@ -53,6 +54,7 @@ export interface ChatViewProps {
 }
 
 export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArtifact }: ChatViewProps) {
+  const { t, i18n } = useTranslation('chat');
   const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
   const session = useStore((s) => s.sessions.get(sessionId));
   const rawCard = useStore((s) => s.cards.get(sessionId));
@@ -96,11 +98,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const answerKey = pendingAnswerTo.join(',');
   const spine = useMemo(
     () => spineRows(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead],
+    [messages, answerKey, atHead, i18n.language],
   );
   const questions = useMemo(
     () => openQuestions(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead],
+    [messages, answerKey, atHead, i18n.language],
   );
 
   const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
@@ -132,7 +134,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       const key = rowKey(item);
       const cached = cache.get(key);
       const row: ChatRow = cached && cached.kind === 'spine' && cached.item.message === item.message
-        && cached.item.question?.state === item.question?.state ? cached : { kind: 'spine', key, item };
+        && cached.item.question?.state === item.question?.state
+        && cached.item.question?.outcome?.message === item.question?.outcome?.message ? cached : { kind: 'spine', key, item };
       nextCache.set(key, row);
       return row;
     });
@@ -486,7 +489,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       />
       {session && rows.length === 0 && !showHistoryStatus && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>
-          <p>Send a message to start.</p>
+          <p>{t('view.empty')}</p>
         </div>
       )}
       <div className="kjump" style={{
@@ -498,19 +501,19 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         <button
           type="button"
           className={`kround ${showUp ? 'is-visible' : ''} ${atBottom ? '' : 'is-raised'}`}
-          aria-label="Previous reply"
+          aria-label={t('view.previousReply')}
           tabIndex={showUp ? 0 : -1}
           onClick={goUp}
         ><ChevronUp aria-hidden /></button>
         <button
           type="button"
-          className={`kround ${!atBottom && rows.length > 0 ? 'is-visible' : ''}`}
-          aria-label="Jump to latest"
+          className={`kround is-latest ${!atBottom && rows.length > 0 ? 'is-visible' : ''}`}
+          aria-label={t('view.latest')}
           tabIndex={!atBottom ? 0 : -1}
           onClick={() => scrollToBottom(true)}
         >
           <ChevronsDown aria-hidden />
-          {unseen && <span className="kround-dot" aria-label="New reply" />}
+          {unseen && <span className="kround-dot" aria-label={t('view.newReply')} />}
         </button>
       </div>
 
@@ -519,9 +522,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           {showHistoryStatus && <HistoryLoadStatus status={rangeStatus} onRetry={retryHistory} />}
         </div>
         {isCompacting && (
-          <div className="kcompacting" role="status" aria-label="Compacting context">
+          <div className="kcompacting" role="status" aria-label={t('view.compactingLabel')}>
             <Loader className="kcompacting-spinner" aria-hidden />
-            <span>Compacting context…</span>
+            <span>{t('view.compacting')}</span>
           </div>
         )}
         <Composer

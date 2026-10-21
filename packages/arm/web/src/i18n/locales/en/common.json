@@ -1,0 +1,19 @@
+{
+  "time": {
+    "justNow": "just now"
+  },
+  "action": {
+    "cancel": "Cancel",
+    "done": "Done",
+    "ok": "OK",
+    "save": "Save",
+    "close": "Close",
+    "retry": "Retry",
+    "copy": "Copy",
+    "copied": "Copied",
+    "delete": "Delete",
+    "rename": "Rename",
+    "continue": "Continue",
+    "back": "Back"
+  }
+}

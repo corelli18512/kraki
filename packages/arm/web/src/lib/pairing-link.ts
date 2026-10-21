@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * What to do when the web app is opened from a pairing QR link
  * (`/?relay=…&token=…`).
@@ -80,10 +81,10 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
   const appStore = import.meta.env.VITE_IOS_APP_STORE_URL as string | undefined;
   if (decision.kind === 'confirm-relay') {
     root.innerHTML = `<div style="${PAGE_STYLE}">
-      <h2>Connect to a self-hosted server?</h2>
-      <p>This code asks to connect to <b></b>, which is not a Kraki server. Continue only if you set up this server yourself.</p>
-      <button id="kraki-confirm" style="${BUTTON};background:#2384d4;color:#fff">Connect</button>
-      <button id="kraki-cancel" style="${BUTTON};background:transparent;color:#888">Cancel</button>
+      <h2>${t('app:pairing.confirmTitle')}</h2>
+      <p>${t('app:pairing.confirmDetail')}</p>
+      <button id="kraki-confirm" style="${BUTTON};background:#2384d4;color:#fff">${t('app:pairing.connect')}</button>
+      <button id="kraki-cancel" style="${BUTTON};background:transparent;color:#888">${t('common:action.cancel')}</button>
     </div>`;
     root.querySelector('b')!.textContent = decision.host;
     root.querySelector('#kraki-confirm')!.addEventListener('click', () => window.location.replace(withParam('confirmRelay', '1')));
@@ -91,15 +92,36 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
     return true;
   }
   root.innerHTML = `<div style="${PAGE_STYLE}">
-    <h2>Open in the Kraki app</h2>
+    <h2>${t('app:pairing.appTitle')}</h2>
     <p>${appStore
-      ? 'Install Kraki for iPhone, then scan the code on your computer again.'
-      : 'Kraki for iPhone is not available yet. You can connect in this browser instead.'}</p>
-    ${appStore ? `<a id="kraki-store" href="" style="${BUTTON};background:#2384d4;color:#fff;text-decoration:none">Get Kraki for iPhone</a>` : ''}
-    <button id="kraki-web" style="${BUTTON};background:${appStore ? 'transparent;color:#2384d4' : '#2384d4;color:#fff'}">Continue in browser</button>
+      ? t('app:pairing.install')
+      : t('app:pairing.unavailable')}</p>
+    ${appStore ? `<a id="kraki-store" href="" style="${BUTTON};background:#2384d4;color:#fff;text-decoration:none">${t('app:pairing.getApp')}</a>` : ''}
+    <button id="kraki-web" style="${BUTTON};background:${appStore ? 'transparent;color:#2384d4' : '#2384d4;color:#fff'}">${t('app:pairing.browser')}</button>
   </div>`;
   const store = root.querySelector<HTMLAnchorElement>('#kraki-store');
   if (store && appStore) store.href = appStore;
   root.querySelector('#kraki-web')!.addEventListener('click', () => window.location.replace(withParam('web', '1')));
+  // Kraki is not installed (iOS would have opened it). Go straight to the App
+  // Store once per code; coming back shows this page, so the user can still
+  // continue in the browser. The token stays unused either way.
+  if (appStore && shouldAutoOpenStore(window.sessionStorage, window.location.search)) {
+    window.location.assign(appStore);
+  }
+  return true;
+}
+
+/** True the first time this pairing code reaches the "open in app" page in
+ *  this tab. Records the visit, so returning from the App Store doesn't loop. */
+export function shouldAutoOpenStore(storage: Pick<Storage, 'getItem' | 'setItem'>, search: string): boolean {
+  const token = new URLSearchParams(search).get('token');
+  if (!token) return false;
+  const key = `kraki.storeOffered.${token.slice(0, 16)}`;
+  try {
+    if (storage.getItem(key)) return false;
+    storage.setItem(key, '1');
+  } catch {
+    return false; // storage blocked: don't risk a redirect loop
+  }
   return true;
 }

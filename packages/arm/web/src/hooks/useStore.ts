@@ -188,6 +188,24 @@ export const useStore = create<Store>()(persist((set) => ({
       return { devices: next };
     }),
 
+  renameDevice: (deviceId, name, defaultName) =>
+    set((state) => {
+      const device = state.devices.get(deviceId);
+      let devices = state.devices;
+      if (device) {
+        const { defaultName: _old, ...rest } = device;
+        devices = new Map(state.devices);
+        devices.set(deviceId, defaultName ? { ...rest, name, defaultName } : { ...rest, name });
+      }
+      let sessions = state.sessions;
+      for (const [id, session] of state.sessions) {
+        if (session.deviceId !== deviceId || session.deviceName === name) continue;
+        if (sessions === state.sessions) sessions = new Map(state.sessions);
+        sessions.set(id, { ...session, deviceName: name });
+      }
+      return devices === state.devices && sessions === state.sessions ? state : { devices, sessions };
+    }),
+
   setDeviceOnline: (deviceId, online) =>
     set((state) => {
       const device = state.devices.get(deviceId);

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
@@ -15,14 +16,6 @@ const AGENT_PREF_KEY = 'kraki:last-agent';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
 const CONTEXT_TIER_PREF_KEY = 'kraki:last-context-tier';
-
-const EFFORT_LABELS: Record<ReasoningEffort, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'XHigh',
-  max: 'Max',
-};
 
 function getModelPrefs(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(MODEL_PREF_KEY) ?? '{}'); } catch { return {}; }
@@ -55,6 +48,7 @@ function saveContextTierPref(modelId: string, tier: ContextTier) {
 }
 
 export function NewSessionDialog({ open, onClose }: Props) {
+  const { t } = useTranslation('sessions');
   useEscape(open, onClose);
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
@@ -211,7 +205,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-text-primary">New Session</h2>
+          <h2 className="text-lg font-semibold text-text-primary">{t('newDialog.title')}</h2>
           <button
             onClick={onClose}
             className="rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
@@ -224,8 +218,8 @@ export function NewSessionDialog({ open, onClose }: Props) {
 
         {tentacles.length === 0 ? (
           <div className="py-8 text-center">
-            <p className="text-sm text-text-secondary">No computers online</p>
-            <p className="mt-1 text-xs text-text-muted">Connect a computer to create sessions</p>
+            <p className="text-sm text-text-secondary">{t('newDialog.noComputers')}</p>
+            <p className="mt-1 text-xs text-text-muted">{t('newDialog.connectComputer')}</p>
             <code className="mt-3 inline-block rounded bg-surface-tertiary px-2.5 py-1 text-[11px] text-text-secondary">
               curl -fsSL https://app.kraki.chat/install.sh | bash
             </code>
@@ -234,7 +228,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
           <div className="space-y-4">
             {/* Device picker — pill buttons */}
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">Device</label>
+              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t('newDialog.device')}</label>
               <div className="flex flex-wrap gap-1.5">
                 {tentacles.map((d) => (
                   <button
@@ -249,7 +243,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                     <span className={`h-1.5 w-1.5 rounded-full ${d.online ? 'bg-emerald-400' : 'bg-slate-400'}`} />
                     {d.name}
                     {availableUpdate(d, deviceUpdates, deviceVersions) && (
-                      <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-kraki-400 ring-1 ring-white/70" title="A newer Kraki is available on this computer" aria-label="Update available" />
+                      <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-kraki-400 ring-1 ring-white/70" title={t('newDialog.updateDetail')} aria-label={t('newDialog.update')} />
                     )}
                   </button>
                 ))}
@@ -280,7 +274,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
 
             {/* Model picker — filtered by selected agent */}
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">Model</label>
+              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t('newDialog.model')}</label>
               {models.length > 0 ? (
                 <div ref={listRef} className="max-h-48 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
                   {models.map((m) => (
@@ -304,7 +298,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                   type="text"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="e.g. claude-sonnet-4"
+                  placeholder={t('newDialog.modelPlaceholder')}
                   className="w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-kraki-500"
                 />
               )}
@@ -313,7 +307,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
             {/* Reasoning effort picker — only shown when model supports it */}
             {supportedEfforts && supportedEfforts.length > 0 && (
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Thinking</label>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t('newDialog.thinking')}</label>
                 <div className="flex gap-1.5">
                   {supportedEfforts.map((effort) => (
                     <button
@@ -325,7 +319,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                           : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
                       }`}
                     >
-                      {EFFORT_LABELS[effort] ?? effort}
+                      {t(`newDialog.effort.${effort}`, { defaultValue: effort })}
                     </button>
                   ))}
                 </div>
@@ -335,7 +329,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
             {/* Context tier picker — only shown when model supports long_context */}
             {supportedContextTiers && supportedContextTiers.length > 1 && (
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Context</label>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t('newDialog.context')}</label>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() => handleSelectContextTier('default')}
@@ -345,7 +339,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                         : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
                     }`}
                   >
-                    Default
+                    {t('newDialog.default')}
                   </button>
                   <button
                     onClick={() => handleSelectContextTier('long_context')}
@@ -355,7 +349,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
                         : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
                     }`}
                   >
-                    1M tokens
+                    {t('newDialog.tokens')}
                   </button>
                 </div>
               </div>
@@ -367,7 +361,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
               disabled={!canSubmit}
               className="w-full rounded-lg bg-kraki-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-kraki-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Start Session
+              {t('newDialog.start')}
             </button>
           </div>
         )}
