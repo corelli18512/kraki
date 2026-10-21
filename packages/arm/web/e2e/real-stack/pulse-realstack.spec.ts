@@ -293,6 +293,8 @@ test.describe.serial('real-stack pulse: live presence + preferences (head→arm 
     expect(await tentacle2Online(page)).not.toBe(true);
     await control('/tentacle2/connect');
     await expect.poll(() => tentacle2Online(page), { timeout: 20_000 }).toBe(true);
+    // …and the Devices page shows it online.
+    await expectTentacle2Status(page, 'online');
   });
 
   test('9. that device leaving disappears live (device_left over pulse)', async () => {
@@ -300,6 +302,7 @@ test.describe.serial('real-stack pulse: live presence + preferences (head→arm 
     expect(await tentacle2Online(page)).toBe(true);
     await control('/tentacle2/disconnect');
     await expect.poll(() => tentacle2Online(page), { timeout: 20_000 }).toBe(false);
+    await expectTentacle2Status(page, 'offline');
   });
 
   test('10. removing an offline device removes it live (remove_device → device_removed)', async () => {
@@ -607,4 +610,17 @@ async function tentacle2Online(page: Page): Promise<boolean | undefined> {
   return page.evaluate(() => (window as unknown as {
     __krakiStore: { getState(): { devices: Map<string, { online: boolean }> } };
   }).__krakiStore.getState().devices.get('realstack-tentacle-2')?.online);
+}
+
+/** Tentacle 2's status as the Devices page renders it ("online",
+ *  "offline", …): opens the page and selects the device if needed. */
+async function expectTentacle2Status(page: Page, text: string): Promise<void> {
+  if (!page.url().endsWith('/devices')) await page.goto(`${WEB_URL}/devices`);
+  const status = page.locator('h2:has(button[aria-label="Rename RealStack Tentacle 2"]) + span');
+  await expect(async () => {
+    if (!(await status.isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: /^RealStack Tentacle 2/ }).first().click();
+    }
+    await expect(status).toHaveText(text, { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
 }

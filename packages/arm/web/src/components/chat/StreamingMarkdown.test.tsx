@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render } from '@testing-library/react';
-import { STREAMING_RENDER_MS, StreamingMarkdown } from './Markdown';
+import { renderHook } from '@testing-library/react';
+import { STREAMING_RENDER_MS, StreamingMarkdown, useThrottledValue } from './Markdown';
 
 /**
  * A streaming draft must keep visibly updating while tokens arrive faster
@@ -33,5 +34,25 @@ describe('StreamingMarkdown', () => {
   it('renders the first token at once', () => {
     const { container } = render(<StreamingMarkdown text="Hello" />);
     expect(container.textContent).toBe('Hello');
+  });
+
+  it('drops a pending commit when the value returns to what is shown', () => {
+    const { result, rerender } = renderHook(({ v }) => useThrottledValue(v, 80), { initialProps: { v: 'a' } });
+    rerender({ v: 'b' });      // within the interval: pending
+    expect(result.current).toBe('a');
+    rerender({ v: 'a' });      // back to the shown value
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(result.current).toBe('a');
+  });
+
+  it('reschedules a pending commit when the interval changes', () => {
+    const { result, rerender } = renderHook(({ v, ms }) => useThrottledValue(v, ms), { initialProps: { v: 'a', ms: 1000 } });
+    rerender({ v: 'b', ms: 1000 });
+    act(() => { vi.advanceTimersByTime(20); });
+    expect(result.current).toBe('a');
+    rerender({ v: 'b', ms: 30 });
+    act(() => { vi.advanceTimersByTime(15); });
+    expect(result.current).toBe('b');
   });
 });

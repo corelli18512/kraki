@@ -263,13 +263,13 @@ test.describe('preview high-intensity stress', () => {
     // Resolve B first, then A. A must still be intact after B clears.
     await control('/permissionAutoResolved', { sid: sidB, id: 'p-indep-b' });
     await settle();
-    await expectSettled(sidB);
+    expect(await enrichedPreview(sidB)).toBeUndefined(); // B has no spine line at all
     expect(await enrichedPreview(sidA)).toMatchObject({ type: 'question', text: qA });
 
     await control('/questionAutoResolved', { sid: sidA, id: 'q-indep-a' });
     await settle();
     await expectSettled(sidA, { type: 'agent', text: qA });
-    await expectSettled(sidB);
+    expect(await enrichedPreview(sidB)).toBeUndefined(); // B has no spine line at all
   });
 
   // ── 8. Rapid open/autoresolve churn: many question cycles collapse to a

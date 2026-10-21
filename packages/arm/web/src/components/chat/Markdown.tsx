@@ -72,16 +72,26 @@ export function useThrottledValue<T>(value: T, ms: number): T {
   const lastAt = useRef(0);
   const latest = useRef(value);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerMs = useRef(ms);
   latest.current = value;
   useEffect(() => {
-    if (Object.is(value, shown)) return;
+    const cancel = () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = null;
+    };
+    // Back to what is shown: nothing left to commit.
+    if (Object.is(value, shown)) { cancel(); return; }
+    // A new interval reschedules the pending commit.
+    if (timer.current !== null && timerMs.current !== ms) cancel();
     const wait = ms - (performance.now() - lastAt.current);
     if (wait <= 0) {
+      cancel();
       lastAt.current = performance.now();
       setShown(value);
       return;
     }
     if (timer.current === null) {
+      timerMs.current = ms;
       timer.current = setTimeout(() => {
         timer.current = null;
         lastAt.current = performance.now();
