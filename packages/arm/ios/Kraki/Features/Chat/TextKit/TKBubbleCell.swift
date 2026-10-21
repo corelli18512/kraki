@@ -136,11 +136,11 @@ private final class TKHTMLArtifactButton: UIControl {
     func configure(artifact: ContentRef, onOpen: @escaping (ContentRef) -> Void) {
         self.artifact = artifact
         self.onOpen = onOpen
-        let caption = artifact.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = caption?.isEmpty == false
-            ? caption!
-            : (name?.isEmpty == false ? name! : String(localized: "Report"))
+        let nonEmpty: (String?) -> String? = { text in
+            guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+        let title = nonEmpty(artifact.caption) ?? nonEmpty(artifact.name) ?? String(localized: "Report")
         titleLabel.text = title
         detailLabel.text = String(localized: "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
         accessibilityLabel = title

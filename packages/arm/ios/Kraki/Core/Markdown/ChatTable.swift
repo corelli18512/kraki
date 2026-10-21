@@ -517,9 +517,7 @@ final class ChatTableGeometry {
             let hidden = table.bodyRowCount - previewRows
             showsFooter = !full && (hidden > 0 || overflows)
             if hidden > 0 {
-                let rows = String(localized: "\(table.bodyRowCount) rows")
-                let columns = String(localized: "\(table.columnCount) columns")
-                footerText = String(localized: "Showing \(previewRows) of \(rows) · \(columns)")
+                footerText = String(localized: "Showing \(previewRows) of \(String(localized: "\(table.bodyRowCount) rows")) · \(String(localized: "\(table.columnCount) columns"))")
             } else if overflows {
                 #if os(iOS)
                 footerText = String(localized: "\(table.columnCount) columns · swipe for more")

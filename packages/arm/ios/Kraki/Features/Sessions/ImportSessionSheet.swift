@@ -243,7 +243,7 @@ struct ImportSessionSheet: View {
                 if s.isLive {
                     Circle().fill(.green).frame(width: 6, height: 6)
                 }
-                Text(s.summary?.isEmpty == false ? s.summary! : String(localized: "(no summary)"))
+                Text(s.summary.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "(no summary)"))
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .lineLimit(2)

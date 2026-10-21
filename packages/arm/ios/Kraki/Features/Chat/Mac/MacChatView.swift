@@ -778,22 +778,22 @@ private struct MacSessionInfoSheet: View {
             if let used = usage.contextTokens {
                 if let ceiling = contextWindow, ceiling > 0 {
                     let ratio = min(1, Double(used) / Double(ceiling))
-                    let context = "\(macFormatTokenCount(used)) / \(macFormatTokenCount(ceiling))  ·  \(ratio.formatted(.percent.precision(.fractionLength(0))))"
+                    let context = "\(MacChatFormat.tokenCount(used)) / \(MacChatFormat.tokenCount(ceiling))  ·  \(ratio.formatted(.percent.precision(.fractionLength(0))))"
                     VStack(alignment: .leading, spacing: 6) {
                         infoRow("Context", context)
                         ProgressView(value: ratio).tint(contextBandColor(ratio))
                     }
                 } else {
-                    infoRow("Context", macFormatTokenCount(used))
+                    infoRow("Context", MacChatFormat.tokenCount(used))
                 }
             }
-            infoRow("Input tokens", macFormatTokenCount(usage.inputTokens))
-            infoRow("Output tokens", macFormatTokenCount(usage.outputTokens))
-            infoRow("Cache read", macFormatTokenCount(usage.cacheReadTokens))
-            infoRow("Cache write", macFormatTokenCount(usage.cacheWriteTokens))
+            infoRow("Input tokens", MacChatFormat.tokenCount(usage.inputTokens))
+            infoRow("Output tokens", MacChatFormat.tokenCount(usage.outputTokens))
+            infoRow("Cache read", MacChatFormat.tokenCount(usage.cacheReadTokens))
+            infoRow("Cache write", MacChatFormat.tokenCount(usage.cacheWriteTokens))
             Divider()
-            infoRow("Total cost", macFormatCost(usage.totalCost))
-            infoRow("Duration", macFormatDuration(usage.totalDurationMs))
+            infoRow("Total cost", MacChatFormat.cost(usage.totalCost))
+            infoRow("Duration", MacChatFormat.duration(usage.totalDurationMs))
         }
     }
 
@@ -863,35 +863,6 @@ private struct MacSessionInfoSheet: View {
         }
         .font(.system(size: 15))
         .contentShape(Rectangle())
-    }
-
-    // Keep in sync with Shared/Helpers.swift (iOS-only).
-    private func macFormatTokenCount(_ count: Int) -> String {
-        if count < 1_000 { return "\(count)" }
-        if count < 1_000_000 {
-            let k = Double(count) / 1_000
-            return k < 10 ? String(format: "%.1fK", k) : String(format: "%.0fK", k)
-        }
-        let m = Double(count) / 1_000_000
-        return m < 10 ? String(format: "%.1fM", m) : String(format: "%.0fM", m)
-    }
-
-    private func macFormatCost(_ cost: Double) -> String {
-        if cost < 0.01 {
-            return String(format: "$%.4f", cost)
-        }
-        return String(format: "$%.3f", cost)
-    }
-
-    private func macFormatDuration(_ milliseconds: Double) -> String {
-        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" }
-        let totalSeconds = min(milliseconds / 1_000, 1e12)
-        if totalSeconds < 60 {
-            return String(format: String(localized: "%.1fs"), totalSeconds)
-        }
-        let minutes = Int(totalSeconds) / 60
-        let seconds = Int(totalSeconds) % 60
-        return String(localized: "\(minutes)m \(seconds)s")
     }
 
     private func contextBandColor(_ ratio: Double) -> Color {
