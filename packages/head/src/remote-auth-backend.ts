@@ -15,6 +15,9 @@ export interface EdgeRevocation {
   code: string;
   message: string;
   redirect?: string;
+  /** Only an older session is meant: a newer answer for the device is being
+   *  applied right now, so keep this edge's device mirror. */
+  supersededOnly?: boolean;
 }
 
 /** Status poll interval for cached devices (see EdgeAuthCache). */
@@ -94,13 +97,14 @@ export class RemoteAuthBackend implements AuthBackend {
     const cache = this.edgeCache;
     if (!cache) return;
     const lifecycle = this.lifecycle;
-    const entries = cache.entries();
+    // Identity and epoch captured together, before any request is out.
+    const entries = cache.entries().map((e) => ({ ...e, epoch: cache.epoch(e.deviceId) }));
     const statuses = new Map<string, { status: string; redirect?: string; epoch: number }>();
     // Always at least one request (an empty list still proves support).
     // ~130 bytes per device: 300 stays well under the account API body limit.
     for (let i = 0; i === 0 || i < entries.length; i += 300) {
       const chunk = entries.slice(i, i + 300);
-      const epochs = chunk.map((e) => cache.epoch(e.deviceId));
+      const epochs = chunk.map((e) => e.epoch);
       const res = await this.post<{ ok?: boolean; statuses?: unknown; redirects?: unknown; code?: string }>('/api/devices/status', {
         devices: chunk.map((e) => ({ id: e.deviceId, userId: e.userId, keyFingerprint: e.keyFingerprint })),
         headRegion: this.edgeRegion,
@@ -162,7 +166,7 @@ export class RemoteAuthBackend implements AuthBackend {
     // A token / pairing sign-in is as authoritative as a verified challenge:
     // the next reconnect of this device can be local.
     if (result.ok && cache && cache === this.edgeCache
-      && cache.remember(result, device.deviceId === result.deviceId ? epoch : undefined) === 'stale') {
+      && this.storeAuthoritative(cache, result, device.deviceId === result.deviceId ? epoch : undefined) === 'stale') {
       // The device was dropped here (removed, account deleted) while this
       // sign-in was out: do not let it complete. Retryable: a retry gets
       // the account service's current answer.
@@ -214,14 +218,49 @@ export class RemoteAuthBackend implements AuthBackend {
     const epoch = cache?.epoch(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
     if (cache && cache === this.edgeCache) {
-      if (result.ok && cache.remember(result, epoch) === 'stale') {
+      if (result.ok && this.storeAuthoritative(cache, result, epoch) === 'stale') {
         return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
       }
-      // Only a verdict about the device drops trust: a wrong signature from
-      // another socket must not take a live session out of revocation polls.
-      if (!result.ok && isDeviceRejection(result.code)) cache.forget(deviceId);
+      // Only a verdict about the device drops trust (a wrong signature from
+      // another socket must not), and then any live session goes with it.
+      // ...and only if nothing newer happened to the device while it was out.
+      if (!result.ok && isDeviceRejection(result.code) && epoch === cache.epoch(deviceId)) {
+        this.rejectDevice(cache, deviceId, result.code, result.message,
+          result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined);
+      }
     }
     return result;
+  }
+
+  /**
+   * Store an authoritative answer. If it replaces the account or key a live
+   * session may have signed in under, that session must go too (it would
+   * otherwise keep running on trust the polls no longer check).
+   */
+  private storeAuthoritative(cache: EdgeAuthCache, result: AuthResult, epoch: number | undefined): 'stored' | 'stale' | 'skipped' {
+    const before = cache.identity(result.deviceId);
+    const stored = cache.remember(result, epoch);
+    if (stored !== 'stored' || !before) return stored;
+    const after = cache.identity(result.deviceId);
+    if (after && (after.userId !== before.userId || after.keyFingerprint !== before.keyFingerprint)) {
+      this.onRevoked?.({
+        deviceId: result.deviceId,
+        code: after.userId !== before.userId ? 'unknown_device' : 'key_changed',
+        message: 'Device signed in again with another key or account',
+        supersededOnly: true,
+      });
+    }
+    return stored;
+  }
+
+  /** A device-level rejection seen on a foreground sign-in: drop trust and
+   *  retire any session still running on it. */
+  private rejectDevice(cache: EdgeAuthCache, deviceId: string, code: string, message: string, redirect?: string): void {
+    const trusted = cache.identity(deviceId) !== undefined;
+    cache.forget(deviceId);
+    if (!trusted) return;
+    metrics().inc('auth.localRevoked');
+    this.onRevoked?.({ deviceId, code, message, redirect });
   }
 
   /** Background re-check of a locally accepted signature. */
@@ -236,7 +275,7 @@ export class RemoteAuthBackend implements AuthBackend {
     // must neither revive it nor act on it.
     if (lifecycle !== this.lifecycle || epoch !== cache.epoch(deviceId)) return;
     if (result.ok && result.userId === userId) {
-      if (cache.remember(result, epoch) === 'stored') this.onRefreshed?.(result, context);
+      if (this.storeAuthoritative(cache, result, epoch) === 'stored') this.onRefreshed?.(result, context);
       return;
     }
     const code = result.ok ? 'device_not_found' : result.code;

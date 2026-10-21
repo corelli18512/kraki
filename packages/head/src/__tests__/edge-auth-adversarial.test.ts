@@ -378,6 +378,45 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
     account.upsertUser('u2', 'other', 'open');
     expect({ ...backend.deviceStatuses([{ id: 'phone', userId: 'u2' }], 'us').statuses }).toEqual({ phone: 'unknown_device' });
   });
+  // ── release-gate review round 3 ─────────────────────────
+
+  it('a device-level rejection seen on a foreground sign-in retires the live session too', async () => {
+    await warm();
+    const c = await remote.startChallenge('phone', 'enc-1', 'us'); // local nonce
+    if (!c.ok) throw new Error('challenge');
+    account.deleteDevice('phone');
+    // Bad signature: falls through to the account service, which says the device is gone.
+    const r = await remote.verifyChallenge('phone', c.nonce, 'bad-signature', 'enc-1', 'us');
+    expect(r.ok).toBe(false);
+    // The Head maps device_not_found to unknown_device when it closes the socket.
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'device_not_found' })]);
+  });
+
+  it('a newer key stored for a device retires a session still running on the old key', async () => {
+    await warm();
+    const k2 = generateKeyPair();
+    account.upsertDevice('phone', 'u', 'Phone', 'app', 'ios', exportPublicKey(k2.publicKey), 'enc-1');
+    const { token } = backend.createPairingToken('u');
+    const result = await remote.authenticate({ method: 'pairing', token },
+      { deviceId: 'phone', name: 'Phone', role: 'app', kind: 'ios', publicKey: exportPublicKey(k2.publicKey), encryptionKey: 'enc-1' }, 'us');
+    expect(result.ok).toBe(true);
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'key_changed', supersededOnly: true })]);
+  });
+
+  it('poll chunks use the identity and epoch captured together before the first request', async () => {
+    await warm();
+    holdStatus = true;
+    const poll = remote.pollDeviceStatus();
+    await until(() => heldStatus !== undefined);
+    // Re-authenticated while the poll is out: the poll's verdict must not apply.
+    const again = cache.lookup('phone')!.result;
+    cache.remember(again, cache.epoch('phone'));
+    heldStatus!.end(JSON.stringify({ ok: true, statuses: { phone: 'key_changed' } }));
+    await poll;
+    expect(revoked).toEqual([]);
+    expect(cache.lookup('phone')).toBeDefined();
+  });
+
 });
 
 describe('Head auth guards (release-gate round 2)', () => {

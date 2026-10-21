@@ -90,4 +90,26 @@ final class ReconnectRound2Tests: XCTestCase {
         XCTAssertEqual(ended, [100, 1, 2])
         XCTAssertEqual(teardown, 1)
     }
+
+    /// Release-gate round 3: a stale non-empty reply must not store rows above
+    /// the head the Tentacle reports now.
+    func testStaleNonEmptyReplyAfterHeadDropStoresNothingAboveTheNewHead() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sid = "r3-stale-rows"
+        app.sessionStore.sessions[sid] = SessionInfo(id: sid, deviceId: "d", deviceName: "d", agent: "pi", model: "m", title: "t", state: .idle, mode: .auto, lastSeq: 8, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
+        app.deviceStore.devices["d"] = DeviceSummary(id: "d", name: "d", role: .tentacle, kind: .desktop, publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
+        let rows = (1...7).map { ChatMessage(type: "agent_message", seq: $0, sessionId: sid, deviceId: "d", timestamp: nil, payload: ["content": AnyCodable("row")]) }
+        app.messageStore.ingestBatch(sid, rows)
+        app.connectionStatus = .connected
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 12, deviceId: "d")
+        provider.ensureLoaded(sessionId: sid, reason: "old-head")
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 8, deviceId: "d")
+        let stale = (8...12).map { ChatMessage(type: "agent_message", seq: $0, sessionId: sid, deviceId: "d", timestamp: nil, payload: ["content": AnyCodable("old")]) }
+        provider.handleBatch(sessionId: sid, messages: stale, lastSeq: 12, totalLastSeq: 12, containsHead: true)
+        XCTAssertLessThanOrEqual(app.messageStore.dbLastSeq(sid), 8, "rows of the old incarnation above the new head are not stored")
+        XCTAssertLessThanOrEqual(app.messageStore.persistedHead(sid), 8)
+    }
 }
