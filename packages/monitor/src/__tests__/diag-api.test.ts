@@ -175,7 +175,7 @@ describe('off-band diagnostics', () => {
     const f = await fixture();
     const ready = { ev: 'ready.summary', seq: 1, t: Date.now(), m: 10, d: {
       kind: 'warm', outcome: 'ready', path: 'wifi', attempt: 0, gap: 3, viewing: true, backgroundMs: 61000,
-      firstContentMs: 0, wsOpenMs: 180, authedMs: 420, listFreshMs: 700, viewCurrentMs: 950 } };
+      firstContentMs: 0, wsOpenMs: 180, authedMs: 420, listFreshMs: 700, viewCurrentMs: 950, cause: 'peer_closed' } };
     const outage = { ev: 'outage.summary', seq: 2, t: Date.now(), m: 11, d: {
       source: 'transport_error', code: '-1005', outcome: 'recovered', path: 'cellular', attempt: 2, detectMs: 1200,
       reconnectMs: 3100, catchupMs: 400, impactMs: 4700, visibleMs: 2600, pathChanged: true, afterWake: false } };
@@ -189,6 +189,7 @@ describe('off-band diagnostics', () => {
     const open = { ev: 'open.summary', seq: 5, t: Date.now(), m: 14, d: { outcome: 'current', gap: 2, firstContentMs: 40, viewCurrentMs: 600 } };
     const resend = { ev: 'outbox.state', seq: 6, t: Date.now(), m: 15, d: { clientId: randomUUID(), phase: 'resend_stalled' } };
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [ready, outage, send, voice, open, resend] })))).status).toBe(204);
+    expect(sanitizeDiagBatch({ ...f.batch, events: [ready, outage, send, voice, open, resend] }, f.id)).toMatchObject({ stripped: 0, invalid: 0 });
     for (const [bad, field] of [
       [{ ...voice, d: { ...voice.d, cause: 'The voice service timed out.' } }, 'cause'],
       [{ ...ready, d: { ...ready.d, kind: 'lukewarm' } }, 'kind'],

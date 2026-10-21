@@ -37,6 +37,11 @@ final class StabilityTracker {
         /// Warm only: the signed-in socket survived the background (grace
         /// period), so nothing had to reconnect.
         var kept = false
+        /// How the last connection lost during this opening ended
+        /// (WebSocketClient recover reason). A drop before the opening is
+        /// ready is part of it, not an `outage.summary` — and iOS reconnects
+        /// on every return, so without this its drops had no reason at all.
+        var failure: String?
     }
 
     /// Tapping a conversation while online: how long until its latest
@@ -81,7 +86,12 @@ final class StabilityTracker {
     static let readyTimeout: TimeInterval = 30
     static let outageGiveUp: TimeInterval = 600
 
-    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// Keeps counting while the device sleeps (`backgroundMs` of a warm
+    /// opening, the sleep of a `wake` one): `systemUptime` stops, and 48 of
+    /// 261 warm iPhone openings under-reported the background by > 60 s.
+    /// Records end when the app hides or the Mac sleeps, so no other duration
+    /// spans a sleep.
+    var now: () -> TimeInterval = { Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1e9 }
     var onReady: ((Ready) -> Void)?
     var onOutage: ((Outage) -> Void)?
     var onOpen: ((Open) -> Void)?
@@ -171,6 +181,10 @@ final class StabilityTracker {
         guard newPath != path else { return }
         if path != "unknown" { lastPathChange = now() }
         path = newPath
+        // The path monitor answers asynchronously: a record that started
+        // before its first answer (every cold opening) takes that answer.
+        if ready?.path == "unknown" { ready?.path = newPath }
+        if outage?.path == "unknown" { outage?.path = newPath }
     }
 
     // MARK: - Connection
@@ -193,6 +207,7 @@ final class StabilityTracker {
     /// The transport gave up on its connection (WebSocketClient.recover).
     /// `quietFor` is the time since the last inbound frame.
     func transportLost(reason: String, code: Int?, quietFor: TimeInterval?) {
+        if ready != nil, hiddenAt == nil, asleepAt == nil { ready?.failure = reason }
         guard hiddenAt == nil, asleepAt == nil, everAuthenticated, ready == nil else { return }
         if outage != nil {
             if outageReauthed != nil {

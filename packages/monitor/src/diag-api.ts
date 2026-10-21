@@ -80,7 +80,7 @@ export const schemas: Record<string, string[]> = {
   'list.snapshot': ['count', 'pending', 'firstSeq', 'lastSeq'],
   'session.view': ['source'],
   'ready.summary': ['kind', 'outcome', 'path', 'attempt', 'gap', 'viewing', 'backgroundMs', 'firstContentMs',
-    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit', 'kept'],
+    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit', 'kept', 'cause'],
   // A head (catch-up) reply arrived: request → handled on the main thread.
   'history.batch': ['kind', 'count', 'durationMs', 'viewing', 'attempt'],
   'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs', 'reconnecting'],

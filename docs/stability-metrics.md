@@ -23,8 +23,9 @@ Principles:
 - **Other fields**:
   - `attempt`: number of failed retries
   - `gap`: how many messages the current conversation was missing on open
-  - `backgroundMs`: how long the app was in the background (or asleep)
-  - `path`: wifi / cellular / wired / other / none
+  - `backgroundMs`: how long the app was in the background (or asleep), including device sleep (before the 2026-10 audit fix it stopped while the device slept)
+  - `path`: wifi / cellular / wired / other / none; the first answer of the path monitor if the opening started before it (cold openings were always `unknown`)
+  - `cause`: how the last connection lost during this opening ended (same tags as `outage.summary.source`). A drop before the opening is ready belongs to the opening, not to an outage, so on iOS (which reconnects on every return) this is where drops show up
   - `previousExit`: cold only. `unclean` means the previous process died in the foreground — a crash, a hang killed by the system, or a force quit
   - `kept`: warm only. The signed-in socket survived the background (iOS keeps it about 25 s, see `BackgroundSocketGrace`), so nothing reconnected and every milestone is 0
 - **outcome**: `ready`; `abandoned` (left before ready); `timeout` (not ready after 30 s).
