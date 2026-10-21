@@ -16,7 +16,11 @@ it('translates agent details and the catalog at render time without translating 
   expect(screen.getByText('Claude Code')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument();
   expect(detailLine({ id: 'pi', name: 'Pi', status: 'ready', models: 2 })).toBe('已就绪 · 2 个模型');
-  expect(detailLine({ id: 'pi', name: 'Pi', status: 'needs_login', models: 0, hint: 'Run pi login.' })).toBe('未登录。Run pi login.');
+  // Known agents: the login instruction is translated; the command stays literal.
+  expect(detailLine({ id: 'pi', name: 'Pi', status: 'needs_login', models: 0, hint: 'Run `pi` in Terminal and use /login, or add an API key.' }))
+    .toBe('未登录。在终端中运行 `pi` 并使用 /login，或添加 API 密钥。');
+  // Unknown agents fall back to the CLI's hint.
+  expect(detailLine({ id: 'other', name: 'Other', status: 'needs_login', models: 0, hint: 'Run other login.' })).toBe('未登录。Run other login.');
   expect(detailLine({ id: 'pi', name: 'Pi', status: 'error', models: 0, hint: 'CLI failure' })).toBe('CLI failure');
 });
 

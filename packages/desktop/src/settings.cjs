@@ -12,9 +12,15 @@ function isKrakiExecutable(file) {
   try { return /^kraki(?:\.exe)?$/i.test(path.basename(file)) && existsSync(file) && statSync(file).isFile(); } catch { return false; }
 }
 async function probeCli(selected) {
-  const file = selected || (await exec(process.platform === 'win32' ? 'where.exe' : 'which', ['kraki'])).split(/\r?\n/)[0];
+  let file = selected;
+  if (!file) {
+    try { file = (await exec(process.platform === 'win32' ? 'where.exe' : 'which', ['kraki'])).split(/\r?\n/)[0]; }
+    catch { throw new Error(i18n.t('error.selectExecutable')); }
+  }
   if (!isKrakiExecutable(file)) throw new Error(i18n.t('error.selectExecutable'));
-  const output = await exec(file, ['--version']);
+  let output;
+  try { output = await exec(file, ['--version']); }
+  catch { throw new Error(i18n.t('error.cliVersion')); }
   const version = /\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/.exec(output)?.[0];
   if (!version) throw new Error(i18n.t('error.cliVersion'));
   return { externalCliPath: file, externalCliVersion: version };

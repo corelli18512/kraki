@@ -14,6 +14,7 @@
  * the app resumes at the right place.
  */
 import { useTranslation } from 'react-i18next';
+import { t as translate } from '../../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KrakiLogo } from '../KrakiLogo';
 import { isDesktopSignedOut, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
@@ -240,7 +241,24 @@ type SignInPhase =
   | { kind: 'waiting' }
   | { kind: 'code'; code: string; uri: string }
   | { kind: 'configuring'; username: string }
-  | { kind: 'failed'; message?: string };
+  | { kind: 'failed'; code?: string };
+
+/** The CLI's setup error codes (tentacle setup-json.ts) → GUI copy; its
+ *  English messages are for the terminal, so they are never shown here. */
+const SIGN_IN_ERRORS: Record<string, 'setup.networkFailed' | 'setup.signInExpired' | 'setup.signInCancelled' | 'setup.signInUnverified' | 'setup.signInUnavailable'> = {
+  network: 'setup.networkFailed',
+  relay_unreachable: 'setup.networkFailed',
+  client_id_unavailable: 'setup.networkFailed',
+  expired: 'setup.signInExpired',
+  denied: 'setup.signInCancelled',
+  cancelled: 'setup.signInCancelled',
+  bad_callback: 'setup.signInUnverified',
+  token_invalid: 'setup.signInUnverified',
+  oauth_unavailable: 'setup.signInUnavailable',
+};
+export function signInErrorText(code: string | undefined): string {
+  return translate((code && SIGN_IN_ERRORS[code]) || 'setup.signInFailed', { ns: 'desktop' });
+}
 
 function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again: 'expired' | 'signedOut' | null; onDone: () => void }) {
   const { t } = useTranslation('desktop');
@@ -260,7 +278,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
       if (e.event === 'oauth_url') setPhase({ kind: 'waiting' });
       else if (e.event === 'device_code') setPhase({ kind: 'code', code: e.userCode, uri: e.verificationUri });
       else if (e.event === 'authenticated') setPhase({ kind: 'configuring', username: e.username });
-      else if (e.event === 'error') setPhase({ kind: 'failed', message: e.message });
+      else if (e.event === 'error') setPhase({ kind: 'failed', code: e.code });
     }).then((result) => {
       if (current !== attempt.current) return;
       if (result.ok) onDone();
@@ -324,7 +342,7 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
           {t('setup.github')}
         </button>
         {phase.kind === 'failed' && <>
-          <div className="ds-warning">{phase.message ?? t('setup.signInFailed')}</div>
+          <div className="ds-warning">{signInErrorText(phase.code)}</div>
           <button type="button" className="ds-link" onClick={() => start(true)}>{t('setup.useCode')}</button>
         </>}
       </div>
