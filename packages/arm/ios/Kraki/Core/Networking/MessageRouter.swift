@@ -1098,6 +1098,7 @@ final class MessageRouter {
             totalLastSeq: lastSeq,
             containsHead: containsHead
         )
+        if containsHead { appState.noteHeadReplyApplied(sessionId) }
     }
 
     /// `session_messages_range_batch` — response to

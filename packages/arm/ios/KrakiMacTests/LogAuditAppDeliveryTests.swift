@@ -180,8 +180,9 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         app.noteSessionListApplied()
         XCTAssertTrue(stability.outages.isEmpty, "local 0 < head 12: catching up")
 
-        let provider = try XCTUnwrap(app.messageProvider)
-        provider.handleBatch(sessionId: sid, messages: [], lastSeq: 12, totalLastSeq: 12, containsHead: true)
+        let reply: [String: Any] = ["type": "session_messages_batch", "sessionId": sid, "deviceId": dev,
+                                    "payload": ["sessionId": sid, "messages": [], "firstSeq": 12, "lastSeq": 12, "containsHead": true]]
+        try XCTUnwrap(app.messageRouter).handleDataMessage(try JSONSerialization.data(withJSONObject: reply))
         XCTAssertEqual(stability.outages.last?.outcome, .recovered)
         XCTAssertNotNil(stability.outages.last?.catchupMs)
     }

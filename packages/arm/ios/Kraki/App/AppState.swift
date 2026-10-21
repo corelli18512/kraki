@@ -817,14 +817,13 @@ struct UserInfo: Codable, Equatable {
 // MARK: - Opening record and background socket grace (same file: private state)
 
 extension AppState {
-    /// The Tentacle answered a head request: this device has everything
-    /// through `seq`. The stability records compare against that, not the
-    /// last stored row: the newest seqs can be rows clients never store, and
-    /// then the catch-up changes nothing on screen, so no view refresh would
-    /// tell the tracker (Mac diag 10-15/10-16: outages re-authenticated in
-    /// 3 s but read "caught up" only at the next new message, 216 s / never).
-    func noteCaughtUp(_ sessionId: String, through seq: Int) {
-        messageStore.markCaughtUp(sessionId, through: seq)
+    /// A head reply was applied (MessageProvider.handleBatch). The stability
+    /// records compare against the persisted head, not the last stored row:
+    /// the newest seqs can be rows clients never store, and then the catch-up
+    /// changes nothing on screen, so no view refresh would tell the tracker
+    /// (Mac diag 10-15/10-16: outages re-authenticated in 3 s but read
+    /// "caught up" only at the next new message, 216 s / never).
+    func noteHeadReplyApplied(_ sessionId: String) {
         guard sessionStore.activeSessionId == sessionId else { return }
         noteConversationRendered(sessionId, hasContent: false)
     }
