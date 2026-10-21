@@ -58,6 +58,8 @@ kraki-relay --push web_push
 
 The web app will automatically show a "Push notifications" toggle in Settings when the relay has VAPID configured.
 
+The relay only sends to subscriptions on the browser push services (https on FCM, Mozilla autopush, Apple Web Push or WNS). It refuses other endpoints when they are registered, and drops older stored ones at send time.
+
 ## Local web development
 
 For local web development, put browser-only overrides like `VITE_WS_URL=ws://localhost:4000` in `packages/arm/web/.env.development.local`, not `packages/arm/web/.env`. Vite loads `.env` during production builds too, so using the dev-only filename avoids accidentally baking localhost into a deploy.

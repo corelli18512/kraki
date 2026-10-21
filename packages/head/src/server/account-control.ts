@@ -6,6 +6,7 @@ import type { BlobPayload } from '@kraki/protocol';
 import { ACCOUNT_DELETED_CLOSE_CODE, normalizeDeviceName } from '@kraki/protocol';
 import { parseVoiceWordOps, type VoiceWord } from '../voice-vocabulary.js';
 import { getLogger } from '../logger.js';
+import { parseWebPushSubscription } from '../push/web-push.js';
 import { trace } from '../trace.js';
 import type { HeadServer } from '../server.js';
 import { broadcastDeviceRemoved, broadcastDeviceRenamed } from './presence.js';
@@ -291,6 +292,10 @@ export function handleRegisterPushToken(server: HeadServer, ws: WebSocket, state
   const payload = msg.payload as Record<string, unknown> | undefined;
   if (!payload || typeof payload.token !== 'string' || typeof payload.provider !== 'string') {
     server.sendError(ws, 'Invalid push token: payload.token and payload.provider required');
+    return;
+  }
+  if (payload.provider === 'web_push' && !parseWebPushSubscription(payload.token)) {
+    server.sendError(ws, 'Invalid push token: unsupported Web Push subscription');
     return;
   }
 

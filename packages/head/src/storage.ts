@@ -868,7 +868,9 @@ export class Storage {
     // One push address belongs to one device. A phone that signs out and in
     // again (or switches account) re-registers the same token under a new
     // device; drop the old rows so it is not notified twice, once of them
-    // with a preview it can no longer decrypt.
+    // with a preview it can no longer decrypt. This crosses accounts on
+    // purpose: a push token is an unguessable capability issued to the device,
+    // so whoever registers it holds that device.
     this.db.prepare(
       'DELETE FROM push_tokens WHERE provider = ? AND token = ? AND device_id != ?'
     ).run(provider, token, deviceId);
