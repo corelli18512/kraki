@@ -40,7 +40,7 @@ import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuth
 import type { AuthProvider } from './auth.js';
 import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 import { validateVoiceConfig } from './voice-config.js';
-import { handleVoiceSettlement } from './voice-settlement.js';
+import { handleVoiceSettlement, logVoiceSettlement } from './voice-settlement.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
@@ -603,11 +603,13 @@ const httpServer = createServer(async (req, res) => {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token || !safeEqual(token, VOICE_SETTLEMENT_KEY)) {
+      logger.warn('Voice settlement rejected', { httpStatus: 401, error: 'unauthorized' });
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
     if (req.method !== 'POST') {
+      logger.warn('Voice settlement rejected', { httpStatus: 405, error: 'method_not_allowed' });
       res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'method_not_allowed' }));
       return;
@@ -623,21 +625,17 @@ const httpServer = createServer(async (req, res) => {
     });
     req.on('end', () => {
       if (tooLarge) {
+        logger.warn('Voice settlement rejected', { httpStatus: 413, error: 'payload_too_large' });
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'payload_too_large' }));
         return;
       }
+      const body = Buffer.concat(chunks).toString('utf8');
       const result = handleVoiceSettlement(storage!, VOICE_SETTLEMENT_KEY, {
         authorization: req.headers.authorization,
-        body: Buffer.concat(chunks).toString('utf8'),
+        body,
       }, { dailyCapSec: VOICE_DAILY_QUOTA_SEC });
-      if (result.status === 200) {
-        logger.info('Voice lease accounting updated', {
-          action: result.body.activationStatus ? 'activate' : 'settle',
-          usedSeconds: result.body.usedSeconds,
-          status: result.body.activationStatus ?? result.body.settlementStatus,
-        });
-      }
+      logVoiceSettlement(storage!, body, result);
       res.writeHead(result.status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result.body));
     });
