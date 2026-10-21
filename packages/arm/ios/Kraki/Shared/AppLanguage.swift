@@ -74,7 +74,10 @@ enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     static func relaunch() {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { application, error in
+            // Quit only once the new instance is running; if the launch
+            // failed, keep this one (the choice still applies next launch).
+            guard application != nil, error == nil else { return }
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }
