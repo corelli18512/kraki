@@ -826,7 +826,7 @@ struct MessageInputView: View {
     // MARK: - Mode Submit Handlers
 
     private func handleModeSubmit() {
-        guard !isRecordingHere else { return }
+        guard !isRecordingHere, !voiceSendPending else { return }
         // A correction still flowing into this draft stops at what is visible.
         if voice.sessionID == sessionId, voice.operation?.phase == .toDraft { voice.retireKeepingDraft() }
         switch submissionIntent {

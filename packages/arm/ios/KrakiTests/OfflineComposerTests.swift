@@ -72,6 +72,62 @@ import UIKit
         XCTAssertTrue(app.iosVoiceComposer.isRecording(in: sid), "a presence blip must not end dictation")
     }
 
+    func testQuestionReturnWaitsForStagedVoiceSend() throws {
+        try assertStructuredReturnWaitsForVoice(answering: true)
+    }
+
+    func testPermissionReturnWaitsForStagedVoiceSend() throws {
+        try assertStructuredReturnWaitsForVoice(answering: false)
+    }
+
+    private func assertStructuredReturnWaitsForVoice(answering: Bool) throws {
+        try requireForegroundUITests()
+        let driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false, automaticPartials: false)
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
+        var sent: [String] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            sent.append(message["type"] as? String ?? "")
+            return true
+        }
+        self.app = app
+        let voice = app.iosVoiceComposer
+        voice.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        let deadline = Date().addingTimeInterval(2)
+        while !voice.isRecording(in: sid), Date() < deadline { drain(0.02) }
+        XCTAssertTrue(voice.isRecording(in: sid))
+        driver.emit(.partial("voice first"))
+        drain(0.1)
+        XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt))
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: MessageInputView(
+            sessionId: sid,
+            pendingPermission: answering ? nil : PendingPermission(id: "p", sessionId: sid, description: "Run?", toolName: "Bash", args: nil, timestamp: Date()),
+            pendingQuestion: answering ? PendingQuestion(id: "q", sessionId: sid, question: "Which?", choices: nil, timestamp: Date()) : nil
+        ).environment(app))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        drain(0.3)
+        let field = try XCTUnwrap(editor(host))
+        field.becomeFirstResponder()
+        field.insertText("typed second")
+        drain(0.1)
+        field.insertText("\n")
+        drain(0.1)
+        XCTAssertTrue(sent.isEmpty, "a keyboard structured response cannot overtake correcting voice")
+        XCTAssertEqual(app.sessionStore.drafts[sid], "typed second", "blocked submission retains the draft")
+
+        driver.emit(.final("voice first corrected", rawText: "voice first"))
+        drain(0.2)
+        XCTAssertEqual(sent, ["send_input"])
+        field.insertText("\n")
+        drain(0.2)
+        XCTAssertEqual(sent, ["send_input", answering ? "send_input" : "deny"])
+        XCTAssertEqual(app.sessionStore.drafts[sid] ?? "", "")
+    }
+
     func testOfflineSendGoesToTheOutbox() throws {
         try requireForegroundUITests()
         let driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
