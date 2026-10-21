@@ -1,7 +1,7 @@
 // Kraki desktop shell (Electron). Serves the bundled Web client from
 // app://kraki and adds what a browser tab cannot: a tray presence that keeps
 // the relay connection (so replies, questions and approvals notify natively),
-// a taskbar badge, single-instance behaviour, and in-window GitHub sign-in.
+// a taskbar badge, single-instance behaviour, and GitHub sign-in in a window of its own.
 const {
   app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, globalShortcut, nativeImage, nativeTheme,
   net, protocol, screen, shell,
@@ -16,13 +16,17 @@ const i18n = require('./i18n.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
 const windowsTitleBar = require('./windows-titlebar.cjs');
+const { appOnlyIpc } = require('./ipc-guard.cjs');
+const navigation = require('./navigation.cjs');
 const buildInfo = require('./build-info.json');
-// Public, immutable build identity; never read from runtime env/renderer URLs.
-ipcMain.on('kraki:build-info', (event) => { event.returnValue = buildInfo; });
 
 const SCHEME = 'app';
 const HOST = 'kraki';
 const APP_ORIGIN = `${SCHEME}://${HOST}`;
+/** Every channel below answers app pages only (ipc-guard.cjs). */
+const appIpc = appOnlyIpc(ipcMain, APP_ORIGIN);
+// Public, immutable build identity; never read from runtime env/renderer URLs.
+appIpc.on('kraki:build-info', (event) => { event.returnValue = buildInfo; });
 /** The Web's registered GitHub OAuth origin; its callback is intercepted. */
 const OAUTH_REDIRECT_ORIGIN = process.env.KRAKI_OAUTH_ORIGIN || 'https://app.kraki.chat';
 const OAUTH_CALLBACK_PATH = '/auth/callback';
@@ -53,7 +57,7 @@ if (!app.requestSingleInstanceLock()) {
 
 /** @type {BrowserWindow | null} */
 let win = null;
-windowsTitleBar.registerTitleBarTheme(ipcMain, () => win, process.platform);
+windowsTitleBar.registerTitleBarTheme(appIpc, () => win, process.platform);
 /** @type {Tray | null} */
 let tray = null;
 let quitting = false;
@@ -116,19 +120,16 @@ function serveApp() {
   });
 }
 
-function isAppUrl(u) { return u.startsWith(`${APP_ORIGIN}/`) || u === APP_ORIGIN; }
-function isGitHubAuth(u) {
-  try {
-    const h = new URL(u).hostname;
-    return h === 'github.com' || h.endsWith('.github.com') || h === 'githubusercontent.com';
-  } catch { return false; }
-}
-
 /** GitHub redirects to the Web's registered callback; bring it home. */
 function oauthCallbackToApp(u) {
-  if (!u.startsWith(OAUTH_REDIRECT_ORIGIN + OAUTH_CALLBACK_PATH)) return null;
-  const parsed = new URL(u);
-  return `${APP_ORIGIN}${OAUTH_CALLBACK_PATH}${parsed.search}`;
+  return navigation.webOAuthCallbackToApp(u, OAUTH_REDIRECT_ORIGIN, OAUTH_CALLBACK_PATH, APP_ORIGIN);
+}
+
+/** The Web client's GitHub sign-in: in the sign-in window, then back to the app's callback page. */
+function signInFromMainWindow(url) {
+  void openSignInWindow(url, oauthCallbackToApp).then((callback) => {
+    if (callback && win && !win.isDestroyed()) void win.loadURL(callback);
+  });
 }
 
 function showWindow() {
@@ -189,15 +190,16 @@ function createWindow() {
   const wc = win.webContents;
   // New windows (links, reports) open in the default browser.
   wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    if (navigation.isWebUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // Only app pages load here (they alone get the bridge, see preload.cjs).
   const guard = (event, url) => {
-    const callback = oauthCallbackToApp(url);
-    if (callback) { event.preventDefault(); void win.loadURL(callback); return; }
-    if (isAppUrl(url) || isGitHubAuth(url)) return; // sign-in stays in the window
+    const where = navigation.mainWindowNavigation(url, APP_ORIGIN);
+    if (where === 'app') return;
     event.preventDefault();
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    if (where === 'signin') signInFromMainWindow(url);
+    else if (where === 'external') void shell.openExternal(url);
   };
   wc.on('will-navigate', guard);
   wc.on('will-redirect', guard);
@@ -342,13 +344,13 @@ function stillOnlineHintOnce() {
 
 // The Web client owns the language choice (Settings › Language) and reports
 // the resolved language on load and on every change.
-ipcMain.on('kraki:language', (event, code) => {
+appIpc.on('kraki:language', (event, code) => {
   if (!win || event.sender !== win.webContents) return;
   pref('language', String(code));
   if (i18n.setLanguage(String(code))) { shownMenu = null; updateTray(); applyBadge(); }
 });
 
-ipcMain.on('kraki:needs-you', (_e, list) => {
+appIpc.on('kraki:needs-you', (_e, list) => {
   needsYou = Array.isArray(list) ? list.map((s) => ({ id: String(s.id), title: String(s.title), reason: String(s.reason) })) : [];
   updateTray();
 });
@@ -382,7 +384,7 @@ function applyBadge() {
     win.setOverlayIcon(badge && !badge.isEmpty() ? badge : null, unread > 0 ? i18n.t('tray.unread', { count: unread }) : '');
   }
 }
-ipcMain.on('kraki:badge', (_e, count) => {
+appIpc.on('kraki:badge', (_e, count) => {
   unread = Math.max(0, Number(count) || 0);
   applyBadge();
   updateTray();
@@ -393,8 +395,12 @@ ipcMain.on('kraki:badge', (_e, count) => {
 /** The open GitHub sign-in window, closed again when setup is cancelled. */
 let signInWindow = null;
 
-/** GitHub sign-in in a window of our own; resolves with kraki://auth/callback?… */
-function openSignInWindow(url) {
+/**
+ * GitHub sign-in in a window of our own. Resolves with `toCallback` of the
+ * redirect that ends it (by default the built-in Kraki's kraki://auth/callback?…),
+ * or null when the user closed it.
+ */
+function openSignInWindow(url, toCallback = navigation.builtInOAuthCallback) {
   return new Promise((resolve) => {
     if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
     const child = new BrowserWindow({
@@ -414,12 +420,10 @@ function openSignInWindow(url) {
       if (!child.isDestroyed()) child.close();
     };
     const intercept = (event, target) => {
-      let parsed;
-      try { parsed = new URL(target); } catch { return; }
-      const desktopCallback = parsed.pathname === '/auth/callback/desktop' || parsed.protocol === 'kraki:';
-      if (!desktopCallback) return;
+      const callback = toCallback(target);
+      if (!callback) return;
       event.preventDefault();
-      finish(`kraki://auth/callback${parsed.search}`);
+      finish(callback);
     };
     child.on('page-title-updated', (event) => {
       event.preventDefault();
@@ -427,7 +431,10 @@ function openSignInWindow(url) {
     });
     child.webContents.on('will-redirect', intercept);
     child.webContents.on('will-navigate', intercept);
-    child.webContents.setWindowOpenHandler(({ url: u }) => { void shell.openExternal(u); return { action: 'deny' }; });
+    child.webContents.setWindowOpenHandler(({ url: u }) => {
+      if (navigation.isHttpsUrl(u)) void shell.openExternal(u);
+      return { action: 'deny' };
+    });
     child.on('closed', () => { if (signInWindow === child) signInWindow = null; finish(null); });
     signInWindow = child;
     void child.loadURL(url);
@@ -442,43 +449,43 @@ const safely = (fn) => async (...args) => {
   try { return { ok: true, ...(await fn(...args)) }; } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
 };
 
-ipcMain.handle('kraki:local-link-discovery', () => readLocalLinkDiscovery());
+appIpc.handle('kraki:local-link-discovery', () => readLocalLinkDiscovery());
 // Performance data (Settings › Share Performance Data): fixed collector
 // paths only; main-window callers only.
 const diagHttp = require('./diag-http.cjs');
-ipcMain.handle('kraki:diag-request', (event, req) => {
+appIpc.handle('kraki:diag-request', (event, req) => {
   if (!win || event.sender !== win.webContents) return { status: 0, body: '' };
   return diagHttp.request((url, init) => net.fetch(url, init), req);
 });
-ipcMain.handle('kraki:builtin-state', () => builtIn?.state() ?? null);
-ipcMain.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => send('kraki:builtin-agent-event', e)));
-ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
+appIpc.handle('kraki:builtin-state', () => builtIn?.state() ?? null);
+appIpc.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => send('kraki:builtin-agent-event', e)));
+appIpc.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
   deviceName: opts?.deviceName,
   forceLogin: !!opts?.forceLogin,
   useCode: !!opts?.useCode,
   onEvent: (e) => send('kraki:builtin-setup-event', e),
   openSignIn: openSignInWindow,
 }));
-ipcMain.handle('kraki:builtin-connect', () => builtIn?.connectPhone() ?? { ok: false, error: 'not_available' });
-ipcMain.on('kraki:builtin-cancel-setup', () => {
+appIpc.handle('kraki:builtin-connect', () => builtIn?.connectPhone() ?? { ok: false, error: 'not_available' });
+appIpc.on('kraki:builtin-cancel-setup', () => {
   builtIn?.cancelSetup();
   if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
 });
-ipcMain.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
-ipcMain.handle('kraki:builtin-disable', safely((_e, opts) => builtIn.disable({ keepOwnership: !!opts?.keepOwnership })));
-ipcMain.on('kraki:builtin-show-signin', () => {
+appIpc.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
+appIpc.handle('kraki:builtin-disable', safely((_e, opts) => builtIn.disable({ keepOwnership: !!opts?.keepOwnership })));
+appIpc.on('kraki:builtin-show-signin', () => {
   if (signInWindow && !signInWindow.isDestroyed()) { signInWindow.restore(); signInWindow.show(); signInWindow.focus(); }
 });
-ipcMain.handle('kraki:builtin-logs-path', () => path.join(builtIn.home(), 'logs'));
-ipcMain.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
-ipcMain.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
+appIpc.handle('kraki:builtin-logs-path', () => path.join(builtIn.home(), 'logs'));
+appIpc.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
+appIpc.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
   if (builtIn.marker()) throw new Error(i18n.t('error.builtInManagesPC'));
   await settings.exec(pref('externalCliPath') || builtIn.bin, [action]);
 }));
-ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
-ipcMain.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
-ipcMain.on('kraki:builtin-open-logs', () => {
+appIpc.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
+appIpc.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
+appIpc.on('kraki:builtin-open-logs', () => {
   if (!builtIn) return;
   const logs = path.join(builtIn.home(), 'logs');
   const viewer = new BrowserWindow({ width: 900, height: 600, title: i18n.t('window.logs'), autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -500,7 +507,7 @@ function registerUsageShortcut(shortcut, enabled) {
   registeredUsageShortcut = enabled ? shortcut : null;
 }
 function readConfig() { try { return JSON.parse(readFileSync(path.join(builtIn.home(), 'config.json'), 'utf8')); } catch { return null; } }
-ipcMain.handle('kraki:settings-state', async () => ({
+appIpc.handle('kraki:settings-state', async () => ({
   usageShortcut: pref('usageShortcut') ?? 'F6',
   usageShortcutEnabled: !!registeredUsageShortcut,
   launchAtLogin: process.platform === 'win32' ? await builtIn.launchAtLogin() : app.getLoginItemSettings().openAtLogin,
@@ -512,12 +519,12 @@ ipcMain.handle('kraki:settings-state', async () => ({
   externalCliPath: pref('externalCliPath') ?? null,
   externalCliVersion: pref('externalCliVersion') ?? null,
 }));
-ipcMain.handle('kraki:settings-shortcut', safely((_e, shortcut, enabled) => {
+appIpc.handle('kraki:settings-shortcut', safely((_e, shortcut, enabled) => {
   if (!settings.isSafeUsageShortcut(shortcut)) throw new Error(i18n.t('error.shortcutUnsafe'));
   registerUsageShortcut(shortcut, !!enabled);
   pref('usageShortcut', shortcut); pref('usageShortcutEnabled', !!enabled);
 }));
-ipcMain.handle('kraki:settings-login', safely(async (_e, enabled) => {
+appIpc.handle('kraki:settings-login', safely(async (_e, enabled) => {
   if (process.platform === 'win32') {
     await builtIn.setLoginItem(!!enabled);
     if (await builtIn.launchAtLogin() !== !!enabled) throw new Error(i18n.t('error.loginItem'));
@@ -526,27 +533,27 @@ ipcMain.handle('kraki:settings-login', safely(async (_e, enabled) => {
   app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath, args: ['--login'] });
   if (app.getLoginItemSettings().openAtLogin !== !!enabled) throw new Error(i18n.t('error.loginItem'));
 }));
-ipcMain.handle('kraki:settings-go-online', safely(() => changePresence('starting', () => builtIn.enable())));
-ipcMain.handle('kraki:settings-go-offline', safely(() => changePresence('stopping', () => builtIn.disable({ keepOwnership: true }))));
-ipcMain.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
-ipcMain.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
-ipcMain.handle('kraki:settings-locate-cli', safely(async () => {
+appIpc.handle('kraki:settings-go-online', safely(() => changePresence('starting', () => builtIn.enable())));
+appIpc.handle('kraki:settings-go-offline', safely(() => changePresence('stopping', () => builtIn.disable({ keepOwnership: true }))));
+appIpc.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
+appIpc.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
+appIpc.handle('kraki:settings-locate-cli', safely(async () => {
   const result = await dialog.showOpenDialog(win, { title: i18n.t('dialog.locateTitle'), properties: ['openFile'], filters: [{ name: i18n.t('dialog.executable'), extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
   if (result.canceled) throw new Error(i18n.t('error.selectionCancelled'));
   const cli = await settings.probeCli(result.filePaths[0]);
   pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
 }));
-ipcMain.handle('kraki:settings-recheck-cli', safely(async () => {
+appIpc.handle('kraki:settings-recheck-cli', safely(async () => {
   const cli = await settings.probeCli(pref('externalCliPath'));
   pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
 }));
-ipcMain.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
+appIpc.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
   if (!readConfig()) throw new Error(i18n.t('error.setupFirst'));
   await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']);
   if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error(i18n.t('error.updatePolicy'));
 }));
 
-ipcMain.on('kraki:notify', (_e, n) => {
+appIpc.on('kraki:notify', (_e, n) => {
   if (!Notification.isSupported() || !n || typeof n.title !== 'string') return;
   const note = new Notification({
     title: String(n.title),
@@ -599,7 +606,7 @@ app.whenReady().then(async () => {
 });
 
 // Explicit report export: the page supplies HTML, never a filesystem path.
-ipcMain.handle('kraki:export-html-report', async (event, html, name) => {
+appIpc.handle('kraki:export-html-report', async (event, html, name) => {
   if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) {
     return { ok: false, error: 'Report export is only available from the main window.' };
   }

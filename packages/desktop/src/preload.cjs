@@ -1,11 +1,14 @@
 // Exposes a small, fixed bridge to the Web client (lib/desktop.ts). No Node
-// or Electron objects reach the page.
+// or Electron objects reach the page, and pages of any other origin get no
+// bridge at all (the main process also refuses them, ipc-guard.cjs).
 const { contextBridge, ipcRenderer } = require('electron');
+
+const APP_ORIGIN = 'app://kraki';
 
 // Set by the main process (webPreferences.additionalArguments).
 const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? '').split('=').slice(1).join('=');
 
-contextBridge.exposeInMainWorld('krakiDesktop', {
+if (globalThis.location?.origin === APP_ORIGIN) contextBridge.exposeInMainWorld('krakiDesktop', {
   // Browser report copies are exported by the main process, not page paths.
   exportHtmlReport: (html, name) => ipcRenderer.invoke('kraki:export-html-report', html, name),
   platform: process.platform,
