@@ -368,6 +368,15 @@ class MessageProvider {
   }
 
   private async loadRange(sessionId: string, from: number, to: number, operation: RangeOperation): Promise<boolean> {
+    // Memory wins over cached rows below and a covered window sends no Tentacle
+    // request, so an IDB read could only re-deliver what is already shown (a
+    // chat open's route reconcile followed by its subscription snapshot at the
+    // same seq; a closing idle followed by the session_list digest).
+    const held = this.memoryWindow(sessionId, from, to);
+    if (held) {
+      this.confirmEchoedOutbox(sessionId, held);
+      return true;
+    }
     let cached: ChatMessage[] = [];
     try {
       const db = await loadMessageDb();
@@ -718,17 +727,21 @@ class MessageProvider {
       && 'sessionId' in message && message.sessionId === sessionId);
     if (valid.length > 0) {
       getStore().prependMessages(sessionId, valid);
-      for (const message of valid) {
-        if (message.type !== 'user_message') continue;
-        const clientId = message.payload.clientId;
-        // confirm's clientId lookup is global: validate session first and never
-        // infer replay acceptance from text (which could confirm another retry).
-        if (clientId && outbox.forSession(sessionId).some(entry => entry.clientId === clientId)) {
-          outbox.confirm(sessionId, clientId, undefined);
-        }
-      }
+      this.confirmEchoedOutbox(sessionId, valid);
     }
     logger.info('delivered', { sessionId, count: valid.length });
+  }
+
+  private confirmEchoedOutbox(sessionId: string, messages: ChatMessage[]): void {
+    for (const message of messages) {
+      if (message.type !== 'user_message') continue;
+      const clientId = message.payload.clientId;
+      // confirm's clientId lookup is global: validate session first and never
+      // infer replay acceptance from text (which could confirm another retry).
+      if (clientId && outbox.forSession(sessionId).some(entry => entry.clientId === clientId)) {
+        outbox.confirm(sessionId, clientId, undefined);
+      }
+    }
   }
 }
 
