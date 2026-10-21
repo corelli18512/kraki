@@ -141,8 +141,8 @@ struct PairingSheet: View {
         VStack(spacing: 18) {
             if let connected {
                 StepCard(
-                    title: "You’re all set",
-                    detail: "\(connected.name) can now see and run your sessions. Sessions you start on either one show up on both."
+                    title: String(localized: "You’re all set"),
+                    detail: String(localized: "\(connected.name) can now see and run your sessions. Sessions you start on either one show up on both.")
                 ) { EmptyView() }
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 54))
@@ -158,8 +158,8 @@ struct PairingSheet: View {
             } else {
                 StepCard(
                     step: "Optional",
-                    title: "Connect your phone",
-                    detail: "Scan with your phone’s camera to follow sessions and approve actions from anywhere. No Kraki on your iPhone yet? The code takes you to the App Store."
+                    title: String(localized: "Connect your phone"),
+                    detail: String(localized: "Scan with your phone’s camera to follow sessions and approve actions from anywhere. No Kraki on your iPhone yet? The code takes you to the App Store.")
                 ) { EmptyView() }
                 codeArea
                 Button("Skip for Now", action: onFinish)

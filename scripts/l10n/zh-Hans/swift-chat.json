@@ -236,7 +236,6 @@
     "The agent did not report this subagent's steps.": "Agent 未上报此子 Agent 的步骤。",
     "The clipboard doesn't contain a readable image.": "剪贴板中没有可读取的图片。",
     "The clipboard image couldn't be read.": "无法读取剪贴板中的图片。",
-    "The computer": "电脑",
     "The computer is offline": "电脑已离线",
     "The only coding agent on this computer": "此电脑上唯一的编程 Agent",
     "The session device is offline and no cached conversation is available.": "会话设备已离线，且没有可用的对话缓存。",
