@@ -1180,8 +1180,8 @@ export class PiAdapter extends AgentAdapter {
   cachedEfforts: Map<string, ReasoningEffort[]> | null = null;
 
   async listModelDetails(): Promise<ModelDetail[]> {
-    await ensureRawModels(this);
-    const byModel = await fetchEfforts(this);
+    // Two independent pi processes: run them side by side (startup latency).
+    const [, byModel] = await Promise.all([ensureRawModels(this), fetchEfforts(this)]);
     return fetchModels(this).map(m => {
       const id = `${m.provider}/${m.model}`;
       const efforts = byModel.get(id) ?? (m.reasoning ? FALLBACK_EFFORTS : []);

@@ -319,17 +319,12 @@ export class MultiAgentAdapter extends AgentAdapter {
 
   /** Get per-agent capabilities for the greeting / device capabilities. */
   async getAgentCapabilities(): Promise<AgentCapabilities[]> {
-    const caps: AgentCapabilities[] = [];
-    for (const [id, adapter] of this.adapters) {
+    // Each agent lists its models with its own CLI/SDK: query them side by
+    // side (startup latency), keeping the detection order.
+    return Promise.all([...this.adapters].map(async ([id, adapter]): Promise<AgentCapabilities> => {
       const modelDetails = await adapter.listModelDetails();
-      caps.push({
-        type: 'code',
-        id,
-        models: modelDetails.map(m => m.id),
-        modelDetails,
-      });
-    }
-    return caps;
+      return { type: 'code', id, models: modelDetails.map(m => m.id), modelDetails };
+    }));
   }
 
   // ── Model aggregation ──────────────────────────────
