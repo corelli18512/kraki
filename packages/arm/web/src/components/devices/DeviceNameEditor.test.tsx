@@ -34,9 +34,34 @@ describe('DeviceNameEditor', () => {
     expect(commands.renameDevice).toHaveBeenLastCalledWith('dev-t', '');
   });
 
-  it('limits the name to 64 code points, so emoji count once', () => {
-    edit(laptop, '😀'.repeat(70));
-    expect(commands.renameDevice).toHaveBeenCalledWith('dev-t', '😀'.repeat(64));
+  it('limits the name to 64 code points (emoji count once) and refuses edits that would go over', () => {
+    edit(laptop, '😀'.repeat(64));
+    expect(commands.renameDevice).toHaveBeenLastCalledWith('dev-t', '😀'.repeat(64));
+
+    document.body.innerHTML = '';
+    const full = { ...laptop, name: 'x'.repeat(64), defaultName: 'corelli-mbp' };
+    render(<DeviceNameEditor device={full} />);
+    fireEvent.click(screen.getByRole('button', { name: `Rename ${full.name}` }));
+    const input = screen.getByRole('textbox', { name: 'Device name' }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: `A${full.name}` } }); // insert at the start
+    expect(input.value).toBe(full.name); // refused: nothing at the end was dropped
+  });
+
+  it('never cuts an IME composition; an over-long result goes back to the text before it', () => {
+    const full = { ...laptop, name: 'x'.repeat(63), defaultName: 'corelli-mbp' };
+    render(<DeviceNameEditor device={full} />);
+    fireEvent.click(screen.getByRole('button', { name: `Rename ${full.name}` }));
+    const input = screen.getByRole('textbox', { name: 'Device name' }) as HTMLInputElement;
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: `${full.name}ni` } }); // pinyin in progress, over the limit
+    expect(input.value).toBe(`${full.name}ni`);
+    fireEvent.change(input, { target: { value: `${full.name}你` } });
+    fireEvent.compositionEnd(input);
+    expect(input.value).toBe(`${full.name}你`); // 64: fits
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: `${full.name}你好` } });
+    fireEvent.compositionEnd(input);
+    expect(input.value).toBe(`${full.name}你`); // 65: back to before this composition
   });
 
   it('sends nothing when the name did not change or on Escape', () => {

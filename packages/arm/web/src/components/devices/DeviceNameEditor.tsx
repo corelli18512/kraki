@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { MAX_DEVICE_NAME_LENGTH, normalizeDeviceName, type DeviceSummary } from '@kraki/protocol';
 import { wsClient } from '../../lib/ws-client';
@@ -12,6 +12,10 @@ import { wsClient } from '../../lib/ws-client';
 export function DeviceNameEditor({ device, className }: { device: DeviceSummary; className?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  // Draft before an IME composition started: restored if the composed text
+  // would exceed the limit (the composition itself is never cut mid-way).
+  const beforeComposition = useRef<string | null>(null);
+  const tooLong = (value: string) => [...value].length > MAX_DEVICE_NAME_LENGTH;
   const ownName = device.defaultName ?? device.name;
 
   const save = () => {
@@ -32,8 +36,18 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
         value={draft}
         placeholder={ownName}
         // Limit by code points like the relay (HTML maxLength counts UTF-16
-        // units, so an emoji would count twice).
-        onChange={(e) => setDraft([...e.target.value].slice(0, MAX_DEVICE_NAME_LENGTH).join(''))}
+        // units, so an emoji would count twice). An edit that would go over
+        // is refused as a whole, so existing text is never silently cut.
+        onChange={(e) => {
+          const value = e.target.value;
+          if (beforeComposition.current !== null || !tooLong(value)) setDraft(value);
+        }}
+        onCompositionStart={() => { beforeComposition.current = draft; }}
+        onCompositionEnd={(e) => {
+          const before = beforeComposition.current;
+          beforeComposition.current = null;
+          if (before !== null && tooLong(e.currentTarget.value)) setDraft(before);
+        }}
         onBlur={save}
         onKeyDown={(e) => {
           if (e.key === 'Enter') save();

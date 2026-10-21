@@ -232,11 +232,13 @@ describe('rename_device through the account service (edge mode)', () => {
     // device list as it was then; if a rename completes on the edge before
     // that answer is applied, mirroring the list would put the old name back.
     let release!: () => void;
+    let markHeld!: () => void;
+    const isHeld = new Promise<void>((r) => { markHeld = r; });
     let held = false;
     class SlowBackend extends RemoteAuthBackend {
       override async authenticate(...args: Parameters<RemoteAuthBackend['authenticate']>) {
         const result = await super.authenticate(...args);
-        if (held) await new Promise<void>((r) => { release = r; });
+        if (held) await new Promise<void>((r) => { release = r; markHeld(); });
         return result;
       }
     }
@@ -253,7 +255,7 @@ describe('rename_device through the account service (edge mode)', () => {
     // The laptop signs in again; its answer (old device list) is held back.
     held = true;
     const back = connect(e, 'corelli-mbp', 'tentacle', { deviceId: laptopId });
-    await new Promise((r) => setTimeout(r, 200));
+    await isHeld; // its answer (computed before the rename) is being held
     held = false;
     phone.send({ type: 'rename_device', deviceId: laptopId, name: 'Work laptop' });
     expect(await next(phone, 'device_renamed')).toMatchObject({ name: 'Work laptop' });

@@ -271,6 +271,7 @@ export async function handleDeleteAccount(server: HeadServer, ws: WebSocket, sta
         }
       }
       server.pulseHub.forgetDevice(id);
+      server.deviceRenamedAt.delete(id);
     }
   } catch (err) {
     logger.error('Account deletion failed', { userId, error: (err as Error).message });
