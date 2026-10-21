@@ -333,8 +333,9 @@ export async function startWorker(): Promise<WorkerResult> {
   // Offloaded tool args/results accumulate a few files per tool call. Keep
   // them for the archive window, then reclaim them (images/reports stay).
   const TOOL_PAYLOAD_TTL_MS = 14 * 24 * 3600_000;
-  setTimeout(() => { try { attachmentStore.pruneToolPayloads(TOOL_PAYLOAD_TTL_MS); } catch { /* best effort */ } }, 60_000).unref();
-  setInterval(() => { try { attachmentStore.pruneToolPayloads(TOOL_PAYLOAD_TTL_MS); } catch { /* best effort */ } }, 24 * 3600_000).unref();
+  const pruneToolPayloads = () => { attachmentStore.pruneToolPayloads(TOOL_PAYLOAD_TTL_MS).catch(() => { /* best effort */ }); };
+  setTimeout(pruneToolPayloads, 60_000).unref();
+  setInterval(pruneToolPayloads, 24 * 3600_000).unref();
 
   // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
   //     fails, log and continue without it — daemon stays up.

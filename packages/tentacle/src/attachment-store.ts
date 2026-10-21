@@ -40,6 +40,7 @@ import {
   readSync,
   closeSync,
 } from 'node:fs';
+import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ContentRef } from '@kraki/protocol';
@@ -329,33 +330,44 @@ export class AttachmentStore {
    * Delete tool-call payload attachments (offloaded `<tool>.args.json` /
    * `<tool>.result.txt`) older than `maxAgeMs`, across every session. Images
    * and reports the user was shown are kept. Old Steps then show their
-   * headline without the expandable body. Returns the number of payloads
+   * headline without the expandable body. Resolves to the number of payloads
    * removed.
+   *
+   * Asynchronous: the daily scan visits every sidecar of every session, and
+   * done with sync fs calls it blocked the daemon's event loop (WebSocket,
+   * Pulse, local link) for 2.8-3.8 s (log audit 2026-10-22).
    */
-  pruneToolPayloads(maxAgeMs: number, now = Date.now()): number {
+  async pruneToolPayloads(maxAgeMs: number, now = Date.now()): Promise<number> {
+    const startedAt = Date.now();
     let removed = 0;
+    let scanned = 0;
+    let bytesFreed = 0;
     let sessions: string[];
-    try { sessions = readdirSync(this.sessionsDir); } catch { return 0; }
+    try { sessions = await readdir(this.sessionsDir); } catch { return 0; }
     for (const sessionId of sessions) {
       if (!isSafeId(sessionId)) continue;
       const dir = join(this.sessionsDir, sessionId, 'attachments');
       let names: string[];
-      try { names = readdirSync(dir); } catch { continue; }
+      try { names = await readdir(dir); } catch { continue; }
       for (const name of names) {
         if (!name.endsWith('.json')) continue;
+        scanned++;
         const sidecar = join(dir, name);
         let meta: AttachmentMetaSidecar;
         try {
-          if (now - statSync(sidecar).mtimeMs < maxAgeMs) continue;
-          meta = JSON.parse(readFileSync(sidecar, 'utf8')) as AttachmentMetaSidecar;
+          if (now - (await stat(sidecar)).mtimeMs < maxAgeMs) continue;
+          meta = JSON.parse(await readFile(sidecar, 'utf8')) as AttachmentMetaSidecar;
         } catch { continue; }
         if (!meta.name || !/\.(?:args\.json|result\.txt)$/.test(meta.name)) continue;
         const id = name.slice(0, -'.json'.length);
-        try { unlinkSync(join(dir, `${id}.${extForMime(meta.mimeType)}`)); } catch { /* already gone */ }
-        try { unlinkSync(sidecar); removed++; } catch { /* ignore */ }
+        try { await unlink(join(dir, `${id}.${extForMime(meta.mimeType)}`)); bytesFreed += meta.size ?? 0; } catch { /* already gone */ }
+        try { await unlink(sidecar); removed++; } catch { /* ignore */ }
       }
     }
-    if (removed > 0) logger.info({ removed, maxAgeDays: Math.round(maxAgeMs / 86_400_000) }, 'pruned old tool payload attachments');
+    logger[removed > 0 ? 'info' : 'debug']({
+      removed, scanned, bytesFreed, sessions: sessions.length,
+      durationMs: Date.now() - startedAt, maxAgeDays: Math.round(maxAgeMs / 86_400_000),
+    }, 'pruned old tool payload attachments');
     return removed;
   }
 }
