@@ -52,6 +52,10 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
         }}
         onBlur={save}
         onKeyDown={(e) => {
+          // Enter/Escape while an IME composition is open pick/cancel the
+          // candidate (Chinese, Japanese…); they must not save or close.
+          // keyCode 229 covers Safari, which ends the composition first.
+          if (beforeComposition.current !== null || e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Enter') save();
           if (e.key === 'Escape') {
             e.stopPropagation();

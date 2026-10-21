@@ -157,7 +157,7 @@ struct PairingSheet: View {
                     .accessibilityIdentifier("mac.setup.phone.start")
             } else {
                 StepCard(
-                    step: "Optional",
+                    step: String(localized: "Optional"),
                     title: String(localized: "Connect your phone"),
                     detail: String(localized: "Scan with your phone’s camera to follow sessions and approve actions from anywhere. No Kraki on your iPhone yet? The code takes you to the App Store.")
                 ) { EmptyView() }

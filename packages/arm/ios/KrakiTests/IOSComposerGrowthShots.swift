@@ -23,7 +23,7 @@ final class IOSComposerGrowthShots: XCTestCase {
         if ProcessInfo.processInfo.environment["KRAKI_COMPOSER_SHOTS"] != "1" { try requireForegroundUITests() }
         IOSVoiceGeometryProbe.enabled = true
         IOSVoiceGeometryProbe.frames = [:]
-        driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
+        driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false, automaticPartials: false)
         app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try mount(.light)

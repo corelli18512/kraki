@@ -70,11 +70,21 @@ export function useAgentsCheck(builtIn: BuiltInBridge) {
   return { agents, installed, readyCount, running, hasResults, run };
 }
 
+const loginHintKeys = {
+  claude: 'desktop:agents.loginClaude',
+  codex: 'desktop:agents.loginCodex',
+  copilot: 'desktop:agents.loginCopilot',
+  pi: 'desktop:agents.loginPi',
+} as const;
+
 export function detailLine(a: AgentResult): string | null {
   switch (a.status) {
     case 'checking': return null;
     case 'ready': return t('desktop:agents.models', { count: a.models });
-    case 'needs_login': return t('desktop:agents.login', { hint: a.hint ?? '' }).trim();
+    case 'needs_login': {
+      const key = loginHintKeys[a.id as keyof typeof loginHintKeys];
+      return t('desktop:agents.login', { hint: key ? t(key) : (a.hint ?? '') }).trim();
+    }
     case 'not_installed': return t('desktop:agents.notInstalled');
     case 'error': return a.hint ?? t('desktop:agents.couldNotStart');
   }

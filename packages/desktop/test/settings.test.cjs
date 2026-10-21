@@ -138,3 +138,21 @@ test('external CLI version errors follow shell language without translating CLI 
     await assert.rejects(probeCli(file), { message: '所选 CLI 未报告 Kraki 版本。' });
   } finally { i18n.setLanguage('en'); rmSync(dir, { recursive: true }); }
 });
+
+test('CLI probe failures surface localized messages, never child_process output', async () => {
+  const settings = require('../src/settings.cjs');
+  const i18n = require('../src/i18n.cjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'kraki-probe-'));
+  const broken = path.join(dir, process.platform === 'win32' ? 'kraki.exe' : 'kraki');
+  writeFileSync(broken, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+  try {
+    for (const lang of ['en', 'zh-Hans']) {
+      i18n.setLanguage(lang);
+      await assert.rejects(settings.probeCli(broken), { message: i18n.t('error.cliVersion') });
+      await assert.rejects(settings.probeCli(path.join(dir, 'missing', 'kraki')), { message: i18n.t('error.selectExecutable') });
+    }
+  } finally {
+    i18n.setLanguage('en');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
