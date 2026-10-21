@@ -76,7 +76,7 @@ extension LucideIconType {
     func tabImage(size: CGFloat = 24) -> Image {
         let view = LucideIcon(self, size: size, color: .black)
         let renderer = ImageRenderer(content: view)
-        renderer.scale = UIScreen.main.scale
+        renderer.scale = currentDisplayScale()
         if let uiImage = renderer.uiImage {
             return Image(uiImage: uiImage.withRenderingMode(.alwaysTemplate))
         }
