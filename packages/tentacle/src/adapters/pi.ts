@@ -36,7 +36,7 @@ import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEf
 import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
 import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
 import { PiRpcProcess } from './pi-rpc.js';
-import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
+import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, type PiSubagentHoldEnd, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
 export { effortToThinking, type PiListModelsError, summarizeCrash, runPiListModels, type PiCatalogModel, FALLBACK_EFFORTS, piThinkingLevelsFor, defaultEffortFor, queryPiCatalog } from './pi-catalog.js';
 export { piToolKind, shouldAutoApprove, parsePiPermission } from './pi-permissions.js';
 export { type PiRpcEvent, type PiRpcOptions } from './pi-rpc.js';
@@ -198,7 +198,7 @@ export class PiAdapter extends AgentAdapter {
     clearModelRetry(this);
     if (this.evictTimer) clearInterval(this.evictTimer);
     for (const s of this.sessions.values()) {
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'adapter_stop');
       s.proc.kill();
     }
     this.sessions.clear();
@@ -218,7 +218,7 @@ export class PiAdapter extends AgentAdapter {
 
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
     const previous = this.sessions.get(sessionId);
-    if (previous) this.stopAwaitingSubagents(previous);
+    if (previous) this.stopAwaitingSubagents(previous, 'respawn');
     const [provider, modelId] = this.resolveModelId(model);
     // Export the meta sidecar path so the extension's kraki_get_mode reads the
     // live permission mode (the adapter, via persistMeta, is the source of truth).
@@ -268,7 +268,7 @@ export class PiAdapter extends AgentAdapter {
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
-    this.stopAwaitingSubagents(sess);
+    this.stopAwaitingSubagents(sess, 'process_exit');
     if (this.sessions.get(sessionId) !== sess) {
       // A replacement process already owns the session: this late exit must
       // not cancel its cards, evict it, or announce anything for it.
@@ -391,7 +391,18 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  stopAwaitingSubagents(s: PiSession): void {
+  /** End the background-subagent hold. `reason` names how it ended for the
+   *  hold-end log line (only written when a hold was actually open). */
+  stopAwaitingSubagents(s: PiSession, reason: PiSubagentHoldEnd): void {
+    if (s.awaitingSubagents) {
+      logger.info({
+        sessionId: s.turn.sessionId,
+        ...s.turn.event(),
+        reason,
+        heldMs: s.subagentHoldSince === undefined ? undefined : Date.now() - s.subagentHoldSince,
+      }, 'pi background-subagent hold ended');
+    }
+    s.subagentHoldSince = undefined;
     s.awaitingSubagents = false;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = undefined;
@@ -399,15 +410,15 @@ export class PiAdapter extends AgentAdapter {
     s.subagentHoldTimer = undefined;
   }
 
-  /** (Re)start the hold's inactivity bound: background runs that report
-   *  nothing for SUBAGENT_HOLD_IDLE_MS are given up on and the turn settles. */
+  /** (Re)start the hold's inactivity bound: background runs that make no
+   *  progress for SUBAGENT_HOLD_IDLE_MS are given up on and the turn settles. */
   private armSubagentHoldTimer(sessionId: string, s: PiSession): void {
     if (s.subagentHoldTimer) clearTimeout(s.subagentHoldTimer);
     s.subagentHoldTimer = setTimeout(() => {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
-      logger.warn({ sessionId }, 'pi background subagents reported nothing for too long; settling');
+      logger.warn({ sessionId, ...s.turn.event(), idleMs: PiAdapter.SUBAGENT_HOLD_IDLE_MS }, 'pi background subagents made no progress for too long; settling');
       this.emitSubagentSteps(sessionId, s, this.subagentTrackers.get(sessionId)?.retirePending() ?? []);
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'no_progress_timeout');
       s.turn.finish();
     }, PiAdapter.SUBAGENT_HOLD_IDLE_MS);
   }
@@ -420,21 +431,26 @@ export class PiAdapter extends AgentAdapter {
     // Prose so far ("started…") is an intermediate step, not the reply.
     s.turn.holdOpen();
     s.awaitingSubagents = true;
+    s.subagentHoldSince = Date.now();
     this.armSubagentHoldTimer(sessionId, s);
-    logger.info({ sessionId, running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
+    logger.info({ sessionId, ...s.turn.event(), running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
     return true;
   }
 
-  /** Background runs may have finished: if no wake run follows, settle. */
-  checkSubagentsDone(sessionId: string, s: PiSession): void {
+  /** Background runs may have finished: if no wake run follows, settle.
+   *  `progressed` is false for a status snapshot identical to the previous
+   *  one: pi-subagents re-renders its widget every second while a run is
+   *  listed, so such a repaint is not activity and must not keep postponing
+   *  the hold's inactivity bound (a hung run would hold the turn forever). */
+  checkSubagentsDone(sessionId: string, s: PiSession, progressed = true): void {
     if (!s.awaitingSubagents) return;
-    this.armSubagentHoldTimer(sessionId, s);
+    if (progressed) this.armSubagentHoldTimer(sessionId, s);
     if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = setTimeout(() => {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
       logger.info({ sessionId }, 'pi background subagents finished without a wake run; settling');
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'finished_without_wake');
       s.turn.finish();
     }, PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
   }
@@ -473,7 +489,7 @@ export class PiAdapter extends AgentAdapter {
 
   /** A new logical turn (prompt, follow-up, or a steer after the last settled). */
   private resetTurnTracking(s: PiSession): void {
-    this.stopAwaitingSubagents(s);
+    this.stopAwaitingSubagents(s, 'new_turn');
     s.turn.beginTurn();
     s.lastStopReason = undefined;
     s.pendingMaintenanceIdle = false;
@@ -810,7 +826,7 @@ export class PiAdapter extends AgentAdapter {
     // would wake the agent into a turn nobody is listening to.
     const tracker = this.subagentTrackers.get(sessionId);
     const backgroundRuns = tracker?.pendingAsyncRunIds() ?? [];
-    this.stopAwaitingSubagents(s);
+    this.stopAwaitingSubagents(s, 'abort');
     // They will not report back into this turn: stop counting them as active,
     // or every later turn would be held for them.
     this.emitSubagentSteps(sessionId, s, tracker?.retirePending() ?? []);
@@ -932,7 +948,7 @@ export class PiAdapter extends AgentAdapter {
     this.clearPendingQuestions(sessionId);
     this.pendingModeSignals.delete(sessionId);
     const killed = this.sessions.get(sessionId);
-    if (killed) this.stopAwaitingSubagents(killed);
+    if (killed) this.stopAwaitingSubagents(killed, 'killed');
     this.subagentTrackers.delete(sessionId);
     killed?.proc.kill();
     this.sessions.delete(sessionId);

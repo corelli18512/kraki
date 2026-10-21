@@ -25,6 +25,11 @@ export const PROMPT_IDLE_STALL_MS = 120_000;
 
 export type ForeignDialogMethod = 'select' | 'input' | 'editor' | 'confirm';
 
+/** How a background-subagent hold ended (logged with its duration). */
+export type PiSubagentHoldEnd =
+  | 'wake_run' | 'finished_without_wake' | 'no_progress_timeout'
+  | 'new_turn' | 'abort' | 'process_exit' | 'respawn' | 'killed' | 'adapter_stop';
+
 export interface PiSession {
   proc: PiRpcProcess;
   cwd: string;
@@ -75,9 +80,14 @@ export interface PiSession {
   awaitingSubagents?: boolean;
   /** Fallback settle when background runs finished but no wake run came. */
   subagentGrace?: ReturnType<typeof setTimeout>;
-  /** Upper bound on the hold: settles when background runs show no activity
-   *  (status snapshot or notification) for SUBAGENT_HOLD_IDLE_MS. */
+  /** Upper bound on the hold: settles when background runs show no progress
+   *  (a changed status snapshot or a notification) for SUBAGENT_HOLD_IDLE_MS. */
   subagentHoldTimer?: ReturnType<typeof setTimeout>;
+  /** When the current background-subagent hold began (for its end log). */
+  subagentHoldSince?: number;
+  /** The last pi-subagents status snapshot's runs, serialized: an identical
+   *  repaint is not progress. */
+  subagentSnapshotKey?: string;
 }
 
 /** A subagent's saved output file (pi-subagents notifications point at it),

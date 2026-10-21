@@ -48,7 +48,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       const s = adapter.sessions.get(sessionId);
       // A run while held: pi woke the agent with background results; it
       // continues the same Kraki turn.
-      if (s?.awaitingSubagents) adapter.stopAwaitingSubagents(s);
+      if (s?.awaitingSubagents) adapter.stopAwaitingSubagents(s, 'wake_run');
       if (s) {
         s.turn.captureTurnId();
         s.promptPreflight = undefined;
@@ -300,17 +300,25 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         const line = Array.isArray(e.widgetLines) ? String(e.widgetLines[0] ?? '') : '';
         const prefix = 'PI_SUBAGENT_ASYNC_JSON:';
         const tracker = adapter.subagentTrackers.get(sessionId);
+        // pi-subagents repaints this widget every second while a run is listed
+        // (only `generatedAt` changes). Only a changed run list is progress.
+        let progressed = true;
         if (tracker && line.startsWith(prefix)) {
           try {
-            adapter.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot(JSON.parse(line.slice(prefix.length))));
+            const snapshot = JSON.parse(line.slice(prefix.length)) as { runs?: unknown };
+            const key = JSON.stringify(snapshot?.runs ?? null);
+            progressed = key !== s.subagentSnapshotKey;
+            s.subagentSnapshotKey = key;
+            adapter.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot(snapshot));
           } catch (err) {
             logger.debug({ sessionId, err: (err as Error).message }, 'pi: unreadable subagent status snapshot');
           }
         } else if (tracker && !line) {
           // The widget is cleared once no background run remains.
+          s.subagentSnapshotKey = undefined;
           adapter.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot({ runs: [] }));
         }
-        adapter.checkSubagentsDone(sessionId, s);
+        adapter.checkSubagentsDone(sessionId, s, progressed);
         break;
       }
       const rawTitle = typeof e.title === 'string' ? e.title : '';
