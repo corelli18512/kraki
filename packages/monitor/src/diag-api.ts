@@ -74,13 +74,14 @@ export const schemas: Record<string, string[]> = {
   'diag.health': ['dropped', 'count', 'bytes'],
   'diag.upload': ['status', 'bytes', 'durationMs'],
   'work.slow': ['source', 'durationMs', 'cpuMs', 'messageSeq'],
-  'ui.busy': ['durationMs'],
+  // phase=inactive: on screen but not frontmost (Mac); absent while active.
+  'ui.busy': ['durationMs', 'phase'],
   'user.marker': [],
   'voice.action': ['source', 'textLength', 'accepted'],
   'list.snapshot': ['count', 'pending', 'firstSeq', 'lastSeq'],
   'session.view': ['source'],
   'ready.summary': ['kind', 'outcome', 'path', 'attempt', 'gap', 'viewing', 'backgroundMs', 'firstContentMs',
-    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit', 'kept'],
+    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit', 'kept', 'cause'],
   // A head (catch-up) reply arrived: request → handled on the main thread.
   'history.batch': ['kind', 'count', 'durationMs', 'viewing', 'attempt'],
   'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs', 'reconnecting'],
@@ -108,46 +109,74 @@ const EVENT_KEYS = ['t', 'm', 'seq', 'ev', 'sid', 'd'];
  * A newer client is therefore not punished for one added field: before,
  * that rejected the whole batch, the client deleted it on 400, and every
  * event in it was lost (2026-10-01/02, `voice.summary.correctionOn`: 15
- * batches). A known name with a value outside its format still rejects the
- * batch: that is where free text or paths would leak.
+ * batches).
+ *
+ * A known name with a value outside its format (where free text or paths
+ * would leak) is never stored either, but it no longer costs the batch: a bad
+ * `sid` or event field is dropped from its event, and an event whose envelope
+ * (t/m/seq/ev/d) is unusable is dropped whole. Rejecting the batch lost every
+ * neighbouring event (2026-10 audit: the new-session voice draft id
+ * `kraki.new-session-draft` as `sid` cost 9 batches, including launches and
+ * cold READYs). Only a malformed batch envelope still rejects.
+ *
+ * `problems` (optional) receives what was dropped or rejected, as
+ * `event.field` names only — never a value — for the collector's log.
  */
-export function sanitizeDiagBatch(value: unknown, batchId: string): { batch: Record<string, unknown>; stripped: number } | null {
-  if (!object(value)) return null;
+export function sanitizeDiagBatch(value: unknown, batchId: string, problems?: string[]): { batch: Record<string, unknown>; stripped: number; invalid: number } | null {
+  const problem = (name: string) => { if (problems && problems.length < 16 && !problems.includes(name)) problems.push(name); };
+  const reject = (name: string) => { problem(name); return null; };
+  if (!object(value)) return reject('batch');
   let stripped = 0;
+  let invalid = 0;
   const strip = <T extends Record<string, unknown>>(o: T, allowed: (k: string) => boolean): T => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(o)) { if (allowed(k)) out[k] = v; else stripped++; }
     return out as T;
   };
   const batch = strip(value, k => BATCH_KEYS.includes(k));
-  if (batch.schema !== 1 || batch.batchId !== batchId || !uuid(batch.processId)) return null;
-  if (!['ios', 'mac', 'windows', 'test'].includes(String(batch.platform))) return null;
-  if (typeof batch.version !== 'string' || !/^[\d.]{1,32}$/.test(batch.version)) return null;
-  if (typeof batch.build !== 'string' || !/^\d{1,16}$/.test(batch.build)) return null;
+  if (batch.schema !== 1) return reject('batch.schema');
+  if (batch.batchId !== batchId) return reject('batch.batchId');
+  if (!uuid(batch.processId)) return reject('batch.processId');
+  if (!['ios', 'mac', 'windows', 'test'].includes(String(batch.platform))) return reject('batch.platform');
+  if (typeof batch.version !== 'string' || !/^[\d.]{1,32}$/.test(batch.version)) return reject('batch.version');
+  if (typeof batch.build !== 'string' || !/^\d{1,16}$/.test(batch.build)) return reject('batch.build');
   if (batch.image !== undefined) {
-    if (!object(batch.image)) return null;
+    if (!object(batch.image)) return reject('batch.image');
     const image = strip(batch.image, k => ['uuid', 'base', 'os', 'arch'].includes(k));
     if (!uuid(image.uuid)
       || typeof image.base !== 'string' || !/^0x[\da-f]{1,16}$/i.test(image.base)
-      || typeof image.os !== 'string' || !/^[\d.]{1,32}$/.test(image.os) || !['arm64', 'x86_64'].includes(String(image.arch))) return null;
+      || typeof image.os !== 'string' || !/^[\d.]{1,32}$/.test(image.os) || !['arm64', 'x86_64'].includes(String(image.arch))) return reject('batch.image');
     batch.image = image;
   }
-  if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > 1000) return null;
+  if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > 1000) return reject('batch.events');
   const events: Record<string, unknown>[] = [];
   for (const raw of batch.events) {
-    if (!object(raw)) return null;
+    if (!object(raw)) { invalid++; problem('event'); continue; }
     const event = strip(raw, k => EVENT_KEYS.includes(k));
-    if (!number(event.t) || !number(event.m) || !Number.isSafeInteger(event.seq) || Number(event.seq) < 1) return null;
-    if (event.sid !== undefined && !id(event.sid)) return null;
-    if (typeof event.ev !== 'string' || !object(event.d)) return null;
+    const name = typeof event.ev === 'string' && Object.hasOwn(schemas, event.ev) ? event.ev : 'event';
+    if (!number(event.t) || !number(event.m) || !Number.isSafeInteger(event.seq) || Number(event.seq) < 1
+      || typeof event.ev !== 'string' || !object(event.d)) { invalid++; problem(name); continue; }
     if (!Object.hasOwn(schemas, event.ev)) { stripped++; continue; }
+    if (event.sid !== undefined && !id(event.sid)) { delete event.sid; invalid++; problem(`${name}.sid`); }
     const schema = schemas[event.ev];
     const d = strip(event.d, k => schema.includes(k) && Object.hasOwn(fields, k));
-    if (!Object.entries(d).every(([key, val]) => fields[key](val))) return null;
+    for (const [key, val] of Object.entries(d)) {
+      if (!fields[key](val)) { delete d[key]; invalid++; problem(`${name}.${key}`); }
+    }
     events.push({ ...event, d });
   }
   batch.events = events;
-  return { batch, stripped };
+  return { batch, stripped, invalid };
+}
+
+/** One collector log line per batch with a value outside its format: what
+ *  (event.field names), from which device and client build — never a value.
+ *  Before this the collector logged nothing, and 5 rejected Mac batches could
+ *  not be explained (2026-10 audit). */
+function logDiagProblems(action: 'dropped' | 'rejected', deviceId: string, batch: unknown, problems: string[]): void {
+  const b = object(batch) ? batch : {};
+  const tag = (v: unknown) => typeof v === 'string' && /^[\w.]{1,32}$/.test(v) ? v : '?';
+  console.warn(`diag ${action} invalid values device=${deviceId} platform=${tag(b.platform)} version=${tag(b.version)} build=${tag(b.build)} fields=${problems.join(',') || '?'}`);
 }
 
 export function validateDiagBatch(value: unknown, batchId: string): boolean {
@@ -235,14 +264,16 @@ export class DiagApi {
       try { raw = await gunzip(body, { maxOutputLength: MAX_RAW }); }
       catch { throw new HttpFailure(413); }
       let batch: unknown;
-      try { batch = JSON.parse(raw.toString('utf8')); } catch { throw new HttpFailure(400); }
+      try { batch = JSON.parse(raw.toString('utf8')); } catch { logDiagProblems('rejected', device.id, undefined, ['json']); throw new HttpFailure(400); }
       const batchId = req.headers['x-kraki-request'] as string;
-      const clean = sanitizeDiagBatch(batch, batchId);
+      const problems: string[] = [];
+      const clean = sanitizeDiagBatch(batch, batchId, problems);
+      if (!clean || clean.invalid > 0) logDiagProblems(clean ? 'dropped' : 'rejected', device.id, batch, problems);
       if (!clean) throw new HttpFailure(400);
       if ((clean.batch.events as unknown[]).length === 0) { res.writeHead(204); res.end(); return true; }
       // Unchanged batches keep their exact bytes; a stripped one is stored
       // re-encoded (deterministic, so a retry of the same bytes stays idempotent).
-      const stored = clean.stripped === 0 ? body : gzipSync(JSON.stringify(clean.batch));
+      const stored = clean.stripped === 0 && clean.invalid === 0 ? body : gzipSync(JSON.stringify(clean.batch));
       if (this.devicesWriting.has(device.id)) throw new HttpFailure(429);
       this.devicesWriting.add(device.id);
       try { await this.store(device, batchId, stored); }

@@ -1,7 +1,7 @@
 /**
  * The native client's diagnostic vocabulary must be accepted here: an unknown
- * event, field or tag makes the collector reject the whole batch (400) and the
- * client drops it. Parse the Swift sources and compare.
+ * event or field is dropped and a tag outside its format is not stored, so
+ * the data never arrives. Parse the Swift sources and compare.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -75,9 +75,12 @@ describe('reply.summary', () => {
     expect((clean?.batch.events as Array<{ d: unknown }>)[0].d).toEqual(ok);
   });
 
-  it('rejects a value outside its format (where free text would leak)', async () => {
+  it('never stores a value outside its format (where free text would leak)', async () => {
     const { sanitizeDiagBatch } = await import('../diag-api.js');
-    expect(sanitizeDiagBatch(batch({ ...ok, outcome: 'the agent said hello' }), '11111111-1111-4111-8111-111111111111')).toBeNull();
-    expect(sanitizeDiagBatch(batch({ ...ok, maxGapMs: 'slow' }), '11111111-1111-4111-8111-111111111111')).toBeNull();
+    const d = (value: Record<string, unknown>) => (sanitizeDiagBatch(batch(value), '11111111-1111-4111-8111-111111111111')?.batch.events as Array<{ d: unknown }>)[0].d;
+    const { outcome: _outcome, ...withoutOutcome } = ok;
+    const { maxGapMs: _maxGapMs, ...withoutMaxGap } = ok;
+    expect(d({ ...ok, outcome: 'the agent said hello' })).toEqual(withoutOutcome);
+    expect(d({ ...ok, maxGapMs: 'slow' })).toEqual(withoutMaxGap);
   });
 });

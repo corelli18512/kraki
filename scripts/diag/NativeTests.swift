@@ -72,6 +72,33 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         let drain = r.drain()
         check(drain.events.count == 3 && drain.dropped == 2, "bounded queue drops")
         check(drain.events.map(\.seq) == [1, 2, 3], "monotonic sequence")
+        // Lock contention drops a record without waiting, but now counts it.
+        let contended = DiagRecorder(capacity: 10, perSecond: 100)
+        contended.record(.launch)
+        contended.testWhileLocked { check(!contended.record(.launch) && !contended.record(.launch), "contention never waits") }
+        contended.record(.launch)
+        let contendedDrain = contended.drain()
+        check(contendedDrain.events.count == 2 && contendedDrain.dropped == 2, "contention drops are counted (diag.health)")
+        check(contended.drain().dropped == 0, "counted once")
+        // Lifecycle: the Mac's 2-3 `active` per activation are recorded once;
+        // events (`authenticated`) and a background with pending input are not repeats.
+        check(!KrakiDiag.isLifecycleRepeat("active", pending: 0), "first active recorded")
+        check(KrakiDiag.isLifecycleRepeat("active", pending: 0), "repeated active skipped")
+        check(!KrakiDiag.isLifecycleRepeat("authenticated", pending: 0) && !KrakiDiag.isLifecycleRepeat("authenticated", pending: 0), "events always recorded")
+        check(KrakiDiag.isLifecycleRepeat("active", pending: 0), "an event does not break the lifecycle phase")
+        check(!KrakiDiag.isLifecycleRepeat("inactive", pending: 0) && !KrakiDiag.isLifecycleRepeat("active", pending: 0), "real transitions recorded")
+        check(!KrakiDiag.isLifecycleRepeat("background", pending: 1) && !KrakiDiag.isLifecycleRepeat("background", pending: 1), "background with pending input recorded")
+        // Hangs while on screen but not frontmost are recorded, tagged.
+        check(DiagRunLoop.busyFields(120, phase: .active).count == 1, "active busy untagged")
+        if case .tag(let tag)? = DiagRunLoop.busyFields(120, phase: .inactive)[.phase] { check(tag == "inactive", "inactive busy tagged") }
+        else { check(false, "inactive busy tagged") }
+        // A sid outside the collector's format is sent as no session, not as-is.
+        let sids = DiagRecorder(capacity: 10, perSecond: 100)
+        sids.record(.voice, session: "kraki.new-session-draft")
+        sids.record(.voice, session: "mvd7jvld-r1jpirgw")
+        sids.record(.voice, session: "pending-65dffad4-8a1f-4b96-a45e-43761c728805")
+        sids.record(.voice, session: String(repeating: "a", count: 129))
+        check(sids.drain().events.map(\.sid) == [nil, "mvd7jvld-r1jpirgw", "pending-65dffad4-8a1f-4b96-a45e-43761c728805", nil], "sid format")
         r.setEnabled(false); r.record(.launch)
         check(r.drain().events.isEmpty, "off means no event")
         let limited = DiagRecorder(capacity: 10, perSecond: 1)

@@ -818,25 +818,6 @@ final class MessageProvider {
 
     // MARK: - Push-Gap Recovery
 
-    /// Single funnel for every live persistent push that
-    /// `MessageRouter` previously sent straight to
-    /// `messageStore.append`. Buffers the message and runs the drain
-    /// loop — anything contiguous with the store's tail commits
-    /// immediately; anything that opens a gap waits in the buffer
-    /// while we fetch the missing range from tentacle.
-    ///
-    /// Replaces 13 call sites in `MessageRouter`. The store's
-    /// `append` contract changes accordingly: the gap branch is now
-    /// a DEBUG assertion (see `MessageStore.append`).
-    func ingestTailCandidate(_ sessionId: String, json: Data) {
-        #if KRAKI_DIAG
-        let diagWork = KrakiDiag.beginWork()
-        defer { KrakiDiag.endWork(diagWork, source: "provider.ingest_json", session: sessionId) }
-        #endif
-        guard let msg = ProducerMessageDecoder.decode(json) else { return }
-        ingestTailCandidate(sessionId, [msg])
-    }
-
     /// Multi-message overload used by `handleRangeBatch`.
     func ingestTailCandidate(_ sessionId: String, _ messages: [ChatMessage]) {
         #if KRAKI_DIAG
@@ -1291,3 +1272,30 @@ enum MessageProviderDebug {
     nonisolated(unsafe) static var olderPageDelayMs: UInt64 = 0
 }
 #endif
+
+extension MessageProvider {
+    /// Single funnel for every live persistent push that
+    /// `MessageRouter` previously sent straight to
+    /// `messageStore.append`. Buffers the message and runs the drain
+    /// loop — anything contiguous with the store's tail commits
+    /// immediately; anything that opens a gap waits in the buffer
+    /// while we fetch the missing range from tentacle.
+    ///
+    /// Replaces 13 call sites in `MessageRouter`. The store's
+    /// `append` contract changes accordingly: the gap branch is now
+    /// a DEBUG assertion (see `MessageStore.append`).
+    func ingestTailCandidate(_ sessionId: String, json: Data) {
+        #if KRAKI_DIAG
+        // Decoding only: the ingest itself is timed by the `[ChatMessage]`
+        // overload (`provider.ingest_messages`). Timing both counted it twice
+        // (`provider.ingest_json` wrapped it; 59 of 68 pairs identical).
+        let diagWork = KrakiDiag.beginWork()
+        let msg = ProducerMessageDecoder.decode(json)
+        KrakiDiag.endWork(diagWork, source: "provider.decode_json", session: sessionId)
+        #else
+        let msg = ProducerMessageDecoder.decode(json)
+        #endif
+        guard let msg else { return }
+        ingestTailCandidate(sessionId, [msg])
+    }
+}

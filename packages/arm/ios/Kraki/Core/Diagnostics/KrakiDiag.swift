@@ -32,17 +32,48 @@ enum KrakiDiag {
         recorder.setEnabled(enabled)
         client.setEnabled(enabled)
     }
+    private static let phaseLock = NSLock()
+    private static var lifecyclePhase: String?
+    /// App lifecycle phases. `inactive` is still on screen (Mac: another app
+    /// is frontmost; iOS: a system overlay or the way to the background):
+    /// main-thread hangs are recorded, tagged `phase=inactive`, and uploads
+    /// continue. Only `background` (iOS background, Mac sleep) stops both:
+    /// before, a Mac that was not frontmost hid multi-second hangs entirely
+    /// and held its diagnostics for up to 28 h (2026-10 audit).
     static func phase(_ phase: String, pending: Int = 0) {
-        record(.phase, [.phase: .tag(phase), .pending: .int(pending)])
-        if phase == "active" {
+        if isLifecycleRepeat(phase, pending: pending) {
+            // The Mac reports every activation 2-3 times (didBecomeActive,
+            // didBecomeKey per window): one record is enough.
+        } else {
+            record(.phase, [.phase: .tag(phase), .pending: .int(pending)])
+        }
+        switch phase {
+        case "active":
             client.setForeground(true)
-            DispatchQueue.main.async { DiagRunLoop.shared.setActive(true) }
-        }
-        if phase == "background" || phase == "inactive" {
+            DispatchQueue.main.async { DiagRunLoop.shared.setPhase(.active) }
+        case "inactive":
+            // Persist now, uploads continue: an iOS app killed from the app
+            // switcher never reaches `background`.
+            client.setForeground(true)
+            client.flushNow()
+            DispatchQueue.main.async { DiagRunLoop.shared.setPhase(.inactive) }
+        case "background":
             client.setForeground(false)
-            DispatchQueue.main.async { DiagRunLoop.shared.setActive(false) }
+            DispatchQueue.main.async { DiagRunLoop.shared.setPhase(.off) }
+        case "logout":
+            client.logout()
+        default:
+            break
         }
-        if phase == "logout" { client.logout() }
+    }
+    /// The same lifecycle phase again with nothing pending (`authenticated`
+    /// and `logout` are events, never repeats).
+    static func isLifecycleRepeat(_ phase: String, pending: Int) -> Bool {
+        guard ["active", "inactive", "background"].contains(phase) else { return false }
+        phaseLock.lock(); defer { phaseLock.unlock() }
+        let repeated = lifecyclePhase == phase && pending == 0
+        lifecyclePhase = phase
+        return repeated
     }
     /// Wall time and this thread's CPU time. A long wall time with little CPU
     /// means the thread was waiting or descheduled (e.g. an inactive app on a
@@ -254,6 +285,8 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             } else { self.nextUpload = max(self.nextUpload, Date().addingTimeInterval(15)) }
         }
     }
+    /// Write recorded events to the spool now (no upload).
+    func flushNow() { queue.async { self.flush() } }
     func userActivity() { queue.async { self.nextUpload = max(self.nextUpload, Date().addingTimeInterval(10)) } }
     /// One coalesced local flush for important low-frequency events. This does
     /// NOT trigger an upload or allocate an unbounded Dispatch task per event.

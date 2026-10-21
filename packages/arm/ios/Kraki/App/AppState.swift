@@ -617,22 +617,7 @@ final class AppState {
             if let v = voice.finalizeMs { f[.finalizeMs] = .number(v) }
             KrakiDiag.record(.voiceSummary, f)
         }
-        stability.onReady = { ready in
-            var f: [DiagField: DiagValue] = [
-                .kind: .tag(ready.kind.rawValue), .outcome: .tag(ready.outcome.rawValue),
-                .path: .tag(ready.path), .attempt: .int(ready.attempts), .gap: .int(ready.gap),
-                .viewing: .bool(ready.viewing),
-            ]
-            if let v = ready.backgroundMs { f[.backgroundMs] = .number(v) }
-            if let v = ready.firstContentMs { f[.firstContentMs] = .number(v) }
-            if let v = ready.wsOpenMs { f[.wsOpenMs] = .number(v) }
-            if let v = ready.authedMs { f[.authedMs] = .number(v) }
-            if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
-            if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
-            if let v = ready.previousExit { f[.previousExit] = .tag(v) }
-            f[.kept] = .bool(ready.kept)
-            KrakiDiag.record(.ready, f)
-        }
+        stability.onReady = { ready in KrakiDiag.record(.ready, Self.readyFields(ready)) }
         stability.onOutage = { outage in
             var f: [DiagField: DiagValue] = [
                 .source: .tag(outage.reason), .outcome: .tag(outage.outcome.rawValue),
@@ -831,6 +816,10 @@ extension AppState {
     /// Starts the opening record: the first call per process is a cold start,
     /// later ones only after the app was hidden or the Mac slept.
     func noteVisible(keptSocket: Bool = false) {
+        // Before the opening starts: the Mac becomes active before it first
+        // connects, and its cold record had no `previousExit` (it was set
+        // only on the first `.connecting`).
+        startStabilityTracking()
         stability.appVisible(
             hasCachedContent: !sessionStore.sessions.isEmpty,
             viewing: sessionStore.activeSessionId != nil,
@@ -873,3 +862,25 @@ extension AppState {
         relayFeatures = Set(authOk["features"] as? [String] ?? [])
     }
 }
+
+#if KRAKI_DIAG
+extension AppState {
+    /// `ready.summary` fields (metadata only).
+    static func readyFields(_ ready: StabilityTracker.Ready) -> [DiagField: DiagValue] {
+        var f: [DiagField: DiagValue] = [
+            .kind: .tag(ready.kind.rawValue), .outcome: .tag(ready.outcome.rawValue),
+            .path: .tag(ready.path), .attempt: .int(ready.attempts), .gap: .int(ready.gap),
+            .viewing: .bool(ready.viewing), .kept: .bool(ready.kept),
+        ]
+        if let v = ready.backgroundMs { f[.backgroundMs] = .number(v) }
+        if let v = ready.firstContentMs { f[.firstContentMs] = .number(v) }
+        if let v = ready.wsOpenMs { f[.wsOpenMs] = .number(v) }
+        if let v = ready.authedMs { f[.authedMs] = .number(v) }
+        if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
+        if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
+        if let v = ready.previousExit { f[.previousExit] = .tag(v) }
+        if let v = ready.failure { f[.cause] = .tag(v) }
+        return f
+    }
+}
+#endif

@@ -19,6 +19,11 @@ final class CommandSender {
     /// during optimistic create/fork. When `session_created` arrives
     /// with this requestId, the router swaps placeholderId → real id.
     var pendingPlaceholderIds: [String: String] = [:]
+    /// Create placeholder → the Tentacle it was created on. A voice message
+    /// sent into "Starting session…" has no session row yet, so the
+    /// placeholder's target decides `send.summary.offline` (it reported
+    /// offline=true for every such send while online).
+    private(set) var pendingPlaceholderTargets: [String: String] = [:]
     /// A voice send already lives in the chat while create_session is in flight.
     var pendingVoicePlaceholders: Set<String> = []
     /// First messages of create requests that timed out, by requestId.
@@ -171,7 +176,7 @@ final class CommandSender {
         if !handedOff { undispatched.insert(clientId) }
         appState?.sendMetrics.created(
             clientId, kind: answerTo != nil ? .answer : delivery == .steer ? .steer : .typed,
-            textLength: text.utf8.count, attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId),
+            textLength: text.utf8.count, attachments: attachments?.count ?? 0, pathUp: isMetricsPathUp(sessionId),
             handoffMs: handedOff ? Date().timeIntervalSince(handoffStart) * 1000 : nil)
         #if KRAKI_DIAG
         diagAccepted = true
@@ -263,7 +268,7 @@ final class CommandSender {
         pending.payload["originalText"] = AnyCodable(text)
         if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
         appState?.sendMetrics.created(clientId, kind: .voice, textLength: text.utf8.count,
-                                      attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId))
+                                      attachments: attachments?.count ?? 0, pathUp: isMetricsPathUp(sessionId))
         var bucket = outbox[sessionId] ?? [:]
         bucket[clientId] = pending
         outbox[sessionId] = bucket
@@ -513,16 +518,6 @@ final class CommandSender {
                 }
             }
         }
-    }
-
-    func isDeliveryPathUp(_ sessionId: String) -> Bool {
-        guard let appState else { return false }
-        #if DEBUG
-        if appState.testOutboundMessageHandler != nil { return true }
-        #endif
-        guard appState.isFullyOnline,
-              let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId else { return false }
-        return appState.deviceStore.devices[deviceId]?.online == true
     }
 
     /// Resend an unconfirmed input with the SAME clientId (idempotent on the
@@ -920,6 +915,7 @@ final class CommandSender {
         }
 
         pendingPlaceholderIds[requestId] = placeholderId
+        pendingPlaceholderTargets[placeholderId] = targetDeviceId
         if voice { pendingVoicePlaceholders.insert(placeholderId) }
 
         if let appState {
@@ -1048,7 +1044,10 @@ final class CommandSender {
     /// or timeout). Does NOT touch the SessionStore's pending entry —
     /// that's owned by router/UI for swap-out logic.
     func clearPendingRequest(_ requestId: String) {
-        if let placeholder = pendingPlaceholderIds[requestId] { recoverVoicePlaceholder(placeholder) }
+        if let placeholder = pendingPlaceholderIds[requestId] {
+            recoverVoicePlaceholder(placeholder)
+            pendingPlaceholderTargets.removeValue(forKey: placeholder)
+        }
         pendingCreateRequests.removeValue(forKey: requestId)
         pendingCreateTitles.removeValue(forKey: requestId)
         pendingPlaceholderIds.removeValue(forKey: requestId)
@@ -1259,6 +1258,7 @@ final class CommandSender {
         // real session into the store; we just need to retire the
         // placeholder entry and re-point navigation.
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            pendingPlaceholderTargets.removeValue(forKey: placeholderId)
             resolveVoicePlaceholder(placeholderId, sessionID: sessionId)
             // The placeholder route removes its pending mark when the user
             // backs out of "Starting session…". In that case the new Session
@@ -1307,6 +1307,7 @@ final class CommandSender {
     func failPendingRequest(_ requestId: String, reason: String) {
         guard let appState else { return }
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            pendingPlaceholderTargets.removeValue(forKey: placeholderId)
             recoverVoicePlaceholder(placeholderId)
             appState.sessionStore.setPendingError(placeholderId, reason: reason)
             // A fast-failing fork never showed its page: show it now, with
@@ -1330,6 +1331,7 @@ final class CommandSender {
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
+        pendingPlaceholderTargets.removeAll()
         pendingVoicePlaceholders.removeAll()
         deferredForks.removeAll()
         forkSources.removeAll()

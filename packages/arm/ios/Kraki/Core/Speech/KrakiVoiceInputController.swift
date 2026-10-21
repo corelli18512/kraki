@@ -791,7 +791,12 @@ final class KrakiVoiceInputController {
         closeConnection(keepLease: true)
         recordingCleanup(clearHandlers: true)
         metrics.outcome(.cancelled, overwrite: false)
+        let wasIdle = state == .idle
         state = .idle
+        // Cancelled before the attempt left `.idle` (e.g. during audio
+        // activation, 3 ms after the press): no state change ends the
+        // summary, and the attempt was never reported.
+        if wasIdle { metrics.stateChanged(State.idle.metricTag) }
         if warmConnectionDesired { scheduleReconnect(immediate: true) }
     }
 
