@@ -554,6 +554,7 @@
 		C4C163903C832F3E231DED3E /* ComposerAnswerImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4720933E0DFE557C0C481E18 /* ComposerAnswerImages.swift */; };
 		C4FF5D48299265218A60123D /* BuiltInSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */; };
 		C5D35CEA2750B589AC61231C /* MacComposerProbes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241C270F27A79FE23FCD3924 /* MacComposerProbes.swift */; };
+		C6718CCE06106FA38BD7115E /* ReconnectRound3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B608F83B0E48E94F344F7B1 /* ReconnectRound3Tests.swift */; };
 		C69062BD3C2E0844DCF29E5D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA32D66EC88B6BEDF4675518 /* Commands.swift */; };
 		C6BB0C7305CBF9BC6A9C8A4E /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
 		C6C8EC4BB9D1B7EC88565DD8 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
@@ -593,6 +594,7 @@
 		D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */; };
 		D0A68552146F137FC2BC04EE /* MessageStore+SteerPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4767AFB1F09506A6DAC643F4 /* MessageStore+SteerPlacement.swift */; };
 		D0DA7BC914F4D443E2F89695 /* KrakiVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 341940FBEAD0F36C8E7F510C /* KrakiVoiceInputController.swift */; };
+		D173E7F22FA9CFE0550D7606 /* ReconnectRound3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54972AAE7A91D45496261C20 /* ReconnectRound3Tests.swift */; };
 		D27A7F9B6B70581836E99C91 /* TextKitPureSpineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D438FF41D78B8547E66208 /* TextKitPureSpineTests.swift */; };
 		D2F338565001E7FCA5AB451B /* ChatUXRegressionTests+Group1.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3C5E810AB7C57BC68F5279 /* ChatUXRegressionTests+Group1.swift */; };
 		D2FD0981FE2A232FFEB95D63 /* LocalLinkRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48458C5EF504DD7546D2E798 /* LocalLinkRouteTests.swift */; };
@@ -805,6 +807,7 @@
 		1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageRenderTests.swift; sourceTree = "<group>"; };
 		1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdateTests.swift; sourceTree = "<group>"; };
 		1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleActionSlot.swift; sourceTree = "<group>"; };
+		1B608F83B0E48E94F344F7B1 /* ReconnectRound3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectRound3Tests.swift; sourceTree = "<group>"; };
 		1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatComposer.swift; sourceTree = "<group>"; };
 		1BBBDEBF428C4E7A629F6AA8 /* MacStartingVoiceChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartingVoiceChat.swift; sourceTree = "<group>"; };
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
@@ -907,6 +910,7 @@
 		5397CE9AB925FCDD8531D41F /* AppState+VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+VoiceInput.swift"; sourceTree = "<group>"; };
 		5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.entitlements; sourceTree = "<group>"; };
 		5469FDA14AA91327B6DF4400 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
+		54972AAE7A91D45496261C20 /* ReconnectRound3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectRound3Tests.swift; sourceTree = "<group>"; };
 		5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPlaceholderView+macOS.swift"; sourceTree = "<group>"; };
 		568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTrustViews.swift; sourceTree = "<group>"; };
 		56FE3464DA3DC8C37A09F34F /* SessionCardMetadataRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardMetadataRow.swift; sourceTree = "<group>"; };
@@ -1896,6 +1900,7 @@
 				890291BE87939458D26B8E07 /* ReconnectAdversarialTests.swift */,
 				72BF30CBD1D8758EFDB68366 /* ReconnectLatencyTests.swift */,
 				1DFBB790DF1D20B3FABDFBA9 /* ReconnectRound2Tests.swift */,
+				54972AAE7A91D45496261C20 /* ReconnectRound3Tests.swift */,
 				19ED0DA842EA67CB8B2F5D35 /* SessionListReconcilePerfTests.swift */,
 				C4E4873CEEEF25B24B5E8035 /* TableRenderShots.swift */,
 				593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */,
@@ -1992,6 +1997,7 @@
 				57D3C80484D4B15CC55267C4 /* ReconnectAdversarialTests.swift */,
 				8944F3F2DB7D6FAE31454B1B /* ReconnectingIndicatorTests.swift */,
 				AC57D372E0999A26BF93CBCC /* ReconnectRound2Tests.swift */,
+				1B608F83B0E48E94F344F7B1 /* ReconnectRound3Tests.swift */,
 				6D9A98527378EA52288509EA /* ReplyMetricsWiringTests.swift */,
 				FDCB4B5308B56C1588901815 /* SessionCardEffortTests.swift */,
 				09CE947B7AE283166E80C17C /* SessionListHeaderTests.swift */,
@@ -2409,6 +2415,7 @@
 				DA28C443D193E899693CB2BE /* ReconnectAdversarialTests.swift in Sources */,
 				84315666218C35E62BF9A515 /* ReconnectLatencyTests.swift in Sources */,
 				E2A780DD481070F9FF4B6FA8 /* ReconnectRound2Tests.swift in Sources */,
+				D173E7F22FA9CFE0550D7606 /* ReconnectRound3Tests.swift in Sources */,
 				699EF196E7BD561AC9A1E88C /* SessionListReconcilePerfTests.swift in Sources */,
 				6E4A4503459C98F003D5DFF6 /* SteerPlacementTests.swift in Sources */,
 				80AB2DFB29CE41533597EA65 /* SubagentStepsTests.swift in Sources */,
@@ -2486,6 +2493,7 @@
 				768B88E9B54ECCA5A934CB2C /* QuestionAnswerStateTests.swift in Sources */,
 				CBC1B9E57A38DEBAAD181738 /* ReconnectAdversarialTests.swift in Sources */,
 				1A171BE6B6A9B3A8C2670759 /* ReconnectRound2Tests.swift in Sources */,
+				C6718CCE06106FA38BD7115E /* ReconnectRound3Tests.swift in Sources */,
 				46A3A1AA1A0318AD3709FD7E /* ReconnectingIndicatorTests.swift in Sources */,
 				F4E2519EFC5DDCE8A304F4AF /* ReplyMetricsWiringTests.swift in Sources */,
 				6C10D025CEF9E531C568960A /* SessionCardEffortTests.swift in Sources */,

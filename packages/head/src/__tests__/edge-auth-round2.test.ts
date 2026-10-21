@@ -170,7 +170,8 @@ describe('PR577 round2 trust epochs and nonce provenance', () => {
     if (!result.ok) throw new Error('pairing failed'); mirror(result);
     release(); await polling;
     expect(cache.lookup('phone')?.publicKey).toBe(rotated);
-    expect(revocations).toEqual([]);
+    // Only the old-key session (if any) is retired; the device itself is not revoked.
+    expect(revocations.filter((r) => !(r as { supersededOnly?: boolean }).supersededOnly)).toEqual([]);
   });
 
   it.each([[299_999, true], [300_000, true], [300_001, false], [660_001, false]])('nonce age %s ms has validity %s (5 minute TTL)', async (age, valid) => {

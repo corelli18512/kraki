@@ -1,6 +1,5 @@
+import { handleSessionMessages as legacyHandleSessionMessages } from './fixtures/legacy-history-9bcde015.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { transpileModule } from 'typescript';
 
 const { sockets, Socket } = vi.hoisted(() => {
   class Socket {
@@ -67,12 +66,8 @@ function fixture(handler: typeof handleSessionMessages, cursor?: number) {
   return send.mock.lastCall![2].payload.messages.map((m: { seq: number }) => m.seq);
 }
 
-describe('actual origin/main Tentacle history mixed with new/old apps', () => {
-  const source = execFileSync('git', ['show', 'origin/main:packages/tentacle/src/relay/history.ts'], { encoding: 'utf8' });
-  const start = source.indexOf('export function handleSessionMessages(');
-  const end = source.indexOf('\n/**', start);
-  const js = transpileModule(source.slice(start, end).replace('export function', 'function'), {}).outputText;
-  const old = new Function('RelayClient', 'logger', `${js}; return handleSessionMessages;`)(RelayClient, { info: vi.fn(), warn: vi.fn() }) as typeof handleSessionMessages;
+describe('pre-PR #577 Tentacle history (frozen copy) mixed with new/old apps', () => {
+  const old = legacyHandleSessionMessages as unknown as typeof handleSessionMessages;
   it('old Tentacle receives an afterSeq-less request and still returns a whole latest turn', () => {
     expect(fixture(old)).toEqual([4, 5, 6, 7, 8, 9, 10]);
     expect(fixture(handleSessionMessages)).toEqual(fixture(old));

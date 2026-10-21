@@ -675,7 +675,7 @@ export class HeadServer {
     // A fresh challenge for a removed device answers `unknown_device`, which
     // every client handles (a Tentacle re-signs in with its token).
     const code = revocation.code === 'device_not_found' ? 'unknown_device' : revocation.code;
-    const keepsDevice = code === 'wrong_region' || code === 'key_changed';
+    const keepsDevice = code === 'wrong_region' || code === 'key_changed' || revocation.supersededOnly === true;
     getLogger().warn('Revoking locally trusted device', { deviceId, code });
     if (!keepsDevice) {
       try { this.storage.deleteDevice(deviceId); } catch { /* storage may be closed */ }

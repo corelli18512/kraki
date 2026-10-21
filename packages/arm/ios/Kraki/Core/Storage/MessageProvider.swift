@@ -70,6 +70,8 @@ final class MessageProvider {
     /// When each outstanding head request left (diag `history.batch`: how long
     /// catch-up waited on the network/Head/decrypt vs the Tentacle's reply).
     private var headRequestedAt: [String: (at: TimeInterval, attempt: Int)] = [:]
+    /// Sessions whose Tentacle head went down while a head request was out.
+    private var headDropped: Set<String> = []
 
     private weak var appState: AppState?
 
@@ -228,29 +230,6 @@ final class MessageProvider {
     /// request.
     func isLoadingOlder(_ sessionId: String) -> Bool {
         hasSlot(sessionId) { if case .before = $0 { return true }; return false }
-    }
-
-    /// True while a DB-first older-history page load is in flight for
-    /// this session (`ensureOlderLoadedAsync`). Lets the scroll trigger
-    /// serialise continuous loads via single-flight instead of a time
-    /// cooldown — the read is async, so this flag is actually held for
-    /// the duration (unlike the synchronous legacy path).
-    func isLoadingOlderDB(_ sessionId: String) -> Bool {
-        loadingOlderDB.contains(sessionId)
-    }
-
-    /// True if a head fetch (`requestLatest` / `ensureLoaded`) is in
-    /// flight for this session.
-    func isLoadingHead(_ sessionId: String) -> Bool {
-        hasSlot(sessionId) { if case .head = $0 { return true }; return false }
-    }
-
-    /// Read-only access to the last seq we believe tentacle has for
-    /// the session (set by `setTentacleInfo` and bumped by
-    /// `observeLiveMessageSeq`). Diagnostics-only; production code
-    /// should prefer `atHead(_:)`.
-    func tentacleLastKnownSeq(_ sessionId: String) -> Int? {
-        tentacleLastSeq[sessionId]
     }
 
     /// True iff the loaded window has walked back to seq 1 — UI
@@ -714,6 +693,24 @@ final class MessageProvider {
         containsHead: Bool?
     ) {
         guard let appState else { return }
+        // A reply describing the old (higher) history after a head drop must
+        // not consume the replacement request's slot.
+        if isObsoleteHeadReply(sessionId, max(totalLastSeq, messages.map(\.seq).max() ?? 0)) { return }
+
+        // Identify the exact turn-aligned request answered by this batch.
+        // `messages` contains only persistent spine rows, while legacy session
+        // logs may have filtered tool/narration seqs near the upper boundary;
+        // therefore the final persistent seq can legitimately be several
+        // integers below `beforeSeq - 1`.
+        let removedKind = removeTurnAlignedSlot(
+            sessionId,
+            containsHead: containsHead,
+            lastPersistentSeq: messages.last?.seq ?? lastSeq
+        )
+        // A reply to a retired head request (the Tentacle's head went down
+        // meanwhile) may describe the old history: keep nothing above the
+        // head the Tentacle reports now, before anything is stored.
+        let messages = rowsWithinKnownHead(sessionId, messages, answeredHead: removedKind == .head)
 
         // Detect a hole between this batch and what we already have
         // on disk. If batch starts at seq B and DB contains B-1 we're
@@ -731,18 +728,6 @@ final class MessageProvider {
             appState.commandSender?.confirmPendingInputs(sessionId, messages: messages)
             KLog.d("📥 [2/history←DB ingestBatch] session=\(sessionId.prefix(12)) batchSize=\(messages.count) windowSize=\(appState.messageStore.currentWindow(sessionId).count)")
         }
-
-        // Identify the exact turn-aligned request answered by this batch.
-        // `messages` contains only persistent spine rows, while legacy session
-        // logs may have filtered tool/narration seqs near the upper boundary;
-        // therefore the final persistent seq can legitimately be several
-        // integers below `beforeSeq - 1`.
-        let lastPersistentSeq = messages.last?.seq ?? lastSeq
-        let removedKind = removeTurnAlignedSlot(
-            sessionId,
-            containsHead: containsHead,
-            lastPersistentSeq: lastPersistentSeq
-        )
 
         // Update both history and SessionStore heads. The SessionStore head
         // drives the iOS card's authoritative unread boolean; without this a
@@ -1147,6 +1132,7 @@ final class MessageProvider {
         }
         outstanding.removeAll()
         headRequestedAt.removeAll()
+        headDropped.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
         traceRequests.clear()
@@ -1196,6 +1182,29 @@ extension MessageProvider {
 // MARK: - Reconnect catch-up (same file: shares the class's private state)
 
 extension MessageProvider {
+    /// True while a DB-first older-history page load is in flight for
+    /// this session (`ensureOlderLoadedAsync`). Lets the scroll trigger
+    /// serialise continuous loads via single-flight instead of a time
+    /// cooldown — the read is async, so this flag is actually held for
+    /// the duration (unlike the synchronous legacy path).
+    func isLoadingOlderDB(_ sessionId: String) -> Bool {
+        loadingOlderDB.contains(sessionId)
+    }
+
+    /// True if a head fetch (`requestLatest` / `ensureLoaded`) is in
+    /// flight for this session.
+    func isLoadingHead(_ sessionId: String) -> Bool {
+        hasSlot(sessionId) { if case .head = $0 { return true }; return false }
+    }
+
+    /// Read-only access to the last seq we believe tentacle has for
+    /// the session (set by `setTentacleInfo` and bumped by
+    /// `observeLiveMessageSeq`). Diagnostics-only; production code
+    /// should prefer `atHead(_:)`.
+    func tentacleLastKnownSeq(_ sessionId: String) -> Int? {
+        tentacleLastSeq[sessionId]
+    }
+
     /// Whether the chat tail is currently being filled in the
     /// background. UI binds a bottom spinner to this. True iff the
     /// buffer has unresolved entries (waiting on a range fetch) or
@@ -1229,6 +1238,20 @@ extension MessageProvider {
         guard hasSlot(sessionId, where: { $0 == .head }) else { return }
         removeFirstSlot(sessionId) { $0 == .head }
         headRequestedAt.removeValue(forKey: sessionId)
+        headDropped.insert(sessionId)
+    }
+
+    /// After a head drop, a reply claiming more than the Tentacle's current
+    /// head is the retired request's: drop it (rows, slot and head alike).
+    /// The first reply consistent with the current head ends the window.
+    fileprivate func isObsoleteHeadReply(_ sessionId: String, _ batchHead: Int) -> Bool {
+        guard headDropped.contains(sessionId) else { return false }
+        if let known = tentacleLastSeq[sessionId], batchHead > known {
+            KLog.d("🧹 [2/history obsolete head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
+            return true
+        }
+        headDropped.remove(sessionId)
+        return false
     }
 
     /// A reply that answers no outstanding head request (its slot was retired
@@ -1238,6 +1261,11 @@ extension MessageProvider {
         guard !answeredHead, let known = tentacleLastSeq[sessionId], batchHead > known else { return batchHead }
         KLog.d("🧹 [2/history stale head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
         return known
+    }
+
+    fileprivate func rowsWithinKnownHead(_ sessionId: String, _ messages: [ChatMessage], answeredHead: Bool) -> [ChatMessage] {
+        guard !answeredHead, let known = tentacleLastSeq[sessionId], messages.contains(where: { $0.seq > known }) else { return messages }
+        return messages.filter { $0.seq <= known }
     }
 
     /// Diag `history.batch`: head request → reply handled here, to split the

@@ -55,6 +55,7 @@ const NONCE_TTL_MS = 5 * 60_000;
 /** Used/expired local nonces are remembered this long, so a late answer is
  *  still recognised as ours (and rejected) instead of looking unknown. */
 const NONCE_RETAIN_MS = 24 * 3600_000;
+const MAX_NONCES = 20_000;
 
 /** What `takeNonce` found: `local` = issued here for this device and unused. */
 export type NonceCheck = 'local' | 'expired' | 'foreign' | 'unknown';
@@ -89,6 +90,13 @@ export class EdgeAuthCache {
       result_json TEXT NOT NULL,
       verified_at INTEGER NOT NULL
     )`);
+  }
+
+  /** The account and key this edge currently trusts a device under. */
+  identity(deviceId: string): { userId: string; keyFingerprint: string } | undefined {
+    const row = this.db.prepare('SELECT user_id, public_key FROM edge_auth_cache WHERE device_id = ?').get(deviceId) as
+      { user_id: string; public_key: string } | undefined;
+    return row ? { userId: row.user_id, keyFingerprint: keyFingerprint(row.public_key) } : undefined;
   }
 
   /** Current trust epoch of a device (see `remember`). */
@@ -156,6 +164,14 @@ export class EdgeAuthCache {
 
   issueNonce(deviceId: string): string {
     this.sweepNonces();
+    // Bounded: oldest first. An evicted nonce reads as unknown (the account
+    // service decides), and the Head still rejects any answer older than
+    // five minutes on the socket that asked.
+    while (this.localNonces.size >= MAX_NONCES) {
+      const oldest = this.localNonces.keys().next().value;
+      if (oldest === undefined) break;
+      this.localNonces.delete(oldest);
+    }
     const nonce = randomBytes(32).toString('hex');
     this.localNonces.set(nonce, { deviceId, expiresAt: this.now() + NONCE_TTL_MS, used: false });
     return nonce;
@@ -190,8 +206,12 @@ export class EdgeAuthCache {
     return true;
   }
 
+  private lastSweep = 0;
   private sweepNonces(): void {
     const now = this.now();
+    // At most once a minute: issuing a nonce must not scan the whole map.
+    if (now - this.lastSweep < 60_000) return;
+    this.lastSweep = now;
     for (const [nonce, entry] of this.localNonces) {
       if (entry.expiresAt + NONCE_RETAIN_MS < now) this.localNonces.delete(nonce);
     }
