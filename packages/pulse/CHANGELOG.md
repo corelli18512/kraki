@@ -1,5 +1,24 @@
 # @coinfra/pulse
 
+## 0.5.2
+
+### Patch Changes
+
+- Resume correctly after a restart from a durable-only snapshot. When a peer
+  resumes against an old epoch (or is behind the outbox base), the RESET now
+  announces the first seq this endpoint can actually deliver — the oldest
+  retained entry, or `sendSeq + 1` when nothing is retained — instead of
+  `outboxBase + 1`. After a restart `sendSeq` is ahead of the base (non-durable
+  sends since the last snapshot are gone), so the peer waited for a seq that
+  never came, held every later frame as a hole, and — once a stale piggybacked
+  ack from its previous connection had advanced the base — had its repair ACKs
+  ignored as stale. A relay restart left a computer deaf to all relay control
+  this way.
+- A RESET naming an epoch the receiver has not seen now replaces the receive
+  cursor (it belongs to the peer's previous stream) instead of only raising it,
+  so a RESET that arrives before the new epoch's HELLO no longer makes the new
+  stream's frames look like duplicates. Same change in SwiftPulse.
+
 ## 0.5.1
 
 ### Patch Changes

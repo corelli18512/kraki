@@ -104,3 +104,72 @@ test('relay-restart seq collision: non-durable sends lost ⇒ post-restart frame
   // the expected next frame and IS delivered (no longer treated as a dup).
   expect(delivered).toBe(1);
 });
+
+// ── Relay restart, second variant (kraki 2026-10-21) ─────────────────────────
+//
+// The relay restores the endpoint toward a computer from a durable-only
+// snapshot taken a while ago: sendSeq=4, outboxBase=3, nothing retained — the
+// computer had in fact received seq 1..17. The relay now has a NEW epoch.
+// The computer's endpoint (process kept running) still holds cursor 17.
+//
+// On the wire the relay's HELLO arrives first (it is sent right after auth);
+// the computer zeroes its cursor. The computer's HELLO (resuming the OLD relay
+// epoch) and a DATA frame piggybacking ack=17 reach the relay. Before the fix
+// the relay answered RESET oldest=outboxBase+1=4 — a seq it does not have —
+// and the stale ack=17 advanced its base to 4: the computer waited for seq 4
+// forever, held seq 5.. as holes, and its repair ACK (3) was ignored as stale.
+
+type Effects = ReturnType<Endpoint['onBytes']>;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function restartedRelayAndComputer() {
+  const relay = new Endpoint({
+    epoch: 'relay:new',
+    durable: { supported: true },
+    restore: {
+      epoch: 'relay:old', sendSeq: '4', outboxBase: '3', outbox: [],
+      recvCursor: '0', peerEpoch: 'computer:1', disconnectedAtMs: null,
+    } as Snapshot,
+  });
+  const computer = new Endpoint({ epoch: 'computer:1', durable: { supported: false } });
+  // The computer received 1..17 from the old relay process.
+  Object.assign(computer as unknown as Record<string, unknown>, { peerEpoch: 'relay:old', recvCursor: 17n });
+  const delivered: string[] = [];
+  const toComputer = (effects: Effects) => {
+    for (const e of effects) {
+      if (e.t !== 'transmit') continue;
+      for (const r of computer.onBytes(e.bytes, 1)) {
+        if (r.t === 'deliver') delivered.push(dec.decode(r.payload));
+        if (r.t === 'transmit') toRelay([r]);
+      }
+    }
+  };
+  const toRelay = (effects: Effects) => {
+    for (const e of effects) if (e.t === 'transmit') toComputer(relay.onBytes(e.bytes, 1));
+  };
+  return { relay, computer, delivered, toComputer, toRelay };
+}
+
+test('relay restart from a stale snapshot: frames after the restart reach the computer (HELLO first)', () => {
+  const { relay, computer, delivered, toComputer, toRelay } = restartedRelayAndComputer();
+  const relayHello = relay.onConnected(1);
+  const computerHello = computer.onConnected(1);
+  const computerData = computer.send(enc.encode('up')).effects; // piggybacks ack=17
+  toComputer(relayHello);
+  toRelay(computerHello);
+  toRelay(computerData);
+  for (let i = 0; i < 4; i++) toComputer(relay.send(enc.encode(`m${i}`)).effects);
+  for (let t = 2; t < 6; t++) { toComputer(relay.onTick(t * 20_000)); toRelay(computer.onTick(t * 20_000)); }
+  expect(delivered).toEqual(['m0', 'm1', 'm2', 'm3']);
+});
+
+test('a RESET with a new epoch replaces the cursor even when it arrives before the HELLO', () => {
+  const { relay, computer, delivered, toComputer, toRelay } = restartedRelayAndComputer();
+  const relayHello = relay.onConnected(1);
+  // The computer speaks first; the relay's RESET reaches it before the HELLO.
+  toRelay(computer.onConnected(1));
+  toComputer(relayHello);
+  for (let i = 0; i < 3; i++) toComputer(relay.send(enc.encode(`m${i}`)).effects);
+  expect(delivered).toEqual(['m0', 'm1', 'm2']);
+});
