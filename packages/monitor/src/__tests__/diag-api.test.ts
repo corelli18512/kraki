@@ -138,6 +138,12 @@ describe('off-band diagnostics', () => {
       warn.mockClear();
       expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, platform: 'secret os' })))).status).toBe(400);
       expect(String(warn.mock.calls[0][0])).toBe('diag rejected invalid values device=device-1 platform=? version=0.1.1 build=1 fields=batch.platform');
+      // A rejected token-shaped value is never echoed: only schema-valid values are logged.
+      warn.mockClear();
+      expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, version: 'sk_live_0123456789abcdef', build: 'tok_abc' })))).status).toBe(400);
+      const rejected = String(warn.mock.calls[0][0]);
+      expect(rejected).toBe('diag rejected invalid values device=device-1 platform=ios version=? build=? fields=batch.version');
+      expect(rejected).not.toMatch(/sk_live|tok_abc/);
       // A clean batch logs nothing.
       warn.mockClear();
       const g = await fixture();

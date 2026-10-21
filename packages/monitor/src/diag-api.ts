@@ -128,6 +128,10 @@ const EVENT_KEYS = ['t', 'm', 'seq', 'ev', 'sid', 'd'];
  * `problems` (optional) receives what was dropped or rejected, as
  * `event.field` names only — never a value — for the collector's log.
  */
+const diagPlatform = (v: unknown): v is string => typeof v === 'string' && ['ios', 'mac', 'windows', 'test'].includes(v);
+const diagVersion = (v: unknown): v is string => typeof v === 'string' && /^[\d.]{1,32}$/.test(v);
+const diagBuild = (v: unknown): v is string => typeof v === 'string' && /^\d{1,16}$/.test(v);
+
 export function sanitizeDiagBatch(value: unknown, batchId: string, problems?: string[]): { batch: Record<string, unknown>; stripped: number; invalid: number } | null {
   const problem = (name: string) => { if (problems && problems.length < 16 && !problems.includes(name)) problems.push(name); };
   const reject = (name: string) => { problem(name); return null; };
@@ -143,9 +147,9 @@ export function sanitizeDiagBatch(value: unknown, batchId: string, problems?: st
   if (batch.schema !== 1) return reject('batch.schema');
   if (batch.batchId !== batchId) return reject('batch.batchId');
   if (!uuid(batch.processId)) return reject('batch.processId');
-  if (!['ios', 'mac', 'windows', 'test'].includes(String(batch.platform))) return reject('batch.platform');
-  if (typeof batch.version !== 'string' || !/^[\d.]{1,32}$/.test(batch.version)) return reject('batch.version');
-  if (typeof batch.build !== 'string' || !/^\d{1,16}$/.test(batch.build)) return reject('batch.build');
+  if (!diagPlatform(batch.platform)) return reject('batch.platform');
+  if (!diagVersion(batch.version)) return reject('batch.version');
+  if (!diagBuild(batch.build)) return reject('batch.build');
   if (batch.image !== undefined) {
     if (!object(batch.image)) return reject('batch.image');
     const image = strip(batch.image, k => ['uuid', 'base', 'os', 'arch'].includes(k));
@@ -181,8 +185,9 @@ export function sanitizeDiagBatch(value: unknown, batchId: string, problems?: st
  *  not be explained (2026-10 audit). */
 function logDiagProblems(action: 'dropped' | 'rejected', deviceId: string, batch: unknown, problems: string[]): void {
   const b = object(batch) ? batch : {};
-  const tag = (v: unknown) => typeof v === 'string' && /^[\w.]{1,32}$/.test(v) ? v : '?';
-  console.warn(`diag ${action} invalid values device=${deviceId} platform=${tag(b.platform)} version=${tag(b.version)} build=${tag(b.build)} fields=${problems.join(',') || '?'}`);
+  // Only a value its batch schema accepts is printed; a rejected one may be anything.
+  const tag = (v: unknown, valid: (v: unknown) => v is string) => valid(v) ? v : '?';
+  console.warn(`diag ${action} invalid values device=${deviceId} platform=${tag(b.platform, diagPlatform)} version=${tag(b.version, diagVersion)} build=${tag(b.build, diagBuild)} fields=${problems.join(',') || '?'}`);
 }
 
 export function validateDiagBatch(value: unknown, batchId: string): boolean {
