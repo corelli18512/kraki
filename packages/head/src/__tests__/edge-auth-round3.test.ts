@@ -248,8 +248,10 @@ describe('release-gate round 4: hard revocation retires Pulse state at once', ()
       const ws = { readyState: 1, send: (m: string) => sent.push(m), close: () => {}, terminate: () => {}, once: () => {} } as never;
       server.connections.set('d', ws);
       server.userByDevice.set('d', 'a');
-      server.clients.set(ws, { deviceId: 'd', userId: 'a', authenticated: true, isAlive: true, pongOverdueAt: null, pendingLivenessBroadcast: false } as never);
+      const oldState = { deviceId: 'd', userId: 'a', authenticated: true, isAlive: true, pongOverdueAt: null, pendingLivenessBroadcast: false } as { evicted?: boolean };
+      server.clients.set(ws, oldState as never);
       server.revokeDevice({ deviceId: 'd', code: 'device_not_found', message: 'gone' });
+      expect(oldState.evicted, 'late frames on the old socket are ignored').toBe(true);
       expect(forgotten, 'Pulse state is retired before the close completes').toEqual(['d']);
       expect(server.connections.has('d')).toBe(false);
       expect(server.clients.has(ws)).toBe(false);

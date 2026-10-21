@@ -663,6 +663,10 @@ export class HeadServer {
       // completes: the same device id may sign in again (even under another
       // account) before then and must not inherit the revoked state.
       const userId = this.userByDevice.get(deviceId);
+      // Inert from now on: frames still in flight on this socket (a late
+      // Pulse ack) must not touch the state a replacement connection gets.
+      const state = this.clients.get(ws);
+      if (state) state.evicted = true;
       this.connections.delete(deviceId);
       this.userByDevice.delete(deviceId);
       this.clients.delete(ws);
