@@ -63,17 +63,21 @@ it('detecting uses independent launch logo and activity, not a setup card', () =
   expect(document.querySelector('.ds-card')).toBeNull();
 });
 
-it.each([undefined, 'CLI sign-in error'])('updates fallback sign-in errors live and preserves CLI text (%s)', async (message) => {
+it.each([
+  [undefined, 'Sign-in did not finish. Try again.', '登录未完成。请重试。'],
+  ['relay_unreachable', 'Could not reach Kraki. Check your network connection, then try again.', '无法连接 Kraki。请检查网络连接后重试。'],
+])('sign-in errors follow the CLI code, not its English message, and update live (%s)', async (code, en, zh) => {
   const { i18next } = await import('../../i18n');
   const { b, emit, completion } = bridge();
   render(<DesktopSetup builtIn={b} />);
   fireEvent.click(await screen.findByText('Sign in with GitHub'));
-  if (message) emit({ event: 'error', message });
+  if (code) emit({ event: 'error', code, message: 'Cannot reach the Kraki relay (connect ECONNREFUSED 127.0.0.1:4719).' });
   await act(async () => { completion()({ ok: false }); });
-  expect(screen.getByText(message ?? 'Sign-in did not finish. Try again.')).toBeInTheDocument();
+  expect(screen.getByText(en)).toBeInTheDocument();
+  expect(screen.queryByText(/ECONNREFUSED/)).toBeNull();
   try {
     await act(async () => { await i18next.changeLanguage('zh-Hans'); });
-    expect(screen.getByText(message ?? '登录未完成。请重试。')).toBeInTheDocument();
+    expect(screen.getByText(zh)).toBeInTheDocument();
   } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
 });
 

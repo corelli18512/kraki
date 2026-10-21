@@ -31,6 +31,7 @@ test('settings preload exposes the agreed capability names and forwards fixed IP
   vm.runInNewContext(readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), {
     require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer }),
     process: { platform: 'win32', argv: ['--kraki-builtin=1'] },
+    location: { origin: 'app://kraki' },
   });
   await bridge.settings.setUsageShortcut('Control+U', true);
   await bridge.settings.setLaunchAtLogin(false);
@@ -56,7 +57,7 @@ test('settings preload exposes the agreed capability names and forwards fixed IP
   }
   await bridge.exportHtmlReport('<html>Report</html>', 'report');
   assert.deepEqual(calls.at(-1), ['kraki:export-html-report', '<html>Report</html>', 'report']);
-  assert.ok(main.includes("ipcMain.handle('kraki:export-html-report'"));
+  assert.ok(main.includes("appIpc.handle('kraki:export-html-report'"));
   assert.equal(typeof bridge.settings.locateCli, 'function');
   assert.equal(typeof bridge.settings.recheckCli, 'function');
   assert.equal(typeof bridge.builtIn.showSignInWindow, 'function');
@@ -83,6 +84,8 @@ test('settings presence IPC keeps ownership and returns errors instead of claimi
   const mainPath = path.join(__dirname, '../src/main.cjs');
   const mainRequire = createRequire(mainPath);
   const calls = [];
+  // IPC from an app page (ipc-guard.cjs refuses any other frame).
+  const appEvent = { senderFrame: { url: 'app://kraki/' } };
   const context = vm.createContext({
     require: (name) => name === 'electron' ? electron : mainRequire(name),
     __dirname: path.dirname(mainPath),
@@ -92,35 +95,35 @@ test('settings presence IPC keeps ownership and returns errors instead of claimi
   try {
     vm.runInContext(readFileSync(mainPath, 'utf8'), context);
     vm.runInContext('builtIn = __builtin;', context);
-    assert.equal((await handlers.get('kraki:settings-go-online')()).ok, true);
-    assert.equal((await handlers.get('kraki:settings-go-offline')()).ok, true);
+    assert.equal((await handlers.get('kraki:settings-go-online')(appEvent)).ok, true);
+    assert.equal((await handlers.get('kraki:settings-go-offline')(appEvent)).ok, true);
     assert.equal(calls[0], 'enable');
     assert.equal(calls[1].keepOwnership, true);
     context.__builtin.disable = async () => { throw new Error('Cannot stop service'); };
-    const result = await handlers.get('kraki:settings-go-offline')();
+    const result = await handlers.get('kraki:settings-go-offline')(appEvent);
     assert.equal(result.ok, false);
     assert.equal(result.error, 'Cannot stop service');
     assert.equal(vm.runInContext('transition', context), null);
-    const state = await handlers.get('kraki:settings-state')();
+    const state = await handlers.get('kraki:settings-state')(appEvent);
     assert.equal(state.keepRunningInTray, true);
     assert.equal(state.usageShortcut, 'F6');
     assert.equal(state.usageShortcutEnabled, false);
     assert.equal(state.logsPath, path.join(dir, 'logs'));
     assert.equal(state.notificationPermission, 'default');
-    assert.equal((await handlers.get('kraki:settings-tray')(undefined, false)).ok, true);
-    assert.equal((await handlers.get('kraki:settings-state')()).keepRunningInTray, false);
+    assert.equal((await handlers.get('kraki:settings-tray')(appEvent, false)).ok, true);
+    assert.equal((await handlers.get('kraki:settings-state')(appEvent)).keepRunningInTray, false);
     assert.ok(readFileSync(mainPath, 'utf8').includes("if (pref('keepRunningInTray') === false) void quitFromTray();"));
     for (const [language, title, filter, managed, cancelled] of [
       ['en', 'Locate kraki manually', 'Kraki executable', 'The built-in Kraki manages this PC.', 'Selection cancelled.'],
       ['zh-Hans', '定位 kraki 可执行文件', 'Kraki 可执行文件', '内置 Kraki 正在管理这台电脑。', '已取消选择。'],
     ]) {
       i18n.setLanguage(language);
-      const locate = await handlers.get('kraki:settings-locate-cli')();
+      const locate = await handlers.get('kraki:settings-locate-cli')(appEvent);
       assert.equal(locate.ok, false);
       assert.equal(locate.error, cancelled);
       assert.equal(dialogs.at(-1).title, title);
       assert.equal(dialogs.at(-1).filters[0].name, filter);
-      const presence = await handlers.get('kraki:builtin-external-presence')(undefined, 'start');
+      const presence = await handlers.get('kraki:builtin-external-presence')(appEvent, 'start');
       assert.equal(presence.ok, false);
       assert.equal(presence.error, managed);
     }
@@ -137,4 +140,22 @@ test('external CLI version errors follow shell language without translating CLI 
     i18n.setLanguage('zh-Hans');
     await assert.rejects(probeCli(file), { message: '所选 CLI 未报告 Kraki 版本。' });
   } finally { i18n.setLanguage('en'); rmSync(dir, { recursive: true }); }
+});
+
+test('CLI probe failures surface localized messages, never child_process output', async () => {
+  const settings = require('../src/settings.cjs');
+  const i18n = require('../src/i18n.cjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'kraki-probe-'));
+  const broken = path.join(dir, process.platform === 'win32' ? 'kraki.exe' : 'kraki');
+  writeFileSync(broken, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+  try {
+    for (const lang of ['en', 'zh-Hans']) {
+      i18n.setLanguage(lang);
+      await assert.rejects(settings.probeCli(broken), { message: i18n.t('error.cliVersion') });
+      await assert.rejects(settings.probeCli(path.join(dir, 'missing', 'kraki')), { message: i18n.t('error.selectExecutable') });
+    }
+  } finally {
+    i18n.setLanguage('en');
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

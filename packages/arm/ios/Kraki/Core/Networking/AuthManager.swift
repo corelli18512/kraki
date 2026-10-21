@@ -920,6 +920,16 @@ final class AuthManager {
     }
 }
 
+extension AuthManager {
+    /// Every Head issues `randomBytes(32).toString('hex')` as its challenge
+    /// nonce (head local-auth-backend.ts; edges get it from the account
+    /// service). The same RSA key signs local-link proofs, so MessageRouter
+    /// refuses any other string rather than sign it for whoever sent it.
+    static func isHeadAuthNonce(_ nonce: String) -> Bool {
+        nonce.utf8.count == 64 && nonce.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+}
+
 #if os(iOS)
 /// Trivial bridge — ASWebAuthenticationSession needs an
 /// `ASPresentationAnchor` provider it can call back into to learn

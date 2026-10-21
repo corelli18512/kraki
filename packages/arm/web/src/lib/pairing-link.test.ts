@@ -55,11 +55,13 @@ describe('pairing link (release review A10 / D5)', () => {
     // any static import of the app from main.tsx would bypass this gate.
     const main = readFileSync(resolve(__dirname, '../main.tsx'), 'utf8');
     const staticImports = [...main.matchAll(/^import\s.*?from\s+'([^']+)'|^import\s+'([^']+)'/gm)].map(m => m[1] ?? m[2]);
-    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/pairing-link']);
+    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/desktop-auth-callback', './lib/pairing-link']);
     expect(main).toContain("import('./boot')");
     const gate = readFileSync(resolve(__dirname, 'pairing-link.ts'), 'utf8');
     const gateImports = [...gate.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1]);
     expect(gateImports).toEqual(['../i18n']);
+    const callback = readFileSync(resolve(__dirname, 'desktop-auth-callback.ts'), 'utf8');
+    expect([...callback.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n']);
     // Localization loads before the gate, so it must stay app-free: only
     // i18next and bundled locale data, never the relay client or the store.
     const i18nDir = resolve(__dirname, '../i18n');

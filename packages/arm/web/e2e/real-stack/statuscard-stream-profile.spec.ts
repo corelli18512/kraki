@@ -33,8 +33,9 @@ async function pair(browser: Browser): Promise<{ context: BrowserContext; page: 
   await context.addInitScript(() => {
     (window as unknown as { __deltas: Array<{ at: number; len: number }> }).__deltas = [];
     const parse = JSON.parse.bind(JSON);
-    JSON.parse = function (text: string) {
-      const v = parse(text);
+    // Forward every argument: the app parses some frames with a reviver.
+    JSON.parse = function (text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) {
+      const v = parse(text, reviver);
       if (v && typeof v === 'object' && v.type === 'agent_message_delta') {
         (window as unknown as { __deltas: Array<{ at: number; len: number }> }).__deltas
           .push({ at: performance.now(), len: ((v.payload?.content ?? '') as string).length });
@@ -64,6 +65,7 @@ async function pair(browser: Browser): Promise<{ context: BrowserContext; page: 
 }
 
 test('profile: status-card draft delta smoothness', async ({ browser }) => {
+  test.setTimeout(120_000); // 6x CPU throttling
   const sid = `stream-${Date.now().toString(36)}`;
   const marker = `STREAMMARK-${sid}`;
   await control('/createSession', { id: sid });
@@ -89,22 +91,39 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     // change so we can see the actual on-screen update cadence (what the user
     // perceives as smooth vs janky).
     await arm.page.evaluate(() => {
-      (window as unknown as { __draftUpdates: number[] }).__draftUpdates = [];
-      const startPoll = () => {
-        const el = document.querySelector('[data-live-bubble] .markdown-content') as HTMLElement | null;
-        if (!el) { setTimeout(startPoll, 50); return; }
-        const mo = new MutationObserver(() => {
-          (window as unknown as { __draftUpdates: number[] }).__draftUpdates.push(performance.now());
-        });
-        mo.observe(el, { childList: true, subtree: true, characterData: true });
+      // The live row re-mounts (typing indicator → draft bubble), so sample
+      // its text every frame instead of observing one element.
+      const w = window as unknown as { __draftUpdates: number[] };
+      w.__draftUpdates = [];
+      let last = '';
+      const sample = () => {
+        const el = document.querySelector('[data-row-key="__live__"] .kbubble-agent:not(.kbubble-typing)') as HTMLElement | null;
+        const text = el?.innerText ?? '';
+        if (text && text !== last) { w.__draftUpdates.push(performance.now()); last = text; }
+        requestAnimationFrame(sample);
       };
-      startPoll();
+      requestAnimationFrame(sample);
     });
 
     // Wait for the live card's draft container to exist, then stream.
     // Drive 400 chunks at ~20ms with HEAVY markdown (code fences + lists) so
     // every render re-runs remark + rehype-highlight on growing structured
     // content — the real worst case for the status-card draft.
+    // A turn starts with the user's input (a concluded turn is never
+    // reopened by agent frames alone).
+    const prompt = `stream-prompt-${sid}`;
+    const input = arm.page.getByPlaceholder('Send a message…');
+    await input.fill(prompt);
+    await input.press('Enter');
+    await expect.poll(async () => {
+      const { messages } = await control('/received');
+      return (messages as Array<{ text: string }>).some((m) => m.text === prompt);
+    }, { timeout: 15_000 }).toBe(true);
+    // A slow device: one markdown parse takes longer than the gap between
+    // tokens. The draft froze for the whole stream under exactly this
+    // (useDeferredValue starvation); 6x reproduced it every time.
+    const cdp = await arm.context.newCDPSession(arm.page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU_SLOW ?? 6) });
     const streamPromise = control('/deltaStream', { sid, chunks: '400', intervalMs: '20', size: '12', heavy: '1' });
 
     // MID-STREAM snapshot: while tokens are still arriving (~halfway), assert
@@ -113,7 +132,7 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     // streaming. (Previously it degraded to raw text until the stream settled.)
     await arm.page.waitForTimeout(3000);
     const midStream = await arm.page.evaluate(() => {
-      const root = document.querySelector('[data-live-bubble] .markdown-content') as HTMLElement | null;
+      const root = document.querySelector('[data-row-key="__live__"] .kbubble-agent:not(.kbubble-typing)') as HTMLElement | null;
       if (!root) return { hasDom: false };
       return {
         hasDom: true,
@@ -134,7 +153,7 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     const report = await arm.page.evaluate(() => {
       const deltas = (window as unknown as { __deltas: Array<{ at: number; len: number }> }).__deltas;
       const longTasks = (window as unknown as { __longTasks: number[] }).__longTasks;
-      const draftEl = document.querySelector('[data-live-bubble] .markdown-content') as HTMLElement | null;
+      const draftEl = document.querySelector('[data-row-key="__live__"] .kbubble-agent:not(.kbubble-typing)') as HTMLElement | null;
       const frames = (window as unknown as { __frames: number[] }).__frames ?? [];
       const span = frames.length > 1 ? frames[frames.length - 1] - frames[0] : 0;
       const expectedFrames = span > 0 ? Math.round(span / 16.67) : 0;
@@ -178,6 +197,10 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     expect(midStream.hasDom).toBe(true);
     expect(midStream.hasCode || midStream.hasListItem || midStream.hasStrongOrEm).toBe(true);
     expect(midStream.rawMarkerVisible).toBe(false);
+    // The draft keeps visibly updating through the stream: no multi-second
+    // freeze (was one update at the first token and one at the end).
+    expect(report.draftUpdateCount).toBeGreaterThan(20);
+    expect(report.draftGapP90Ms).toBeLessThan(1_000);
   } finally {
     await arm.context.close();
   }

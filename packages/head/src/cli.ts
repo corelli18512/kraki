@@ -9,6 +9,9 @@
  *
  * Environment variables:
  *   PORT         Server port (default: 4000)
+ *   HOST         Listen address (default: 127.0.0.1 for open auth without
+ *                OPEN_SHARED_KEY, otherwise all interfaces)
+ *   OPEN_SHARED_KEY       Shared secret required by open auth (optional)
  *   DB_PATH      SQLite database path (default: kraki-head.db)
  *   AUTH_MODE    Auth mode: open | github | apikey (default: open)
  *   API_KEY               API key for apikey auth mode
@@ -53,6 +56,7 @@ import { InflightRequests } from './http-drain.js';
 
 /** Shutdown waits this long for HTTP requests still being answered. */
 const SHUTDOWN_DRAIN_MS = 2_000;
+import { resolveListenHost } from './listen-host.js';
 
 // --- CLI flags / subcommands ---
 const rawArgs = process.argv.slice(2);
@@ -84,8 +88,15 @@ if (args.includes('--help') || args.includes('-h')) {
 
   Options:
     --port <n>        Server port (default: 4000, env: PORT)
+    --host <addr>     Listen address (env: HOST). Default: 127.0.0.1 when auth
+                      is open without a shared key, otherwise all interfaces.
+                      Open auth without a shared key refuses a non-loopback host.
     --db <path>       SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>     Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
+    --open-shared-key <key>
+                      Secret every open-auth connection and pairing request must
+                      send (prefer env OPEN_SHARED_KEY: argv is visible in ps).
+                      Computers send it from ~/.kraki/channel.key.
     --admin-key <key> Enable GET /admin/stats endpoint (prefer env ADMIN_KEY: argv is visible in ps)
     --push <type>     Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
     --log <level>     Log level: debug | info | warn | error (default: info)
@@ -158,6 +169,8 @@ if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
 }
 const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
+const HOST = flag('host', process.env.HOST || '');
+const OPEN_SHARED_KEY = flag('open-shared-key', process.env.OPEN_SHARED_KEY || '');
 const API_KEY = process.env.API_KEY;
 const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
@@ -184,6 +197,12 @@ if (REGION_URLS_RAW) {
   }
 }
 const IS_CONNECTED_MODE = MODE === 'edge' ? true : MODE === 'main' ? false : !!ACCOUNT_URL;
+const LISTEN = resolveListenHost({
+  host: HOST,
+  authModes: AUTH_MODES,
+  openSharedKey: OPEN_SHARED_KEY,
+  connectedMode: IS_CONNECTED_MODE,
+});
 
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, '');
@@ -345,6 +364,12 @@ if (IS_CONNECTED_MODE && !ACCOUNT_URL) {
   process.exit(1);
 }
 
+if (!LISTEN.ok) {
+  console.error(`Error: ${LISTEN.error}`);
+  process.exit(1);
+}
+const LISTEN_HOST = LISTEN.host;
+
 async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
   const providers = new Map<string, AuthProvider>();
   for (const mode of AUTH_MODES) {
@@ -371,7 +396,9 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
         providers.set('apikey', new ThrottledAuthProvider(new ApiKeyAuthProvider(API_KEY)));
         break;
       case 'open':
-        providers.set('open', new OpenAuthProvider());
+        providers.set('open', OPEN_SHARED_KEY
+          ? new ThrottledAuthProvider(new OpenAuthProvider(OPEN_SHARED_KEY))
+          : new OpenAuthProvider());
         break;
       default:
         console.error(`Error: Unknown auth mode '${mode}'. Use: github, apikey, open`);
@@ -683,9 +710,10 @@ const httpServer = createServer(async (req, res) => {
 
 head.attach(httpServer);
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, LISTEN_HOST, () => {
   logger.info(`Kraki Head listening on port ${PORT}`, {
     version: VERSION,
+    host: LISTEN_HOST ?? '(all interfaces)',
     ws: `ws://localhost:${PORT}`,
     mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
     auth: IS_CONNECTED_MODE ? '(delegated)' : AUTH_MODES.join(', '),

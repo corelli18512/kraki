@@ -16,6 +16,12 @@ const MAX_WIRE = 64 * 1024;
 const MAX_RAW = 256 * 1024;
 const DAILY_BYTES = 20 * 1024 * 1024;
 const RETENTION_MS = 14 * 86400_000;
+/** Uploads read at once: per device (clients upload one batch at a time),
+ *  per client IP, and for the whole process (bounds buffered bodies). */
+const MAX_ACTIVE_PER_DEVICE = 2;
+const MAX_ACTIVE_PER_IP = 4;
+const MAX_ACTIVE = 32;
+const MAX_BUCKETS = 16384;
 const uuid = (v: unknown): v is string => typeof v === 'string' && /^[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}$/i.test(v);
 const id = (v: unknown) => typeof v === 'string' && /^[\w-]{1,128}$/.test(v);
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
@@ -187,6 +193,24 @@ export function diagSigningText(method: string, path: string, deviceId: string, 
   return ['kraki-diag-v1', method, path, deviceId, timestamp, requestId, createHash('sha256').update(body).digest('hex')].join('\n');
 }
 
+/**
+ * The client's IP. The collector listens on loopback only, behind the relay's
+ * nginx/Caddy, so a loopback peer is the proxy and the rightmost
+ * `X-Forwarded-For` entry is the address it saw (the same rule as Head's
+ * `client-ip.ts`; this package does not import Head).
+ */
+export function diagClientIp(req: IncomingMessage): string {
+  const strip = (a: string | undefined) => a?.startsWith('::ffff:') ? a.slice(7) : a;
+  const peer = strip(req.socket.remoteAddress) ?? 'unknown';
+  if (peer !== '127.0.0.1' && peer !== '::1') return peer;
+  const header = req.headers['x-forwarded-for'];
+  const forwarded = (Array.isArray(header) ? header.join(',') : header)?.split(',').map(p => p.trim()).filter(Boolean).at(-1);
+  return strip(forwarded) ?? peer;
+}
+
+/** What a request's headers claim, checked except for the signature over the body. */
+interface DiagHeaderClaims { device: DiagnosticDevice; deviceId: string; publicKey: string; timestamp: string; requestId: string; signature: string }
+
 class HttpFailure extends Error { constructor(readonly status: number) { super(String(status)); } }
 
 export interface DiagApiOptions {
@@ -202,6 +226,7 @@ export interface DiagApiOptions {
 export class DiagApi {
   private readonly now: () => number;
   private active = 0;
+  private activeByKey = new Map<string, number>();
   private buckets = new Map<string, { minute: number; count: number }>();
   private devicesWriting = new Set<string>();
   private retentionTimer?: ReturnType<typeof setInterval>;
@@ -229,9 +254,9 @@ export class DiagApi {
     const minute = Math.floor(this.now() / 60_000);
     const prev = this.buckets.get(key);
     if (prev?.minute === minute) return ++prev.count <= limit;
-    if (this.buckets.size >= 4096) {
+    if (this.buckets.size >= MAX_BUCKETS) {
       for (const [k, v] of this.buckets) if (v.minute !== minute) this.buckets.delete(k);
-      if (this.buckets.size >= 4096) return false;
+      if (this.buckets.size >= MAX_BUCKETS) return false;
     }
     this.buckets.set(key, { minute, count: 1 });
     return true;
@@ -242,16 +267,20 @@ export class DiagApi {
     if (!path.startsWith(DIAG_PREFIX)) return false;
     res.setHeader('Cache-Control', 'no-store');
     // No access logging of headers/signatures, query strings or request body.
-    let counted = false;
+    let slots: string[] = [];
     try {
       if (!this.options.directory) throw new HttpFailure(410);
       if (!['batch', 'config'].includes(path.slice(DIAG_PREFIX.length))) throw new HttpFailure(404);
       const method = path.endsWith('/config') ? 'GET' : 'POST';
       if (req.method !== method || req.url !== path) throw new HttpFailure(405);
-      if (this.active >= 2 || !this.allow(`ip:${req.socket.remoteAddress}`, 120)) throw new HttpFailure(429);
-      this.active++; counted = true;
+      const ip = diagClientIp(req);
+      if (!this.allow(`ip:${ip}`, 120)) throw new HttpFailure(429);
+      // Everything but the signature over the body is checked before the
+      // body is read, so unauthenticated requests hold no upload slot.
+      const claimed = this.authenticateHeaders(req);
+      slots = this.takeSlots([`ip:${ip}`, `dev:${claimed.deviceId}`]);
       const body = method === 'POST' ? await this.readBody(req) : Buffer.alloc(0);
-      const device = this.authenticate(req, path, body);
+      const device = this.verifySignature(req, path, claimed, body);
       if (!this.allow(`dev:${device.id}`, 30)) throw new HttpFailure(429);
       if (method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -285,11 +314,30 @@ export class DiagApi {
       res.writeHead(status); res.end();
       // Drain rejected bodies; never retain or log them.
       req.resume();
-    } finally { if (counted) this.active--; }
+    } finally { this.releaseSlots(slots); }
     return true;
   }
 
-  private authenticate(req: IncomingMessage, path: string, body: Buffer): DiagnosticDevice {
+  /** Reserve one upload slot per key plus one of the process; 429 when any is full. */
+  private takeSlots(keys: string[]): string[] {
+    const limit = (key: string) => key.startsWith('dev:') ? MAX_ACTIVE_PER_DEVICE : MAX_ACTIVE_PER_IP;
+    if (this.active >= MAX_ACTIVE || keys.some(key => (this.activeByKey.get(key) ?? 0) >= limit(key))) throw new HttpFailure(429);
+    this.active++;
+    for (const key of keys) this.activeByKey.set(key, (this.activeByKey.get(key) ?? 0) + 1);
+    return keys;
+  }
+
+  private releaseSlots(keys: string[]): void {
+    if (!keys.length) return;
+    this.active--;
+    for (const key of keys) {
+      const left = (this.activeByKey.get(key) ?? 1) - 1;
+      if (left > 0) this.activeByKey.set(key, left); else this.activeByKey.delete(key);
+    }
+  }
+
+  /** The request headers' claims: well-formed, fresh, and naming a registered app device. */
+  private authenticateHeaders(req: IncomingMessage): DiagHeaderClaims {
     const deviceId = req.headers['x-kraki-device'];
     const timestamp = req.headers['x-kraki-time'];
     const requestId = req.headers['x-kraki-request'];
@@ -299,8 +347,13 @@ export class DiagApi {
       || Math.abs(this.now() - Number(timestamp)) > 5 * 60_000) throw new HttpFailure(401);
     const device = this.options.getDevice(deviceId);
     if (!device?.publicKey || device.role !== 'app') throw new HttpFailure(401);
+    return { device, deviceId, publicKey: device.publicKey, timestamp, requestId, signature };
+  }
+
+  private verifySignature(req: IncomingMessage, path: string, claimed: DiagHeaderClaims, body: Buffer): DiagnosticDevice {
+    const { device, deviceId, publicKey, timestamp, requestId, signature } = claimed;
     try {
-      const pem = `-----BEGIN PUBLIC KEY-----\n${device.publicKey.match(/.{1,64}/g)?.join('\n')}\n-----END PUBLIC KEY-----\n`;
+      const pem = `-----BEGIN PUBLIC KEY-----\n${publicKey.match(/.{1,64}/g)?.join('\n')}\n-----END PUBLIC KEY-----\n`;
       const key = createPublicKey(pem);
       if (key.asymmetricKeyType !== 'rsa' || !verify('sha256', Buffer.from(diagSigningText(req.method!, path, deviceId, timestamp, requestId, body)), key, Buffer.from(signature, 'base64'))) throw new Error('signature');
     } catch { throw new HttpFailure(401); }

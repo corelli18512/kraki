@@ -162,7 +162,8 @@ A public deployment must have TLS, ingress rate limiting and a dedicated data di
 - ≤64 KiB compressed, ≤256 KiB decompressed, ≤1000 events/batch, schema 1.
 - Event name/field name allowlist; format checks for numbers/booleans/IDs/fixed tags; unknown names and out-of-format values are dropped (never stored, logged by name only); a malformed batch envelope is rejected.
 - No generic string logs, message text, selected text, drafts, transcripts, URLs, attachments or raw NSError.
-- At most 2 concurrent requests; 120/min per IP, 30/min per device; at most 10 seconds to read a request body.
+- Headers (device, time, request id, signature format, registered app device) are checked before the body is read; only the signature over the body is checked after it.
+- Bodies read at once: at most 2 per device, 4 per client IP, 32 in total; 120/min per client IP (the rightmost `X-Forwarded-For` entry from the loopback proxy; the nginx block sets it to `$remote_addr`), 30/min per device; at most 10 seconds to read a request body.
 - 20 MiB compressed and 2048 files per device per day; 14-day retention, cleaned at startup/hourly, including inactive devices.
 - The directory is measured per device/day on cold start and the quota is cached afterwards, rather than scanning all history on each request.
 - Returns 507 when free disk is <1 GiB so logs cannot exhaust the relay DB's space. A deployment-level total disk quota/alerting is still needed.

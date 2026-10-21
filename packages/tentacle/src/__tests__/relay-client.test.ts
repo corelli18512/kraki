@@ -73,6 +73,7 @@ vi.mock('@kraki/crypto', async () => {
     decryptFromBlob: vi.fn((payload: { blob: string }) => payload.blob),
     encryptToBlob: vi.fn((plaintext: string) => ({ blob: plaintext, keys: {} })),
     importPublicKey: vi.fn(() => ({})),
+    signChallenge: vi.fn((nonce: string) => `sig:${nonce}`),
   };
 });
 
@@ -273,6 +274,32 @@ describe('RelayClient auth negotiation', () => {
   beforeEach(() => {
     sockets.length = 0;
     vi.useFakeTimers();
+  });
+
+  it('signs only the nonce format every Head issues', () => {
+    const client = new RelayClient(createAdapter(), createSessionManager(), {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' }, reconnectDelay: 10,
+    }, createKeyManager());
+    client.connect();
+    sockets[0].emit('open');
+    const challenge = (nonce: string) => {
+      sockets[0].sent.length = 0;
+      sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'auth_challenge', nonce })));
+      return sockets[0].sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    };
+    const nonce = 'a1'.repeat(32);
+    expect(challenge(nonce)).toEqual([{ type: 'auth_response', signature: `sig:${nonce}` }]);
+    for (const other of [
+      'kraki-local-link/v1/tentacle\nabc\ndev_app\ndev_123',
+      'kraki-diag-v1\nPOST\n/api/diag/v1/batch\ndev_123\n1760000000000\nreq\n' + 'ab'.repeat(32),
+      'A1'.repeat(32),
+      'a1'.repeat(33),
+      '',
+    ]) {
+      expect(challenge(other), other).toEqual([]);
+    }
+    client.disconnect();
   });
 
   it.each([

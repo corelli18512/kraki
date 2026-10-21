@@ -226,7 +226,8 @@ items, all addressed with regression tests:
   approving a new device from an already paired one is not implemented.
 - **Head-originated destructive control**: `account_deleted` makes the computer
   forget credentials and keys; `device_removed` revokes trust (DoS, not takeover).
-- App-side replay protection (computer→app) and key rotation are not implemented.
+- Key rotation is not implemented. App-side replay protection (computer→app)
+  drops exact repeats only, with no age limit (see e2e-trust.md).
 - In mixed setups (some computers paired, some not) unpaired computers'
   notifications show generic text on iOS/Mac.
 - Before a pinned computer's signed session list arrives, a session the relay

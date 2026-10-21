@@ -105,6 +105,11 @@ export interface StoredRegion {
 
 const SCHEMA_VERSION = 15;
 
+/** Limits of the client-written part of a user's preferences (everything but
+ *  Custom Words). Real clients store a few short keys, well under 1 KB. */
+export const MAX_PREFERENCE_KEYS = 64;
+export const MAX_PREFERENCES_BYTES = 16 * 1024;
+
 /**
  * Audio a live broker connection may run ahead of its last usage report.
  * The broker reports every 15 s while recording and each reply extends the
@@ -512,16 +517,24 @@ export class Storage {
     this.db.prepare('UPDATE users SET region = ? WHERE user_id = ?').run(region, userId);
   }
 
-  updatePreferences(userId: string, preferences: Record<string, unknown>): void {
+  /** Merge a client's preferences patch. Returns false (nothing stored) when
+   *  the client-written preferences would exceed MAX_PREFERENCE_KEYS or
+   *  MAX_PREFERENCES_BYTES; clients write a few short settings (theme, channel). */
+  updatePreferences(userId: string, preferences: Record<string, unknown>): boolean {
     const existing = this.getUser(userId);
-    if (!existing) return;
+    if (!existing) return false;
     // Custom Words change only through update_voice_vocabulary intents, and
     // `internal` (dogfood account) only through setInternal: a generic
     // preferences write from a client must never change either.
     const { voiceVocabulary: _reserved, internal: _serverManaged, ...patch } = preferences;
     const merged = { ...(existing.preferences ?? {}), ...patch };
+    // Custom Words have their own limit (MAX_VOICE_WORDS).
+    const { voiceVocabulary: _words, ...clientWritten } = merged;
+    if (Object.keys(clientWritten).length > MAX_PREFERENCE_KEYS
+      || Buffer.byteLength(JSON.stringify(clientWritten)) > MAX_PREFERENCES_BYTES) return false;
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+    return true;
   }
 
   /**
@@ -874,7 +887,9 @@ export class Storage {
     // One push address belongs to one device. A phone that signs out and in
     // again (or switches account) re-registers the same token under a new
     // device; drop the old rows so it is not notified twice, once of them
-    // with a preview it can no longer decrypt.
+    // with a preview it can no longer decrypt. This crosses accounts on
+    // purpose: a push token is an unguessable capability issued to the device,
+    // so whoever registers it holds that device.
     this.db.prepare(
       'DELETE FROM push_tokens WHERE provider = ? AND token = ? AND device_id != ?'
     ).run(provider, token, deviceId);

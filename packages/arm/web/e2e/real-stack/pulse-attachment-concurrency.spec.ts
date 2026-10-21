@@ -9,7 +9,7 @@ import { test, expect, type Page, request } from '@playwright/test';
  *
  * With the fix:
  *   - the tentacle no longer broadcasts attachment bytes to every Arm;
- *   - the browser pulls one 256 KiB chunk at a time (AttachmentPullQueue);
+ *   - the browser pulls one 128 KiB chunk at a time (AttachmentPullQueue);
  *   - a live message fired while the attachment is mid-download is NOT queued
  *     behind the whole blob.
  *
@@ -80,7 +80,7 @@ test.describe.serial('real-stack pulse: paced attachment concurrency', () => {
       return (messages as Array<{ text: string }>).some((m) => m.text === prompt);
     }, { timeout: 15_000 }).toBe(true);
 
-    // 1. Generate a 1.5 MB tool result (≈6 chunks of 256 KiB) → offloaded to a
+    // 1. Generate a 1.5 MB tool result (≈12 chunks of 128 KiB) → offloaded to a
     //    ContentRef the browser must pull on demand.
     const reply = `DONE-${Date.now().toString(36)}`;
     const big = await control('/bigRef', { sid: sessionId, sizeKb: '1500', reply });
@@ -97,20 +97,22 @@ test.describe.serial('real-stack pulse: paced attachment concurrency', () => {
     // 3. Expand the turn's Steps, then expand the tool step. ToolResultBody
     //    (which fires the paced request_attachment pull) only mounts when the
     //    individual step is expanded.
-    const stepsBtn = page.locator('[data-chat-scroll]').getByRole('button', { name: /Open steps/i }).first();
+    const stepsBtn = page.locator('[data-chat-scroll]').getByRole('button', { name: /Show steps/i }).last();
     await expect(stepsBtn).toBeVisible({ timeout: 20_000 });
     await stepsBtn.click();
-    const toolChip = page.locator('[data-chat-scroll]').getByRole('button', { name: /cat big\.bin/i }).first();
+    // Steps open in a dialog over the chat.
+    const toolChip = page.getByRole('dialog').getByRole('button', { name: /cat big\.bin/i }).first();
     await expect(toolChip).toBeVisible({ timeout: 20_000 });
     await toolChip.click(); // expand → ToolResultBody mounts → paced pull starts
 
     // 4. Wait until the paced pull has actually started (≥1 chunk served) before
     //    firing the concurrent echo — this avoids a race where the echo's idle
     //    re-renders the panel before ToolResultBody mounts.
-    await expect.poll(async () => {
-      const { reads } = await control('/attachmentReads');
-      return (reads as unknown[]).length;
-    }, { timeout: 20_000, message: 'paced attachment pull never started' }).toBeGreaterThanOrEqual(1);
+    const bigIds = new Set(big.ids as string[]);
+    expect(bigIds.size).toBe(1);
+    const bigReads = async () => ((await control('/attachmentReads')).reads as Array<{ id: string }>)
+      .filter((r) => bigIds.has(r.id)).length;
+    await expect.poll(bigReads, { timeout: 20_000, message: 'paced attachment pull never started' }).toBeGreaterThanOrEqual(1);
 
     // 5. Fire a live echo CONCURRENTLY with the in-flight attachment download.
     //    It must interleave, not wait for all chunks.
@@ -121,13 +123,12 @@ test.describe.serial('real-stack pulse: paced attachment concurrency', () => {
       .toBeVisible({ timeout: 15_000 });
 
     // 6. The paced pull eventually serves every chunk (one request_attachment
-    //    per 256 KiB chunk). Exactly chunkCount reads proves the browser did
+    //    per 128 KiB chunk). Exactly chunkCount reads proves the browser did
     //    NOT request the whole blob at once — it advanced one chunk at a time,
     //    even with a concurrent live echo interleaved.
-    await expect.poll(async () => {
-      const { reads } = await control('/attachmentReads');
-      return (reads as unknown[]).length;
-    }, { timeout: 30_000, message: 'paced attachment pull did not serve all chunks' }).toBe(chunkCount);
+    // Only this tool result's reads count: the shared session also holds
+    // earlier attachments, which the browser may pull too.
+    await expect.poll(bigReads, { timeout: 30_000, message: 'paced attachment pull did not serve all chunks' }).toBe(chunkCount);
 
     // 7. No browser errors during the concurrent download + echo.
     expect(pageErrors).toEqual([]);

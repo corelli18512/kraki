@@ -1086,19 +1086,31 @@ describe('KrakiWSClient', () => {
         type: 'auth_error',
         code: 'wrong_region',
         message: 'Reconnect to your assigned region',
-        redirect: 'ws://cn.example.com',
+        redirect: 'wss://cn.example.com',
       });
 
       // Verify relay URL saved to localStorage for post-reload connection
       await vi.waitFor(() => {
         expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({
-          relay: 'ws://cn.example.com',
+          relay: 'wss://cn.example.com',
           deviceId: 'dev-stale',
         });
       });
 
       // No error banner — page reload handles the transition silently
       expect(useStore.getState().lastError).toBeNull();
+    });
+
+    it('ignores a wrong_region redirect from an official relay to any other host', async () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('wss://relay.kraki.chat');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance).toBeDefined());
+      for (const redirect of ['wss://evil.example', 'ws://cn.relay.kraki.chat', 'wss://kraki.chat.evil.example']) {
+        lastWsInstance._receive({ type: 'auth_error', code: 'wrong_region', message: 'x', redirect });
+      }
+      expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-stale' });
+      client.disconnect();
     });
   });
 
@@ -2170,8 +2182,8 @@ describe('KrakiWSClient', () => {
     it('applies device_renamed from the head', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       useStore.getState().setDevices([{ id: 'dev-t', name: 'corelli-mbp', role: 'tentacle', online: true }]);
-      const deliver = (msg: object) => (client as unknown as { handlePulseDelivered(p: string): void })
-        .handlePulseDelivered(JSON.stringify({ from: '@head', msg }));
+      const deliver = (msg: object) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void })
+        .handlePulseDelivered(JSON.stringify({ from: '@head', msg }), 'head');
       deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'Work laptop', defaultName: 'corelli-mbp' });
       expect(useStore.getState().devices.get('dev-t')).toMatchObject({ name: 'Work laptop', defaultName: 'corelli-mbp' });
       deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'corelli-mbp' });
@@ -2179,18 +2191,134 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().devices.get('dev-t')?.defaultName).toBeUndefined();
     });
 
-    it('reassembles a payload the Tentacle sent in fragments', async () => {
-      const { fragmentPayload } = await import('@kraki/protocol');
+    describe('Head control wrapper', () => {
+      async function authed() {
+        localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-web-123' }));
+        const client = new KrakiWSClient('wss://relay.kraki.chat');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [] });
+        const deliver = (msg: object, route: 'head' | 'link' = 'head') => (client as unknown as { handlePulseDelivered(p: string, r: string): void })
+          .handlePulseDelivered(JSON.stringify({ from: '@head', msg }), route);
+        return { client, deliver };
+      }
+
+      it.each([
+        ['auth_error wrong_region', { type: 'auth_error', code: 'wrong_region', message: 'x', redirect: 'wss://evil.example', deviceId: 'dev-web-123' }],
+        ['auth_error invalid_signature', { type: 'auth_error', code: 'invalid_signature', message: 'x' }],
+        ['account_deleted', { type: 'account_deleted' }],
+        ['auth_ok', { type: 'auth_ok', deviceId: 'dev-attacker', devices: [] }],
+      ])('acts only on the Head control types: %s is dropped', async (_name, msg) => {
+        const { deliver } = await authed();
+        deliver(msg);
+        await new Promise((r) => setTimeout(r, 10));
+        expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toEqual({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-web-123' });
+        expect(useStore.getState().deviceId).toBe('dev-web-123');
+        expect(useStore.getState().status).not.toBe('awaiting_login');
+      });
+
+      it('does not feed a wrapped relay envelope to the Pulse endpoint', async () => {
+        const { client, deliver } = await authed();
+        const onFrame = vi.spyOn((client as unknown as { pulse: { onFrame(f: string): void } }).pulse, 'onFrame');
+        deliver({ type: 'unicast', to: 'dev-web-123', pulse: 'AAAA' });
+        expect(onFrame).not.toHaveBeenCalled();
+      });
+
+      it('takes Head control only from the Head route', async () => {
+        const { deliver } = await authed();
+        const device = { id: 'dev-new', name: 'New', role: 'tentacle', online: true };
+        deliver({ type: 'device_joined', device }, 'link');
+        expect(useStore.getState().devices.has('dev-new')).toBe(false);
+        deliver({ type: 'device_joined', device }, 'head');
+        expect(useStore.getState().devices.has('dev-new')).toBe(true);
+      });
+    });
+
+    it('drops a payload whose deviceId is not the Head-stamped sender', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
-      const name = 'x'.repeat(100_000);
-      const whole = JSON.stringify({ from: '@head', msg: { type: 'device_joined', device: { id: 'dev-big', name, role: 'app', online: true } } });
-      const parts = fragmentPayload(whole, 'f1')!;
-      expect(parts.length).toBeGreaterThan(2);
-      const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string): void }).handlePulseDelivered(p);
-      for (const part of parts.slice(0, -1)) deliver(part);
-      expect(useStore.getState().devices.has('dev-big')).toBe(false);
-      deliver(parts.at(-1)!);
-      expect(useStore.getState().devices.get('dev-big')?.name).toBe(name);
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' },
+          { id: 'app-other', name: 'Phone', role: 'app', online: true, encryptionKey: 'k3' },
+        ],
+      });
+      const deliver = (deviceId: string, id: string, src: string) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void })
+        .handlePulseDelivered(JSON.stringify({
+          src, keys: {},
+          blob: JSON.stringify({ type: 'session_list', deviceId, seq: 1, timestamp: '', payload: { sessions: [{ id, agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] } }),
+        }), 'head');
+      // Another device on the account claims to be the computer.
+      deliver('dev-t', 'sess-forged', 'app-other');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(useStore.getState().sessions.has('sess-forged')).toBe(false);
+      deliver('dev-t', 'sess-real', 'dev-t');
+      await vi.waitFor(() => expect(useStore.getState().sessions.has('sess-real')).toBe(true));
+    });
+
+    describe('fragment sender binding', () => {
+      async function authed() {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance._receive({
+          type: 'auth_ok', deviceId: 'dev-web-123',
+          devices: [
+            { id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' },
+            { id: 'dev-other', name: 'Other', role: 'tentacle', online: true, encryptionKey: 'k2' },
+          ],
+        });
+        return client;
+      }
+      // The Head stamps the authenticated sender on every part it forwards.
+      async function deliverParts(client: KrakiWSClient, whole: Record<string, unknown>, src: string, id = 'f1', mangle = false) {
+        const { fragmentPayload } = await import('@kraki/protocol');
+        const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void }).handlePulseDelivered(p, 'head');
+        const parts = fragmentPayload(JSON.stringify(whole), id, 40, 0)!;
+        expect(parts.length).toBeGreaterThan(2);
+        // `mangle`: every part but the first, with other content.
+        for (const part of mangle ? parts.slice(1) : parts) {
+          const p = { ...JSON.parse(part), src } as Record<string, unknown>;
+          if (mangle) p.d = 'x'.repeat((p.d as string).length);
+          deliver(JSON.stringify(p));
+        }
+        return parts.length;
+      }
+      const sessionList = (deviceId: string, id: string) => ({
+        type: 'session_list', deviceId, seq: 1, timestamp: '',
+        payload: { sessions: [{ id, agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] },
+      });
+
+      it('reassembles a payload the Tentacle sent in fragments', async () => {
+        const client = await authed();
+        await deliverParts(client, { blob: JSON.stringify(sessionList('dev-t', 'sess-frag')), keys: {} }, 'dev-t');
+        await vi.waitFor(() => expect(useStore.getState().sessions.get('sess-frag')?.deviceId).toBe('dev-t'));
+      });
+
+      it('a fragmented Head wrapper from a device is not Head control', async () => {
+        const client = await authed();
+        await deliverParts(client, { from: '@head', msg: { type: 'device_joined', device: { id: 'dev-rogue', name: 'Rogue', role: 'app', online: true } } }, 'dev-t');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(useStore.getState().devices.has('dev-rogue')).toBe(false);
+      });
+
+      it('a reassembled payload cannot claim another sender with its own src', async () => {
+        const client = await authed();
+        await deliverParts(client, { src: 'dev-other', blob: JSON.stringify(sessionList('dev-other', 'sess-forged')), keys: {} }, 'dev-t');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(useStore.getState().sessions.has('sess-forged')).toBe(false);
+      });
+
+      it('parts stamped by another sender never complete a set with the same id', async () => {
+        const client = await authed();
+        const whole = { blob: JSON.stringify(sessionList('dev-t', 'sess-real')), keys: {} };
+        // Another device pre-fills the set id with all but the first part.
+        await deliverParts(client, whole, 'dev-other', 'same', true);
+        await deliverParts(client, whole, 'dev-t', 'same');
+        await vi.waitFor(() => expect(useStore.getState().sessions.get('sess-real')?.deviceId).toBe('dev-t'));
+      });
     });
 
     it('declares fragment support to a Tentacle that offers it, and re-offers unconfirmed inputs', async () => {

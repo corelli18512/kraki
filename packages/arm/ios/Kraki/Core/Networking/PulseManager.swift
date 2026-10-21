@@ -383,7 +383,11 @@ final class PulseManager {
                 if isFragment {
                     // The Head stamps the sender on every part; carry it to the
                     // reassembled payload so sender checks still apply.
-                    if let whole { host?.onDelivered(json: Self.stampSender(whole, from: payload)) }
+                    if let whole, let stamped = Self.stampSender(whole, from: payload) {
+                        host?.onDelivered(json: stamped)
+                    } else if whole != nil {
+                        KLog.d("⚠️ Dropped reassembled payload that names its own sender")
+                    }
                 } else {
                     host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
                 }
@@ -432,15 +436,19 @@ final class PulseManager {
         }
     }
 
-    static func stampSender(_ whole: String, from part: [UInt8]) -> String {
-        guard let partObject = try? JSONSerialization.jsonObject(with: Data(part)) as? [String: Any],
-              let src = partObject["src"] as? String,
-              let data = whole.data(using: .utf8),
+    /// The reassembled `whole`, credited to the sender the Head stamped on its
+    /// parts. Nil when it names a sender itself (`from` or `src`): only the Head
+    /// sets those, on whole payloads, and it never fragments its own control,
+    /// so such a payload is forged. Also nil when it is not a JSON object.
+    static func stampSender(_ whole: String, from part: [UInt8]) -> String? {
+        guard let data = whole.data(using: .utf8),
               var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["src"] == nil else { return whole }
+              object["from"] == nil, object["src"] == nil else { return nil }
+        guard let partObject = try? JSONSerialization.jsonObject(with: Data(part)) as? [String: Any],
+              let src = partObject["src"] as? String else { return whole }
         object["src"] = src
         guard let stamped = try? JSONSerialization.data(withJSONObject: object),
-              let string = String(data: stamped, encoding: .utf8) else { return whole }
+              let string = String(data: stamped, encoding: .utf8) else { return nil }
         return string
     }
 

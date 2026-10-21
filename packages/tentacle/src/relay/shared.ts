@@ -117,21 +117,15 @@ export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefine
   return undefined;
 }
 
+/** Shared with the web app (protocol `control-messages.ts`). */
+export { isAcceptableRegionRedirect } from '@kraki/protocol';
+
 /**
- * Whether to follow a relay's `wrong_region` redirect. From an official
- * relay only to another official one (`wss://kraki.chat` or a subdomain); a
- * self-hosted relay may send its users elsewhere, but only over TLS (plain
- * `ws://` only to this machine). The computer authenticates at the redirect
- * target, so a hostile redirect would hand its connection to anyone.
+ * Every Head issues `randomBytes(32).toString('hex')` as its challenge nonce
+ * (head local-auth-backend.ts; edges get it from the account service). The
+ * same RSA key signs local-link proofs, so any other string is refused rather
+ * than signed for whoever sent it.
  */
-export function isAcceptableRegionRedirect(current: string, redirect: string): boolean {
-  let to: URL;
-  let from: URL | null = null;
-  try { to = new URL(redirect); } catch { return false; }
-  try { from = new URL(current); } catch { /* unknown current relay */ }
-  const official = (u: URL) => u.hostname === 'kraki.chat' || u.hostname.endsWith('.kraki.chat');
-  const loopback = (u: URL) => ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
-  if (to.protocol !== 'wss:' && !(to.protocol === 'ws:' && loopback(to))) return false;
-  if (from && official(from)) return to.protocol === 'wss:' && official(to);
-  return true;
+export function isHeadAuthNonce(nonce: unknown): nonce is string {
+  return typeof nonce === 'string' && /^[0-9a-f]{64}$/.test(nonce);
 }

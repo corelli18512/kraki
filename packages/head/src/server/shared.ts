@@ -140,10 +140,20 @@ export function isValidMessage(msg: unknown): msg is { type: string; [key: strin
   return typeof obj.type === 'string' && obj.type.length > 0;
 }
 
+/** Ceilings for the device fields of an `auth` message, far above real
+ *  values: names are host or model names (renames allow MAX_DEVICE_NAME_LENGTH
+ *  = 64), keys are RSA-4096 SPKI base64 (736 characters, 800 as PEM). */
+export const MAX_AUTH_DEVICE_NAME_LENGTH = 1024;
+export const MAX_AUTH_DEVICE_KEY_LENGTH = 8192;
+
 export function isValidAuth(msg: Record<string, unknown>): boolean {
   if (!msg.device || typeof msg.device !== 'object') return false;
   const dev = msg.device as Record<string, unknown>;
   if (typeof dev.name !== 'string' || typeof dev.role !== 'string') return false;
+  if (dev.name.length > MAX_AUTH_DEVICE_NAME_LENGTH) return false;
+  for (const key of [dev.publicKey, dev.encryptionKey]) {
+    if (typeof key === 'string' && key.length > MAX_AUTH_DEVICE_KEY_LENGTH) return false;
+  }
   if (dev.role !== 'tentacle' && dev.role !== 'app') return false;
   if (!msg.auth || typeof msg.auth !== 'object') return false;
   const auth = msg.auth as Record<string, unknown>;

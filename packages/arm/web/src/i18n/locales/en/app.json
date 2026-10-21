@@ -1,4 +1,9 @@
 {
+  "desktopCallback": {
+    "signedIn": "You’re signed in",
+    "return": "Return to Kraki to finish setting up.",
+    "open": "Open Kraki"
+  },
   "connection": {
     "errorTitle": "Connection Error",
     "disconnected": "Disconnected",
