@@ -965,7 +965,9 @@ export class PiAdapter extends AgentAdapter {
       return 'session_gone';
     }
     if (!s.pendingQuestions.has(questionId)) {
-      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
+      // Usual after a daemon restart / pi process loss; RelayClient logs the
+      // recovery prompt it sends instead.
+      logger.debug({ sessionId, questionId }, 'respondToQuestion: no pending question');
       return 'not_found';
     }
     if (!s.proc.alive) return 'session_gone';

@@ -78,6 +78,7 @@ vi.mock('@kraki/crypto', async () => {
 import { SessionResumeError, RelayClient } from '../relay-client.js';
 import { beginAdapterTurn, finishTurnWithStatus, inputFingerprint, reserveInput } from '../relay/turns.js';
 import { handleConsumerMessage } from '../relay/consumer-messages.js';
+import { logger as relayLogger } from '../relay/shared.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
 import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
@@ -4039,6 +4040,9 @@ describe('RelayClient pending-question digest', () => {
       expect.stringContaining('answer after restart'),
       [{ type: 'image', mimeType: 'image/png', data: 'abc' }],
     );
+    // The recovery is recorded (it used to be silent apart from an adapter WARN).
+    expect(vi.mocked(relayLogger.info).mock.calls.filter((c) => c[1] === 'Question answered after its live request was lost; sending it as a recovery prompt'))
+      .toEqual([[expect.objectContaining({ sessionId: 'sess_1', questionId: 'q1', adapterResult: 'not_found', ageMs: expect.any(Number) }), expect.any(String)]]);
   });
 
   it('keeps the pending sidecar when recovery delivery fails', async () => {
@@ -4799,6 +4803,17 @@ describe('RelayClient permission decisions', () => {
     decide('deny', 'keep the file');
     await vi.waitFor(() => expect(resolutions()).toEqual(['denied']));
     expect(traced().at(-1)).toMatchObject({ id: 'perm_1', decision: 'deny', reason: 'keep the file' });
+  });
+
+  it('writes an audit line per decision: who decided what, never the reason text', async () => {
+    const { decide, resolutions } = connected(['accepted']);
+    const info = vi.mocked(relayLogger.info);
+    info.mockClear();
+    decide('deny', 'keep the file');
+    await vi.waitFor(() => expect(resolutions()).toEqual(['denied']));
+    const audit = info.mock.calls.filter((c) => c[1] === 'Permission decision');
+    expect(audit).toEqual([[{ sessionId: 'sess_1', permissionId: 'perm_1', decision: 'deny', fromDeviceId: 'app_1', adapterResult: 'accepted', withReason: true }, 'Permission decision']]);
+    expect(JSON.stringify(audit)).not.toContain('keep the file');
   });
 
   it('announces a decision the agent accepted', async () => {

@@ -434,7 +434,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         const reason = decision === 'deny' && typeof (msg.payload as { reason?: unknown }).reason === 'string'
           ? ((msg.payload as { reason: string }).reason).trim().slice(0, 2000)
           : '';
-        resolvePermission(client, sessionId, msg.payload.permissionId, decision, reason);
+        resolvePermission(client, sessionId, msg.payload.permissionId, decision, reason, msg.deviceId);
         break;
       }
       case 'kill_session':

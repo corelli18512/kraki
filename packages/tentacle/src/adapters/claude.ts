@@ -665,7 +665,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
-      logger.warn({ permissionId }, 'respondToPermission: no pending permission');
+      logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission');
       return 'not_found';
     }
 
@@ -692,7 +692,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     const pending = entry.pendingQuestions.get(questionId);
     if (!pending) {
-      logger.warn({ questionId }, 'respondToQuestion: no pending question');
+      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
       return 'not_found';
     }
     const answerValue = typeof answer === 'string' ? { text: answer } : answer;
