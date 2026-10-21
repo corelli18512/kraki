@@ -50,8 +50,8 @@ import UIKit
 
     private func runScenario(readingHistory: Bool) throws {
         try requireForegroundUITests()
-        let driver = IOSVoiceHoldScenarioDriver(automaticPartials: false)
-        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
+        // This test drives the transcript itself: no canned fixture partial.
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: IOSVoiceHoldScenarioDriver(automaticPartials: false))
         let sid = "voice-a", dev = "voice-test-device"
         app.testOutboundMessageHandler = { _, _, _ in true }
         let messages = (1...40).map { seq in
