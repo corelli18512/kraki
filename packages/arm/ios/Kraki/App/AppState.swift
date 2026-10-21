@@ -600,8 +600,7 @@ final class AppState {
                 .offline: .bool(send.offlineAtSend), .attachments: .int(send.attachments),
                 .textLength: .int(send.textLength), .background: .bool(send.failedInBackground),
             ]
-            if let v = send.confirmMs { f[.confirmMs] = .number(v) }
-            if let v = send.correctionMs { f[.correctionMs] = .number(v) }
+            f.merge(send.diagTimings) { $1 }
             if let v = send.cause { f[.cause] = .tag(v) }
             KrakiDiag.record(.send, f)
         }

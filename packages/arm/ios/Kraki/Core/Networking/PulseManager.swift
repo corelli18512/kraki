@@ -234,6 +234,10 @@ final class PulseManager {
     /// would stall for a heartbeat interval per window, so parts go at once.
     var acksPromptly = false
     private var inflight: [(seq: UInt64, bytes: Int, sentAt: Date)] = []
+    /// Newest live seq handed to Pulse, and whether parts still wait to go
+    /// (send.summary `uploadMs`).
+    private(set) var lastSentLiveSeq: UInt64 = 0
+    var hasQueuedUpload: Bool { !outQueue.isEmpty }
 
     #if DEBUG
     var queuedForTesting: Int { outQueue.count }
@@ -282,6 +286,7 @@ final class PulseManager {
         connectionScoped: Bool
     ) -> UInt64 {
         let (seq, effects) = live.send([UInt8](payload), durable: false, coalesceKey: nil)
+        lastSentLiveSeq = seq
         if let target {
             targetByStream[Self.liveStream, default: [:]][seq] = target
         }

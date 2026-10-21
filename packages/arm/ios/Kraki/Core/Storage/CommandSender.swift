@@ -163,13 +163,13 @@ final class CommandSender {
         guard isSignedIn else { return false }
         // A steer's bubble appears now: the live card stays above it.
         if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
-        if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
-            undispatched.insert(clientId)
-        }
+        let handoffStart = Date()
+        let handedOff = send(["type": "send_input", "payload": payload], sessionId: sessionId)
+        if !handedOff { undispatched.insert(clientId) }
         appState?.sendMetrics.created(
             clientId, kind: answerTo != nil ? .answer : delivery == .steer ? .steer : .typed,
-            textLength: text.utf8.count, attachments: attachments?.count ?? 0,
-            pathUp: isDeliveryPathUp(sessionId))
+            textLength: text.utf8.count, attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId),
+            handoffMs: handedOff ? Date().timeIntervalSince(handoffStart) * 1000 : nil)
         #if KRAKI_DIAG
         diagAccepted = true
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("created")])
@@ -636,6 +636,8 @@ final class CommandSender {
         var answerTo: String? = nil
         var state: String? = nil
         var afterSeq: Int? = nil
+        /// `SendTracker.Summary.Kind` (absent in outboxes written before 2026-10-22).
+        var kind: String? = nil
     }
 
     /// Pending payload key: the session head seq when the input was written.
@@ -671,7 +673,8 @@ final class CommandSender {
                     attachments: persistedAttachments,
                     answerTo: message.answerTo,
                     state: message.payload["localState"]?.stringValue,
-                    afterSeq: message.payload[Self.afterSeqKey]?.intValue
+                    afterSeq: message.payload[Self.afterSeqKey]?.intValue,
+                    kind: appState?.sendMetrics.kind(of: clientId)?.rawValue
                 ))
             }
         }
@@ -723,10 +726,12 @@ final class CommandSender {
             if let afterSeq = item.afterSeq { payload[Self.afterSeqKey] = AnyCodable(afterSeq) }
             appState?.sendMetrics.restored(
                 item.clientId,
-                kind: item.state == "correcting" ? .voice : item.answerTo != nil ? .answer
-                    : item.delivery == "steer" ? .steer : .typed,
+                kind: item.kind.flatMap(SendTracker.Summary.Kind.init(rawValue:))
+                    ?? (item.state == "correcting" ? .voice : item.answerTo != nil ? .answer
+                        : item.delivery == "steer" ? .steer : .typed),
                 createdAt: item.timestamp.flatMap { ISO8601.parse($0) },
-                failed: item.state == "failed" || item.state == "correcting")
+                failed: item.state == "failed" || item.state == "correcting",
+                textLength: item.text.utf8.count, attachments: item.attachments?.count ?? 0)
             var bucket = outbox[item.sessionId] ?? [:]
             bucket[item.clientId] = ChatMessage(
                 type: "pending_input", seq: 0, sessionId: item.sessionId, deviceId: nil,
