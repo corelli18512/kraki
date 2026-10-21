@@ -270,6 +270,16 @@ export class HeadServer {
     state.authTimer = setTimeout(() => {
       state.authTimer = undefined;
       if (state.authenticated) return;
+      // Our own account service call is still out (a challenge and a verify
+      // may each take up to RemoteAuthBackend's 15 s): one more period, so a
+      // slow sign-in ends with its answer (or service_unavailable) instead of
+      // 4008 after the account service already accepted it.
+      if (state.authInFlight && !state.authDeadlineExtended) {
+        state.authDeadlineExtended = true;
+        getLogger().debug('Auth deadline extended while the auth backend answers', { ip: state.ip, afterMs: ms });
+        this.armAuthTimer(ws, state, ms);
+        return;
+      }
       // The close handler logs it ('WebSocket closed before auth', code 4008).
       getLogger().debug('Closing unauthenticated socket', { ip: state.ip, afterMs: ms });
       ws.close(4008, 'Authentication timeout');

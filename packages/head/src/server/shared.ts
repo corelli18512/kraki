@@ -41,6 +41,8 @@ export interface ClientState {
   evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
   authTimer?: ReturnType<typeof setTimeout>;
+  /** The auth deadline was already extended once for a backend call. */
+  authDeadlineExtended?: boolean;
 
   // ── Liveness uncertainty (device_pending broadcast) ──
   /** Timestamp when pong grace period expires (null = no pending ping). */
