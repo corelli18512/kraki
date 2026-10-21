@@ -21,6 +21,10 @@
     "Updated to %@": "已更新到 %@",
     "Updating restarts Kraki and stops them.": "更新会重新启动 Kraki 并停止这些会话。",
     "Waiting for sessions to finish": "正在等待会话结束",
-    "You’re all set": "一切就绪"
+    "You’re all set": "一切就绪",
+    "Rename %@": "重命名 %@",
+    "Rename Device": "重命名设备",
+    "Shown on all your devices. Leave it empty to use \"%@\".": "会显示在你的所有设备上。留空则使用“%@”。",
+    "Name": "名称"
   }
 }

@@ -7669,6 +7669,26 @@
         }
       }
     },
+    "Rename %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名 %@"
+          }
+        }
+      }
+    },
+    "Rename Device" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名设备"
+          }
+        }
+      }
+    },
     "Rename…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8746,6 +8766,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示 %lld 行，共 %@ · %@"
+          }
+        }
+      }
+    },
+    "Shown on all your devices. Leave it empty to use \"%@\"." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会显示在你的所有设备上。留空则使用“%@”。"
           }
         }
       }
