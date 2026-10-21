@@ -180,6 +180,7 @@ final class MessageProvider {
         }
         let oldLastSeq = tentacleLastSeq[sessionId]
         if oldLastSeq != lastSeq { tentacleLastSeq[sessionId] = lastSeq } // no-op writes notify observers
+        if let oldLastSeq, lastSeq < oldLastSeq { retireHeadRequest(sessionId) }
         if let oldLastSeq, oldLastSeq != lastSeq {
             KLog.d("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=\(oldLastSeq)→\(lastSeq) device=\(deviceId.prefix(12))")
         } else if oldLastSeq == nil {
@@ -733,20 +734,6 @@ final class MessageProvider {
             KLog.d("📥 [2/history←DB ingestBatch] session=\(sessionId.prefix(12)) batchSize=\(messages.count) windowSize=\(appState.messageStore.currentWindow(sessionId).count)")
         }
 
-        // Update both history and SessionStore heads. The SessionStore head
-        // drives the iOS card's authoritative unread boolean; without this a
-        // replay can populate SQLite while the card still shows old cursors.
-        let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
-        if containsHead == true {
-            appState.messageStore.markCaughtUp(sessionId, through: batchHead)
-        }
-        if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
-            tentacleLastSeq[sessionId] = batchHead
-        }
-        if batchHead > 0 {
-            appState.sessionStore.observeLastSeq(sessionId, seq: batchHead)
-        }
-
         // Identify the exact turn-aligned request answered by this batch.
         // `messages` contains only persistent spine rows, while legacy session
         // logs may have filtered tool/narration seqs near the upper boundary;
@@ -758,6 +745,26 @@ final class MessageProvider {
             containsHead: containsHead,
             lastPersistentSeq: lastPersistentSeq
         )
+
+        // Update both history and SessionStore heads. The SessionStore head
+        // drives the iOS card's authoritative unread boolean; without this a
+        // replay can populate SQLite while the card still shows old cursors.
+        // A reply that answers no outstanding head request (its slot was
+        // retired by a lower session_list head) may not raise the head above
+        // what the Tentacle last reported.
+        let rawHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
+        let batchHead = acceptedHead(sessionId, rawHead, answeredHead: removedKind == .head)
+        // A reply to a retired request that describes a higher (older
+        // incarnation's) head proves nothing about the current one.
+        if containsHead == true, batchHead == rawHead || removedKind != nil {
+            appState.messageStore.markCaughtUp(sessionId, through: batchHead)
+        }
+        if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
+            tentacleLastSeq[sessionId] = batchHead
+        }
+        if batchHead > 0 {
+            appState.sessionStore.observeLastSeq(sessionId, seq: batchHead)
+        }
         if case .before(let requestedBefore) = removedKind,
            appState.messageStore.windowState(sessionId)?.topSeq == requestedBefore {
             appState.messageStore.prependOlderPage(sessionId, messages)
@@ -1224,6 +1231,24 @@ extension MessageProvider {
             return false
         }
         return true
+    }
+
+    /// The Tentacle's head went DOWN (restored from a backup): a head reply
+    /// still on its way describes the old history. Retire its slot so that
+    /// reply cannot restore the old head and a fresh request can go out.
+    fileprivate func retireHeadRequest(_ sessionId: String) {
+        guard hasSlot(sessionId, where: { $0 == .head }) else { return }
+        removeFirstSlot(sessionId) { $0 == .head }
+        headRequestedAt.removeValue(forKey: sessionId)
+    }
+
+    /// A reply that answers no outstanding head request (its slot was retired
+    /// by a lower session_list head) may not raise the head above what the
+    /// Tentacle last reported.
+    fileprivate func acceptedHead(_ sessionId: String, _ batchHead: Int, answeredHead: Bool) -> Int {
+        guard !answeredHead, let known = tentacleLastSeq[sessionId], batchHead > known else { return batchHead }
+        KLog.d("🧹 [2/history stale head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
+        return known
     }
 
     /// Diag `history.batch`: head request → reply handled here, to split the

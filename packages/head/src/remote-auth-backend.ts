@@ -37,6 +37,9 @@ export class RemoteAuthBackend implements AuthBackend {
   /** Edge-local challenge auth (EdgeAuthCache). Off until the account service
    *  has answered a device status poll: without revocations, no local trust. */
   private edgeCache?: EdgeAuthCache;
+  /** Kept across stop/start: a nonce this edge issued must stay recognised
+   *  (and single-use) even after local auth is switched off. */
+  private nonceSource?: EdgeAuthCache;
   private edgeRegion?: string;
   private localAuthReady = false;
   private statusTimer?: ReturnType<typeof setInterval>;
@@ -60,6 +63,7 @@ export class RemoteAuthBackend implements AuthBackend {
   enableLocalChallenge(cache: EdgeAuthCache, region: string | undefined, pollMs = DEVICE_STATUS_POLL_MS): Promise<void> {
     this.stopLocalChallenge();
     this.edgeCache = cache;
+    this.nonceSource = cache;
     this.edgeRegion = region;
     const lifecycle = this.lifecycle;
     this.statusTimer = setInterval(() => { void this.pollDeviceStatus(); }, pollMs);
@@ -188,7 +192,7 @@ export class RemoteAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
-    const check = cache?.takeNonce(nonce, deviceId) ?? 'unknown';
+    const check = (cache ?? this.nonceSource)?.takeNonce(nonce, deviceId) ?? 'unknown';
     if (check === 'expired' || check === 'foreign') {
       // Issued by this edge, but stale, reused or for another device. The
       // account service never saw it; retryable so the client asks again.
