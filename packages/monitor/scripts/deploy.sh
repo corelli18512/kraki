@@ -52,14 +52,6 @@ MemoryMax=128M
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl daemon-reload
-systemctl enable kraki-diag
-systemctl restart kraki-diag
-for attempt in $(seq 1 20); do
-  if curl -fsS http://127.0.0.1:4011/health > "$BACKUP/health.json"; then break; fi
-  sleep 1
-done
-grep -q "$REV" "$BACKUP/health.json"
 python3 - "$CONFIG" "$PROXY" <<'PY'
 import pathlib,sys
 path=pathlib.Path(sys.argv[1]); kind=sys.argv[2]; text=path.read_text()
@@ -100,6 +92,16 @@ else
   if ! caddy validate --config "$CONFIG" --adapter caddyfile; then cp "$BACKUP/proxy.conf" "$CONFIG"; exit 1; fi
   systemctl reload caddy
 fi
+# Restart the collector only after the proxy sets X-Forwarded-For: the new collector trusts it
+# for its per-client limit, so it must never run behind a block that passes a client's header through.
+systemctl daemon-reload
+systemctl enable kraki-diag
+systemctl restart kraki-diag
+for attempt in $(seq 1 20); do
+  if curl -fsS http://127.0.0.1:4011/health > "$BACKUP/health.json"; then break; fi
+  sleep 1
+done
+grep -q "$REV" "$BACKUP/health.json"
 test "$(systemctl show kraki-relay -p MainPID --value)" = "$BEFORE_PID"
 systemctl is-active kraki-diag kraki-relay
 curl -fsS http://127.0.0.1:4011/health
