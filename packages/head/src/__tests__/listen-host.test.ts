@@ -28,9 +28,14 @@ describe('resolveListenHost', () => {
   it.each(['127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]'])(
     'allows explicit loopback host %s for open auth without a shared key',
     (host) => {
-      expect(resolveListenHost({ ...base, host })).toEqual({ ok: true, host });
+      expect(resolveListenHost({ ...base, host })).toEqual({ ok: true, host: host.replace(/^\[(.*)\]$/, '$1') });
     },
   );
+
+  it('strips IPv6 brackets so listen() gets a bare address', () => {
+    expect(resolveListenHost({ ...base, host: '[::1]' })).toEqual({ ok: true, host: '::1' });
+    expect(resolveListenHost({ ...base, host: '[::]', openSharedKey: 'k' })).toEqual({ ok: true, host: '::' });
+  });
 
   it('allows any host for open auth once a shared key is set', () => {
     expect(resolveListenHost({ ...base, host: '0.0.0.0', openSharedKey: 'secret' })).toEqual({ ok: true, host: '0.0.0.0' });

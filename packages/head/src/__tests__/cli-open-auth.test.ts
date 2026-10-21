@@ -47,7 +47,8 @@ async function startHead(args: string[], env: Record<string, string> = {}): Prom
   tmpDirs.push(dir);
   const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
   for (const key of ['HOST', 'OPEN_SHARED_KEY', 'AUTH_MODE', 'API_KEY', 'HEAD_MODE', 'MODE', 'ACCOUNT_URL', 'SERVICE_KEY', 'PUSH_PROVIDERS', 'VOICE_LEASE_ENABLED', 'REGION', 'PUBLIC_RELAY_URL']) {
-    delete cleanEnv[key];
+    // Empty rather than deleted: cli.ts loads packages/head/.env, and dotenv fills only unset keys.
+    cleanEnv[key] = '';
   }
   const child = spawn(TSX, [CLI, '--port', String(port), '--db', join(dir, 'head.db'), ...args], {
     cwd: dir,

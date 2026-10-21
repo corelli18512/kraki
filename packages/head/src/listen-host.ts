@@ -36,7 +36,8 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 export function resolveListenHost(input: ListenHostInput): ListenHostResult {
-  const host = input.host.trim();
+  // Node's listen() wants a bare IPv6 address; `[::1]` would fail DNS lookup and crash the relay.
+  const host = input.host.trim().replace(/^\[(.*)\]$/, '$1');
   const openWithoutKey = !input.connectedMode
     && input.authModes.includes('open')
     && !input.openSharedKey;
