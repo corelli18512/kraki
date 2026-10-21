@@ -13,9 +13,9 @@
  * (Copilot CLI, Claude Code CLI) and starts all that are found.
  */
 
-import { platform } from 'node:os';
+import { platform, uptime as osUptime } from 'node:os';
 import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
-import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
+import { ensureWindowsSystemPath, probeFdaDetailed, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 import { hideChildWindowsByDefault } from './windows-hide.js';
 import { applyProcessProxy } from './proxy.js';
@@ -44,7 +44,7 @@ process.on('unhandledRejection', (reason) => {
 import { RelayClient } from './relay-client.js';
 import { AccountUsageMonitor, UsageHistory } from './account-usage.js';
 import { join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
@@ -53,16 +53,19 @@ import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
 import { appManagedWorkerOwner, isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
+import { beginRun, endRun, noteRunFda, RUN_HEARTBEAT_MS, touchRun } from './run-record.js';
 import type { AgentAdapter } from './adapters/base.js';
 import type { AgentId } from '@kraki/protocol';
 
 const logger = createLogger('daemon');
 
-// Note: `uncaughtException` is installed inside `startWorker` so it has
-// access to the `shutdown` closure and can run a best-effort graceful
-// cleanup (kill the Copilot SDK runtime, close the relay) before exiting.
-// A hard module-level handler would just `process.exit(1)` and leak the
-// runtime child process every time.
+// Note: SIGTERM/SIGINT/`uncaughtException` are installed at the top of
+// `startWorker` so they can run a best-effort cleanup (kill the Copilot SDK
+// runtime, close the relay) before exiting. A hard module-level handler would
+// just `process.exit(1)` and leak the runtime child process every time.
+
+/** A stop during startup waits this long for the partial cleanup. */
+const STARTUP_STOP_CLEANUP_MS = 5000;
 
 // ── Main ────────────────────────────────────────────────
 
@@ -70,7 +73,7 @@ export interface WorkerResult {
   adapter: AgentAdapter;
   relay: RelayClient;
   sessionManager: SessionManager;
-  shutdown: () => Promise<void>;
+  shutdown: (reason?: string) => Promise<void>;
 }
 
 export async function startWorker(): Promise<WorkerResult> {
@@ -86,7 +89,55 @@ export async function startWorker(): Promise<WorkerResult> {
   // prevents a reused numeric PID from momentarily matching an old ready file.
   clearDaemonReady();
   saveDaemonPid(process.pid);
-  logger.info('Daemon starting…');
+  const startedAt = Date.now();
+  logger.info({
+    version: getVersion(),
+    pid: process.pid,
+    ppid: process.ppid,
+    supervisorPid: Number(process.env.KRAKI_SUPERVISED) || undefined,
+    managedBy: appManagedWorkerOwner() ?? 'cli',
+    osUptimeSec: Math.round(osUptime()),
+  }, 'Daemon starting…');
+
+  // Stop and crash handling from the first line on. Startup takes seconds
+  // (login-shell env, FDA probe, MCP server, agent runtimes) and a SIGTERM in
+  // that window used to kill the worker with Node's default action: no log,
+  // and the agent runtimes adapter.start() had spawned were never stopped
+  // (log audit 2026-10-22: Mac app updates restarted the helper mid-startup).
+  // Until the full shutdown exists, stop whatever startup has created so far.
+  let startupPhase = 'init';
+  const startupCleanups: Array<() => unknown> = [];
+  let fullShutdown: ((reason: string) => Promise<void>) | null = null;
+  let stoppingDuringStartup = false;
+  const stopDuringStartup = (reason: string, code: number) => {
+    if (stoppingDuringStartup) return;
+    stoppingDuringStartup = true;
+    logger.warn({ reason, phase: startupPhase, uptimeMs: Date.now() - startedAt }, 'Shutdown requested during startup');
+    const cleanup = (async () => {
+      for (const step of startupCleanups.reverse()) {
+        try { await step(); } catch { /* best effort */ }
+      }
+    })();
+    const timeout = new Promise((resolve) => setTimeout(resolve, STARTUP_STOP_CLEANUP_MS));
+    void Promise.race([cleanup, timeout]).finally(() => {
+      endRun(`${reason} during startup`);
+      process.exit(code);
+    });
+  };
+  const onStopSignal = (signal: NodeJS.Signals) => {
+    if (fullShutdown) { fullShutdown(signal).catch(() => {}).finally(() => process.exit(0)); return; }
+    stopDuringStartup(signal, 0);
+  };
+  process.on('SIGTERM', onStopSignal);
+  process.on('SIGINT', onStopSignal);
+  // On an uncaught exception, attempt the same graceful shutdown so the
+  // Copilot SDK runtime child is stopped instead of being orphaned. exit(1)
+  // to signal the abnormal termination to the launcher / launchctl.
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err, phase: fullShutdown ? 'running' : startupPhase }, 'Uncaught exception — attempting graceful shutdown');
+    if (fullShutdown) { fullShutdown('uncaught-exception').catch(() => {}).finally(() => process.exit(1)); return; }
+    stopDuringStartup('uncaught-exception', 1);
+  });
   if (_ensuredWindowsPathDirs.length > 0) {
     logger.info(
       { addedPathDirs: _ensuredWindowsPathDirs },
@@ -116,7 +167,35 @@ export async function startWorker(): Promise<WorkerResult> {
     return process.exit(0);
   }
 
+  // This worker is the daemon for this home: open its run record and say why
+  // it is starting, including whether the previous run died without a trace.
+  const run = beginRun(getVersion(), startedAt);
+  const heartbeat = setInterval(() => touchRun(), RUN_HEARTBEAT_MS);
+  heartbeat.unref();
+  startupCleanups.push(() => clearInterval(heartbeat));
+  logger.info({
+    startReason: run.startReason,
+    bootedSincePrevious: run.bootedSincePrevious,
+    previous: run.previous && {
+      pid: run.previous.pid,
+      version: run.previous.version,
+      startedAt: run.previous.startedAt,
+      lastSeenAt: run.previous.lastSeenAt,
+      exitReason: run.previous.exitReason,
+    },
+  }, 'Daemon start record');
+  if (run.previousUnclean && run.previous) {
+    logger.warn({
+      previousPid: run.previous.pid,
+      previousVersion: run.previous.version,
+      lastSeenAt: run.previous.lastSeenAt,
+      downMs: startedAt - Date.parse(run.previous.lastSeenAt),
+      bootedSincePrevious: run.bootedSincePrevious,
+    }, 'Previous daemon run ended uncleanly (killed, crashed or the machine lost power)');
+  }
+
   if (managedByMacApp) {
+    startupPhase = 'login-shell-env';
     // Started by Kraki for Mac's SMAppService job: launchd provides only a
     // minimal environment, so recover the user's login-shell PATH/proxies
     // before any agent, `gh`, or version-manager shim is resolved.
@@ -160,12 +239,16 @@ export async function startWorker(): Promise<WorkerResult> {
   // is published in status.json for the Mac app's onboarding to follow.
   let fdaMonitor: NodeJS.Timeout | null = null;
   if (platform() === 'darwin') {
-    const fdaStatus = await probeFda();
+    startupPhase = 'fda-probe';
+    const fdaStatus = (await probeFdaDetailed()).status;
     if (fdaStatus !== 'granted') {
-      logger.warn(
-        'Full Disk Access not granted — grant in System Settings → Privacy & Security → Full Disk Access to prevent recurring permission dialogs',
-      );
+      const message = 'Full Disk Access not granted — grant in System Settings → Privacy & Security → Full Disk Access to prevent recurring permission dialogs';
+      // Once per state, not on every start: the same warning 89 times taught
+      // nobody anything.
+      if (run.previous?.fda === fdaStatus) logger.info({ fda: fdaStatus }, 'Full Disk Access still not granted');
+      else logger.warn({ fda: fdaStatus }, message);
     }
+    noteRunFda(fdaStatus);
     let lastFda = fdaStatus;
     let nextCheckAt = 0;
     const monitorStartedAt = Date.now();
@@ -174,10 +257,18 @@ export async function startWorker(): Promise<WorkerResult> {
       // after start or a change), slowly afterwards (FDA can also be revoked at
       // any time). Every probe also rewrites status.json.
       if (Date.now() < nextCheckAt) return;
-      probeFda().then((status) => {
+      probeFdaDetailed().then(({ status, blockedPath, code }) => {
         if (status !== lastFda) {
-          logger.info({ from: lastFda, to: status }, 'Full Disk Access status changed');
+          // A grant lost while running is TCC refusing this process (e.g. its
+          // executable was replaced or deleted), not the user revoking it, as
+          // often as not: say which path failed and whether the binary exists.
+          const lost = lastFda === 'granted';
+          (lost ? logger.warn : logger.info).call(logger, {
+            from: lastFda, to: status, blockedPath, code,
+            ...(lost && { execPathExists: existsSync(process.execPath), uptimeMs: Date.now() - startedAt }),
+          }, 'Full Disk Access status changed');
           lastFda = status;
+          noteRunFda(status);
         }
         updateFdaStatus(status);
         const eager = status !== 'granted' && Date.now() - monitorStartedAt < 10 * 60_000;
@@ -185,6 +276,8 @@ export async function startWorker(): Promise<WorkerResult> {
       }).catch(() => {});
     }, 3000);
     fdaMonitor.unref();
+    const monitor = fdaMonitor;
+    startupCleanups.push(() => clearInterval(monitor));
     pendingFda = fdaStatus;
   }
 
@@ -192,6 +285,7 @@ export async function startWorker(): Promise<WorkerResult> {
   const channelKeyPath = getChannelKeyPath();
 
   // 1. Load config
+  startupPhase = 'config';
   let config = loadConfig();
   if (!config && appManagedWorkerOwner()) {
     // The Mac app registers its job only after setup, but the user can still
@@ -207,6 +301,7 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.fatal({ configPath }, `No config found at ${configPath} — run \`kraki\` to set up`);
     // Permanent: a supervisor must not restart us until setup has run.
     const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
+    endRun('no-config');
     process.exit(PERMANENT_EXIT_CODE);
   }
 
@@ -243,11 +338,14 @@ export async function startWorker(): Promise<WorkerResult> {
   //     fails, log and continue without it — daemon stays up.
   let mcpInfo: { urlForSession: (sid: string) => string; tokenForSession: (sid: string) => string } | undefined;
   let mcpServer: KrakiMcpServer | null = null;
+  startupPhase = 'mcp-server';
   try {
     mcpServer = new KrakiMcpServer({
       version: getVersion(),
       isSessionActive: (id) => sessionManager.isSessionActive(id),
     });
+    const server = mcpServer;
+    startupCleanups.push(() => server.stop());
     const started = await mcpServer.start();
     mcpInfo = {
       urlForSession: started.urlForSession,
@@ -280,6 +378,8 @@ export async function startWorker(): Promise<WorkerResult> {
   // command it runs would inherit it. Copilot authenticates with its own
   // logged-in user (useLoggedInUser), the others never needed it.
   let adapterReady = false;
+  startupPhase = 'agent-adapters';
+  startupCleanups.push(() => adapter.stop());
   try {
     await adapter.start();
     adapterReady = true;
@@ -329,6 +429,7 @@ export async function startWorker(): Promise<WorkerResult> {
   }
 
   // 6. Connect to relay via RelayClient
+  startupPhase = 'relay';
   const relay = new RelayClient(
     adapter,
     sessionManager,
@@ -356,6 +457,7 @@ export async function startWorker(): Promise<WorkerResult> {
   );
 
   relayRef = relay;
+  startupCleanups.push(() => clearStatusFile(), () => relay.disconnect());
 
   // Read-only subscription quota of this machine's Claude / Codex accounts.
   // Off with `accountUsage.enabled: false` in config.json or KRAKI_ACCOUNT_USAGE=0.
@@ -406,7 +508,7 @@ export async function startWorker(): Promise<WorkerResult> {
       const { forgetDeletedAccount, retireAutostart } = await import('./account-deleted.js');
       forgetDeletedAccount();
       retireAutostart();
-      await shutdown().catch(() => {});
+      await shutdown('account-deleted').catch(() => {});
       // Clean exit: supervisors don't restart it, and without a config the
       // next `kraki` runs setup from scratch.
       process.exit(0);
@@ -416,7 +518,7 @@ export async function startWorker(): Promise<WorkerResult> {
   relay.onDeviceRemoved = () => {
     logger.fatal('This computer was removed from your Kraki account. Run `kraki` to sign in again.');
     void (async () => {
-      await shutdown().catch(() => {});
+      await shutdown('device-removed').catch(() => {});
       // Permanent: restarting cannot sign in again without the user.
       const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
       process.exit(PERMANENT_EXIT_CODE);
@@ -429,7 +531,7 @@ export async function startWorker(): Promise<WorkerResult> {
     // supervisor while the device stays offline forever. Exit non-zero:
     // launchd KeepAlive / the Mac app restart us, and `kraki status` tells
     // the truth.
-    shutdown().catch(() => {}).finally(() => process.exit(1));
+    shutdown('relay-fatal').catch(() => {}).finally(() => process.exit(1));
   };
 
   // "Is a newer Kraki available here?" — shown on this computer in every app —
@@ -499,21 +601,29 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 6. Graceful shutdown
   let shuttingDown = false;
-  const shutdown = async () => {
+  const shutdown = async (reason = 'requested') => {
     if (shuttingDown) return;
     shuttingDown = true;
-    logger.info('Shutting down…');
+    const shutdownStartedAt = Date.now();
+    logger.info({ reason, uptimeMs: shutdownStartedAt - startedAt, runningSessions: relay.runningSessionCount?.() }, 'Shutting down…');
     clearDaemonReady();
     clearDaemonIdentity();
     if (fdaMonitor) clearInterval(fdaMonitor);
+    clearInterval(heartbeat);
     usageMonitor?.stop();
     stopUpdateWatch();
-    clearStatusFile();
+    // Disconnect before removing status.json: the disconnect's state change
+    // rewrote the file with this (old) version after it had been removed, and
+    // Kraki for Mac, seeing an outdated daemon version next to the successor's
+    // PID, restarted the successor mid-startup (remote update 2026-10-15).
     relay.disconnect();
+    clearStatusFile();
     await adapter.stop();
     if (mcpServer) {
       try { await mcpServer.stop(); } catch { /* already stopped */ }
     }
+    endRun(reason);
+    logger.info({ reason, durationMs: Date.now() - shutdownStartedAt }, 'Shutdown complete');
   };
 
   // Supervised (Kraki for Mac): leave if the supervisor is gone, so a killed
@@ -521,22 +631,17 @@ export async function startWorker(): Promise<WorkerResult> {
   const { watchSupervisor } = await import('./daemon-supervisor.js');
   watchSupervisor(() => {
     logger.warn('Supervisor is gone — shutting down');
-    shutdown().catch(() => {}).finally(() => process.exit(0));
+    shutdown('supervisor-gone').catch(() => {}).finally(() => process.exit(0));
   });
-  process.on('SIGTERM', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
-  process.on('SIGINT', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
-  // On an uncaught exception, attempt the same graceful shutdown so the
-  // Copilot SDK runtime child is stopped instead of being orphaned. exit(1)
-  // to signal the abnormal termination to the launcher / launchctl.
-  process.on('uncaughtException', (err) => {
-    logger.fatal({ err }, 'Uncaught exception — attempting graceful shutdown');
-    shutdown().catch(() => {}).finally(() => process.exit(1));
-  });
+  // SIGTERM/SIGINT/uncaughtException (installed at the top) now run the full
+  // shutdown.
+  fullShutdown = shutdown;
 
   // Publish readiness only after every startup-critical component and graceful
   // lifecycle handler is installed. The launcher must not report success before
   // this point.
-  saveDaemonReady(process.pid);
+  // A stop that arrived during startup is already tearing this worker down.
+  if (!stoppingDuringStartup) saveDaemonReady(process.pid);
 
   return { adapter, relay, sessionManager, shutdown };
 }
@@ -548,6 +653,7 @@ if (isDirectRun) {
   applyProcessProxy();
   startWorker().catch((err) => {
     logger.fatal({ err }, 'Daemon failed to start');
+    endRun('startup-failed');
     process.exit(1);
   });
 }

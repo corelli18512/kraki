@@ -403,26 +403,38 @@ async function readProbe(target: string, kind: 'dir' | 'file'): Promise<void> {
  * Never triggers a system dialog — FDA-gated paths fail silently with EPERM.
  */
 export async function probeFda(): Promise<FdaStatus> {
-  if (platform() !== 'darwin') return 'granted'; // non-macOS: not applicable
+  return (await probeFdaDetailed()).status;
+}
+
+export interface FdaProbeResult {
+  status: FdaStatus;
+  /** The protected path that decided a 'denied' result, and its errno. */
+  blockedPath?: string;
+  code?: string;
+}
+
+/** {@link probeFda} plus which path was refused, for logging a change. */
+export async function probeFdaDetailed(): Promise<FdaProbeResult> {
+  if (platform() !== 'darwin') return { status: 'granted' }; // non-macOS: not applicable
 
   const home = homedir();
-  let sawBlocked = false;
+  let blocked: { rel: string; code: string } | undefined;
 
   for (const { rel, kind } of FDA_PROBE_TARGETS) {
     const target = join(home, rel);
     try {
       await readProbe(target, kind);
-      return 'granted';
+      return { status: 'granted' };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EPERM' || code === 'EACCES') {
-        sawBlocked = true;
+      if ((code === 'EPERM' || code === 'EACCES') && !blocked) {
+        blocked = { rel, code };
       }
       // ENOENT → path doesn't exist on this machine, try next
     }
   }
 
-  return sawBlocked ? 'denied' : 'missing';
+  return blocked ? { status: 'denied', blockedPath: blocked.rel, code: blocked.code } : { status: 'missing' };
 }
 
 /**

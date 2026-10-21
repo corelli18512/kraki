@@ -37,6 +37,8 @@ vi.mock('../adapters/copilot.js', () => ({
 const mockRelay = {
   connect: vi.fn(),
   disconnect: vi.fn(),
+  getState: vi.fn(() => 'disconnected'),
+  runningSessionCount: vi.fn(() => 0),
   onStateChange: null as ((state: string) => void) | null,
   onAuthenticated: null as ((info: Record<string, unknown>) => void) | null,
   onFatalError: null as ((message: string) => void) | null,
@@ -155,6 +157,17 @@ vi.mock('../checks.js', () => ({
   ensureTccBundleRegistered: vi.fn(),
   cleanupStaleBundleEntries: vi.fn().mockReturnValue({ removed: [], kept: [] }),
   probeFda: vi.fn().mockResolvedValue('granted'),
+  probeFdaDetailed: vi.fn().mockResolvedValue({ status: 'granted' }),
+}));
+
+let mockRunStart: Record<string, unknown> = { previous: null, previousUnclean: false, startReason: 'first-run', bootedSincePrevious: false };
+const mockEndRun = vi.fn();
+vi.mock('../run-record.js', () => ({
+  RUN_HEARTBEAT_MS: 60_000,
+  beginRun: vi.fn(() => mockRunStart),
+  touchRun: vi.fn(),
+  noteRunFda: vi.fn(),
+  endRun: (...args: unknown[]) => mockEndRun(...args),
 }));
 
 const mockHydrateLoginShellEnv = vi.fn(() => ({ source: 'shell', shell: '/bin/zsh', addedKeys: [] }));
@@ -267,7 +280,10 @@ describe('daemon-worker: startWorker()', () => {
   it('loads config, resolves the saved Kraki token, starts adapter, connects relay', async () => {
     const { adapter, relay, shutdown } = await startWorker();
 
-    expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Daemon starting'));
+    expect(mockLoggerFns.info).toHaveBeenCalledWith(
+      expect.objectContaining({ version: '0.0.0-test', pid: process.pid }),
+      expect.stringContaining('Daemon starting'),
+    );
     expect(mockLoggerFns.debug).toHaveBeenCalledWith(expect.stringContaining('Resolved GitHub token'));
     expect(mockAdapter.start).toHaveBeenCalled();
     expect(mockRelay.connect).toHaveBeenCalled();
@@ -369,7 +385,8 @@ describe('daemon-worker: startWorker()', () => {
     await shutdown();
     expect(mockRelay.disconnect).toHaveBeenCalled();
     expect(mockAdapter.stop).toHaveBeenCalled();
-    expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Shutting down'));
+    expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.objectContaining({ reason: 'requested' }), expect.stringContaining('Shutting down'));
+    expect(mockEndRun).toHaveBeenCalledWith('requested');
   });
 
   it('logs relay and device info on startup', async () => {
@@ -378,6 +395,64 @@ describe('daemon-worker: startWorker()', () => {
       expect.objectContaining({ relay: 'wss://relay.kraki.chat', device: 'test-machine' }),
       expect.stringContaining('Daemon running'),
     );
+  });
+
+  it('reports an unclean previous run at startup', async () => {
+    mockRunStart = {
+      previous: { pid: 32140, version: '0.38.10', startedAt: '2026-10-16T15:21:50.000Z', lastSeenAt: '2026-10-19T17:22:00.000Z' },
+      previousUnclean: true,
+      startReason: 'after-unclean-exit',
+      bootedSincePrevious: true,
+    };
+    try {
+      const { shutdown } = await startWorker();
+      expect(mockLoggerFns.info).toHaveBeenCalledWith(
+        expect.objectContaining({ startReason: 'after-unclean-exit', bootedSincePrevious: true }),
+        'Daemon start record',
+      );
+      expect(mockLoggerFns.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ previousPid: 32140, lastSeenAt: '2026-10-19T17:22:00.000Z' }),
+        expect.stringContaining('Previous daemon run ended uncleanly'),
+      );
+      await shutdown();
+    } finally {
+      mockRunStart = { previous: null, previousUnclean: false, startReason: 'first-run', bootedSincePrevious: false };
+    }
+  });
+
+  it('a SIGTERM during startup stops the agent runtimes already started and logs it (log audit 2026-10-22)', async () => {
+    // Only this worker's handlers: earlier tests' workers registered theirs.
+    const saved = { SIGTERM: process.listeners('SIGTERM'), SIGINT: process.listeners('SIGINT'), uncaught: process.listeners('uncaughtException') };
+    process.removeAllListeners('SIGTERM');
+    const { MultiAgentAdapter } = await import('../adapters/multi.js');
+    let releaseStart!: () => void;
+    const start = vi.spyOn(MultiAgentAdapter.prototype, 'start').mockImplementationOnce(() => new Promise<void>((resolve) => { releaseStart = resolve; }));
+    const stop = vi.spyOn(MultiAgentAdapter.prototype, 'stop');
+    try {
+      const starting = startWorker();
+      await vi.waitFor(() => expect(start).toHaveBeenCalled(), { timeout: 5000 });
+      process.emit('SIGTERM', 'SIGTERM');
+      await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(0), { timeout: 5000 });
+      expect(mockLoggerFns.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'SIGTERM', phase: 'agent-adapters' }),
+        'Shutdown requested during startup',
+      );
+      expect(stop).toHaveBeenCalled();
+      expect(mockEndRun).toHaveBeenCalledWith('SIGTERM during startup');
+      releaseStart();
+      await starting;
+      // The stopping worker never reports itself ready.
+      expect(mockSaveDaemonReady).not.toHaveBeenCalled();
+    } finally {
+      start.mockRestore();
+      stop.mockRestore();
+      process.removeAllListeners('SIGTERM');
+      process.removeAllListeners('SIGINT');
+      process.removeAllListeners('uncaughtException');
+      for (const l of saved.SIGTERM) process.on('SIGTERM', l as NodeJS.SignalsListener);
+      for (const l of saved.SIGINT) process.on('SIGINT', l as NodeJS.SignalsListener);
+      for (const l of saved.uncaught) process.on('uncaughtException', l as NodeJS.UncaughtExceptionListener);
+    }
   });
 
   it('returns all components for external access', async () => {
