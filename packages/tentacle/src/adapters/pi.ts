@@ -36,7 +36,7 @@ import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEf
 import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
 import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
 import { PiRpcProcess } from './pi-rpc.js';
-import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, type PiSubagentHoldEnd, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
+import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, type PiSubagentHoldEnd, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, TURN_STALL_WARN_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
 export { effortToThinking, type PiListModelsError, summarizeCrash, runPiListModels, type PiCatalogModel, FALLBACK_EFFORTS, piThinkingLevelsFor, defaultEffortFor, queryPiCatalog } from './pi-catalog.js';
 export { piToolKind, shouldAutoApprove, parsePiPermission } from './pi-permissions.js';
 export { type PiRpcEvent, type PiRpcOptions } from './pi-rpc.js';
@@ -337,7 +337,10 @@ export class PiAdapter extends AgentAdapter {
 
   touch(id: string) {
     const s = this.sessions.get(id);
-    if (s) s.lastActivity = Date.now();
+    if (s) {
+      s.lastActivity = Date.now();
+      s.stallWarned = false;
+    }
   }
 
   setCompacting(
@@ -491,6 +494,8 @@ export class PiAdapter extends AgentAdapter {
   private resetTurnTracking(s: PiSession): void {
     this.stopAwaitingSubagents(s, 'new_turn');
     s.turn.beginTurn();
+    s.turnStartedAt = Date.now();
+    s.retryAttempt = undefined;
     s.lastStopReason = undefined;
     s.pendingMaintenanceIdle = false;
     s.aborting = false;
@@ -1152,6 +1157,7 @@ export class PiAdapter extends AgentAdapter {
   private sweepIdle(): void {
     const now = Date.now();
     for (const [id, s] of this.sessions) {
+      this.warnIfStalled(id, s, now);
       if (
         s.proc.alive
         && s.turn.isSettled
@@ -1161,10 +1167,42 @@ export class PiAdapter extends AgentAdapter {
         && !s.aborting
         && now - s.lastActivity > IDLE_TTL_MS
       ) {
-        logger.info({ id }, 'Evicting idle pi session');
+        logger.info({ id, idleMs: now - s.lastActivity, livePiProcesses: this.liveProcessCount() - 1 }, 'Evicting idle pi session');
         s.proc.kill();
         this.onSessionEvicted?.(id);
       }
     }
+  }
+
+  private liveProcessCount(): number {
+    let live = 0;
+    for (const s of this.sessions.values()) if (s.proc.alive) live++;
+    return live;
+  }
+
+  /** A turn that is open (not held for background subagents, not waiting on
+   *  the human) yet hears nothing from pi for TURN_STALL_WARN_MS is logged
+   *  once with what is known: pi's retry attempt and the held error. */
+  private warnIfStalled(sessionId: string, s: PiSession, now: number): void {
+    if (
+      s.stallWarned
+      || !s.proc.alive
+      || s.turn.isSettled
+      || s.awaitingSubagents
+      || s.pendingQuestions.size > 0
+      || s.pendingPerms.size > 0
+      || now - s.lastActivity < TURN_STALL_WARN_MS
+    ) return;
+    s.stallWarned = true;
+    logger.warn({
+      sessionId,
+      ...s.turn.event(),
+      silentMs: now - s.lastActivity,
+      elapsedMs: s.turnStartedAt === undefined ? undefined : now - s.turnStartedAt,
+      compacting: this.compactingSessions.has(sessionId),
+      stopReason: s.lastStopReason,
+      ...(s.retryAttempt !== undefined && { retryAttempt: s.retryAttempt }),
+      ...(s.turn.pendingError && { err: s.turn.pendingError.slice(0, 300) }),
+    }, 'pi turn has had no events for a long time');
   }
 }

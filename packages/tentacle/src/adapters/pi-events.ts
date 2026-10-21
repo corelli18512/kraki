@@ -11,6 +11,14 @@ import { KRAKI_DIALOG_PREFIX } from './pi-kraki-tools.js';
 import { DELEGATE_ANSWER } from './permission-policy.js';
 import { LEGACY_SHOW_HTML_MAX_BYTES, logger, type AssistantStreamEvent } from './pi-session.js';
 
+/** From this pi auto-retry attempt on, each retry is logged as a warning. */
+export const PI_RETRY_WARN_ATTEMPT = 5;
+
+/** Provider/pi error text for a log line: bounded, never the whole payload. */
+export function logText(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value.slice(0, 300) : undefined;
+}
+
 /** Choices of a question card shown for another extension's confirm dialog. */
 export const PI_CONFIRM_CHOICES = ['Yes', 'No'] as const;
 
@@ -27,6 +35,8 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       const reason = adapter.normalizeCompactionReason(e.reason);
       adapter.setCompacting(sessionId, true, { reason });
       const s = adapter.sessions.get(sessionId);
+      if (s) s.compactionStartedAt = Date.now();
+      logger.info({ sessionId, ...adapter.lifecycleEvent(s), reason: e.reason }, 'pi compaction started');
       // The start event closes the tiny ordering gap between the final
       // provider answer and background maintenance. Publish compaction first,
       // then settle the conversational turn while maintenance remains active.
@@ -36,14 +46,55 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       }
       break;
     }
-    case 'compaction_end':
+    case 'compaction_end': {
+      const errorMessage = typeof e.errorMessage === 'string' ? e.errorMessage : undefined;
+      const s = adapter.sessions.get(sessionId);
+      (errorMessage ? logger.warn : logger.info).call(logger, {
+        sessionId,
+        ...adapter.lifecycleEvent(s),
+        reason: e.reason,
+        aborted: e.aborted === true,
+        willRetry: e.willRetry === true,
+        ...(errorMessage && { err: logText(errorMessage) }),
+        durationMs: s?.compactionStartedAt === undefined ? undefined : Date.now() - s.compactionStartedAt,
+      }, 'pi compaction ended');
+      if (s) s.compactionStartedAt = undefined;
       adapter.setCompacting(sessionId, false, {
         reason: adapter.normalizeCompactionReason(e.reason),
         aborted: e.aborted === true,
         willRetry: e.willRetry === true,
-        errorMessage: typeof e.errorMessage === 'string' ? e.errorMessage : undefined,
+        errorMessage,
       });
       break;
+    }
+    case 'auto_retry_start': {
+      // Pi retries a failed provider request (429, overload, network) with
+      // backoff; the cause and attempt are only on this event.
+      const s = adapter.sessions.get(sessionId);
+      const attempt = typeof e.attempt === 'number' ? e.attempt : undefined;
+      if (s) s.retryAttempt = attempt;
+      ((attempt ?? 0) >= PI_RETRY_WARN_ATTEMPT ? logger.warn : logger.info).call(logger, {
+        sessionId,
+        ...adapter.lifecycleEvent(s),
+        attempt,
+        maxAttempts: e.maxAttempts,
+        delayMs: e.delayMs,
+        err: logText(e.errorMessage),
+      }, 'pi retrying a failed model request');
+      break;
+    }
+    case 'auto_retry_end': {
+      const s = adapter.sessions.get(sessionId);
+      if (s) s.retryAttempt = undefined;
+      (e.success === true ? logger.info : logger.warn).call(logger, {
+        sessionId,
+        ...adapter.lifecycleEvent(s),
+        attempt: e.attempt,
+        success: e.success === true,
+        ...(e.success !== true && { err: logText(e.finalError) }),
+      }, 'pi model request retries ended');
+      break;
+    }
     case 'agent_start': {
       const s = adapter.sessions.get(sessionId);
       // A run while held: pi woke the agent with background results; it
@@ -232,14 +283,17 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       break;
     case 'agent_end': {
       void adapter.refreshUsage(sessionId);
+      const s = adapter.sessions.get(sessionId);
       logger.info({
         sessionId,
-        turnId: adapter.sessions.get(sessionId)?.turn.event().turnId,
+        turnId: s?.turn.event().turnId,
         phase: 'agent_end',
-        attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
         willRetry: e.willRetry === true,
+        stopReason: s?.lastStopReason,
+        ...(s?.retryAttempt !== undefined && { retryAttempt: s.retryAttempt }),
+        ...(s?.turn.pendingError && { err: logText(s.turn.pendingError) }),
+        elapsedMs: s?.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
       }, 'pi agent lifecycle');
-      const s = adapter.sessions.get(sessionId);
       // Pi emits willRetry=false before non-retry threshold/overflow
       // compaction. Remember that the conversational answer may settle at
       // compaction_start; keep agent_settled as the fully-drained runtime
@@ -251,14 +305,14 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
     }
     case 'agent_settled': {
       void adapter.refreshUsage(sessionId);
+      const s = adapter.sessions.get(sessionId);
       logger.info({
         sessionId,
-        turnId: adapter.sessions.get(sessionId)?.turn.event().turnId,
+        turnId: s?.turn.event().turnId,
         phase: 'agent_settled',
-        attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
         willRetry: false,
+        elapsedMs: s?.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
       }, 'pi agent lifecycle');
-      const s = adapter.sessions.get(sessionId);
       if (!s) {
         adapter.onIdle?.(sessionId);
         break;
