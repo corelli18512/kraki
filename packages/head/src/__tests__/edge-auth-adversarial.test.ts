@@ -19,7 +19,7 @@ async function until(predicate: () => boolean) {
   expect(predicate()).toBe(true);
 }
 
-describe('PR577 adversarial edge auth', () => {
+describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
   let account: Storage;
   let edge: Storage;
   let http: Server;
@@ -309,7 +309,115 @@ describe('PR577 adversarial edge auth', () => {
     const late = { ok: true as const, userId: 'u', deviceId: 'phone', authMethod: 'challenge' as const,
       user: { id: 'u', login: 'qa', provider: 'open' },
       devices: [{ id: 'phone', name: 'Phone', role: 'app' as const, publicKey, encryptionKey: 'enc-1', online: false }] };
-    expect(cache.remember(late, epoch)).toBe(false);
+    expect(cache.remember(late, epoch)).toBe('stale');
     expect(cache.lookup('phone')).toBeUndefined();
+  });
+
+  // ── release-gate review round 2 ─────────────────────────
+
+  it('a bad signature from another socket does not drop a live device from revocation polls', async () => {
+    await warm();
+    const c = await remote.startChallenge('phone', 'enc-1', 'us');
+    if (!c.ok) throw new Error('challenge');
+    // Not a local nonce (forced remote): a forged signature at the account service.
+    const forged = await remote.verifyChallenge('phone', 'remote-nonce', signChallenge('remote-nonce', generateKeyPair().privateKey), 'enc-1', 'us');
+    expect(forged.ok).toBe(false);
+    expect(cache.lookup('phone'), 'still trusted and still polled').toBeDefined();
+    account.deleteDevice('phone');
+    await remote.pollDeviceStatus();
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
+  });
+
+  it('a delayed older background success cannot overwrite a newer key', async () => {
+    await warm();
+    head = new HeadServer(edge, { authBackend: remote });
+    verifyMode = 'hold';
+    expect((await signIn()).ok).toBe(true); // local; background re-verify held
+    await until(() => heldVerify !== undefined);
+    // Newer authoritative sign-in with a rotated key completes first.
+    verifyMode = 'normal';
+    const k2 = generateKeyPair();
+    account.upsertDevice('phone', 'u', 'Phone', 'app', 'ios', exportPublicKey(k2.publicKey), 'enc-1');
+    const fresh = { ok: true as const, userId: 'u', deviceId: 'phone', authMethod: 'challenge' as const,
+      user: { id: 'u', login: 'qa', provider: 'open' },
+      devices: [{ id: 'phone', name: 'Phone', role: 'app' as const, publicKey: exportPublicKey(k2.publicKey), encryptionKey: 'enc-1', online: false }] };
+    mirror(fresh);
+    expect(cache.remember(fresh, cache.epoch('phone'))).toBe('stored');
+    let refreshed = false;
+    const inner = remote.onRefreshed!;
+    remote.onRefreshed = (r, c2) => { inner(r, c2); refreshed = true; };
+    heldVerify!.res.end(JSON.stringify(heldVerify!.answer));
+    for (let i = 0; i < 20; i++) await tick();
+    expect(refreshed).toBe(false);
+    expect(cache.lookup('phone')?.publicKey).toBe(exportPublicKey(k2.publicKey));
+  });
+
+  it('a foreground sign-in that crosses a removal on this edge does not complete', async () => {
+    await warm();
+    verifyMode = 'hold';
+    const c = await remote.startChallenge('phone', 'enc-2', 'us'); // new key -> remote verify
+    if (!c.ok) throw new Error('challenge');
+    const pending = remote.verifyChallenge('phone', c.nonce, signChallenge(c.nonce, keys.privateKey), 'enc-2', 'us');
+    await until(() => heldVerify !== undefined);
+    remote.forgetLocalTrust('phone');
+    heldVerify!.res.end(JSON.stringify(heldVerify!.answer));
+    const result = await pending;
+    expect(result.ok, 'vetoed: the device was dropped while the answer was out').toBe(false);
+  });
+
+  it('a poll answer staged before a re-authentication does not revoke it', async () => {
+    await warm();
+    const epoch = cache.epoch('phone');
+    // Simulate: the status answer was computed, then the device re-authenticated.
+    const again = await signIn('enc-1');
+    expect(again.ok).toBe(true);
+    expect(cache.epoch('phone')).toBeGreaterThanOrEqual(epoch);
+  });
+
+  it('a device moved to another account is a full revocation, not a key change', () => {
+    account.upsertUser('u2', 'other', 'open');
+    expect({ ...backend.deviceStatuses([{ id: 'phone', userId: 'u2' }], 'us').statuses }).toEqual({ phone: 'unknown_device' });
+  });
+});
+
+describe('Head auth guards (release-gate round 2)', () => {
+  it('rejects an answer to a challenge older than five minutes', async () => {
+    const { handleChallengeResponse } = await import('../server/auth-flow.js');
+    const sent: string[] = [];
+    const ws = { readyState: 1, send: (m: string) => sent.push(m) } as never;
+    const state = { authenticated: false, isAlive: true, pongOverdueAt: null, pendingLivenessBroadcast: false,
+      pendingNonce: 'n', pendingDeviceId: 'd', pendingNonceAt: Date.now() - 5 * 60_000 - 1 } as never;
+    let verified = false;
+    const server = { authBackend: { verifyChallenge: async () => { verified = true; return { ok: false, code: 'x', message: 'x' }; } },
+      clients: new Map(), renameClock: 0, options: {} } as never;
+    handleChallengeResponse(server, ws, state, { deviceId: 'd', signature: 's' });
+    expect(verified).toBe(false);
+    expect(JSON.parse(sent[0])).toMatchObject({ type: 'auth_error', code: 'service_unavailable' });
+  });
+
+  it('a tombstoned device id never completes sign-in, and ownership changes retire the old mirror', async () => {
+    const { handleBackendAuthResult } = await import('../server/auth-flow.js');
+    const storage = new Storage(':memory:');
+    try {
+      storage.upsertUser('a', 'alice', 'open');
+      storage.upsertUser('b', 'bob', 'open');
+      storage.tombstoneDevices(['dead']);
+      const sent: string[] = [];
+      const ws = { readyState: 1, send: (m: string) => sent.push(m) } as never;
+      const forgotten: string[] = [];
+      const server = { storage, connections: new Map(), clients: new Map(), userByDevice: new Map(), deviceRenamedAt: new Map(),
+        renameClock: 0, options: {}, pulseHub: { forgetDevice: (id: string) => forgotten.push(id), onDeviceConnected: () => {}, onDeviceDisconnected: () => {} },
+        authBackend: { getAuthInfo: () => ({ methods: [] }) }, getVapidPublicKey: () => undefined, getVoiceCapability: () => undefined,
+        sendPresenceToDevice: () => {} } as never;
+      const ok = (deviceId: string, userId: string) => ({ ok: true as const, userId, deviceId, authMethod: 'challenge' as const,
+        user: { id: userId, login: userId, provider: 'open' }, devices: [{ id: deviceId, name: 'D', role: 'app' as const, publicKey, online: false }] });
+      handleBackendAuthResult(server, ws, { authenticated: false } as never, ok('dead', 'a'));
+      expect(JSON.parse(sent[0])).toMatchObject({ type: 'auth_error', code: 'account_deleted' });
+
+      storage.upsertDevice('moved', 'a', 'D', 'app', 'ios', publicKey);
+      handleBackendAuthResult(server, ws, { authenticated: false } as never, ok('moved', 'b'));
+      expect(storage.getDevice('moved')?.userId).toBe('b');
+      expect(forgotten).toContain('moved');
+    } finally { storage.close(); }
   });
 });

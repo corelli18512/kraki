@@ -9,8 +9,9 @@ import { getLogger } from '../logger.js';
 import { trace } from '../trace.js';
 import type { AuthBackend, AuthOutcome, AuthResult } from '../auth-backend.js';
 import type { HeadServer } from '../server.js';
+import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { broadcastDeviceJoined, getDeviceSummaries } from './presence.js';
-import { HEAD_FEATURES, publicPreferences, type ClientState } from './shared.js';
+import { CHALLENGE_TTL_MS, HEAD_FEATURES, publicPreferences, type ClientState } from './shared.js';
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
   metrics().authFailed(code);
@@ -51,6 +52,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
         return;
       }
       state.pendingNonce = result.nonce;
+      state.pendingNonceAt = Date.now();
       state.pendingDeviceId = result.deviceId;
       state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
       state.pendingAuthMethod = 'challenge';
@@ -84,13 +86,21 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
   const deviceId = state.pendingDeviceId;
   const nonce = state.pendingNonce;
   const pendingInfo = state.pendingDeviceInfo;
+  const issuedAt = state.pendingNonceAt;
 
   state.pendingNonce = undefined;
+  state.pendingNonceAt = undefined;
   state.pendingDeviceId = undefined;
   state.pendingDeviceInfo = undefined;
 
   if (!deviceId || !nonce) {
     sendAuthError(server, ws, 'no_pending_challenge', 'No pending challenge');
+    return;
+  }
+  // A socket kept alive on the login screen must not answer an old
+  // challenge. Retryable: the client signs in again with a fresh one.
+  if (issuedAt !== undefined && Date.now() - issuedAt > CHALLENGE_TTL_MS) {
+    sendAuthError(server, ws, 'service_unavailable', 'Challenge expired, sign in again');
     return;
   }
 
@@ -143,6 +153,19 @@ export function handleBackendAuthResult(
     return;
   }
 
+  // An account deleted through this edge tombstones its devices: an
+  // account-service answer that was already on its way must not bring one
+  // back (e.g. a first pairing completing right after the deletion).
+  if (server.storage.isDeletedDevice(result.deviceId)) {
+    sendAuthError(server, ws, 'account_deleted', 'This Kraki account was deleted.');
+    return;
+  }
+  // The account service now says this device id belongs to another account
+  // (removed and registered again elsewhere). This edge's mirror and Pulse
+  // state are the old account's: retire them before the new owner is
+  // registered, or routing would still treat it as the old account's device.
+  retireForeignMirror(server, result.deviceId, result.userId);
+
   // Register connection
   state.authenticated = true;
   state.authenticatedAt = Date.now();
@@ -183,6 +206,26 @@ export function handleBackendAuthResult(
     githubClientId: result.githubClientId,
     vapidPublicKey: result.vapidPublicKey,
   });
+}
+
+/** See handleBackendAuthResult: a mirrored device now owned by another account. */
+export function retireForeignMirror(server: HeadServer, deviceId: string, userId: string): void {
+  const local = server.storage.getDevice(deviceId);
+  if (!local || local.userId === userId) return;
+  getLogger().warn('Device moved to another account; retiring the old mirror', { deviceId });
+  const previous = server.connections.get(deviceId);
+  if (previous) {
+    // A socket still signed in as the old owner: close it outright.
+    server.connections.delete(deviceId);
+    server.userByDevice.delete(deviceId);
+    server.clients.delete(previous);
+    try { previous.terminate(); } catch { /* gone */ }
+  }
+  server.storage.deleteDevice(deviceId);
+  server.storage.deletePushTokensForDevice(deviceId);
+  server.pulseHub.forgetDevice(deviceId);
+  server.deviceRenamedAt.delete(deviceId);
+  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(deviceId);
 }
 
 /**

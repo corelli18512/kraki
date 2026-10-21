@@ -204,7 +204,7 @@ describe('edge-local challenge auth', () => {
     expect(st([{ id: 'phone' }, { id: 'missing' }], 'china')).toEqual({ phone: 'ok', missing: 'unknown_device' });
     expect(st([{ id: 'phone' }], 'us')).toEqual({ phone: 'wrong_region' });
     expect({ ...backend.deviceStatuses([{ id: 'phone' }], 'us').redirects }).toEqual({ phone: 'wss://cn.example.com' });
-    expect(st([{ id: 'phone', userId: 'someone-else' }], 'china')).toEqual({ phone: 'key_changed' });
+    expect(st([{ id: 'phone', userId: 'someone-else' }], 'china')).toEqual({ phone: 'unknown_device' });
     expect(st([{ id: 'phone', keyFingerprint: 'other' }], 'china')).toEqual({ phone: 'key_changed' });
     expect(st([{ id: 'phone', userId: 'u1', keyFingerprint: keyFingerprint(exportPublicKey(keys.publicKey)) }], 'china')).toEqual({ phone: 'ok' });
     account.deleteUser('u1');

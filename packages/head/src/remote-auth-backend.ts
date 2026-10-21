@@ -6,7 +6,7 @@
 import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
 import type { AuthBackend, AuthOutcome, AuthResult, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
 import { getLogger } from './logger.js';
-import { EdgeAuthCache, isDefinitiveRejection } from './edge-auth-cache.js';
+import { EdgeAuthCache, isDefinitiveRejection, isDeviceRejection } from './edge-auth-cache.js';
 import { metrics } from './metrics.js';
 
 /** A device the account service no longer accepts here. */
@@ -91,7 +91,7 @@ export class RemoteAuthBackend implements AuthBackend {
     if (!cache) return;
     const lifecycle = this.lifecycle;
     const entries = cache.entries();
-    const statuses = new Map<string, { status: string; redirect?: string }>();
+    const statuses = new Map<string, { status: string; redirect?: string; epoch: number }>();
     // Always at least one request (an empty list still proves support).
     // ~130 bytes per device: 300 stays well under the account API body limit.
     for (let i = 0; i === 0 || i < entries.length; i += 300) {
@@ -127,13 +127,16 @@ export class RemoteAuthBackend implements AuthBackend {
           // keep trusting it locally either.
           status: typeof raw === 'string' ? raw : 'unanswered',
           redirect: typeof redirect === 'string' ? redirect : undefined,
+          epoch: epochs[j],
         });
       });
     }
     if (!this.localAuthReady) getLogger().info('Edge-local challenge auth enabled', { cached: entries.length });
     this.localAuthReady = true;
-    for (const [deviceId, { status, redirect }] of statuses) {
+    for (const [deviceId, { status, redirect, epoch }] of statuses) {
       if (status === 'ok') continue;
+      // Re-authenticated or dropped while later chunks were out: newer facts win.
+      if (epoch !== cache.epoch(deviceId)) continue;
       cache.forget(deviceId);
       if (status === 'unanswered') continue;
       metrics().inc('auth.localRevoked');
@@ -154,7 +157,13 @@ export class RemoteAuthBackend implements AuthBackend {
     const result = await this.post<AuthOutcome>('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
     // A token / pairing sign-in is as authoritative as a verified challenge:
     // the next reconnect of this device can be local.
-    if (result.ok && cache === this.edgeCache) cache?.remember(result, device.deviceId === result.deviceId ? epoch : undefined);
+    if (result.ok && cache && cache === this.edgeCache
+      && cache.remember(result, device.deviceId === result.deviceId ? epoch : undefined) === 'stale') {
+      // The device was dropped here (removed, account deleted) while this
+      // sign-in was out: do not let it complete. Retryable: a retry gets
+      // the account service's current answer.
+      return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
+    }
     return result;
   }
 
@@ -201,8 +210,12 @@ export class RemoteAuthBackend implements AuthBackend {
     const epoch = cache?.epoch(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
     if (cache && cache === this.edgeCache) {
-      if (result.ok) cache.remember(result, epoch);
-      else if (isDefinitiveRejection(result.code)) cache.forget(deviceId);
+      if (result.ok && cache.remember(result, epoch) === 'stale') {
+        return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
+      }
+      // Only a verdict about the device drops trust: a wrong signature from
+      // another socket must not take a live session out of revocation polls.
+      if (!result.ok && isDeviceRejection(result.code)) cache.forget(deviceId);
     }
     return result;
   }
@@ -219,7 +232,7 @@ export class RemoteAuthBackend implements AuthBackend {
     // must neither revive it nor act on it.
     if (lifecycle !== this.lifecycle || epoch !== cache.epoch(deviceId)) return;
     if (result.ok && result.userId === userId) {
-      if (cache.remember(result, epoch)) this.onRefreshed?.(result, context);
+      if (cache.remember(result, epoch) === 'stored') this.onRefreshed?.(result, context);
       return;
     }
     const code = result.ok ? 'device_not_found' : result.code;

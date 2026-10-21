@@ -26,9 +26,12 @@ key still matches this edge's device mirror:
    (`device_not_found`, `account_deleted`, `wrong_region`, …) forgets the
    device and closes its socket with that `auth_error`, exactly what a fresh
    sign-in would have answered. Transient errors change nothing.
-4. Every 5 minutes the edge posts all cached device ids to
-   `/api/devices/status` on the account service and revokes the ones that
-   are no longer `ok` there.
+4. Every 5 minutes the edge posts every cached device (id, the account it
+   trusts it for, its signing-key fingerprint) to `/api/devices/status` on
+   the account service. Answers: `ok`; `unknown_device` (removed, or the id
+   now belongs to another account) → forget + close with that auth error;
+   `account_deleted`; `wrong_region` (with the redirect); `key_changed` →
+   forget and close (1012) so the device signs in again remotely.
 
 Everything else uses the old remote path unchanged:
 
@@ -52,7 +55,18 @@ next poll. `KRAKI_EDGE_LOCAL_AUTH=0` disables it on an edge.
   device mirror is deleted, which ends local trust), at most one background
   re-verification after the next sign-in, or one 5-minute poll otherwise.
 - Nonces issued locally are single-use, bound to their device, and expire
-  after 5 minutes.
+  after 5 minutes; the Head also rejects any challenge answer (local or
+  account-service nonce) older than 5 minutes on that socket.
+- Every trust change has an epoch: removal / account deletion on the edge,
+  revocation, and every stored account-service answer advance it. An answer
+  requested before the latest change is dropped (and a foreground sign-in
+  that crossed one fails retryably) so nothing older can revive or
+  overwrite newer trust.
+- A device id that the account service now assigns to another account
+  retires this edge's old mirror and Pulse state before the new owner signs
+  in; ids of an account deleted here are tombstoned and never sign in again.
+- Only verdicts about the device itself drop local trust; a bad signature
+  from some other socket does not.
 - Each edge sign-in log line carries `ms: {total, challenge, sign, verify,
   token}` and `/internal/metrics` exposes `authStages` histograms and
   `auth.localChallenge` / `auth.localVerify` / `auth.localRevoked` counters.

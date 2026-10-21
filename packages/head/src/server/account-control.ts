@@ -263,6 +263,8 @@ export async function handleDeleteAccount(server: HeadServer, ws: WebSocket, sta
     // This relay's own rows (the edge mirror; already gone when the
     // account store is this relay's storage).
     for (const id of server.storage.deleteUser(userId)) deviceIds.add(id);
+    // Including ids this edge never mirrored (e.g. a first pairing in flight).
+    server.storage.tombstoneDevices([...deviceIds]);
     logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
 
     for (const id of deviceIds) {

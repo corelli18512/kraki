@@ -228,8 +228,9 @@ export class LocalAuthBackend implements AuthBackend {
       if (this.storage.isDeletedDevice(id)) { statuses[id] = 'account_deleted'; continue; }
       const device = this.storage.getDevice(id);
       if (!device || !device.publicKey) { statuses[id] = 'unknown_device'; continue; }
-      if ((userId !== undefined && userId !== device.userId)
-        || (fingerprint !== undefined && fingerprint !== keyFingerprint(device.publicKey))) {
+      // Same id, another account: for the edge's copy this device is gone.
+      if (userId !== undefined && userId !== device.userId) { statuses[id] = 'unknown_device'; continue; }
+      if (fingerprint !== undefined && fingerprint !== keyFingerprint(device.publicKey)) {
         statuses[id] = 'key_changed';
         continue;
       }

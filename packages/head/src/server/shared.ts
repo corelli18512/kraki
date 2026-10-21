@@ -25,6 +25,8 @@ export interface ClientState {
   /** At most one daily activity write per authenticated app socket/day. */
   foregroundDay?: string;
   pendingNonce?: string;
+  /** When the pending challenge was issued (ms epoch). */
+  pendingNonceAt?: number;
   /** An `auth` / `auth_response` is awaiting its backend. */
   authInFlight?: boolean;
   pendingDeviceId?: string;
@@ -110,6 +112,8 @@ export const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 export const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 export const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
+/** A challenge must be answered within this, whoever issued the nonce. */
+export const CHALLENGE_TTL_MS = 5 * 60_000;
 export const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 export const MAX_MULTICAST_TARGETS = 64;
 /** Send-buffer ceiling per socket before a stalled client is disconnected. */

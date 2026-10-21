@@ -254,11 +254,11 @@ export class AccountApi {
     const rawDevices = Array.isArray(body?.devices)
       ? body.devices
       : Array.isArray(body?.deviceIds) ? (body.deviceIds as unknown[]).map((id) => ({ id })) : undefined;
-    const valid = rawDevices !== undefined && rawDevices.length <= 500 && rawDevices.every((d) =>
+    const valid = rawDevices !== undefined && rawDevices.length <= 1000 && rawDevices.every((d) =>
       typeof d === 'object' && d !== null && typeof (d as { id?: unknown }).id === 'string'
       && ['userId', 'keyFingerprint'].every((k) => (d as Record<string, unknown>)[k] === undefined || typeof (d as Record<string, unknown>)[k] === 'string'));
     if (!valid) {
-      this.json(res, 400, { ok: false, code: 'bad_request', message: 'devices ({id, userId?, keyFingerprint?}[] up to 500) required' });
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'devices ({id, userId?, keyFingerprint?}[] up to 1000) required' });
       return true;
     }
     const region = caller.admin ? (typeof body?.headRegion === 'string' ? body.headRegion : undefined) : caller.region;

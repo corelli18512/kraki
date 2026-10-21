@@ -49,9 +49,12 @@ export interface CachedDevice {
 
 export const DEFAULT_MAX_STALE_MS = 7 * 24 * 3600_000;
 export const DEFAULT_REVALIDATE_MS = 60_000;
-/** Longer than the Head's longest auth deadline (10 min on the login screen),
- *  so a socket still allowed to authenticate never holds an expired nonce. */
-const NONCE_TTL_MS = 11 * 60_000;
+/** A challenge must be answered within this (the Head also enforces it per
+ *  socket, for account-service nonces too). */
+const NONCE_TTL_MS = 5 * 60_000;
+/** Used/expired local nonces are remembered this long, so a late answer is
+ *  still recognised as ours (and rejected) instead of looking unknown. */
+const NONCE_RETAIN_MS = 24 * 3600_000;
 
 /** What `takeNonce` found: `local` = issued here for this device and unused. */
 export type NonceCheck = 'local' | 'expired' | 'foreign' | 'unknown';
@@ -93,18 +96,21 @@ export class EdgeAuthCache {
 
   /**
    * The account service accepted this device (challenge or token auth).
-   * `epochAtRequest` (from `epoch()` before the request was sent) makes a
-   * late answer that crossed a revocation a no-op; returns whether stored.
+   * `epochAtRequest` (from `epoch()` before the request was sent) fences the
+   * answer: if the device was dropped, or a newer answer was stored, since
+   * the request left, this one is `stale` and must not be acted on. Storing
+   * advances the epoch, so an older answer can never overwrite a newer one.
    */
-  remember(result: AuthResult, epochAtRequest?: number): boolean {
-    if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return false;
+  remember(result: AuthResult, epochAtRequest?: number): 'stored' | 'stale' | 'skipped' {
+    if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return 'stale';
     const self = result.devices.find((d) => d.id === result.deviceId);
-    if (!self?.publicKey) return false; // no signing key: cannot do challenge auth anyway
+    if (!self?.publicKey) return 'skipped'; // no signing key: cannot do challenge auth anyway
+    this.epochs.set(result.deviceId, this.epoch(result.deviceId) + 1);
     this.db.prepare(`INSERT OR REPLACE INTO edge_auth_cache
       (device_id, user_id, public_key, encryption_key, result_json, verified_at) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(result.deviceId, result.userId, self.publicKey, self.encryptionKey ?? null,
         JSON.stringify(result), this.now());
-    return true;
+    return 'stored';
   }
 
   /** A fresh entry, or undefined. */
@@ -187,9 +193,17 @@ export class EdgeAuthCache {
   private sweepNonces(): void {
     const now = this.now();
     for (const [nonce, entry] of this.localNonces) {
-      if (entry.expiresAt + NONCE_TTL_MS < now) this.localNonces.delete(nonce);
+      if (entry.expiresAt + NONCE_RETAIN_MS < now) this.localNonces.delete(nonce);
     }
   }
+}
+
+/** Rejections that are about the device itself (it is gone, moved or the
+ *  account was deleted), as opposed to one bad attempt: only these may drop
+ *  local trust. A wrong signature from some other socket must not. */
+export function isDeviceRejection(code: string | undefined): boolean {
+  return code === 'unknown_device' || code === 'device_not_found' || code === 'account_deleted'
+    || code === 'wrong_region' || code === 'user_not_found';
 }
 
 /** Account-service answers that mean "this device may not sign in here". */

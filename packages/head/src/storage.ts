@@ -814,6 +814,12 @@ export class Storage {
     })();
   }
 
+  /** Mark device ids as belonging to a deleted account (idempotent). */
+  tombstoneDevices(ids: string[]): void {
+    const stmt = this.db.prepare('INSERT OR IGNORE INTO deleted_devices (device_id) VALUES (?)');
+    this.db.transaction(() => { for (const id of ids) stmt.run(id); })();
+  }
+
   /** Whether this device id belonged to an account that was deleted. */
   isDeletedDevice(deviceId: string): boolean {
     return this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined;
