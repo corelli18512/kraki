@@ -16,6 +16,10 @@
 // Negotiation: a Tentacle advertises `fragments` in `device_greeting.features`;
 // an app that can reassemble replies with `client_features`. Neither side
 // sends fragments to a peer that has not advertised support.
+//
+// Sender binding: the Head stamps its authenticated sender (`src`) on every
+// part, never on the reassembled payload it cannot see. Receivers therefore
+// keep one set per (sender, id).
 
 export const PAYLOAD_FRAGMENT_FEATURE = 'fragments';
 /** Payloads larger than this are fragmented (when the peer supports it). */
@@ -65,7 +69,9 @@ export function isPayloadFragment(value: unknown): value is PayloadFragment {
 }
 
 /**
- * Reassembles fragments (any interleaving across ids). Memory is bounded:
+ * Reassembles fragments (any interleaving across ids and senders). Parts are
+ * grouped by the sender the Head stamped on them and the fragment id, so parts
+ * from different senders never combine. Memory is bounded:
  * the oldest incomplete payloads are dropped beyond `maxBytes`, and payloads
  * untouched for `ttlMs` are discarded. A dropped payload never surfaces; the
  * sender's higher layers (echo/confirmation, re-requests) recover it.
@@ -81,20 +87,23 @@ export class PayloadAssembler {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Returns the whole payload when `fragment` completes it, else null. */
-  accept(fragment: PayloadFragment): string | null {
+  /** Returns the whole payload when `fragment` completes it, else null.
+   *  `sender` is the Head-stamped `src` of this part (empty when unstamped). */
+  accept(fragment: PayloadFragment, sender = ''): string | null {
     if (fragment.n > this.maxParts) return null;
     // A part is never larger than the sender's fragment size (a little slack
     // for other senders' sizes); a whole payload can't exceed the budget.
     if (fragment.d.length > PAYLOAD_FRAGMENT_SIZE * 2 || fragment.n * PAYLOAD_FRAGMENT_SIZE > this.maxBytes) return null;
     const now = this.now();
-    for (const [id, set] of this.sets) {
-      if (now - set.touched > this.ttlMs) this.drop(id);
+    for (const [key, set] of this.sets) {
+      if (now - set.touched > this.ttlMs) this.drop(key);
     }
-    let set = this.sets.get(fragment.id);
+    // Length-prefixed so no (sender, id) pair can spell another's key.
+    const key = `${sender.length}:${sender}:${fragment.id}`;
+    let set = this.sets.get(key);
     if (!set) {
       set = { parts: new Array(fragment.n), got: 0, bytes: 0, touched: now };
-      this.sets.set(fragment.id, set);
+      this.sets.set(key, set);
     }
     if (set.parts.length !== fragment.n) return null; // inconsistent: ignore
     set.touched = now;
@@ -105,15 +114,15 @@ export class PayloadAssembler {
       this.bytes += fragment.d.length;
     }
     if (set.got === fragment.n) {
-      this.drop(fragment.id);
+      this.drop(key);
       return set.parts.join('');
     }
-    for (const id of this.sets.keys()) {
+    for (const other of this.sets.keys()) {
       if (this.bytes <= this.maxBytes) break;
-      if (id !== fragment.id) this.drop(id);
+      if (other !== key) this.drop(other);
     }
     // Still over budget: the current payload alone is too big.
-    if (this.bytes > this.maxBytes) this.drop(fragment.id);
+    if (this.bytes > this.maxBytes) this.drop(key);
     return null;
   }
 
@@ -125,10 +134,10 @@ export class PayloadAssembler {
 
   get pendingPayloads(): number { return this.sets.size; }
 
-  private drop(id: string): void {
-    const set = this.sets.get(id);
+  private drop(key: string): void {
+    const set = this.sets.get(key);
     if (!set) return;
     this.bytes -= set.bytes;
-    this.sets.delete(id);
+    this.sets.delete(key);
   }
 }

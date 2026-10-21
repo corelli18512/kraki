@@ -55,6 +55,23 @@ final class LocalLinkRouteTests: XCTestCase {
         XCTAssertEqual(PulseManager.stampSender(whole, from: [UInt8](bare)), whole)
     }
 
+    func testFragmentPartsFromDifferentSendersNeverCombine() throws {
+        let whole = Data(#"{"blob":"from-T1","keys":{}}"#.utf8)
+        let parts = try XCTUnwrap(PayloadFragments.split(whole, id: "same", size: 8, threshold: 0))
+        func stamped(_ part: Data, _ src: String) throws -> [UInt8] {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: part) as? [String: Any])
+            object["src"] = src
+            return [UInt8](try JSONSerialization.data(withJSONObject: object))
+        }
+        let assembler = PayloadAssembler()
+        // Another sender's parts with the same id must not fill T1's set.
+        for part in parts.dropFirst() { XCTAssertNil(assembler.accept(try stamped(part, "T2")).whole) }
+        XCTAssertNil(assembler.accept(try stamped(parts[0], "T1")).whole)
+        var last: String?
+        for part in parts.dropFirst() { last = assembler.accept(try stamped(part, "T1")).whole }
+        XCTAssertEqual(last, String(decoding: whole, as: UTF8.self))
+    }
+
     func testSenderCheckNowAppliesToReassembledPayloads() throws {
         let (app, handler, key, root) = try makeApp()
         defer { withExtendedLifetime(app) {} }
