@@ -144,6 +144,24 @@ final class DeviceTrustTests: XCTestCase {
         }
     }
 
+    /// Head auth_challenge nonces are 32 random bytes in lowercase hex; the
+    /// same RSA key signs local-link proofs, so nothing else is signed.
+    func testOnlyHeadAuthNoncesAreSigned() {
+        XCTAssertTrue(AuthManager.isHeadAuthNonce(String(repeating: "a1", count: 32)))
+        XCTAssertTrue(AuthManager.isHeadAuthNonce("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+        for other in [
+            "kraki-local-link/v1/app\nabc\ndev_t\ndev_app",
+            "kraki-diag-v1\nPOST\n/api/diag/v1/batch\ndev_app\n1760000000000\nreq\n" + String(repeating: "ab", count: 32),
+            String(repeating: "A1", count: 32),
+            String(repeating: "a1", count: 31),
+            String(repeating: "a1", count: 32) + "\n",
+            String(repeating: "é", count: 64),
+            "",
+        ] {
+            XCTAssertFalse(AuthManager.isHeadAuthNonce(other), other)
+        }
+    }
+
     func testAcceptsOnlyThePinnedSigner() throws {
         let computer = Curve25519.Signing.PrivateKey()
         pin("dev_t", key: computer)

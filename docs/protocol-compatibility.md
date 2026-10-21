@@ -21,6 +21,12 @@ tentacle. Remove a legacy path only when **both** conditions in its row hold.
 
 A peer must never send a behaviour the other side has not advertised.
 
+## Fixed wire formats
+
+| Item | Format | Why it must not change |
+|---|---|---|
+| `auth_challenge.nonce` (Head → device) | 64 lowercase hex characters (32 random bytes; `local-auth-backend.ts`, also what an edge gets from the account service) | Web, tentacle and iOS/Mac refuse to sign any other string: the same RSA key signs local-link (`kraki-local-link/…`) and diagnostics (`kraki-diag-v1…`) proofs. The signed bytes are the nonce itself, so old Heads keep working. A new nonce format needs a new auth method, not a new string |
+
 ## Deprecated, still supported
 
 | Item | Replaced by | Still produced by | Remove when |
