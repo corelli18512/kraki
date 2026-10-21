@@ -9,7 +9,7 @@ export default defineConfig({
     exclude: ['src/**/*.live.test.ts'],
     testTimeout: 10_000,
     // Never the developer's real ~/.kraki (see the setup file).
-    setupFiles: ['src/isolated-home.setup.ts'],
+    setupFiles: [resolve(__dirname, '../../scripts/vitest/isolated-home.setup.ts')],
     // Unpaired apps exercise the shipping account-access default. Historical
     // enforcing peers are selected explicitly by the trust/transition fixtures.
   },
