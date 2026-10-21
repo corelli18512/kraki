@@ -40,6 +40,30 @@ import { resumeDisconnectedSessions } from './relay/session-resume.js';
 import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
 export { SessionResumeError, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
 
+type LocalLinkStatsSnapshot = ReturnType<LocalLinkServer['getStats']> & { head: { frames: number; bytes: number; framesToLinkedApps: number } };
+
+/** Unchanged-peer counters are summarised at most this often. */
+export const LOCAL_LINK_STATS_SUMMARY_MS = 5 * 60_000;
+
+/**
+ * Whether a 'Local link stats' line is worth writing. Logged every 5 s whenever
+ * a counter moved — and heartbeats move them every tick — it was 97 % of
+ * relay-client.log and cut its retention to ~10 days (log audit 2026-10-22).
+ * Now: at once when the linked Apps change or a frame for a linked App went
+ * through the Head, otherwise a summary every 5 minutes if anything moved.
+ */
+export function localLinkStatsLogReason(
+  prev: LocalLinkStatsSnapshot | null,
+  next: LocalLinkStatsSnapshot,
+  msSincePrev: number,
+): 'first' | 'peers' | 'head-to-linked' | 'summary' | null {
+  if (!prev) return 'first';
+  if ([...prev.peers].sort().join() !== [...next.peers].sort().join()) return 'peers';
+  if (next.head.framesToLinkedApps !== prev.head.framesToLinkedApps) return 'head-to-linked';
+  if (msSincePrev < LOCAL_LINK_STATS_SUMMARY_MS) return null;
+  return JSON.stringify(prev) === JSON.stringify(next) ? null : 'summary';
+}
+
 export class RelayClient {
   private ws: WebSocket | null = null;
   adapter: AgentAdapter;
@@ -939,7 +963,7 @@ export class RelayClient {
   /** Frames this Tentacle put on the Head socket; `framesToLinkedApps` counts
    *  frames addressed to an App that was on the local link at the time. */
   private headTx = { frames: 0, bytes: 0, framesToLinkedApps: 0 };
-  private lastStatsLine = '';
+  private lastStatsLogged: { stats: LocalLinkStatsSnapshot; at: number } | null = null;
 
   /** Local-link counters (for diagnostics/tests); null when not running. */
   getLocalLinkStats(): (ReturnType<LocalLinkServer['getStats']> & { head: { frames: number; bytes: number; framesToLinkedApps: number } }) | null {
@@ -947,13 +971,14 @@ export class RelayClient {
     return stats ? { ...stats, head: { ...this.headTx } } : null;
   }
 
-  private logLocalLinkStats(): void {
+  private logLocalLinkStats(now = Date.now()): void {
     const stats = this.getLocalLinkStats();
     if (!stats) return;
-    const line = JSON.stringify(stats);
-    if (line === this.lastStatsLine) return;
-    this.lastStatsLine = line;
-    logger.info({ localLink: stats }, 'Local link stats');
+    const prev = this.lastStatsLogged;
+    const reason = localLinkStatsLogReason(prev?.stats ?? null, stats, prev ? now - prev.at : Infinity);
+    if (!reason) return;
+    this.lastStatsLogged = { stats, at: now };
+    logger.info({ localLink: stats, reason, ...(prev && { sinceMs: now - prev.at }) }, 'Local link stats');
   }
 
   private ensureLocalLink(): void {
