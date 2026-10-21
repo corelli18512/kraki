@@ -305,6 +305,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var textSizeObserver: NSObjectProtocol?
     /// The text size this list's rows were laid out for (see TKTextSize).
     var laidOutTextSize = ""
+    /// The list width the rows were laid out for. iPhone Duo fold/unfold,
+    /// iPad resizing and rotation change it while the chat is open.
+    var laidOutWidth: CGFloat = 0
+    /// What the reader was looking at while the width was `laidOutWidth`.
+    /// Kept up to date on scroll and layout: by the time a width change is
+    /// noticed, UIKit has already resized the list, so it can't be read then.
+    var lastReadingAnchor: ReadingAnchor?
+    var widthRelayoutScheduled = false
+    /// Bumped on a re-layout and on every user scroll: late anchor
+    /// corrections stop as soon as the user takes over.
+    var widthAnchorGeneration = 0
     var codeHighlightSettleWork: DispatchWorkItem?
     var pendingCodeHighlightRefresh = false
     override func viewDidLoad() {
@@ -396,6 +407,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         scrollIndicator.updateGeometry()
+        handleWidthChangeIfNeeded()
         // A hidden/zero-width page may have deferred starting a barrier. Retry
         // after layout, never re-enter a collection batch from inside layout.
         if !isLeavingView, view.window != nil, collectionView.bounds.width > 0,
@@ -771,6 +783,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         #endif
         if userDriven, !applyingProgrammaticShift {
             noteUserScrollOffset(scrollView.contentOffset.y)
+            widthAnchorGeneration += 1
+            rememberReadingAnchor(force: true)
+        } else {
+            rememberReadingAnchor(force: false)
         }
         // UIKit owns fetch buffering, exact-height barriers, and anchored
         // batch application; the shared policy decides when to page.
