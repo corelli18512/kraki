@@ -7,7 +7,7 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { PulseHub } from './pulse-hub.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
-import { getLogger, LogThrottle } from './logger.js';
+import { authLogField, getLogger, LogThrottle } from './logger.js';
 import { HealthLog } from './health-log.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
@@ -361,11 +361,11 @@ export class HeadServer {
         const throttle = this.preAuthCloseLog.take(state.ip ?? 'unknown');
         if (throttle) {
           logger.info('WebSocket closed before auth', {
-            ip: state.ip,
+            ip: authLogField(state.ip),
             closeCode: code,
-            closeReason: reasonStr,
+            closeReason: authLogField(reasonStr),
             afterMs: state.connectedAt !== undefined ? Date.now() - state.connectedAt : undefined,
-            method: state.authMethod,
+            method: authLogField(state.authMethod),
             ...(state.authInFlight && { authInFlight: true }),
             ...throttle,
           });

@@ -115,6 +115,16 @@ export class Logger {
   }
 }
 
+/** A client-supplied value as an auth log field: the first 64 characters and
+ *  the full length. Device ids and auth methods are not bounded before the
+ *  backend rejects them, and a WebSocket message may be 10 MiB. */
+export const MAX_AUTH_LOG_FIELD_LENGTH = 64;
+export function authLogField(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value);
+  return text.length <= MAX_AUTH_LOG_FIELD_LENGTH ? text : `${text.slice(0, MAX_AUTH_LOG_FIELD_LENGTH)}\u2026(${text.length} chars)`;
+}
+
 /**
  * Caps how many lines one kind of event may log per window, so events an
  * outsider can trigger at will (auth failures, sockets that never sign in)

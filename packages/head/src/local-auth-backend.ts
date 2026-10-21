@@ -14,7 +14,7 @@ import type { AuthProvider, AuthUser } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger } from './logger.js';
 import { suggestRegionForIp } from './ip-geo.js';
 
 export interface LocalAuthBackendOptions {
@@ -121,7 +121,7 @@ export class LocalAuthBackend implements AuthBackend {
 
     const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) {
-      logger.warn('Auth rejected', { method: auth.method, ip: clientIp, reason: resolved.message });
+      logger.warn('Auth rejected', { method: authLogField(auth.method), ip: authLogField(clientIp), reason: authLogField(resolved.message) });
       return resolved;
     }
 

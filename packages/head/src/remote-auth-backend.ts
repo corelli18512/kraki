@@ -5,7 +5,7 @@
 
 import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
 import type { AuthBackend, AuthOutcome, AuthResult, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger } from './logger.js';
 import { EdgeAuthCache, isDeviceRejection } from './edge-auth-cache.js';
 import { metrics } from './metrics.js';
 import { REQUEST_ID_HEADER, newRequestId } from './request-id.js';
@@ -406,7 +406,7 @@ export class RemoteAuthBackend implements AuthBackend {
       phase = 'body';
       const text = await response.text();
       const ms = Math.round(performance.now() - startedAt);
-      const fields = { path, reqId, status: response.status, ms, ...(deviceId && { deviceId }) };
+      const fields = { path, reqId, status: response.status, ms, ...(deviceId && { deviceId: authLogField(deviceId) }) };
       if (ms >= SLOW_ACCOUNT_REQUEST_MS) logger.info('Account service request slow', fields);
       else logger.debug('Account service request', fields);
       try {
@@ -422,7 +422,7 @@ export class RemoteAuthBackend implements AuthBackend {
       const cause = (err as { cause?: { code?: unknown } }).cause?.code;
       logger.error('Account service request failed', {
         path, reqId, ms: Math.round(performance.now() - startedAt), phase,
-        ...(deviceId && { deviceId }),
+        ...(deviceId && { deviceId: authLogField(deviceId) }),
         error: (err as Error).message,
         ...(typeof cause === 'string' && { cause }),
       });

@@ -5,7 +5,7 @@ import { metrics } from '../metrics.js';
 import type { AuthMessage, AuthErrorCode, DeviceSummary } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
-import { getLogger } from '../logger.js';
+import { authLogField, getLogger } from '../logger.js';
 import { trace } from '../trace.js';
 import type { AuthBackend, AuthOutcome, AuthResult } from '../auth-backend.js';
 import type { HeadServer } from '../server.js';
@@ -20,10 +20,10 @@ export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthError
   if (throttle) {
     getLogger().info('Auth failed', {
       code,
-      ip: state?.ip,
-      method: state?.authMethod,
-      deviceId: deviceId ?? state?.deviceId ?? state?.authDeviceId,
-      reason: message,
+      ip: authLogField(state?.ip),
+      method: authLogField(state?.authMethod),
+      deviceId: authLogField(deviceId ?? state?.deviceId ?? state?.authDeviceId),
+      reason: authLogField(message),
       ...throttle,
     });
   }
@@ -41,7 +41,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
   if (state.authInFlight || state.pendingNonce) {
     // Ignored rather than answered with auth_error: clients treat auth
     // errors as credential failures, and this one is just a duplicate.
-    logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
+    logger.warn('Ignoring duplicate auth while one is in progress', { ip: authLogField(state.ip) });
     return;
   }
   state.authInFlight = true;
@@ -71,7 +71,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
       state.pendingDeviceId = result.deviceId;
       state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
       state.pendingAuthMethod = 'challenge';
-      logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
+      logger.debug('Issuing auth challenge', { deviceId: authLogField(auth.deviceId) });
       ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
       state.authTiming.challengeSentAt = Date.now();
       return;

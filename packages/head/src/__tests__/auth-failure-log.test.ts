@@ -72,6 +72,33 @@ describe('auth failure and pre-auth close logging', () => {
     ws.close();
   });
 
+  it('bounds every client-supplied field of an auth log line (1 MB device id / method)', async () => {
+    const huge = 'd'.repeat(1024 * 1024);
+    const ws = await open();
+    const error = next(ws, 'auth_error');
+    ws.send(JSON.stringify({ type: 'auth', auth: { method: 'challenge', deviceId: huge }, device: { name: 'x', role: 'app' } }));
+    expect((await error).code).toBe('unknown_device');
+    const [line] = logs.find('Auth failed');
+    expect(line.data.deviceId).toBe(`${'d'.repeat(64)}…(${huge.length} chars)`);
+    ws.close();
+
+    const ws2 = await open();
+    const error2 = next(ws2, 'auth_error');
+    ws2.send(JSON.stringify({ type: 'auth', auth: { method: huge }, device: { name: 'x', role: 'app', deviceId: huge } }));
+    await error2;
+    const failed = logs.find('Auth failed')[1];
+    for (const value of Object.values(failed.data)) {
+      expect(String(value).length).toBeLessThan(200);
+    }
+    ws2.close();
+    await new Promise<void>((resolve) => ws2.on('close', () => resolve()));
+    await waitUntil(() => logs.find('WebSocket closed before auth').length >= 2);
+    for (const closed of logs.find('WebSocket closed before auth')) {
+      for (const value of Object.values(closed.data)) expect(String(value).length).toBeLessThan(200);
+    }
+    expect(JSON.stringify(logs.lines).length).toBeLessThan(20_000);
+  });
+
   it('logs a socket that closes without signing in, capped per IP', async () => {
     for (let i = 0; i < 7; i++) {
       const ws = await open();
