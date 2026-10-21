@@ -160,10 +160,15 @@ export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state
     }
     for (const d of result.devices) {
       try {
+        // The account service sends the name to show; when the user renamed
+        // the device, `defaultName` is the device's own one. Mirror both, so
+        // a rename (or clearing it) made on another edge shows here too.
+        const renamed = typeof d.defaultName === 'string';
         server.storage.upsertDevice(
-          d.id, result.userId, d.name, d.role,
+          d.id, result.userId, renamed ? d.defaultName! : d.name, d.role,
           d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
         );
+        server.storage.setDeviceDisplayName(d.id, renamed ? d.name : null);
       } catch (err) {
         logger.warn('Failed to mirror device locally', { deviceId: d.id, error: (err as Error).message });
       }

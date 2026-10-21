@@ -8,9 +8,16 @@ import SwiftUI
 
 struct DeviceDetailView: View {
     @Environment(AppState.self) private var appState
-    let device: DeviceSummary
+    private let initial: DeviceSummary
+
+    init(device: DeviceSummary) { initial = device }
+
+    /// Live from the store, so a rename (from here or any other device) shows.
+    private var device: DeviceSummary { appState.deviceStore.devices[initial.id] ?? initial }
 
     @State private var showRemoveConfirmation = false
+    @State private var showRename = false
+    @State private var nameDraft = ""
     @State private var modelsExpanded = false
 
     private var isCurrentDevice: Bool {
@@ -66,6 +73,20 @@ struct DeviceDetailView: View {
         List {
             // Info rows
             Section {
+                Button {
+                    nameDraft = device.name
+                    showRename = true
+                } label: {
+                    HStack {
+                        Text("Name").foregroundStyle(.secondary)
+                        Spacer()
+                        Text(device.name).foregroundStyle(.primary).lineLimit(1)
+                        Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                }
+                .accessibilityLabel("Rename \(device.name)")
+                .accessibilityIdentifier("device.rename")
                 infoRow("Status", value: statusLabel, valueColor: statusColor)
                 if !agentNames.isEmpty {
                     infoRow("Coding agents", value: agentNames)
@@ -173,6 +194,22 @@ struct DeviceDetailView: View {
             SessionDetailView(sessionId: nav.id)
                 .id(nav.id)
                 .environment(appState)
+        }
+        .alert("Rename Device", isPresented: $showRename) {
+            TextField(device.ownName, text: $nameDraft)
+                .onChange(of: nameDraft) { _, value in
+                    if value.unicodeScalars.count > DeviceName.maxLength {
+                        nameDraft = String(String.UnicodeScalarView(value.unicodeScalars.prefix(DeviceName.maxLength)))
+                    }
+                }
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                if let name = DeviceName.renameValue(draft: nameDraft, for: device) {
+                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                }
+            }
+        } message: {
+            Text("Shown on all your devices. Leave it empty to use \"\(device.ownName)\".")
         }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}

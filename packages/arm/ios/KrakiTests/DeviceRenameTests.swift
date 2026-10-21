@@ -1,0 +1,87 @@
+import XCTest
+#if os(macOS)
+@testable import Kraki_Dev
+#else
+@testable import Kraki
+#endif
+
+/// Renaming a device (`rename_device` → `device_renamed`), the native side:
+/// name rules shared with the relay, applying the relay's broadcast to the
+/// device list and its sessions, and the `@head` wrapper accepting it.
+final class DeviceRenameTests: XCTestCase {
+    private var root: URL!
+    private var app: AppState!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-rename-\(UUID().uuidString)")
+        app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+    }
+
+    override func tearDown() {
+        app = nil
+        try? FileManager.default.removeItem(at: root)
+        super.tearDown()
+    }
+
+    private func json(_ object: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func session(_ id: String, on deviceId: String, named name: String) -> SessionInfo {
+        SessionInfo(id: id, deviceId: deviceId, deviceName: name, agent: "copilot", state: .idle, mode: .auto,
+                    lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
+    }
+
+    func testNamesAreNormalisedLikeTheRelay() {
+        XCTAssertEqual(DeviceName.normalize("  Work \n\t laptop "), "Work laptop")
+        XCTAssertEqual(DeviceName.normalize("a\u{0007}b\u{2028}c"), "a b c")
+        XCTAssertEqual(DeviceName.normalize("   "), "")
+        XCTAssertEqual(DeviceName.normalize(String(repeating: "😀", count: 64))?.unicodeScalars.count, 64)
+        XCTAssertNil(DeviceName.normalize(String(repeating: "x", count: 65)))
+    }
+
+    func testRenameValue() {
+        let laptop = DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true)
+        let renamed = DeviceSummary(id: "t", name: "Work laptop", role: .tentacle, online: true, defaultName: "corelli-mbp")
+        XCTAssertEqual(DeviceName.renameValue(draft: " Work  laptop ", for: laptop), "Work laptop")
+        XCTAssertNil(DeviceName.renameValue(draft: "corelli-mbp", for: laptop), "unchanged")
+        XCTAssertNil(DeviceName.renameValue(draft: "", for: laptop), "already its own name")
+        XCTAssertEqual(DeviceName.renameValue(draft: "", for: renamed), "", "clears the custom name")
+        XCTAssertEqual(DeviceName.renameValue(draft: "corelli-mbp", for: renamed), "", "its own name clears too")
+        XCTAssertNil(DeviceName.renameValue(draft: "Work laptop", for: renamed), "unchanged")
+        XCTAssertNil(DeviceName.renameValue(draft: String(repeating: "x", count: 65), for: laptop), "too long")
+    }
+
+    func testDeviceRenamedUpdatesDevicesAndSessions() throws {
+        app.deviceStore.setDevices([
+            DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true),
+            DeviceSummary(id: "o", name: "other", role: .tentacle, online: true),
+        ])
+        app.sessionStore.sessions = ["s1": session("s1", on: "t", named: "corelli-mbp"),
+                                     "s2": session("s2", on: "o", named: "other")]
+
+        // Arrives wrapped as {from:"@head", msg}; the wrapper must accept it.
+        let wrapped: [String: Any] = ["from": "@head", "msg": ["type": "device_renamed", "deviceId": "t", "name": "Work laptop", "defaultName": "corelli-mbp"]]
+        let inner = try XCTUnwrap(AppState.headControlMessage(in: wrapped))
+        app.messageRouter?.handleRawMessage(try json(inner))
+
+        XCTAssertEqual(app.deviceStore.devices["t"]?.name, "Work laptop")
+        XCTAssertEqual(app.deviceStore.devices["t"]?.defaultName, "corelli-mbp")
+        XCTAssertEqual(app.sessionStore.sessions["s1"]?.deviceName, "Work laptop")
+        XCTAssertEqual(app.sessionStore.sessions["s2"]?.deviceName, "other")
+
+        app.messageRouter?.handleRawMessage(try json(["type": "device_renamed", "deviceId": "t", "name": "corelli-mbp"]))
+        XCTAssertEqual(app.deviceStore.devices["t"]?.name, "corelli-mbp")
+        XCTAssertNil(app.deviceStore.devices["t"]?.defaultName)
+        XCTAssertEqual(app.sessionStore.sessions["s1"]?.deviceName, "corelli-mbp")
+    }
+
+    func testDeviceListCarriesTheDevicesOwnName() throws {
+        let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
+        XCTAssertEqual(parsed.name, "Work laptop")
+        XCTAssertEqual(parsed.ownName, "corelli-mbp")
+        // Device rows cached by an older build decode without the new field.
+        let old = try JSONDecoder().decode(DeviceSummary.self, from: try json(["id": "t", "name": "corelli-mbp", "role": "tentacle", "online": false]))
+        XCTAssertNil(old.defaultName)
+    }
+}

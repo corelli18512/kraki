@@ -31,7 +31,8 @@ extension DeviceSummary {
             encryptionKey: json["encryptionKey"] as? String,
             online: json["online"] as? Bool ?? false,
             lastSeen: json["lastSeen"] as? String,
-            createdAt: json["createdAt"] as? String
+            createdAt: json["createdAt"] as? String,
+            defaultName: json["defaultName"] as? String
         )
     }
 }

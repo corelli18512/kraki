@@ -29,7 +29,7 @@ export interface PulseFrameField {
 
 /** Reserved pulse routing target meaning "deliver to the head (relay) itself"
  *  rather than forward to a device. A pulse frame addressed here carries
- *  PLAINTEXT control JSON (update_preferences / remove_device /
+ *  PLAINTEXT control JSON (update_preferences / remove_device / rename_device /
  *  (un)register_push_token) — the head is the legitimate recipient, so there is
  *  no E2E on this hop and the payload is NOT an E2E {blob,keys}. The `@` prefix
  *  cannot collide with a real deviceId (which are `dev_`/`app_`-prefixed or a
@@ -47,6 +47,7 @@ export const HEAD_CONTROL_TYPES: ReadonlySet<string> = new Set([
   'device_joined',
   'device_left',
   'device_removed',
+  'device_renamed',
   'device_pending',
   'preferences_updated',
   'push_token_registered',

@@ -179,6 +179,20 @@ describe('useStore', () => {
       expect(useStore.getState().devices.has('dev-2')).toBe(true);
     });
 
+    it('renameDevice renames the device and relabels its sessions', () => {
+      useStore.getState().setDevices([mockDevice, mockDevice2]);
+      useStore.getState().upsertSession({ id: 's1', deviceId: 'dev-1', deviceName: mockDevice.name, agent: 'copilot', state: 'idle', messageCount: 0 });
+      useStore.getState().upsertSession({ id: 's2', deviceId: 'dev-2', deviceName: mockDevice2.name, agent: 'copilot', state: 'idle', messageCount: 0 });
+      useStore.getState().renameDevice('dev-1', 'Work laptop', mockDevice.name);
+      expect(useStore.getState().devices.get('dev-1')).toMatchObject({ name: 'Work laptop', defaultName: mockDevice.name });
+      expect(useStore.getState().sessions.get('s1')?.deviceName).toBe('Work laptop');
+      expect(useStore.getState().sessions.get('s2')?.deviceName).toBe(mockDevice2.name);
+
+      useStore.getState().renameDevice('dev-1', mockDevice.name);
+      expect(useStore.getState().devices.get('dev-1')).toEqual(mockDevice);
+      expect(useStore.getState().sessions.get('s1')?.deviceName).toBe(mockDevice.name);
+    });
+
     it('setDeviceOnline toggles online status', () => {
       useStore.getState().setDevices([mockDevice]);
       useStore.getState().setDeviceOnline('dev-1', false);

@@ -1,8 +1,28 @@
 /** Device presence: who joined, left, is pending or was removed, and the device list. */
 
 import { WebSocket } from 'ws';
-import type { DeviceSummary, DeviceRole, DeviceKind } from '@kraki/protocol';
+import type { DeviceSummary } from '@kraki/protocol';
 import type { HeadServer } from '../server.js';
+import type { StoredDevice } from '../storage.js';
+import { deviceSummary } from '../device-summary.js';
+
+export { deviceSummary };
+
+/** Tell every online device of the account (the renaming one included: it is
+ *  its acknowledgement) the device's new name. */
+export function broadcastDeviceRenamed(server: HeadServer, userId: string, device: StoredDevice): void {
+  const msg = { type: 'device_renamed', deviceId: device.id, name: device.name,
+    ...(device.displayName != null && { defaultName: device.reportedName }) };
+  let userDevices;
+  try {
+    userDevices = server.storage.getDevicesByUser(userId);
+  } catch { return; }
+  for (const d of userDevices) {
+    const ws = server.connections.get(d.id);
+    if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+    server.sendControlToDevice(d.id, msg);
+  }
+}
 
 export function broadcastDeviceRemoved(server: HeadServer, userId: string, removedDeviceId: string): void {
   let userDevices;
@@ -23,17 +43,7 @@ export function broadcastDeviceJoined(server: HeadServer, userId: string, newDev
   } catch { return; } // Storage may be closed during shutdown
   if (!device) return;
 
-  const summary: DeviceSummary = {
-    id: device.id,
-    name: device.name,
-    role: device.role as DeviceRole,
-    kind: (device.kind as DeviceKind) ?? undefined,
-    publicKey: device.publicKey ?? undefined,
-    encryptionKey: device.encryptionKey ?? undefined,
-    online: true,
-    lastSeen: device.lastSeen,
-    createdAt: device.createdAt,
-  };
+  const summary = deviceSummary(device, true);
 
   let userDevices;
   try {
@@ -75,15 +85,5 @@ export function broadcastDevicePending(server: HeadServer, userId: string, pendi
 
 export function getDeviceSummaries(server: HeadServer, userId: string): DeviceSummary[] {
   const stored = server.storage.getDevicesByUser(userId);
-  return stored.map(d => ({
-    id: d.id,
-    name: d.name,
-    role: d.role as DeviceRole,
-    kind: (d.kind as DeviceKind) ?? undefined,
-    publicKey: d.publicKey ?? undefined,
-    encryptionKey: d.encryptionKey ?? undefined,
-    online: server.connections.has(d.id),
-    lastSeen: d.lastSeen,
-    createdAt: d.createdAt,
-  }));
+  return stored.map(d => deviceSummary(d, server.connections.has(d.id)));
 }

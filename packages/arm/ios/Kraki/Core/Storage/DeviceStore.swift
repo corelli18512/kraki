@@ -289,6 +289,16 @@ final class DeviceStore {
         scheduleSave()
     }
 
+    /// `device_renamed`: the name to show now, plus the device's own name
+    /// while a custom one is set.
+    func renameDevice(_ id: String, name: String, defaultName: String?) {
+        guard var device = devices[id] else { return }
+        device.name = name
+        device.defaultName = defaultName
+        devices[id] = device
+        scheduleSave()
+    }
+
     func setOnline(_ id: String, _ online: Bool) {
         devices[id]?.online = online
         if online {

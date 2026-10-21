@@ -13,7 +13,7 @@ extension AppState: KrakiVoiceInputHost {
     /// packages/protocol). Anything else arriving that way, notably `auth_ok`,
     /// `auth_error` and consumer/producer messages, is forged and dropped.
     static let headControlTypes: Set<String> = [
-        "device_joined", "device_left", "device_removed", "device_pending",
+        "device_joined", "device_left", "device_removed", "device_renamed", "device_pending",
         "preferences_updated", "push_token_registered", "notification_preview",
         "voice_lease_grant", "voice_lease_denied", "voice_vocabulary_updated",
     ]

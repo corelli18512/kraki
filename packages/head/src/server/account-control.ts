@@ -1,14 +1,14 @@
-/** Account control messages: preferences, Custom Words, push tokens and previews, removing devices, deleting the account. */
+/** Account control messages: preferences, Custom Words, push tokens and previews, renaming and removing devices, deleting the account. */
 
 import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { WebSocket } from 'ws';
 import type { BlobPayload } from '@kraki/protocol';
-import { ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
+import { ACCOUNT_DELETED_CLOSE_CODE, normalizeDeviceName } from '@kraki/protocol';
 import { parseVoiceWordOps, type VoiceWord } from '../voice-vocabulary.js';
 import { getLogger } from '../logger.js';
 import { trace } from '../trace.js';
 import type { HeadServer } from '../server.js';
-import { broadcastDeviceRemoved } from './presence.js';
+import { broadcastDeviceRemoved, broadcastDeviceRenamed } from './presence.js';
 import { publicPreferences, type ClientState } from './shared.js';
 
 /** The relay-terminated control ops, callable from BOTH the raw-WS dispatch
@@ -18,6 +18,7 @@ export function handleControlMessage(server: HeadServer, ws: WebSocket, state: C
     case 'update_preferences':    handleUpdatePreferences(server, ws, state, msg); return true;
     case 'update_voice_vocabulary': handleUpdateVoiceVocabulary(server, state, msg); return true;
     case 'remove_device':         handleRemoveDevice(server, ws, state, msg.deviceId as string); return true;
+    case 'rename_device':         void handleRenameDevice(server, ws, state, msg); return true;
     case 'delete_account':        void handleDeleteAccount(server, ws, state); return true;
     case 'register_push_token':   handleRegisterPushToken(server, ws, state, msg); return true;
     case 'unregister_push_token': handleUnregisterPushToken(server, ws, state, msg); return true;
@@ -116,6 +117,62 @@ export function firePushPreview(server: HeadServer, state: ClientState, pushPrev
   trace('PUSH-FIRE', { sender: senderDeviceId, onlineCount: onlineDeviceIds.length, offlineCount, previewKeys: Object.keys(pushPreview.keys) });
   server.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, pushPreview)
     .catch(err => getLogger().warn('Push notification send failed', { error: (err as Error).message }));
+}
+
+/**
+ * Give a device of the account a custom name (empty clears it). Any app may
+ * rename any device of its account, online or not. In edge mode the account
+ * service owns the device list and every auth re-mirrors it, so the rename is
+ * stored there first; only then is it applied here and broadcast.
+ */
+export async function handleRenameDevice(server: HeadServer, ws: WebSocket, state: ClientState, msg: Record<string, unknown>): Promise<void> {
+  const logger = getLogger();
+  if (!state.userId || !state.deviceId) {
+    server.sendError(ws, 'Not authenticated');
+    return;
+  }
+  const userId = state.userId;
+  if (server.storage.getDevice(state.deviceId)?.role !== 'app') {
+    server.sendError(ws, 'Only apps can rename devices');
+    return;
+  }
+  const targetDeviceId = msg.deviceId;
+  if (typeof targetDeviceId !== 'string' || !targetDeviceId || typeof msg.name !== 'string') {
+    server.sendError(ws, 'Missing deviceId or name');
+    return;
+  }
+  const name = normalizeDeviceName(msg.name);
+  if (name === null) {
+    server.sendError(ws, 'Device name is too long');
+    return;
+  }
+  const target = server.storage.getDevice(targetDeviceId);
+  if (!target || target.userId !== userId) {
+    server.sendError(ws, 'Device not found');
+    return;
+  }
+  const displayName = name || null;
+
+  const remote = server.authBackend;
+  if (remote instanceof RemoteAuthBackend) {
+    let stored = false;
+    try {
+      stored = await remote.renameDevice(userId, targetDeviceId, displayName);
+    } catch (err) {
+      logger.warn('Failed to rename device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
+    }
+    if (!stored) {
+      server.sendError(ws, 'Could not rename the device. Try again later.');
+      return;
+    }
+  }
+
+  // The device may have been removed while the account service answered.
+  if (!server.storage.setDeviceDisplayName(targetDeviceId, displayName)) return;
+  const renamed = server.storage.getDevice(targetDeviceId);
+  if (!renamed) return;
+  logger.info('Device renamed', { deviceId: targetDeviceId, byDevice: state.deviceId, custom: displayName !== null });
+  broadcastDeviceRenamed(server, userId, renamed);
 }
 
 export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: ClientState, targetDeviceId: string): void {

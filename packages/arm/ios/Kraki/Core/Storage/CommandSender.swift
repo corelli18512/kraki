@@ -1071,6 +1071,13 @@ final class CommandSender {
         appState?.sendRelayControl(["type": "remove_device", "deviceId": deviceId])
     }
 
+    /// Give a device of this account a custom name (`""` goes back to its
+    /// own). Relay-terminated like `remove_device`; the relay answers every
+    /// device of the account with `device_renamed`.
+    func renameDevice(deviceId: String, name: String) {
+        appState?.sendRelayControl(["type": "rename_device", "deviceId": deviceId, "name": name])
+    }
+
     // MARK: - Local sessions (import picker)
 
     /// Ask a tentacle for its catalog of importable local sessions.

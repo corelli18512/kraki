@@ -2167,6 +2167,18 @@ describe('KrakiWSClient', () => {
       expect(sent.deviceId).toBe('dev-web-123');
     });
 
+    it('applies device_renamed from the head', () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      useStore.getState().setDevices([{ id: 'dev-t', name: 'corelli-mbp', role: 'tentacle', online: true }]);
+      const deliver = (msg: object) => (client as unknown as { handlePulseDelivered(p: string): void })
+        .handlePulseDelivered(JSON.stringify({ from: '@head', msg }));
+      deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'Work laptop', defaultName: 'corelli-mbp' });
+      expect(useStore.getState().devices.get('dev-t')).toMatchObject({ name: 'Work laptop', defaultName: 'corelli-mbp' });
+      deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'corelli-mbp' });
+      expect(useStore.getState().devices.get('dev-t')?.name).toBe('corelli-mbp');
+      expect(useStore.getState().devices.get('dev-t')?.defaultName).toBeUndefined();
+    });
+
     it('reassembles a payload the Tentacle sent in fragments', async () => {
       const { fragmentPayload } = await import('@kraki/protocol');
       const client = new KrakiWSClient('ws://localhost:9999');
