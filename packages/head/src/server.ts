@@ -12,7 +12,7 @@ import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
 import { handleControlMessage, firePushPreview } from './server/account-control.js';
-import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken, mirrorAuthResult, sendAuthError } from './server/auth-flow.js';
+import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken, sendAuthError } from './server/auth-flow.js';
 import { RemoteAuthBackend, type EdgeRevocation } from './remote-auth-backend.js';
 import type { AuthErrorCode } from '@kraki/protocol';
 import { broadcastDeviceJoined, broadcastDeviceLeft, broadcastDevicePending } from './server/presence.js';
@@ -66,8 +66,6 @@ export class HeadServer {
       // Edge-local challenge auth (EdgeAuthCache): act on the account
       // service's background answers.
       const remote = this.authBackend;
-      remote.revalidationContext = () => this.renameClock;
-      remote.onRefreshed = (result, clock) => mirrorAuthResult(this, result, typeof clock === 'number' ? clock : this.renameClock);
       remote.onRevoked = (revocation) => this.revokeDevice(revocation);
     }
     this.wss = new WebSocketServer({

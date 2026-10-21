@@ -164,6 +164,12 @@ export class EdgeAuthCache {
     };
   }
 
+  /** The account service confirmed the device as cached (status poll):
+   *  trust is fresh again. No epoch change: nothing about it changed. */
+  confirm(deviceId: string): void {
+    this.db.prepare('UPDATE edge_auth_cache SET verified_at = ? WHERE device_id = ?').run(this.now(), deviceId);
+  }
+
   forget(deviceId: string): void {
     this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?').run(deviceId);
     this.lastRevalidation.delete(deviceId);
