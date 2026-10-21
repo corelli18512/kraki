@@ -76,24 +76,7 @@ final class AppState {
         endTask: { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: $0)) }
     ))
 
-    @ObservationIgnored lazy var backgroundSocketGrace = BackgroundSocketGrace(hooks: .init(
-        canKeep: { [weak self] in
-            guard let self else { return false }
-            return self.connectionStatus == .connected
-                && self.wsClient?.isAuthenticated == true
-                && self.relayFeatures.contains("app_visibility")
-        },
-        setVisible: { [weak self] visible in self?.sendAppVisibility(visible) },
-        teardown: { [weak self] in
-            guard self?.isInBackground == true else { return }
-            self?.tearDownForBackground()
-        },
-        beginTask: { expired in
-            let id = UIApplication.shared.beginBackgroundTask(withName: "KrakiSocketGrace", expirationHandler: expired)
-            return id == .invalid ? nil : id.rawValue
-        },
-        endTask: { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: $0)) }
-    ))
+    @ObservationIgnored lazy var backgroundSocketGrace = makeBackgroundSocketGrace()
     #endif
 
     /// The durable outbox lives next to the message database, so each app
@@ -550,16 +533,6 @@ final class AppState {
     @ObservationIgnored private var pathObserver: NetworkPathObserver?
     @ObservationIgnored private let exitMarker = ForegroundExitMarker(defaults: .standard)
 
-    /// Starts the opening record: the first call per process is a cold start,
-    /// later ones only after the app was hidden or the Mac slept.
-    func noteVisible(keptSocket: Bool = false) {
-        stability.appVisible(
-            hasCachedContent: !sessionStore.sessions.isEmpty,
-            viewing: sessionStore.activeSessionId != nil,
-            keptConnection: keptSocket && connectionStatus == .connected
-        )
-        exitMarker.enteredForeground()
-    }
 
     /// The app leaves the screen in an orderly way (background, sleep, quit):
     /// the next launch will not report an unclean exit.
@@ -615,7 +588,7 @@ final class AppState {
             var f: [DiagField: DiagValue] = [.outcome: .tag(open.outcome.rawValue), .gap: .int(open.gap)]
             if let v = open.firstContentMs { f[.firstContentMs] = .number(v) }
             if let v = open.currentMs { f[.viewCurrentMs] = .number(v) }
-            if open.reconnecting { f[.reconnecting] = .bool(true) }
+            f[.reconnecting] = .bool(open.reconnecting)
             KrakiDiag.record(.open, f)
         }
         sendMetrics.onSummary = { send in
@@ -658,7 +631,7 @@ final class AppState {
             if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
             if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
             if let v = ready.previousExit { f[.previousExit] = .tag(v) }
-            if ready.kept { f[.kept] = .bool(true) }
+            f[.kept] = .bool(ready.kept)
             KrakiDiag.record(.ready, f)
         }
         stability.onOutage = { outage in
@@ -839,5 +812,51 @@ struct UserInfo: Codable, Equatable {
         provider = try container.decodeIfPresent(String.self, forKey: .provider)
         email = try container.decodeIfPresent(String.self, forKey: .email)
         preferences = try container.decodeIfPresent([String: AnyCodable].self, forKey: .preferences)
+    }
+}
+
+// MARK: - Opening record and background socket grace (same file: private state)
+
+extension AppState {
+    /// Starts the opening record: the first call per process is a cold start,
+    /// later ones only after the app was hidden or the Mac slept.
+    func noteVisible(keptSocket: Bool = false) {
+        stability.appVisible(
+            hasCachedContent: !sessionStore.sessions.isEmpty,
+            viewing: sessionStore.activeSessionId != nil,
+            keptConnection: keptSocket && connectionStatus == .connected
+        )
+        exitMarker.enteredForeground()
+    }
+
+    #if os(iOS)
+    func makeBackgroundSocketGrace() -> BackgroundSocketGrace {
+        BackgroundSocketGrace(hooks: .init(
+            canKeep: { [weak self] in
+                guard let self else { return false }
+                return self.connectionStatus == .connected
+                    && self.wsClient?.isAuthenticated == true
+                    && self.relayFeatures.contains("app_visibility")
+            },
+            setVisible: { [weak self] visible in self?.sendAppVisibility(visible) },
+            teardown: { [weak self] in
+                guard self?.isInBackground == true else { return }
+                self?.tearDownForBackground()
+            },
+            beginTask: { expired in
+                let id = UIApplication.shared.beginBackgroundTask(withName: "KrakiSocketGrace", expirationHandler: expired)
+                return id == .invalid ? nil : id.rawValue
+            },
+            endTask: { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: $0)) }
+        ))
+    }
+    #endif
+
+    /// `auth_ok` capabilities of this relay connection.
+    func applyRelayCapabilities(_ authOk: [String: Any]) {
+        // A relay that acknowledges inbound data promptly lets Pulse pace large
+        // uploads by acks; an older one only acks on idle heartbeats.
+        pulseManager?.acksPromptly = (authOk["pulseAckBytes"] as? Int ?? 0) > 0
+        relayFeatures = Set(authOk["features"] as? [String] ?? [])
     }
 }

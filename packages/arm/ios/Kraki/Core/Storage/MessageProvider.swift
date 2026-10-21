@@ -768,18 +768,7 @@ final class MessageProvider {
             if case .head = removedKind { return true }
             return false
         }()
-        if wasHeadRequest, let requested = headRequestedAt.removeValue(forKey: sessionId) {
-            #if KRAKI_DIAG
-            let waitMs = (ProcessInfo.processInfo.systemUptime - requested.at) * 1000
-            let viewing = appState.sessionSubscriptionController.desiredSessionId == sessionId
-            KrakiDiag.record(.history, session: sessionId, [
-                .kind: .tag("head"), .count: .int(messages.count), .durationMs: .number(waitMs),
-                .viewing: .bool(viewing), .attempt: .int(requested.attempt),
-            ])
-            #else
-            _ = requested
-            #endif
-        }
+        if wasHeadRequest { noteHeadReply(sessionId, count: messages.count) }
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
@@ -1020,18 +1009,6 @@ final class MessageProvider {
         drainPendingTail(sessionId)
     }
 
-    /// Whether the chat tail is currently being filled in the
-    /// background. UI binds a bottom spinner to this. True iff the
-    /// buffer has unresolved entries (waiting on a range fetch) or
-    /// a request is in flight.
-    func isFillingTail(_ sessionId: String) -> Bool {
-        if hasSlot(sessionId, where: { if case .range = $0 { return true }; return false }) {
-            return true
-        }
-        if let buf = pendingTail[sessionId], !buf.isEmpty { return true }
-        return false
-    }
-
     // MARK: - Preview
 
     // MARK: - Private
@@ -1046,16 +1023,7 @@ final class MessageProvider {
         guard let appState else { return }
         guard let tentacleDeviceId = appState.sessionStore.sessions[sessionId]?.deviceId,
               !tentacleDeviceId.isEmpty else { return }
-        // Before auth_ok the request cannot reach the Tentacle (the transport
-        // drops unauthenticated sends), yet its slot used to stay reserved:
-        // the post-auth session_list self-heal then saw `isLoadingHead` and
-        // skipped, so a Chat opened during reconnect waited out the full
-        // head timeout (diag: catch-up exactly 5.0 s after the tap). Leave the
-        // slot free; the session_list self-heal asks once we are signed in.
-        guard appState.connectionStatus == .connected else {
-            KLog.d("⏭️ [2/history request] session=\(sessionId.prefix(12)) skip=notAuthenticated reason=\(reason)")
-            return
-        }
+        guard signedInForRequest(sessionId, reason: reason) else { return }
 
         let slotKind: OutstandingKind = beforeSeq.map { .before($0) } ?? .head
         let kind = beforeSeq == nil ? "head" : "before=\(beforeSeq!)"
@@ -1087,9 +1055,7 @@ final class MessageProvider {
         if beforeSeq == nil { headRequestedAt[sessionId] = (ProcessInfo.processInfo.systemUptime, attempt) }
 
         appState.commandSender?.requestSessionMessages(
-            sessionId: sessionId,
-            beforeSeq: beforeSeq,
-            afterSeq: beforeSeq == nil ? appState.messageStore.dbLastSeq(sessionId) : nil
+            sessionId: sessionId, beforeSeq: beforeSeq, afterSeq: beforeSeq == nil ? appState.messageStore.dbLastSeq(sessionId) : nil
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + (beforeSeq == nil ? Self.headRequestTimeout : 10), execute: work)
@@ -1225,6 +1191,52 @@ extension MessageProvider {
         tracePulled = tracePulled.filter { !$0.key.hasPrefix("\(sessionId):") }
         cardRequested.remove(sessionId)
         appState?.sessionStore.setLoading(sessionId, false)
+    }
+}
+
+// MARK: - Reconnect catch-up (same file: shares the class's private state)
+
+extension MessageProvider {
+    /// Whether the chat tail is currently being filled in the
+    /// background. UI binds a bottom spinner to this. True iff the
+    /// buffer has unresolved entries (waiting on a range fetch) or
+    /// a request is in flight.
+    func isFillingTail(_ sessionId: String) -> Bool {
+        if hasSlot(sessionId, where: { if case .range = $0 { return true }; return false }) {
+            return true
+        }
+        if let buf = pendingTail[sessionId], !buf.isEmpty { return true }
+        return false
+    }
+
+    /// Before auth_ok a history request cannot reach the Tentacle (the
+    /// transport drops unauthenticated sends), yet its slot used to stay
+    /// reserved: the post-auth session_list self-heal then saw
+    /// `isLoadingHead` and skipped, so a Chat opened during a reconnect waited
+    /// out the full head timeout (diag: catch-up exactly 5.0 s after the tap).
+    /// Leave the slot free; the session_list self-heal asks once signed in.
+    fileprivate func signedInForRequest(_ sessionId: String, reason: String) -> Bool {
+        guard appState?.connectionStatus == .connected else {
+            KLog.d("⏭️ [2/history request] session=\(sessionId.prefix(12)) skip=notAuthenticated reason=\(reason)")
+            return false
+        }
+        return true
+    }
+
+    /// Diag `history.batch`: head request → reply handled here, to split the
+    /// Tentacle's share of a slow catch-up from network / Head / decrypt.
+    fileprivate func noteHeadReply(_ sessionId: String, count: Int) {
+        guard let requested = headRequestedAt.removeValue(forKey: sessionId) else { return }
+        #if KRAKI_DIAG
+        let waitMs = (ProcessInfo.processInfo.systemUptime - requested.at) * 1000
+        let viewing = appState?.sessionSubscriptionController.desiredSessionId == sessionId
+        KrakiDiag.record(.history, session: sessionId, [
+            .kind: .tag("head"), .count: .int(count), .durationMs: .number(waitMs),
+            .viewing: .bool(viewing), .attempt: .int(requested.attempt),
+        ])
+        #else
+        _ = requested
+        #endif
     }
 }
 

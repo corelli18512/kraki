@@ -464,10 +464,7 @@ final class AuthManager {
 
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
-        // A relay that acknowledges inbound data promptly lets Pulse pace large
-        // uploads by acks; an older one only acks on idle heartbeats.
-        appState.pulseManager?.acksPromptly = (message["pulseAckBytes"] as? Int ?? 0) > 0
-        appState.relayFeatures = Set(message["features"] as? [String] ?? [])
+        appState.applyRelayCapabilities(message)
         let voiceCapability = (message["voice"] as? [String: Any]).flatMap(VoiceCapability.init(json:))
 
         if usesEphemeralOpenAuth {

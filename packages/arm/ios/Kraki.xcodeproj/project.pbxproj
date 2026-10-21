@@ -367,6 +367,7 @@
 		832C89E3B652B1D41983AE67 /* MacAppDelegate+Rendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2094AEF0FE03BEA927602B65 /* MacAppDelegate+Rendering.swift */; };
 		83708A5CFDCAF5DF4D42B03A /* MacPresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70B56E49F0EA690CE7F1B08 /* MacPresenceTests.swift */; };
 		83936B1E21CD7A7B83230630 /* VoiceVocabularySync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CEA6A534E6C629E191BE060 /* VoiceVocabularySync.swift */; };
+		84315666218C35E62BF9A515 /* ReconnectLatencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BF30CBD1D8758EFDB68366 /* ReconnectLatencyTests.swift */; };
 		846189C0712D27DE650B1BDD /* ThisMacSetupStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */; };
 		848E7313B7C56004A546DD7C /* MacSessionActivityDots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCED07CCC2115423AD55B45 /* MacSessionActivityDots.swift */; };
 		84954F7CDDC34A4F2B61CF3C /* NativeStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A84041CFCAABE6E3E2B01 /* NativeStyleTests.swift */; };
@@ -418,6 +419,7 @@
 		95B50B1B58EE167D96ECAF54 /* LocalLinkClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2EFD5BF1FB2C036AFDC23BF /* LocalLinkClient.swift */; };
 		96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
 		97B4D1DF70CC145EFCFAA78F /* PairingLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E8BC58D7E2F9C1B09549F72 /* PairingLinkTests.swift */; };
+		983ACB664973690CAC5FA4C0 /* BackgroundSocketGrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D7833645BC67CBB06D852F3 /* BackgroundSocketGrace.swift */; };
 		98C3956EEDC84748B933CB82 /* TKCodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83112E3D594703A611FDCA32 /* TKCodeHighlighter.swift */; };
 		990C4EB21B4E6743501CCA1E /* MacStartingVoiceChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBBDEBF428C4E7A629F6AA8 /* MacStartingVoiceChat.swift */; };
 		9914A1454DA0A4958D6DD68E /* CardTurnGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870471E45E23ABCD41260C6F /* CardTurnGateTests.swift */; };
@@ -607,6 +609,7 @@
 		DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */; };
 		DD2F5E267165152D175B1811 /* SessionNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3029DCD241AE249B40965544 /* SessionNotifications.swift */; };
 		DDA161F9D1D1E93A3EB8EBC5 /* MacPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4F58D7B95DFE2EE271C71F /* MacPresence.swift */; };
+		DDD0B66DC6EDD7EA1B8D4E9C /* BackgroundSocketGrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D7833645BC67CBB06D852F3 /* BackgroundSocketGrace.swift */; };
 		DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B791C3F6BA99245733A941 /* PairingView.swift */; };
 		DE29243A03D71D778EBAE659 /* ArchiveE2EUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D13B91E51ADE577A38183ED /* ArchiveE2EUITests.swift */; };
 		DEAB0A834496F3A5235F55C7 /* MacNotificationDedupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5512B1E06F9B368B5AA468 /* MacNotificationDedupTests.swift */; };
@@ -948,6 +951,7 @@
 		7209F58C4D298C8764042569 /* DiagSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagSettingsSection.swift; sourceTree = "<group>"; };
 		7266CC5C151C27DC7434B2CE /* MacScrollControllers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacScrollControllers.swift; sourceTree = "<group>"; };
 		72AC8F0A5FEA54A824065B0C /* MacDeletedOpenSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeletedOpenSessionTests.swift; sourceTree = "<group>"; };
+		72BF30CBD1D8758EFDB68366 /* ReconnectLatencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectLatencyTests.swift; sourceTree = "<group>"; };
 		735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarExtraView.swift; sourceTree = "<group>"; };
 		74D308174966E96925EB69B8 /* mermaid-complex-report.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-complex-report.html"; sourceTree = "<group>"; };
 		74DB58BA45935DD4AAE77C45 /* DeviceUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdate.swift; sourceTree = "<group>"; };
@@ -1018,6 +1022,7 @@
 		9BC0634BC9C0F5245E97C899 /* Kraki.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Diagnostics.entitlements; sourceTree = "<group>"; };
 		9C72F9E868EE4A250EB16AC4 /* UsagePeekHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekHotKey.swift; sourceTree = "<group>"; };
 		9D53D5222D643A5A03C51209 /* NewSessionVoiceHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionVoiceHandoffTests.swift; sourceTree = "<group>"; };
+		9D7833645BC67CBB06D852F3 /* BackgroundSocketGrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSocketGrace.swift; sourceTree = "<group>"; };
 		9DA0F259C4438B894B5E0D5E /* KrakiMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiMac.entitlements; sourceTree = "<group>"; };
 		9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
 		9E85D17DFC304688DBB3F729 /* ActivityRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRow.swift; sourceTree = "<group>"; };
@@ -1338,6 +1343,7 @@
 			isa = PBXGroup;
 			children = (
 				8261534E96234C67C920EDCA /* AuthManager.swift */,
+				9D7833645BC67CBB06D852F3 /* BackgroundSocketGrace.swift */,
 				41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */,
 				E7769239D4911C0C1F99ECFC /* ForegroundActivityReporter.swift */,
 				E2EFD5BF1FB2C036AFDC23BF /* LocalLinkClient.swift */,
@@ -1857,6 +1863,7 @@
 				9D53D5222D643A5A03C51209 /* NewSessionVoiceHandoffTests.swift */,
 				C8DA497DCE23973F7E7C380E /* NewSessionVoiceTests.swift */,
 				E83F65DF5E2CEEFA6DA23D6C /* PairingSheetDetectionTests.swift */,
+				72BF30CBD1D8758EFDB68366 /* ReconnectLatencyTests.swift */,
 				19ED0DA842EA67CB8B2F5D35 /* SessionListReconcilePerfTests.swift */,
 				C4E4873CEEEF25B24B5E8035 /* TableRenderShots.swift */,
 				593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */,
@@ -2361,6 +2368,7 @@
 				9453E56DB5004F6F38ECC60A /* NewSessionVoiceTests.swift in Sources */,
 				EE5ABC53C6507BE6B265F395 /* PairingSheetDetectionTests.swift in Sources */,
 				9D6E1F2B6F68CD94D1463993 /* PushPreviewFormatTests.swift in Sources */,
+				84315666218C35E62BF9A515 /* ReconnectLatencyTests.swift in Sources */,
 				699EF196E7BD561AC9A1E88C /* SessionListReconcilePerfTests.swift in Sources */,
 				6E4A4503459C98F003D5DFF6 /* SteerPlacementTests.swift in Sources */,
 				80AB2DFB29CE41533597EA65 /* SubagentStepsTests.swift in Sources */,
@@ -2483,6 +2491,7 @@
 				4C10C6ECF451DA2AA2A5AED0 /* AttachmentStore.swift in Sources */,
 				F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */,
 				3D41352AEBFC0FFDA4E57F36 /* AvatarTestView.swift in Sources */,
+				DDD0B66DC6EDD7EA1B8D4E9C /* BackgroundSocketGrace.swift in Sources */,
 				E5952087022B1FCC4FB24D3F /* BackgroundVoiceFinisher.swift in Sources */,
 				09C0D793D6B2F99D7AA81939 /* BubbleActionSlot.swift in Sources */,
 				C00B760A90E96341077B088A /* BubbleCatalogTestView.swift in Sources */,
@@ -2784,6 +2793,7 @@
 				683B96FC8D6290D73BD26644 /* AttachmentRequestModifier.swift in Sources */,
 				F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */,
 				3581F3000482E30C0DE2698C /* AuthManager.swift in Sources */,
+				983ACB664973690CAC5FA4C0 /* BackgroundSocketGrace.swift in Sources */,
 				868F6B893339E2E6AC0A01C8 /* BackgroundVoiceFinisher.swift in Sources */,
 				76C2FEE3812CC1AB111716F4 /* BuildInfo.swift in Sources */,
 				F538DC4494F63E2D9968388F /* BuildProvenanceView.swift in Sources */,

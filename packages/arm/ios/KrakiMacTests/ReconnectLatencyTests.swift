@@ -56,7 +56,7 @@ final class ReconnectLatencyTests: XCTestCase {
 
     func testOnlyReusableCredentialsAreRetriedOnAFreshSocket() {
         func frame(_ object: [String: Any]) -> String {
-            String(data: try! JSONSerialization.data(withJSONObject: object), encoding: .utf8)!
+            (try? JSONSerialization.data(withJSONObject: object)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         }
         XCTAssertTrue(WebSocketClient.isRetryableAuthFrame(frame(["type": "auth", "auth": ["method": "challenge", "deviceId": "d"]])))
         XCTAssertTrue(WebSocketClient.isRetryableAuthFrame(frame(["type": "auth", "auth": ["method": "github_token", "token": "t"]])))
