@@ -332,6 +332,7 @@ extension AppState {
                 connectionStatus = .disconnected
             }
             pulseManager?.onDisconnected()
+            sendMetrics.pulseDisconnected()
         case .connecting:
             connectionStatus = .connecting
         }

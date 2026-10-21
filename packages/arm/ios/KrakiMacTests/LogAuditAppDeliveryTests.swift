@@ -292,14 +292,14 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         var clock = Date(timeIntervalSince1970: 10)
         let tracker = SendTracker()
         tracker.now = { clock }
-        tracker.created("a", kind: .typed, textLength: 3, attachments: 1, pathUp: true, handoffMs: 120)
-        tracker.created("t", kind: .typed, textLength: 3, attachments: 0, pathUp: true, handoffMs: 1)
+        tracker.created("a", kind: .typed, textLength: 3, attachments: 1, pathUp: true, handoffMs: 120, pulseGeneration: 1)
+        tracker.created("t", kind: .typed, textLength: 3, attachments: 0, pathUp: true, handoffMs: 1, pulseGeneration: 1)
         clock = clock.addingTimeInterval(1)
-        tracker.pulseAcked(seqUpTo: 4, lastSentSeq: 9, uploadQueueEmpty: false) // parts still queued
+        tracker.pulseAcked(seqUpTo: 4, lastSentSeq: 9, uploadQueueEmpty: false, generation: 1) // parts still queued
         clock = clock.addingTimeInterval(1)
-        tracker.pulseAcked(seqUpTo: 6, lastSentSeq: 9, uploadQueueEmpty: true)  // all sent, through 9
+        tracker.pulseAcked(seqUpTo: 6, lastSentSeq: 9, uploadQueueEmpty: true, generation: 1)  // all sent, through 9
         clock = clock.addingTimeInterval(1.5)
-        tracker.pulseAcked(seqUpTo: 9, lastSentSeq: 9, uploadQueueEmpty: true)
+        tracker.pulseAcked(seqUpTo: 9, lastSentSeq: 9, uploadQueueEmpty: true, generation: 1)
         clock = clock.addingTimeInterval(2)
         tracker.finished("a", .delivered)
         tracker.finished("t", .delivered)
@@ -309,5 +309,35 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertEqual(attachment.confirmMs ?? 0, 5_500, accuracy: 1)
         XCTAssertNil(tracker.summaries[1].handoffMs, "text sends are not broken down")
         XCTAssertNil(tracker.summaries[1].uploadMs)
+    }
+
+    /// Release review: an attachment delivered over the local link, or one
+    /// whose Pulse connection ended, got `uploadMs` from an unrelated ACK.
+    func testUploadIsMeasuredOnlyOnThePulseConnectionThatCarriedIt() {
+        var clock = Date(timeIntervalSince1970: 10)
+        let tracker = SendTracker()
+        tracker.now = { clock }
+        tracker.created("link", kind: .typed, textLength: 1, attachments: 1, pathUp: true, handoffMs: 5, pulseGeneration: nil)
+        tracker.created("dropped", kind: .typed, textLength: 1, attachments: 1, pathUp: true, handoffMs: 5, pulseGeneration: 2)
+        tracker.pulseDisconnected()
+        tracker.created("stale", kind: .typed, textLength: 1, attachments: 1, pathUp: true, handoffMs: 5, pulseGeneration: 3)
+        tracker.created("current", kind: .typed, textLength: 1, attachments: 1, pathUp: true, handoffMs: 5, pulseGeneration: 4)
+        clock = clock.addingTimeInterval(2)
+        tracker.pulseAcked(seqUpTo: 9, lastSentSeq: 9, uploadQueueEmpty: true, generation: 4)
+        for id in ["link", "dropped", "stale", "current"] { tracker.finished(id, .delivered) }
+        let upload = tracker.summaries.map(\.uploadMs)
+        XCTAssertNil(upload[0], "delivered over the local link")
+        XCTAssertNil(upload[1], "its connection ended")
+        XCTAssertNil(upload[2], "another connection generation")
+        XCTAssertEqual(upload[3] ?? 0, 2_000, accuracy: 1)
+    }
+
+    func testAppDisconnectDropsPendingUploadMeasurements() throws {
+        let app = try makeApp()
+        app.sendMetrics.created("a", kind: .typed, textLength: 1, attachments: 1, pathUp: true, handoffMs: 5, pulseGeneration: 7)
+        app.handleConnectionStateChange(.disconnected)
+        app.sendMetrics.pulseAcked(seqUpTo: 9, lastSentSeq: 9, uploadQueueEmpty: true, generation: 7)
+        app.sendMetrics.finished("a", .delivered)
+        XCTAssertNil(app.sendMetrics.summaries.last?.uploadMs)
     }
 }

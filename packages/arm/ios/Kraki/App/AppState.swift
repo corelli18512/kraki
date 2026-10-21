@@ -691,6 +691,8 @@ final class AppState {
         // the endpoint before E2E encryption, and unwraps inbound frames
         // after decryption.
         self.pulseManager = PulseManager(host: self)
+        // A new Pulse restarts its generations: nothing pending is measurable.
+        sendMetrics.pulseDisconnected()
         #if os(macOS)
         self.localLink = LocalLinkClient(appState: self)
         #endif

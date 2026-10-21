@@ -34,7 +34,8 @@ final class SendTracker {
         /// breakdown). Synchronous serialize + encrypt + frame on the main thread.
         var handoffMs: Double?
         /// Created → the Relay acknowledged the last Pulse part carrying it
-        /// (nil: not over Pulse, or the connection changed first). The rest of
+        /// (nil: not over Pulse, e.g. the local link, or the connection changed
+        /// first). Only an ACK of the connection it was handed to counts. The rest of
         /// `confirmMs` is Head → Tentacle → echo.
         var uploadMs: Double?
         /// Shown as a problem, yet delivered without the user retrying.
@@ -53,36 +54,54 @@ final class SendTracker {
         var shownSince: Date?
         /// An attachment send handed to Pulse whose upload is not acknowledged yet.
         var awaitingUpload = false
+        /// The Pulse connection generation it was handed to.
+        var uploadGeneration: Int?
         /// The Pulse seq whose acknowledgement covers its last part, once known.
         var uploadThroughSeq: UInt64?
     }
     private var entries: [String: Entry] = [:]
 
+    /// `pulseGeneration`: the connected Pulse generation the send was handed
+    /// to; nil when it went another way (local link) or Pulse was not connected.
     func created(_ clientId: String, kind: Summary.Kind, textLength: Int, attachments: Int, pathUp: Bool,
-                 handoffMs: Double? = nil) {
+                 handoffMs: Double? = nil, pulseGeneration: Int? = nil) {
         var entry = Entry(
             summary: Summary(kind: kind, offlineAtSend: !pathUp, attachments: attachments, textLength: textLength),
             createdAt: now()
         )
         if attachments > 0, let handoffMs {
             entry.summary.handoffMs = handoffMs
-            entry.awaitingUpload = true
+            entry.awaitingUpload = pulseGeneration != nil
+            entry.uploadGeneration = pulseGeneration
         }
         entries[clientId] = entry
     }
 
-    /// The Relay acknowledged Pulse data through `seqUpTo`. `lastSentSeq` is
-    /// the newest seq handed to Pulse so far; with nothing still queued for
-    /// upload it covers every attachment send handed off before now.
-    func pulseAcked(seqUpTo: UInt64, lastSentSeq: UInt64, uploadQueueEmpty: Bool) {
+    /// The Relay acknowledged Pulse data through `seqUpTo` on connection
+    /// `generation`. `lastSentSeq` is the newest seq handed to Pulse so far;
+    /// with nothing still queued for upload it covers every attachment send
+    /// handed off before now. A send of another generation is not measured.
+    func pulseAcked(seqUpTo: UInt64, lastSentSeq: UInt64, uploadQueueEmpty: Bool, generation: Int) {
         for (clientId, entry) in entries where entry.awaitingUpload {
             var entry = entry
+            guard entry.uploadGeneration == generation else {
+                entry.awaitingUpload = false
+                entries[clientId] = entry
+                continue
+            }
             if entry.uploadThroughSeq == nil, uploadQueueEmpty { entry.uploadThroughSeq = lastSentSeq }
             if let through = entry.uploadThroughSeq, through <= seqUpTo {
                 entry.awaitingUpload = false
                 entry.summary.uploadMs = now().timeIntervalSince(entry.createdAt) * 1000
             }
             entries[clientId] = entry
+        }
+    }
+
+    /// The Pulse connection ended: no pending upload can be measured any more.
+    func pulseDisconnected() {
+        for (clientId, entry) in entries where entry.awaitingUpload {
+            entries[clientId]?.awaitingUpload = false
         }
     }
 

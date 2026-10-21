@@ -172,12 +172,18 @@ final class CommandSender {
         // A steer's bubble appears now: the live card stays above it.
         if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
         let handoffStart = Date()
+        let pulse = appState?.pulseManager
+        let pulseHandoffsBefore = pulse?.payloadsHandedOff
         let handedOff = send(["type": "send_input", "payload": payload], sessionId: sessionId)
         if !handedOff { undispatched.insert(clientId) }
+        // Upload timing only for a send that went over the Relay's Pulse
+        // connection (not the local link) while it was connected.
+        let pulseGeneration = handedOff && pulse?.payloadsHandedOff != pulseHandoffsBefore ? pulse?.liveGeneration : nil
         appState?.sendMetrics.created(
             clientId, kind: answerTo != nil ? .answer : delivery == .steer ? .steer : .typed,
             textLength: text.utf8.count, attachments: attachments?.count ?? 0, pathUp: isMetricsPathUp(sessionId),
-            handoffMs: handedOff ? Date().timeIntervalSince(handoffStart) * 1000 : nil)
+            handoffMs: handedOff ? Date().timeIntervalSince(handoffStart) * 1000 : nil,
+            pulseGeneration: pulseGeneration)
         #if KRAKI_DIAG
         diagAccepted = true
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("created")])
