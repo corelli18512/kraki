@@ -73,7 +73,8 @@ export const schemas: Record<string, string[]> = {
   'diag.health': ['dropped', 'count', 'bytes'],
   'diag.upload': ['status', 'bytes', 'durationMs'],
   'work.slow': ['source', 'durationMs', 'messageSeq'],
-  'ui.busy': ['durationMs'],
+  // phase=inactive: on screen but not frontmost (Mac); absent while active.
+  'ui.busy': ['durationMs', 'phase'],
   'user.marker': [],
   'voice.action': ['source', 'textLength', 'accepted'],
   'list.snapshot': ['count', 'pending', 'firstSeq', 'lastSeq'],

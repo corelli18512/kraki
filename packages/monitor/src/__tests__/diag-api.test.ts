@@ -161,6 +161,11 @@ describe('off-band diagnostics', () => {
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [{ ev: 'raw.log', seq: 1, m: 0, t: 0, d: {} }] })))).status).toBe(204);
     expect(await stored(f)).toBeNull();
   });
+  it('stores ui.busy tagged phase=inactive (Mac hangs while not frontmost)', async () => {
+    const f = await fixture();
+    const busy = { ev: 'ui.busy', seq: 1, t: 1, m: 1, d: { durationMs: 1840.5, phase: 'inactive' } };
+    expect(sanitizeDiagBatch({ ...f.batch, events: [busy] }, f.id)).toEqual({ batch: { ...f.batch, events: [busy] }, stripped: 0, invalid: 0 });
+  });
   it('accepts metadata-only transport recovery reason and generation', async () => {
     const f = await fixture();
     const event = { ev: 'ws.state', seq: 1, t: Date.now(), m: 10, d: { source: 'pulse_progress_timeout', count: 3 } };

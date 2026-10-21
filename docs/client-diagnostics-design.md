@@ -26,7 +26,7 @@ The phase-one progress/performance numbers below are a historical snapshot; they
   Normal releases run `verify-production.sh` (metrics present, normal identity, no test-build identity or UI). See `docs/stability-metrics.md`.
 - Target versions this round: iOS 0.1.8 (build number assigned by the TestFlight workflow), Mac 0.2.40 (42).
 - Settings has a "Record and Send Diagnostics" toggle (on by default in diagnostics builds), the last upload time, the pending amount and a manual problem-marker button.
-- Added `ui.busy` (busy intervals ≥50 ms completed by the foreground run loop, excluding sleeping; not a watchdog stack),
+- Added `ui.busy` (busy intervals ≥50 ms completed by the main run loop while the app is on screen, excluding sleeping; tagged `phase=inactive` when not frontmost; not a watchdog stack),
   `list.snapshot` (counts/seq bounds/pending changes), `session.view`, and cross-platform `voice.action` metadata.
 - REST is deployed as a **standalone service** (current entry point `packages/monitor/src/cli.ts`), with a read-only Node 24 built-in SQLite connection to Head's devices table;
   `/api/diag/v1/*` on the existing domain is reverse-proxied to loopback:4011, without upgrading/restarting Head/Pulse.
