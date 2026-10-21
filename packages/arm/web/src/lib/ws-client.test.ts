@@ -2179,18 +2179,67 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().devices.get('dev-t')?.defaultName).toBeUndefined();
     });
 
-    it('reassembles a payload the Tentacle sent in fragments', async () => {
-      const { fragmentPayload } = await import('@kraki/protocol');
-      const client = new KrakiWSClient('ws://localhost:9999');
-      const name = 'x'.repeat(100_000);
-      const whole = JSON.stringify({ from: '@head', msg: { type: 'device_joined', device: { id: 'dev-big', name, role: 'app', online: true } } });
-      const parts = fragmentPayload(whole, 'f1')!;
-      expect(parts.length).toBeGreaterThan(2);
-      const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string): void }).handlePulseDelivered(p);
-      for (const part of parts.slice(0, -1)) deliver(part);
-      expect(useStore.getState().devices.has('dev-big')).toBe(false);
-      deliver(parts.at(-1)!);
-      expect(useStore.getState().devices.get('dev-big')?.name).toBe(name);
+    describe('fragment sender binding', () => {
+      async function authed() {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance._receive({
+          type: 'auth_ok', deviceId: 'dev-web-123',
+          devices: [
+            { id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' },
+            { id: 'dev-other', name: 'Other', role: 'tentacle', online: true, encryptionKey: 'k2' },
+          ],
+        });
+        return client;
+      }
+      // The Head stamps the authenticated sender on every part it forwards.
+      async function deliverParts(client: KrakiWSClient, whole: Record<string, unknown>, src: string, id = 'f1', mangle = false) {
+        const { fragmentPayload } = await import('@kraki/protocol');
+        const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void }).handlePulseDelivered(p, 'head');
+        const parts = fragmentPayload(JSON.stringify(whole), id, 40, 0)!;
+        expect(parts.length).toBeGreaterThan(2);
+        // `mangle`: every part but the first, with other content.
+        for (const part of mangle ? parts.slice(1) : parts) {
+          const p = { ...JSON.parse(part), src } as Record<string, unknown>;
+          if (mangle) p.d = 'x'.repeat((p.d as string).length);
+          deliver(JSON.stringify(p));
+        }
+        return parts.length;
+      }
+      const sessionList = (deviceId: string, id: string) => ({
+        type: 'session_list', deviceId, seq: 1, timestamp: '',
+        payload: { sessions: [{ id, agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] },
+      });
+
+      it('reassembles a payload the Tentacle sent in fragments', async () => {
+        const client = await authed();
+        await deliverParts(client, { blob: JSON.stringify(sessionList('dev-t', 'sess-frag')), keys: {} }, 'dev-t');
+        await vi.waitFor(() => expect(useStore.getState().sessions.get('sess-frag')?.deviceId).toBe('dev-t'));
+      });
+
+      it('a fragmented Head wrapper from a device is not Head control', async () => {
+        const client = await authed();
+        await deliverParts(client, { from: '@head', msg: { type: 'device_joined', device: { id: 'dev-rogue', name: 'Rogue', role: 'app', online: true } } }, 'dev-t');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(useStore.getState().devices.has('dev-rogue')).toBe(false);
+      });
+
+      it('a reassembled payload cannot claim another sender with its own src', async () => {
+        const client = await authed();
+        await deliverParts(client, { src: 'dev-other', blob: JSON.stringify(sessionList('dev-other', 'sess-forged')), keys: {} }, 'dev-t');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(useStore.getState().sessions.has('sess-forged')).toBe(false);
+      });
+
+      it('parts stamped by another sender never complete a set with the same id', async () => {
+        const client = await authed();
+        const whole = { blob: JSON.stringify(sessionList('dev-t', 'sess-real')), keys: {} };
+        // Another device pre-fills the set id with all but the first part.
+        await deliverParts(client, whole, 'dev-other', 'same', true);
+        await deliverParts(client, whole, 'dev-t', 'same');
+        await vi.waitFor(() => expect(useStore.getState().sessions.get('sess-real')?.deviceId).toBe('dev-t'));
+      });
     });
 
     it('declares fragment support to a Tentacle that offers it, and re-offers unconfirmed inputs', async () => {

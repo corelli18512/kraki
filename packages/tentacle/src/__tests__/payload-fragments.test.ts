@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PayloadAssembler, fragmentPayload, isPayloadFragment, PAYLOAD_FRAGMENT_THRESHOLD } from '@kraki/protocol';
+import { PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender, PAYLOAD_FRAGMENT_THRESHOLD } from '@kraki/protocol';
 
 const big = (n: number) => JSON.stringify({ blob: 'b'.repeat(n), keys: { d: 'k' } });
 
@@ -83,4 +83,12 @@ describe('payload fragments', () => {
     expect(asm.accept(parts[0], 'a:b')).toBeNull();
   });
 
+  it('flags a reassembled payload that names its own sender', () => {
+    expect(reassembledPayloadNamesSender({ from: '@head', msg: { type: 'device_removed' } })).toBe(true);
+    expect(reassembledPayloadNamesSender({ src: 'dev_other', blob: 'b', keys: {} })).toBe(true);
+    expect(reassembledPayloadNamesSender({ blob: 'b', keys: {} })).toBe(false);
+    expect(reassembledPayloadNamesSender({ v: 2, blob: 'b' })).toBe(false);
+    expect(reassembledPayloadNamesSender(null)).toBe(false);
+    expect(reassembledPayloadNamesSender('{"from":"@head"}')).toBe(false);
+  });
 });

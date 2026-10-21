@@ -19,7 +19,9 @@
 //
 // Sender binding: the Head stamps its authenticated sender (`src`) on every
 // part, never on the reassembled payload it cannot see. Receivers therefore
-// keep one set per (sender, id).
+// keep one set per (sender, id), credit the whole to that sender, and drop a
+// reassembled payload that names a sender itself (see
+// `reassembledPayloadNamesSender`).
 
 export const PAYLOAD_FRAGMENT_FEATURE = 'fragments';
 /** Payloads larger than this are fragmented (when the peer supports it). */
@@ -66,6 +68,17 @@ export function isPayloadFragment(value: unknown): value is PayloadFragment {
   const f = value as Partial<PayloadFragment> | null;
   return !!f && f.kfrag === 1 && typeof f.id === 'string' && Number.isInteger(f.i) && Number.isInteger(f.n)
     && typeof f.d === 'string' && (f.n as number) > 0 && (f.i as number) >= 0 && (f.i as number) < (f.n as number);
+}
+
+/**
+ * Whether a reassembled payload carries its own `from` or `src`. Only the Head
+ * sets those, on whole payloads (`src` stamp, `{from:'@head'}` control), and it
+ * never fragments its own control; no device puts them in a payload (the Head
+ * drops such a whole payload). A reassembled one that has them is forged.
+ */
+export function reassembledPayloadNamesSender(payload: unknown): boolean {
+  return !!payload && typeof payload === 'object'
+    && (Object.hasOwn(payload, 'from') || Object.hasOwn(payload, 'src'));
 }
 
 /**

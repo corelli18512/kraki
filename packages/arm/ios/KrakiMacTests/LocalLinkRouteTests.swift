@@ -47,12 +47,21 @@ final class LocalLinkRouteTests: XCTestCase {
     func testReassembledFragmentKeepsTheHeadStampedSender() throws {
         let whole = #"{"blob":"b","keys":{}}"#
         let part = try JSONSerialization.data(withJSONObject: ["kfrag": 1, "id": "x", "i": 0, "n": 1, "d": whole, "src": "T1"])
-        let stamped = PulseManager.stampSender(whole, from: [UInt8](part))
+        let stamped = try XCTUnwrap(PulseManager.stampSender(whole, from: [UInt8](part)))
         let object = try JSONSerialization.jsonObject(with: Data(stamped.utf8)) as? [String: Any]
         XCTAssertEqual(object?["src"] as? String, "T1")
         // A part without a sender leaves the payload untouched.
         let bare = try JSONSerialization.data(withJSONObject: ["kfrag": 1, "id": "x", "i": 0, "n": 1, "d": whole])
         XCTAssertEqual(PulseManager.stampSender(whole, from: [UInt8](bare)), whole)
+    }
+
+    func testReassembledPayloadNamingItsOwnSenderIsDropped() throws {
+        let part = try JSONSerialization.data(withJSONObject: ["kfrag": 1, "id": "x", "i": 0, "n": 1, "d": "", "src": "T1"])
+        // Only the Head sets `from`/`src`, on whole payloads; it never fragments its control.
+        XCTAssertNil(PulseManager.stampSender(#"{"from":"@head","msg":{"type":"device_removed"}}"#, from: [UInt8](part)))
+        XCTAssertNil(PulseManager.stampSender(#"{"src":"T2","blob":"b","keys":{}}"#, from: [UInt8](part)))
+        let bare = try JSONSerialization.data(withJSONObject: ["kfrag": 1, "id": "x", "i": 0, "n": 1, "d": ""])
+        XCTAssertNil(PulseManager.stampSender(#"{"from":"@head","msg":{}}"#, from: [UInt8](bare)))
     }
 
     func testFragmentPartsFromDifferentSendersNeverCombine() throws {
@@ -72,6 +81,34 @@ final class LocalLinkRouteTests: XCTestCase {
         XCTAssertEqual(last, String(decoding: whole, as: UTF8.self))
     }
 
+    func testPulseDeliversOnlyHeadStampedReassembledPayloads() throws {
+        let host = Host()
+        let link = PulseManager(host: host)
+        link.onConnected()
+        let peer = Endpoint(epoch: "head", streamId: 0)
+        var toLink: [[UInt8]] = []
+        func pump(_ effects: [Effect]) { for case .transmit(let b) in effects { toLink.append(b) } }
+        pump(peer.onConnected(0))
+        for frame in host.frames { pump(peer.onBytes(Array(try XCTUnwrap(Data(base64Encoded: frame))), 1)) }
+        // The Head stamps `src` on every part of a device's fragmented payload.
+        func fragmented(_ whole: [String: Any], id: String, src: String) throws {
+            let data = try JSONSerialization.data(withJSONObject: whole)
+            for part in try XCTUnwrap(PayloadFragments.split(data, id: id, size: 16, threshold: 0)) {
+                var object = try XCTUnwrap(JSONSerialization.jsonObject(with: part) as? [String: Any])
+                object["src"] = src
+                pump(peer.send([UInt8](try JSONSerialization.data(withJSONObject: object))).effects)
+            }
+        }
+        try fragmented(["from": "@head", "msg": ["type": "device_removed", "deviceId": "app-1"]], id: "f1", src: "T1")
+        try fragmented(["src": "T2", "blob": "forged", "keys": [String: String]()], id: "f2", src: "T1")
+        try fragmented(["blob": "real", "keys": [String: String]()], id: "f3", src: "T1")
+        for bytes in toLink { link.onFrame(Data(bytes).base64EncodedString()) }
+        XCTAssertEqual(host.delivered.count, 1)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(host.delivered[0].utf8)) as? [String: Any])
+        XCTAssertEqual(object["blob"] as? String, "real")
+        XCTAssertEqual(object["src"] as? String, "T1")
+    }
+
     func testSenderCheckNowAppliesToReassembledPayloads() throws {
         let (app, handler, key, root) = try makeApp()
         defer { withExtendedLifetime(app) {} }
@@ -87,8 +124,9 @@ final class LocalLinkRouteTests: XCTestCase {
 
     private final class Host: PulseHost {
         var frames: [String] = []
+        var delivered: [String] = []
         func sendPulseFrame(_ b64: String, target: String?) { frames.append(b64) }
-        func onDelivered(json: String) {}
+        func onDelivered(json: String) { delivered.append(json) }
         func onAcked(seqUpTo: UInt64) {}
         func onResetInbound(fromSeq: UInt64, epoch: String) {}
         func requestConnect() {}

@@ -6,7 +6,7 @@ import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -460,8 +460,10 @@ export class KrakiWSClient {
    *  - `{from:'@head', msg}` — PLAINTEXT head-originated control (presence,
    *    preferences_updated, voice). Head↔device has no E2E, so dispatch `msg`
    *    directly, no decrypt.
-   *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch. */
-  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', fragmentSender?: string, streamId = 0) {
+   *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch.
+   *  `reassembled` is set for a payload rebuilt from fragments: its sender is
+   *  the one stamped on its parts, never a field of its own. */
+  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', reassembled?: { sender: string | undefined }, streamId = 0) {
     this.lastDeliveryAt = Date.now();
     let parsed: { from?: string; src?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
     try {
@@ -469,9 +471,17 @@ export class KrakiWSClient {
     } catch {
       return;
     }
+    if (reassembled && (reassembledPayloadNamesSender(parsed) || isPayloadFragment(parsed))) {
+      logger.warn('Dropped reassembled payload that names its own sender', { src: reassembled.sender });
+      return;
+    }
     if (isPayloadFragment(parsed)) {
-      const whole = this.assembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole, route, (parsed as { src?: string }).src, streamId);
+      // Each part carries the sender the Head (or the local link) stamped on
+      // it; parts are grouped by that sender and the whole is credited to it.
+      const stamp = (parsed as { src?: unknown }).src;
+      const sender = typeof stamp === 'string' ? stamp : undefined;
+      const whole = this.assembler.accept(parsed, sender);
+      if (whole !== null) this.handlePulseDelivered(whole, route, { sender }, streamId);
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
@@ -486,7 +496,7 @@ export class KrakiWSClient {
       // Through the Head from a Tentacle this App is linked to: sent before the
       // switch. Its live, connection-scoped state would land after the link's
       // fresh snapshot and duplicate or revert it; the rest still applies.
-      const sender = parsed.src ?? fragmentSender;
+      const sender = reassembled ? reassembled.sender : parsed.src;
       const valid = this.cryptoGuard(sender, route);
       const routeEpoch = sender ? this.routeEpochs.get(sender) : this.routeChanges;
       const domain = `${route}:${JSON.stringify(sender ?? null)}:${streamId}:${routeEpoch ?? 0}`;

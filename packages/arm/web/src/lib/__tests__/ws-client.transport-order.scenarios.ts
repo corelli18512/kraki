@@ -254,10 +254,11 @@ export async function streamProgress(local: boolean, fragmented = false) {
     return result;
   };
   const send = (stream: number, envelope: object) => {
-    const payload = JSON.stringify({ ...envelope, src: deviceId });
+    // The sender's payload never names a sender itself; the Head stamps src
+    // on the whole payload or on each fragment, the local link stamps it itself.
+    const payload = JSON.stringify(envelope);
     const parts = fragmented ? fragmentPayload(payload, crypto.randomUUID(), 512, 1)! : [payload];
     for (const part of parts) {
-      // Head normally stamps src on each fragment; the local link stamps it itself.
       const stamped = { ...JSON.parse(part), src: deviceId };
       feed(peer.send(stream, new TextEncoder().encode(JSON.stringify(stamped))).effects); pump();
     }
