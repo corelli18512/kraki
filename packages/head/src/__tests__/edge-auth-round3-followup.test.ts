@@ -80,8 +80,16 @@ describe('PR577 follow-up live replacement poll coverage', () => {
       edge.upsertDevice(d.id, result.userId, d.name, d.role, d.kind, d.publicKey, d.encryptionKey);
     }
   }
+  /** A challenge nonce issued by the account service itself (it only
+   *  verifies answers to nonces it issued). */
+  async function accountNonce() {
+    const c = await local.startChallenge('phone');
+    if (!c.ok) throw new Error('account challenge failed');
+    return c.nonce;
+  }
   async function seed() {
-    const result = await local.verifyChallenge('phone', 'seed', signChallenge('seed', keys.privateKey), 'enc');
+    const nonce = await accountNonce();
+    const result = await local.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
     if (!result.ok) throw new Error('seed failed');
     mirror(result); cache.remember(result); return result;
   }
