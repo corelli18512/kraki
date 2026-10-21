@@ -1,4 +1,9 @@
 {
+  "desktopCallback": {
+    "signedIn": "你已登录",
+    "return": "返回 Kraki 以完成设置。",
+    "open": "打开 Kraki"
+  },
   "connection": {
     "errorTitle": "连接错误",
     "disconnected": "已断开连接",

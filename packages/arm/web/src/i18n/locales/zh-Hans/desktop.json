@@ -88,7 +88,10 @@
     "path": "路径",
     "explorer": "在文件资源管理器中显示",
     "logsWindow": "打开日志窗口",
-    "connecting": "正在连接 · {{state}}"
+    "connecting": "正在连接 · {{state}}",
+    "relayDisconnected": "已断开",
+    "relayConnecting": "正在连接",
+    "relayAuthenticating": "正在验证身份"
   },
   "owner": {
     "title": "使用哪个 Kraki 运行你的 Agent"

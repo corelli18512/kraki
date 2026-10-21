@@ -88,7 +88,10 @@
     "path": "Path",
     "explorer": "Show in Explorer",
     "logsWindow": "Open Logs Window",
-    "connecting": "Connecting · {{state}}"
+    "connecting": "Connecting · {{state}}",
+    "relayDisconnected": "disconnected",
+    "relayConnecting": "connecting",
+    "relayAuthenticating": "authenticating"
   },
   "owner": {
     "title": "Which Kraki runs your agents"

@@ -100,6 +100,10 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
     return builtIn.restart();
   };
   const runsAgents = state.owned;
+  const relayStateLabel = state.relayState === 'disconnected' ? t('thisPC.relayDisconnected')
+    : state.relayState === 'authenticating' ? t('thisPC.relayAuthenticating')
+      : state.relayState === 'connecting' ? t('thisPC.relayConnecting')
+        : state.relayState; // a state newer than this client: show it as is
   const status =
     busy === 'online' || busy === 'on' || busy === 'switch'
       ? t('thisPC.goingOnline')
@@ -112,7 +116,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
             : state.relayState === 'connected'
               ? t('thisPC.online')
               : state.relayState
-                ? t('thisPC.connecting', { state: state.relayState })
+                ? t('thisPC.connecting', { state: relayStateLabel })
                 : t('thisPC.checking');
 
   return (
