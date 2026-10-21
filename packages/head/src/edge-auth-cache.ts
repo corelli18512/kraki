@@ -16,7 +16,7 @@
  *   2. answers auth_ok at once, then asks the account service for that
  *      device's status in the background (at most every `revalidateMs`;
  *      it only verifies nonces it issued itself); a rejection there kicks
- *      the connection and forgets the device, an `ok` refreshes trust,
+ *      the connection and forgets the device, an `ok` changes nothing,
  *   3. polls the account service for the status of every cached device
  *      (`/api/devices/status`) so a removal elsewhere ends local trust within
  *      one poll interval.

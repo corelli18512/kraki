@@ -42,6 +42,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
         auth.deviceId,
         msg.device.encryptionKey,
         server.options.region,
+        msg.device.publicKey,
       );
       state.authTiming.challengeMs = Math.round(performance.now() - challengeStart);
       metrics().authStages.challenge.observe(state.authTiming.challengeMs);

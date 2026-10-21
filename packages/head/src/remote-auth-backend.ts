@@ -191,11 +191,16 @@ export class RemoteAuthBackend implements AuthBackend {
     deviceId: string,
     encryptionKey?: string,
     headRegion?: string,
+    signingKey?: string,
   ): Promise<ChallengeOutcome> {
     const cached = this.localChallengeActive ? this.edgeCache!.lookup(deviceId) : undefined;
-    // A new encryption key must reach the account service, which only takes
-    // answers to nonces it issued itself: ask it for the challenge too.
-    if (cached && (encryptionKey === undefined || encryptionKey === cached.encryptionKey)) {
+    // A new encryption or signing key must reach the account service, which
+    // only takes answers to nonces it issued itself: ask it for the challenge
+    // too. (A Tentacle with a new signing key needs its real invalid_signature
+    // to fall back to token sign-in.)
+    const sameEncryption = encryptionKey === undefined || encryptionKey === cached?.encryptionKey;
+    const sameSigning = signingKey === undefined || sameKey(signingKey, cached?.publicKey);
+    if (cached && sameEncryption && sameSigning) {
       metrics().inc('auth.localChallenge');
       return { ok: true, nonce: this.edgeCache!.issueNonce(deviceId), userId: cached.userId, deviceId };
     }
@@ -404,4 +409,11 @@ export class RemoteAuthBackend implements AuthBackend {
     });
     return response.json() as Promise<T>;
   }
+}
+
+/** Same public key, whatever the armour/whitespace (compact base64 or PEM). */
+function sameKey(a: string, b: string | undefined): boolean {
+  if (b === undefined) return false;
+  const norm = (k: string) => k.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+  return norm(a) === norm(b);
 }

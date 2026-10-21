@@ -81,6 +81,8 @@ export interface AuthBackend {
     deviceId: string,
     encryptionKey?: string,
     headRegion?: string,
+    /** The signing key the device announced with this auth (if any). */
+    signingKey?: string,
   ): Promise<ChallengeOutcome>;
 
   /**
