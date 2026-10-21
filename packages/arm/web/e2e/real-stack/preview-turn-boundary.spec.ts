@@ -50,9 +50,17 @@ async function settle(ms = 600): Promise<void> { await new Promise((r) => setTim
 
 /** Sidebar card text for the session whose card contains `marker`. */
 async function cardText(page: Page, marker: string): Promise<string | null> {
-  const btn = page.getByRole('button').filter({ hasText: marker }).first();
-  if (await btn.count() === 0) return null;
-  return (await btn.innerText()).replace(/\s+/g, ' ').trim();
+  // The session card (sidebar row) whose text has the marker. Its status is
+  // a glyph now, so append it as a word ("waiting", "approval", …) from the
+  // row's data-status. Read in one step: the row re-renders while the
+  // preview changes, and a second lookup could wait for a row that is gone.
+  return page.evaluate((m) => {
+    const row = [...document.querySelectorAll('button.ksr')].find((b) => (b.textContent ?? '').includes(m));
+    if (!row) return null;
+    const text = ((row as HTMLElement).innerText ?? row.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const status = row.querySelector('.ksr-status-slot')?.getAttribute('data-status');
+    return status ? `${text} [${status}]` : text;
+  }, marker);
 }
 
 /** Drive a real user turn from the Arm composer (user_message echo + active). */
