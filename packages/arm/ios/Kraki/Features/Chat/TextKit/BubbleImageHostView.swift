@@ -413,8 +413,10 @@ struct IOSImagePreviewGallery: View {
     let selection: IOSImagePreviewSelection
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int
-    /// A page to scroll to (Previous/Next buttons, initial page).
+    /// A page to scroll to (Previous/Next buttons).
     @State private var target: Int?
+    /// The tapped image is scrolled to once, when the viewer opens.
+    @State private var placedInitialPage = false
 
     init(selection: IOSImagePreviewSelection) {
         self.selection = selection
@@ -441,7 +443,10 @@ struct IOSImagePreviewGallery: View {
             GeometryReader { geometry in
               ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    LazyHStack(spacing: 0) {
+                    // All pages exist up front (a message has few images, and
+                    // they are all loaded on open): a lazy stack could re-anchor
+                    // the scroll position as late pages appear.
+                    HStack(spacing: 0) {
                         ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, item in
                             IOSImagePreviewPage(item: item, selection: selection, onBackdropTap: { dismiss() })
                                 .padding(.top, 52)
@@ -467,6 +472,8 @@ struct IOSImagePreviewGallery: View {
                     if page != index { index = page }
                 }
                 .onAppear {
+                    guard !placedInitialPage else { return }
+                    placedInitialPage = true
                     if selection.initialIndex > 0 { proxy.scrollTo(selection.initialIndex, anchor: .leading) }
                 }
                 .onChange(of: target) { _, page in
