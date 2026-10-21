@@ -173,22 +173,28 @@ enum IOSNewSessionScenario {
                     "content": text, "clientId": clientId,
                 ]), after: 300)
                 deliver(envelope("active", sessionId, seq: 0, payload: [:]), after: 320)
-                let answer = IOSNewSessionScenario.answer
-                let chars = Array(answer)
-                var delay = 700
-                var cursor = 0
-                while cursor < chars.count {
-                    let end = min(cursor + 10, chars.count)
-                    deliver(envelope("agent_message_delta", sessionId, payload: [
-                        "content": String(chars[cursor..<end]), "reset": false,
-                    ]), after: delay)
-                    cursor = end
-                    delay += 35
+                // Pace relative to each delivered chunk. Absolute timers all
+                // became overdue during a slow CI render and drained through
+                // final before the journey could observe any live card.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard let self else { return }
+                    let answer = IOSNewSessionScenario.answer
+                    let chars = Array(answer)
+                    var cursor = 0
+                    while cursor < chars.count {
+                        let end = min(cursor + 10, chars.count)
+                        deliver(envelope("agent_message_delta", sessionId, payload: [
+                            "content": String(chars[cursor..<end]), "reset": false,
+                        ]), after: 0)
+                        cursor = end
+                        try? await Task.sleep(for: .milliseconds(35))
+                    }
+                    deliver(envelope("agent_message", sessionId, seq: nextSeq(sessionId), payload: [
+                        "content": answer,
+                    ]), after: 300)
+                    deliver(envelope("idle", sessionId, seq: nextSeq(sessionId), payload: [:]), after: 320)
                 }
-                deliver(envelope("agent_message", sessionId, seq: nextSeq(sessionId), payload: [
-                    "content": answer,
-                ]), after: delay + 300)
-                deliver(envelope("idle", sessionId, seq: nextSeq(sessionId), payload: [:]), after: delay + 320)
             default:
                 break
             }
