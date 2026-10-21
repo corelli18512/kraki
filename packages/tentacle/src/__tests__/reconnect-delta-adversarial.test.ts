@@ -12,6 +12,7 @@ function history(rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], head = 10, turnStart = 
       getMessagesAfterSeq: vi.fn((_sid: string, after: number) => messages.filter((m) => m.seq > after)),
     },
     sendReliableUnicastTo: send,
+    transportTo: () => 'head',
   };
   const request = (afterSeq?: unknown, beforeSeq?: number) => {
     handleSessionMessages(client as unknown as RelayClient, 'arm', 'session', beforeSeq, afterSeq as number);

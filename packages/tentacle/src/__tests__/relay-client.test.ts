@@ -843,6 +843,29 @@ describe('RelayClient title generation', () => {
     return { adapter, sm, client };
   }
 
+  it('logs one connection timeline line per authentication and the outage on close (log audit 2026-10-22)', async () => {
+    loggedLines.length = 0;
+    connectClient();
+    const connected = loggedLines.find((a) => a[1] === 'Relay connected')?.[0] as Record<string, unknown>;
+    expect(connected).toMatchObject({ attempt: 0, authMethod: 'open', apps: 0 });
+    for (const k of ['connectMs', 'authMs', 'bootstrapMs', 'totalMs']) expect(typeof connected[k]).toBe('number');
+    expect(connected.downMs).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    sockets[0].emit('close', 1005, Buffer.from(''));
+    const closed = loggedLines.find((a) => a[1] === 'WS closed')?.[0] as Record<string, unknown>;
+    expect(closed).toMatchObject({ code: 1005, phase: 'connected', intentional: false });
+    expect(closed.connectedForMs).toBeGreaterThanOrEqual(2000);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const next = sockets.at(-1)!;
+    next.emit('open');
+    next.emit('message', Buffer.from(JSON.stringify({ type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'local' }, devices: [] })));
+    const reconnected = loggedLines.filter((a) => a[1] === 'Relay connected').at(-1)?.[0] as Record<string, unknown>;
+    expect(reconnected.attempt).toBe(1);
+    expect(reconnected.downMs).toBeGreaterThan(0);
+  });
+
   it('triggers title generation on first idle', async () => {
     const { adapter, sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -2923,6 +2946,10 @@ describe('RelayClient handleSessionMessagesRange', () => {
     expect(batch!.payload.bubbleSeq).toBe(42);
     expect(batch!.payload.entries).toEqual(traceEntries);
     expect(batch!.payload.complete).toBe(true);
+    // The reply's size and hop are logged, so catch-up cost is measurable.
+    const line = loggedLines.filter((a) => a[1] === 'Replied to turn trace request').at(-1)?.[0] as { bytes: number; transport: string };
+    expect(line.transport).toBe('head');
+    expect(line.bytes).toBeGreaterThan(JSON.stringify(traceEntries).length);
   });
 
   it('floors a fractional bubbleSeq before reading the trace', () => {
