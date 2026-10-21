@@ -13,9 +13,10 @@
  * verified within `maxStaleMs` it:
  *   1. issues the nonce itself and verifies the signature against the
  *      device's public key it mirrors from that result (no network),
- *   2. answers auth_ok at once, then re-verifies the same signature with the
- *      account service in the background (at most every `revalidateMs`); a
- *      definitive rejection there kicks the connection and forgets the device,
+ *   2. answers auth_ok at once, then asks the account service for that
+ *      device's status in the background (at most every `revalidateMs`;
+ *      it only verifies nonces it issued itself); a rejection there kicks
+ *      the connection and forgets the device, an `ok` refreshes trust,
  *   3. polls the account service for the status of every cached device
  *      (`/api/devices/status`) so a removal elsewhere ends local trust within
  *      one poll interval.
@@ -33,7 +34,7 @@ import type { AuthResult } from './auth-backend.js';
 export interface EdgeAuthCacheOptions {
   /** Longest time since the account service last confirmed a device. */
   maxStaleMs?: number;
-  /** Minimum time between background re-verifications of one device. */
+  /** Minimum time between background status checks of one device. */
   revalidateMs?: number;
   now?: () => number;
 }
@@ -224,7 +225,7 @@ export class EdgeAuthCache {
     }
   }
 
-  /** Whether a background re-verification is due (and claims it). */
+  /** Whether a background status check is due (and claims it). */
   claimRevalidation(deviceId: string): boolean {
     const last = this.lastRevalidation.get(deviceId) ?? 0;
     if (this.now() - last < this.revalidateMs) return false;

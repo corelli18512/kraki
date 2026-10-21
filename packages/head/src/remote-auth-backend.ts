@@ -46,7 +46,7 @@ export class RemoteAuthBackend implements AuthBackend {
   private edgeRegion?: string;
   private localAuthReady = false;
   private statusTimer?: ReturnType<typeof setInterval>;
-  /** Bumped by start/stop: in-flight polls and re-verifications of an older
+  /** Bumped by start/stop: in-flight status polls and checks of an older
    *  lifecycle are dropped when they land. */
   private lifecycle = 0;
   /** The account service rejected a device that may be connected here. */
@@ -228,8 +228,10 @@ export class RemoteAuthBackend implements AuthBackend {
         }
         return { ...cached.result, authMethod: 'challenge', local: true };
       }
-      // New encryption key, rotated signing key, or trust lapsed meanwhile:
-      // the account service decides (the edge nonce is just as signable).
+      // A key not announced at startChallenge, a rotated signing key, or
+      // trust lapsed meanwhile: the account service decides. It did not
+      // issue this nonce, so the best it answers is a device verdict
+      // (removed, account deleted) or a retryable refusal.
     }
     const epoch = cache?.epoch(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
