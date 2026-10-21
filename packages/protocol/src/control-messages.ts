@@ -149,6 +149,20 @@ export interface RemoveDeviceMessage {
 }
 
 /**
+ * App → head: give a device of this account a custom name, shown on every
+ * device. `name` is normalised with `normalizeDeviceName`; an empty name
+ * clears the custom name so the device's own name shows again. Works for
+ * online and offline devices. Only devices with role `app` may ask. The
+ * relay answers every online device of the account (the sender included)
+ * with `device_renamed`, or the sender with `server_error`.
+ */
+export interface RenameDeviceMessage {
+  type: 'rename_device';
+  deviceId: string;
+  name: string;
+}
+
+/**
  * App → head: permanently delete this Kraki account (App Store 5.1.1(v)).
  * The relay deletes the user, every device, push tokens, preferences, custom
  * words and voice usage, then sends `account_deleted` to every connected
@@ -183,6 +197,16 @@ export const DEVICE_REPLACED_CLOSE_CODE = 4009;
 export interface DeviceRemovedMessage {
   type: 'device_removed';
   deviceId: string;
+}
+
+/** Broadcast: a device's name changed (`rename_device`). `name` is the name
+ *  to show now; `defaultName` is the device's own name, present only while a
+ *  custom name is set. */
+export interface DeviceRenamedMessage {
+  type: 'device_renamed';
+  deviceId: string;
+  name: string;
+  defaultName?: string;
 }
 
 /** Update user preferences on the relay (e.g. intro dismissal flags). */
@@ -287,6 +311,8 @@ export type ControlMessage =
   | DevicePendingMessage
   | RemoveDeviceMessage
   | DeviceRemovedMessage
+  | RenameDeviceMessage
+  | DeviceRenamedMessage
   | DeleteAccountMessage
   | AccountDeletedMessage
   | UpdatePreferencesMessage

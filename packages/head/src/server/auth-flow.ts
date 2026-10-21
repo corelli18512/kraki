@@ -55,9 +55,10 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
       return;
     }
 
+    const renameClock = server.renameClock;
     const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
     if (!socketStillAuthenticating(server, ws, state)) return;
-    handleBackendAuthResult(server, ws, state, result);
+    handleBackendAuthResult(server, ws, state, result, renameClock);
   } finally {
     state.authInFlight = false;
   }
@@ -86,13 +87,14 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
   }
 
   state.authInFlight = true;
+  const renameClock = server.renameClock;
   server.authBackend.verifyChallenge(
     deviceId, nonce, msg.signature,
     pendingInfo?.encryptionKey,
     server.options.region,
   ).then(result => {
     if (!socketStillAuthenticating(server, ws, state)) return;
-    handleBackendAuthResult(server, ws, state, result);
+    handleBackendAuthResult(server, ws, state, result, renameClock);
   }).catch(err => {
     // A thrown error means the auth backend itself was unreachable / timed
     // out (network, 5xx, abort) — NOT that the signature was invalid. A
@@ -114,7 +116,11 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
  * Handle a result from AuthBackend — registers connection state and sends response.
  * Used for both initial auth and challenge-response verification.
  */
-export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state: ClientState, result: AuthOutcome): void {
+export function handleBackendAuthResult(
+  server: HeadServer, ws: WebSocket, state: ClientState, result: AuthOutcome,
+  /** `server.renameClock` when this auth started. */
+  renameClockAtStart = server.renameClock,
+): void {
   const logger = getLogger();
 
   if (!result.ok) {
@@ -158,12 +164,28 @@ export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state
     if (result.user.preferences && typeof result.user.preferences === 'object') {
       server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
     }
-    for (const d of result.devices) {
+    for (const [i, d] of result.devices.entries()) {
       try {
+        // The account service sends the name to show; when the user renamed
+        // the device, `defaultName` is the device's own one. Mirror both, so
+        // a rename (or clearing it) made on another edge shows here too.
+        const renamed = typeof d.defaultName === 'string';
         server.storage.upsertDevice(
-          d.id, result.userId, d.name, d.role,
+          d.id, result.userId, renamed ? d.defaultName! : d.name, d.role,
           d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
         );
+        // Renamed here after this auth started: the list predates that
+        // rename, which this edge already stored at the account service and
+        // applied. Keep (and report) the newer local name, never revert it.
+        if ((server.deviceRenamedAt.get(d.id) ?? 0) > renameClockAtStart) {
+          const local = server.storage.getDevice(d.id);
+          if (local) {
+            const { defaultName: _stale, ...rest } = d;
+            result.devices[i] = { ...rest, name: local.name, ...(local.displayName != null && { defaultName: local.reportedName }) };
+          }
+          continue;
+        }
+        server.storage.setDeviceDisplayName(d.id, renamed ? d.name : null);
       } catch (err) {
         logger.warn('Failed to mirror device locally', { deviceId: d.id, error: (err as Error).message });
       }

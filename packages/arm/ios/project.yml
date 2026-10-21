@@ -255,6 +255,7 @@ targets:
       - path: KrakiTests/SteerPlacementTests.swift
       - path: KrakiTests/ComposerAnswerImagesTests.swift
       - path: KrakiTests/BuildInfoTests.swift
+      - path: KrakiTests/DeviceRenameTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests

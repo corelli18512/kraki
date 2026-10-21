@@ -32,7 +32,13 @@ export interface Device {
 
 export interface DeviceSummary {
   id: string;
+  /** Name to show: the user's custom name (`rename_device`) if set, else the
+   *  name the device reports for itself. */
   name: string;
+  /** The name the device reports for itself. Present only when the user
+   *  renamed it (`name` is then the custom name); clearing the custom name
+   *  goes back to this one. */
+  defaultName?: string;
   role: DeviceRole;
   kind?: DeviceKind;
   /** Public key for auth (RSASSA-PKCS1-v1_5) */
@@ -95,4 +101,19 @@ export interface ModelDetail {
   contextWindow?: number;
   /** Available context tiers (omitted = only default). */
   supportedContextTiers?: ContextTier[];
+}
+
+/** Longest custom device name, in Unicode code points. */
+export const MAX_DEVICE_NAME_LENGTH = 64;
+
+/**
+ * Normalise a user-chosen device name for `rename_device`: control characters
+ * and runs of whitespace collapse to one space, the ends are trimmed.
+ * Returns `''` for "use the device's own name again" and `null` when the name
+ * is too long. Clients and the relay apply the same rule.
+ */
+export function normalizeDeviceName(raw: string): string | null {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
+  return [...cleaned].length > MAX_DEVICE_NAME_LENGTH ? null : cleaned;
 }

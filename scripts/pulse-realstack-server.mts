@@ -27,7 +27,9 @@ import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WebSocket } from 'ws';
+import { createRequire } from 'node:module';
+// `ws` is the tentacle's dependency; the repo root does not have it.
+const { WebSocket } = createRequire(new URL('../packages/tentacle/package.json', import.meta.url))('ws') as typeof import('ws');
 
 // Import the COMPILED tentacle (dist), not src: tsx's tsconfig-paths resolver
 // mishandles the ESM-only `@kraki/pulse` exports when walking TS source, but
@@ -46,6 +48,8 @@ const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
 
 /** Pre-seeded session id, created before the browser connects. */
 const SEED_SESSION_ID = 'realstack-1';
+/** The first tentacle's device id (kept across reconnects and restarts). */
+const TENTACLE1_ID = 'realstack-tentacle-1';
 /** Pre-seeded session with >50 messages (for the range-backfill test). */
 const HISTORY_SESSION_ID = 'realstack-history';
 
@@ -137,6 +141,28 @@ let sessionManagerForControl: SessionManager | null = null;
 // Second tentacle (same open-auth user) — connected on demand by the presence
 // tests to prove device_joined/left/removed reach the browser over pulse.
 let relay2: RelayClient | null = null;
+/** Head control messages (`{from:'@head', msg}` and raw) each tentacle handled,
+ *  so the spec can prove a broadcast reached the computers, not only browsers. */
+const headControl: Record<'t1' | 't2', Array<Record<string, unknown>>> = { t1: [], t2: [] };
+function recordHeadControl(client: RelayClient, into: Array<Record<string, unknown>>): void {
+  const target = client as unknown as { handleMessage(msg: Record<string, unknown>): void };
+  const original = target.handleMessage.bind(client);
+  target.handleMessage = (msg) => { into.push(msg); original(msg); };
+}
+/** The head child + its DB path, so `/head/restart` can bring it back on the same DB. */
+let headProcess: ChildProcess | null = null;
+let headDbPath = '';
+function spawnHead(): ChildProcess {
+  const headLog = createWriteStream(join(tmpdir(), 'kraki-realstack-head.log'), { flags: 'a' });
+  const child = spawn('pnpm', ['exec', 'tsx', 'packages/head/src/cli.ts', '--port', String(RELAY_PORT), '--db', headDbPath], {
+    cwd: process.cwd(),
+    env: { ...process.env, AUTH_MODE: 'open', E2E_MODE: 'true', PAIRING_ENABLED: 'true', LOG_LEVEL: 'info' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout!.pipe(headLog); child.stderr!.pipe(headLog);
+  children.push(child);
+  return child;
+}
 let relay2Connected = false;
 
 function fail(msg: string): never {
@@ -214,11 +240,15 @@ async function connectTentacle2(): Promise<void> {
     const km2 = new KeyManager(mkdtempSync(join(tmpdir(), 'kraki-realstack-keys2-')));
     relay2 = new RelayClient(adapter2 as unknown as AgentAdapter, sm2, {
       relayUrl: RELAY_URL,
+      // Its fixed id is new to a fresh head: challenge sign-in fails with
+      // unknown_device, and the client signs in fully only for an open relay.
+      authMethod: 'open',
       // Stable deviceId so reconnects reuse the SAME device row (open-auth honors
       // a supplied deviceId, server.ts:1228). Without this, each reconnect mints a
       // fresh dev_<random> and the browser accumulates stale offline duplicates.
       device: { deviceId: 'realstack-tentacle-2', name: 'RealStack Tentacle 2', role: 'tentacle', kind: 'desktop' },
     }, km2);
+    recordHeadControl(relay2, headControl.t2);
   }
   await new Promise<void>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('tentacle2 auth timed out')), 15_000);
@@ -242,14 +272,9 @@ async function main(): Promise<void> {
   execSync('pnpm --filter @kraki/arm-web build', { stdio: 'inherit', cwd: process.cwd() });
 
   // 1. Real head relay
-  const headLog = createWriteStream(join(tmpdir(), 'kraki-realstack-head.log'), { flags: 'w' });
-  const head = spawn('pnpm', ['exec', 'tsx', 'packages/head/src/cli.ts', '--port', String(RELAY_PORT), '--db', join(mkdtempSync(join(tmpdir(), 'kraki-realstack-db-')), 'head.db')], {
-    cwd: process.cwd(),
-    env: { ...process.env, AUTH_MODE: 'open', E2E_MODE: 'true', PAIRING_ENABLED: 'true', LOG_LEVEL: 'info' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  head.stdout!.pipe(headLog); head.stderr!.pipe(headLog);
-  children.push(head);
+  createWriteStream(join(tmpdir(), 'kraki-realstack-head.log'), { flags: 'w' }).end();
+  headDbPath = join(mkdtempSync(join(tmpdir(), 'kraki-realstack-db-')), 'head.db');
+  headProcess = spawnHead();
   await waitForRelay(RELAY_URL);
 
   // 2. Embedded tentacle (MockAdapter + RelayClient)
@@ -274,6 +299,9 @@ async function main(): Promise<void> {
     const internal = client as unknown as {
       handleRequestAttachment: (msg: Record<string, unknown>) => Promise<void>;
     };
+    // Gone from newer tentacles (attachment requests moved out of
+    // RelayClient): only the drop-one-request hook is lost then.
+    if (typeof internal.handleRequestAttachment !== 'function') return;
     const originalHandleRequest = internal.handleRequestAttachment.bind(client);
     internal.handleRequestAttachment = async (msg: Record<string, unknown>) => {
       const payload = msg.payload as { id?: string } | undefined;
@@ -293,9 +321,13 @@ async function main(): Promise<void> {
   };
   relay = new RelayClient(adapter as unknown as AgentAdapter, sm, {
     relayUrl: RELAY_URL,
-    device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+    // A stable id, like a real computer's saved one: after a head restart it
+    // signs in as the same device instead of a new one.
+    authMethod: 'open',
+    device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
   }, keyManager, attachmentStore);
   installAttachmentDropHook(relay);
+  recordHeadControl(relay, headControl.t1);
   await new Promise<void>((resolve, reject) => {
     relay!.onAuthenticated = () => resolve();
     relay!.onFatalError = (m: string) => reject(new Error(`tentacle auth failed: ${m}`));
@@ -498,9 +530,11 @@ async function main(): Promise<void> {
           await new Promise((r) => setTimeout(r, 300));
           relay = new RelayClient(adapter2 as unknown as AgentAdapter, sm2, {
             relayUrl: RELAY_URL,
-            device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+            authMethod: 'open',
+            device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
           }, keyManager, attachmentStore);
           installAttachmentDropHook(relay);
+          recordHeadControl(relay, headControl.t1);
           await new Promise<void>((resolve, reject) => {
             relay!.onAuthenticated = () => resolve();
             relay!.onFatalError = (m: string) => reject(new Error(`tentacle restart auth failed: ${m}`));
@@ -519,6 +553,27 @@ async function main(): Promise<void> {
         // ── second tentacle (presence: device_joined/left over pulse) ──
         case '/tentacle2/connect': await connectTentacle2(); return json(200, { ok: true, name: 'RealStack Tentacle 2' });
         case '/tentacle2/disconnect': disconnectTentacle2(); return json(200, { ok: true });
+        // Head control each tentacle handled, optionally filtered by type.
+        case '/headControl': {
+          const type = q.get('type');
+          const pick = (list: Array<Record<string, unknown>>) => (type ? list.filter((m) => m.type === type) : list);
+          return json(200, { t1: pick(headControl.t1), t2: pick(headControl.t2) });
+        }
+        // Stop the head and start it again on the SAME database file: what
+        // survives is what the head persisted. Every client reconnects itself.
+        case '/head/restart': {
+          const pid = execSync(`lsof -tiTCP:${RELAY_PORT} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+          for (const p of pid.split('\n').filter(Boolean)) { try { process.kill(Number(p), 'SIGTERM'); } catch { /* gone */ } }
+          headProcess?.kill('SIGTERM');
+          for (let i = 0; i < 50; i++) {
+            const still = execSync(`lsof -tiTCP:${RELAY_PORT} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+            if (!still) break;
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          headProcess = spawnHead();
+          await waitForRelay(RELAY_URL);
+          return json(200, { ok: true });
+        }
         // ── seed a long agent_message history so opening the session leaves
         //    older messages uncached → the browser fires request_session_messages_range ──
         case '/seedHistory': {

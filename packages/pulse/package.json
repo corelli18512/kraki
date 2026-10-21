@@ -1,6 +1,6 @@
 {
   "name": "@kraki/pulse",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Kraki's reliable transport core: sequencing, acknowledgments and cursor-based resume. Pure logic, no I/O.",
   "type": "module",
   "exports": {

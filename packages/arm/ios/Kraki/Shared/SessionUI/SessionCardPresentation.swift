@@ -96,7 +96,10 @@ struct SessionCardProjection: Equatable {
         // Before the first sign-in the cached device list has no live
         // presence: show it as unknown, never as every device offline.
         let deviceOnline = presenceKnown ? device?.online : nil
-        let machineName = session.deviceName.isEmpty ? device?.name : session.deviceName
+        // The live device name first: it follows renames (the session's copy
+        // is only what the computer reported with its session list).
+        let liveName = device?.name.isEmpty == false ? device?.name : nil
+        let machineName = liveName ?? (session.deviceName.isEmpty ? nil : session.deviceName)
         let normalizedMachineName = machineName?.isEmpty == true ? nil : machineName
         let pending = SessionPendingPreview.select(pendingInputs, sessionId: session.id,
                                                    isOnline: isDeliveryOnline && deviceOnline != false)
