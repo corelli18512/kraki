@@ -15,7 +15,8 @@ struct ResendCoalescer {
     static let coalescedReasons: Set<String> = ["reconnected", "greeting"]
 
     var now: () -> Date = Date.init
-    /// clientId → when the current connection last carried it.
+    /// clientId → when it was last re-sent for a new connection
+    /// (`reconnected`/`greeting`) on the current one.
     private var handedOffAt: [String: Date] = [:]
 
     mutating func handedOff(_ clientId: String) { handedOffAt[clientId] = now() }

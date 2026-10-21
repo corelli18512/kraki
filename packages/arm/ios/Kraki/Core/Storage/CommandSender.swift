@@ -118,8 +118,6 @@ final class CommandSender {
         msg["seq"] = 0
         msg["timestamp"] = ISO8601.now()
         let accepted = appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
-        if accepted, payload["type"] as? String == "send_input",
-           let clientId = (payload["payload"] as? [String: Any])?["clientId"] as? String { resendCoalescer.handedOff(clientId) }
         #if KRAKI_DIAG
         if payload["type"] as? String == "send_input", let wire = payload["payload"] as? [String: Any],
            let clientId = wire["clientId"] as? String {
@@ -479,6 +477,10 @@ final class CommandSender {
         }
         undispatched.remove(clientId)
         outboundPayloads[clientId] = payload
+        // Only a copy re-sent for a new connection makes the next such trigger
+        // redundant: an earlier copy (the original send, or one a Tentacle
+        // without idempotent_input was not given) must not suppress it.
+        if ResendCoalescer.coalescedReasons.contains(reason) { resendCoalescer.handedOff(clientId) }
         appState?.sendMetrics.retried(clientId, manual: false)
         return true
     }
