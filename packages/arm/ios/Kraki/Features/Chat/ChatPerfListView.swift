@@ -169,7 +169,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var ids: [String] {
         var result = messages.map(\.id)
         // Last, or above a steer the agent has not read yet (MessageStore+SteerPlacement).
-        if let card = vm.card, !card.text.isEmpty || card.action != nil { result.insert(Self.liveCardID, at: card.rowIndex(in: messages)) }
+        if let card = vm.card, !card.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || card.action != nil { result.insert(Self.liveCardID, at: card.rowIndex(in: messages)) }
         return result
     }
     var messageCount: Int { messages.count }

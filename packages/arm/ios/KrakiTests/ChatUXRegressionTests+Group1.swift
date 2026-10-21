@@ -6,6 +6,23 @@ import SwiftUI
 /// Regressions from review group 1 (2026-10-13), on the `ChatUXRegressionTests`
 /// fixture (kept in its own file: the main suite is at its SwiftLint size cap).
 extension ChatUXRegressionTests {
+    func testWhitespaceDraftDoesNotCreateALiveBubbleButActionStillDoes() throws {
+        let fx = try makeFixture(total: 40)
+        fx.app.messageStore.beginCardTurn(sid)
+        fx.app.messageStore.applyCardMessage(sid, " \n\t ", reset: true)
+        fx.vc.syncLiveUpdates()
+        XCTAssertNotNil(fx.vc.vm.card, "the shared card turn remains active")
+        XCTAssertFalse(fx.vc.ids.contains(ChatPerfListVC.liveCardID), "whitespace is not a draft bubble")
+        XCTAssertFalse(fx.vc.items.contains(ChatPerfListVC.liveCardID))
+
+        fx.app.messageStore.applyCardAction(sid, ChatMessage(
+            type: "permission", seq: 0, sessionId: sid, deviceId: dev, timestamp: nil,
+            payload: ["permissionId": "whitespace-permission", "toolName": "Bash"]
+        ))
+        fx.vc.syncLiveUpdates()
+        XCTAssertTrue(fx.vc.ids.contains(ChatPerfListVC.liveCardID), "an action needs a visible bubble even without text")
+    }
+
     func testClosedChatControllerIsReleased() throws {
         weak var weakVC: ChatPerfListVC?
         try autoreleasepool {
