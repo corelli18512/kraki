@@ -1,6 +1,17 @@
 import Foundation
 
 extension CommandSender {
+    /// `send`, plus the Relay Pulse connection generation it went over: nil
+    /// when it went another way (the local link) or Pulse was not connected.
+    /// send.summary `uploadMs` is measured on that connection only.
+    func sendNotingPulse(_ message: [String: Any], sessionId: String) -> (handedOff: Bool, pulseGeneration: Int?) {
+        let pulse = appState?.pulseManager
+        let handoffsBefore = pulse?.payloadsHandedOff
+        let handedOff = send(message, sessionId: sessionId)
+        let overPulse = handedOff && pulse != nil && pulse?.payloadsHandedOff != handoffsBefore
+        return (handedOff, overPulse ? pulse?.liveGeneration : nil)
+    }
+
     /// Whether an input for `sessionId` can reach its Tentacle now: signed in
     /// and the session's Tentacle online.
     func isDeliveryPathUp(_ sessionId: String) -> Bool {
