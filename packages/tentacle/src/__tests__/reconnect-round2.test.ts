@@ -62,7 +62,7 @@ function fixture(handler: typeof handleSessionMessages, cursor?: number) {
   const send = vi.fn();
   const c = { consumerKeys: new Map([['app', 'key']]), authInfo: { deviceId: 't' }, seqCounter: 0,
     sessionManager: { getMeta: () => ({ lastSeq: 10 }), findTurnAlignedStart: () => 4, getMessagesAfterSeq: (_sid: string, after: number) => rows.filter((r) => r.seq > after) },
-    sendReliableUnicastTo: send };
+    sendReliableUnicastTo: send, transportTo: () => 'head' as const };
   handler(c as unknown as RelayClient, 'app', 'sid', undefined, cursor);
   return send.mock.lastCall![2].payload.messages.map((m: { seq: number }) => m.seq);
 }

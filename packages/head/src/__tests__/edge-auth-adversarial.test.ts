@@ -389,7 +389,7 @@ describe('Head auth guards (release-gate round 2)', () => {
       pendingNonce: 'n', pendingDeviceId: 'd', pendingNonceAt: Date.now() - 5 * 60_000 - 1 } as never;
     let verified = false;
     const server = { authBackend: { verifyChallenge: async () => { verified = true; return { ok: false, code: 'x', message: 'x' }; } },
-      clients: new Map(), renameClock: 0, options: {} } as never;
+      clients: new Map(), renameClock: 0, options: {}, authFailureLog: { take: () => ({}) } } as never;
     handleChallengeResponse(server, ws, state, { deviceId: 'd', signature: 's' });
     expect(verified).toBe(false);
     expect(JSON.parse(sent[0])).toMatchObject({ type: 'auth_error', code: 'service_unavailable' });
@@ -406,7 +406,7 @@ describe('Head auth guards (release-gate round 2)', () => {
       const ws = { readyState: 1, send: (m: string) => sent.push(m) } as never;
       const forgotten: string[] = [];
       const server = { storage, connections: new Map(), clients: new Map(), userByDevice: new Map(), deviceRenamedAt: new Map(),
-        renameClock: 0, options: {}, pulseHub: { forgetDevice: (id: string) => forgotten.push(id), onDeviceConnected: () => {}, onDeviceDisconnected: () => {} },
+        renameClock: 0, options: {}, authFailureLog: { take: () => ({}) }, pulseHub: { forgetDevice: (id: string) => forgotten.push(id), onDeviceConnected: () => {}, onDeviceDisconnected: () => {} },
         authBackend: { getAuthInfo: () => ({ methods: [] }) }, getVapidPublicKey: () => undefined, getVoiceCapability: () => undefined,
         sendPresenceToDevice: () => {} } as never;
       const ok = (deviceId: string, userId: string) => ({ ok: true as const, userId, deviceId, authMethod: 'challenge' as const,
