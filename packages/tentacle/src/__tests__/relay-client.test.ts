@@ -52,12 +52,13 @@ vi.mock('ws', () => ({
   WebSocket: MockSocket,
 }));
 
+const loggedLines = vi.hoisted(() => [] as unknown[][]);
 vi.mock('../logger.js', () => ({
   createLogger: vi.fn(() => ({
-    error: vi.fn(),
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
+    error: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    warn: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    info: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    debug: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
   })),
 }));
 
@@ -843,6 +844,29 @@ describe('RelayClient title generation', () => {
     return { adapter, sm, client };
   }
 
+  it('logs one connection timeline line per authentication and the outage on close (log audit 2026-10-22)', async () => {
+    loggedLines.length = 0;
+    connectClient();
+    const connected = loggedLines.find((a) => a[1] === 'Relay connected')?.[0] as Record<string, unknown>;
+    expect(connected).toMatchObject({ attempt: 0, authMethod: 'open', apps: 0 });
+    for (const k of ['connectMs', 'authMs', 'bootstrapMs', 'totalMs']) expect(typeof connected[k]).toBe('number');
+    expect(connected.downMs).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    sockets[0].emit('close', 1005, Buffer.from(''));
+    const closed = loggedLines.find((a) => a[1] === 'WS closed')?.[0] as Record<string, unknown>;
+    expect(closed).toMatchObject({ code: 1005, phase: 'connected', intentional: false });
+    expect(closed.connectedForMs).toBeGreaterThanOrEqual(2000);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const next = sockets.at(-1)!;
+    next.emit('open');
+    next.emit('message', Buffer.from(JSON.stringify({ type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'local' }, devices: [] })));
+    const reconnected = loggedLines.filter((a) => a[1] === 'Relay connected').at(-1)?.[0] as Record<string, unknown>;
+    expect(reconnected.attempt).toBe(1);
+    expect(reconnected.downMs).toBeGreaterThan(0);
+  });
+
   it('triggers title generation on first idle', async () => {
     const { adapter, sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -864,9 +888,12 @@ describe('RelayClient title generation', () => {
       model: 'deepseek/deepseek-flash',
       reasoningEffort: 'high',
     }));
-    // Log audit 2026-10-22: user message text never reaches the log.
-    expect(vi.mocked(relayLogger.debug).mock.calls.some((c) => c[1] === 'Title generation starting')).toBe(true);
-    expect(JSON.stringify(vi.mocked(relayLogger.debug).mock.calls)).not.toContain('fix the login');
+    // Titles and prompts are conversation content: never in the logs, at
+    // any level (log audit 2026-10-22).
+    expect(loggedLines.some((a) => a[1] === 'Auto-title generated')).toBe(true);
+    const logs = JSON.stringify(loggedLines);
+    expect(logs).not.toContain('Fix login authentication bug');
+    expect(logs).not.toContain('fix the login bug');
   });
 
   it('persists current-turn artifacts on a normal adapter idle', () => {
@@ -1862,7 +1889,7 @@ describe('RelayClient tool message lazy-load shape', () => {
       client.onUpdateRequest = async (...args) => { calls.push(args); };
       send({ requestId: 'r2', when: 'idle' });
       send({ requestId: 'bad id!', when: 'whenever' });
-      expect(calls).toEqual([['r2', 'idle'], ['', undefined]]);
+      expect(calls).toEqual([['r2', 'idle', 'consumer-dev'], ['', undefined, 'consumer-dev']]);
     } finally { cleanup(); }
   });
 
@@ -2920,6 +2947,10 @@ describe('RelayClient handleSessionMessagesRange', () => {
     expect(batch!.payload.bubbleSeq).toBe(42);
     expect(batch!.payload.entries).toEqual(traceEntries);
     expect(batch!.payload.complete).toBe(true);
+    // The reply's size and hop are logged, so catch-up cost is measurable.
+    const line = loggedLines.filter((a) => a[1] === 'Replied to turn trace request').at(-1)?.[0] as { bytes: number; transport: string };
+    expect(line.transport).toBe('head');
+    expect(line.bytes).toBeGreaterThan(JSON.stringify(traceEntries).length);
   });
 
   it('floors a fractional bubbleSeq before reading the trace', () => {

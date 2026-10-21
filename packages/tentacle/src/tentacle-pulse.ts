@@ -96,6 +96,8 @@ export class TentaclePulse {
   /** Set after the current relay connection sends any stream-1 frame (normally
    *  its HELLO). Until then bulk falls back to v1 stream 0 for old Heads. */
   private bulkCapable = false;
+  /** Streams whose inbound side has been reset at least once (see onReset). */
+  private resetSeen = new Set<number>();
 
   constructor(
     private readonly host: TentaclePulseHost,
@@ -154,7 +156,35 @@ export class TentaclePulse {
     } else {
       trace('RX', 0, bytes.length, { kind: '?' });
     }
-    this.run(this.streams.onBytes(bytes, this.host.now()));
+    const stream = d?.streamId ?? 0;
+    const cursorBefore = this.streams.get(stream)?.recvCursorValue ?? 0n;
+    this.run(this.streams.onBytes(bytes, this.host.now()), { stream, cursorBefore });
+  }
+
+  /** The relay restarted or skipped part of its stream to us. A first reset
+   *  on a fresh cursor is the relay placing a just-started Tentacle at its
+   *  current seq: nothing this process could have received is lost (info).
+   *  Anything else may have dropped app→Tentacle messages: warn with the
+   *  stream, the cursor we had and the gap. */
+  private onReset(fromSeq: bigint, peerEpoch: string, stream: number, cursorBefore: bigint): void {
+    const firstContact = cursorBefore === 0n && !this.resetSeen.has(stream);
+    this.resetSeen.add(stream);
+    const restarted = fromSeq === 1n && cursorBefore > 0n;
+    const gap = restarted ? undefined : fromSeq - cursorBefore - 1n;
+    const fields = {
+      stream: stream === 1 ? 'bulk' : 'live',
+      peerEpoch,
+      fromSeq: String(fromSeq),
+      cursorBefore: String(cursorBefore),
+      ...(gap !== undefined && { gap: String(gap > 0n ? gap : 0n) }),
+      cause: firstContact ? 'first-contact' : restarted ? 'relay-stream-restarted' : 'relay-skipped-ahead',
+    };
+    if (firstContact || (gap !== undefined && gap <= 0n)) {
+      logger.info(fields, 'pulse reset-inbound (relay stream positioned)');
+    } else {
+      // restarted: whatever the old relay stream held past cursorBefore is gone.
+      logger.warn(fields, 'pulse reset-inbound (relay stream reset; undelivered messages lost)');
+    }
   }
 
   /** Periodic tick for every stream (heartbeat + liveness). */
@@ -162,7 +192,7 @@ export class TentaclePulse {
     this.run(this.streams.onTick(this.host.now()));
   }
 
-  private run(effects: Effect[]): void {
+  private run(effects: Effect[], rx?: { stream: number; cursorBefore: bigint }): void {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit': {
@@ -203,7 +233,7 @@ export class TentaclePulse {
         }
         case 'reset-inbound':
           trace('RESET-INBOUND', e.fromSeq, 0, { peerEpoch: e.peerEpoch });
-          logger.warn({ fromSeq: String(e.fromSeq) }, 'pulse reset-inbound (relay stream reset)');
+          this.onReset(e.fromSeq, e.peerEpoch, rx?.stream ?? 0, rx?.cursorBefore ?? 0n);
           break;
         // store/unstore/open/close: nothing for the tentacle to do here
         // (not durable-supported; link lifecycle driven explicitly).

@@ -39,7 +39,13 @@ let _current: DaemonStatusFile = {
   updatedAt: Date.now(),
 };
 
+/** Set by clearStatusFile: a shutting-down daemon must not recreate the file
+ *  (a late relay state change or FDA probe did, with this daemon's version,
+ *  after the successor had started). */
+let _cleared = false;
+
 export function initStatusFile(relay: string, deviceName: string): void {
+  _cleared = false;
   _current = { ..._current, relay, deviceName, updatedAt: Date.now() };
   writeStatus();
 }
@@ -66,6 +72,7 @@ export function updateDaemonIdentity(identity: Pick<DaemonStatusFile, 'managedBy
 }
 
 export function clearStatusFile(): void {
+  _cleared = true;
   try { unlinkSync(getStatusPath()); } catch { /* file may not exist */ }
 }
 
@@ -80,6 +87,7 @@ export function readStatusFile(): DaemonStatusFile | null {
 }
 
 function writeStatus(): void {
+  if (_cleared) return;
   try {
     // tmp + rename: readers (`kraki status`, Kraki for Mac) never see a
     // half-written file and briefly report "not running".

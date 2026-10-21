@@ -462,8 +462,9 @@ export function maybeGenerateTitle(client: RelayClient, sessionId: string): void
   // Include current auto-title so the LLM can refine rather than regenerate
   const currentTitle = meta.autoTitle;
 
-  // Message content never goes to the log (it ships in diagnostics bundles).
-  logger.debug({ sessionId, turns, lastUserMessageChars: lastUserMessage.length, totalUserMsgs: userMessages.length }, 'Title generation starting');
+  // Lengths only: titles and prompts are conversation content, and logs are
+  // plain text collected for diagnostics (log audit 2026-10-22).
+  logger.debug({ sessionId, turns, lastUserMessageLength: lastUserMessage.length, totalUserMsgs: userMessages.length }, 'Title generation starting');
 
   if (!lastUserMessage) {
     client.titleGenerationInFlight.delete(sessionId);
@@ -488,7 +489,7 @@ export function maybeGenerateTitle(client: RelayClient, sessionId: string): void
           sessionId,
           payload: { title: client.sessionManager.getMeta(sessionId)?.title, autoTitle: title },
         });
-        logger.info({ sessionId, title, turn: turns }, 'Auto-title generated');
+        logger.info({ sessionId, titleLength: title.length, turn: turns }, 'Auto-title generated');
       }
     })
     .catch((err) => {

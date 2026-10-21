@@ -7,6 +7,10 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.live.test.ts'],
     testTimeout: 30_000,
+    // Live agents need the user's credentials under HOME; only the Kraki
+    // home is isolated.
+    env: { KRAKI_TEST_REAL_HOME: '1' },
+    setupFiles: [resolve(__dirname, '../../scripts/vitest/isolated-home.setup.ts')],
   },
   resolve: {
     alias: {

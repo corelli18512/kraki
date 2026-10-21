@@ -6,6 +6,8 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     exclude: ['src/**/*.integration.test.ts'],
     testTimeout: 10000,
+    // Never the developer's real HOME / ~/.kraki (local-link.json, logs).
+    setupFiles: [resolve(__dirname, '../../scripts/vitest/isolated-home.setup.ts')],
     coverage: {
       include: ['src/**/*.ts'],
       exclude: [

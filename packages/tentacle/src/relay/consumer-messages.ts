@@ -137,7 +137,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     const p = msg.payload as { requestId?: unknown; when?: unknown } | undefined;
     const requestId = typeof p?.requestId === 'string' && /^[a-zA-Z0-9-]{1,128}$/.test(p.requestId) ? p.requestId : '';
     const when = p?.when === 'now' || p?.when === 'idle' ? p.when : undefined;
-    if (client.onUpdateRequest) void client.onUpdateRequest(requestId, when);
+    if (client.onUpdateRequest) void client.onUpdateRequest(requestId, when, msg.deviceId);
     else client.sendUpdateStatus({ phase: 'failed', requestId, error: 'This computer can’t be updated remotely.' });
     return;
   }

@@ -82,5 +82,20 @@ describe('daemon supervisor', () => {
     process.emit('SIGTERM', 'SIGTERM');
     expect(await done).toBe(0);
     expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(join(dir, 'sup.log'), 'utf8')).toMatch(/worker exited cleanly \(code=0 signal=null uptime=/);
+  });
+
+  it('does not call a worker killed by the stop signal a clean exit (log audit 2026-10-22)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+    const worker = join(dir, 'worker.mjs');
+    // No SIGTERM handler: the default action kills it, as during startup.
+    writeFileSync(worker, 'setInterval(() => {}, 1000);');
+    const done = runSupervisor({ command: process.execPath, args: [worker], logFile: join(dir, 'sup.log'), delay: () => 10 });
+    await new Promise((r) => setTimeout(r, 400));
+    process.emit('SIGTERM', 'SIGTERM');
+    expect(await done).toBe(0);
+    const log = readFileSync(join(dir, 'sup.log'), 'utf8');
+    expect(log).toMatch(/worker stopped without a clean exit \(code=null signal=SIGTERM uptime=/);
+    expect(log).not.toMatch(/exited cleanly/);
   });
 });
