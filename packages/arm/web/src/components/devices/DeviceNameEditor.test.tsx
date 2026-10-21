@@ -73,3 +73,19 @@ describe('DeviceNameEditor', () => {
     expect(commands.renameDevice).not.toHaveBeenCalled();
   });
 });
+
+it('Enter or Escape that confirms an IME candidate neither saves nor closes', () => {
+  commands.renameDevice.mockClear();
+  render(<DeviceNameEditor device={laptop} />);
+  fireEvent.click(screen.getByRole('button', { name: `Rename ${laptop.name}` }));
+  const input = screen.getByRole('textbox', { name: 'Device name' });
+  fireEvent.compositionStart(input);
+  fireEvent.change(input, { target: { value: '书房' } });
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+  fireEvent.keyDown(input, { key: 'Escape', keyCode: 229 });
+  expect(commands.renameDevice).not.toHaveBeenCalled();
+  expect(screen.getByRole('textbox', { name: 'Device name' })).toBe(input);
+  fireEvent.compositionEnd(input);
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(commands.renameDevice).toHaveBeenCalledWith(laptop.id, '书房');
+});
