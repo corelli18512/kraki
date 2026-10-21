@@ -129,7 +129,7 @@ Produces `/tmp/stability/stability-report.html`, summarized in five sections, wi
 
 ## Release order (important)
 
-Monitor validates against an allowlist: if a batch contains any event, field or value it does not know, it rejects the **whole batch** with 400, and the client deletes a batch that got a 400. Therefore:
+Monitor validates against an allowlist. An event or field it does not know is dropped; a known field (or `sid`) with a value outside its format is dropped from its event and logged by name (`diag dropped invalid values … fields=voice.action.sid`), never by value. Only a malformed batch envelope still gets 400, and the client deletes a batch that got a 400. (Until the 2026-10 audit any bad value rejected the whole batch: 9 batches were lost to the new-session voice draft id as `sid`.) New data is still lost until Monitor knows it, so:
 
 1. **Deploy Monitor first** (`packages/monitor`).
 2. Then release diagnostics clients that emit these events.

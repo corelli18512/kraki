@@ -110,7 +110,9 @@ This refactor changes source ownership, not existing service/data identity:
   Monitor and route these paths to it before upgrading Head. Existing independent
   collector deployments do not need a Head upgrade/restart for this migration.
 - Deploy the updated collector allowlist before distributing the new diagnostic
-  client. Otherwise new metadata fields would cause whole batches to be rejected.
+  client. Otherwise new events, fields and tag values are dropped (never
+  stored); the collector logs `diag dropped invalid values … fields=<event.field>`
+  for values outside their format. Only a malformed batch envelope gets 400.
 - For rollback, restore the previous backed-up service unit (which references the
   old `diag-sidecar.js` release) and proxy configuration as needed, then restart
   **only `kraki-diag`**. Keep its data directory; no Head DB migration is involved.

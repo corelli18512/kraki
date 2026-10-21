@@ -160,7 +160,7 @@ A public deployment must have TLS, ingress rate limiting and a dedicated data di
 ### Input constraints and storage
 
 - ≤64 KiB compressed, ≤256 KiB decompressed, ≤1000 events/batch, schema 1.
-- Event name/field name allowlist; format checks for numbers/booleans/IDs/fixed tags; unknown fields reject the whole batch.
+- Event name/field name allowlist; format checks for numbers/booleans/IDs/fixed tags; unknown names and out-of-format values are dropped (never stored, logged by name only); a malformed batch envelope is rejected.
 - No generic string logs, message text, selected text, drafts, transcripts, URLs, attachments or raw NSError.
 - At most 2 concurrent requests; 120/min per IP, 30/min per device; at most 10 seconds to read a request body.
 - 20 MiB compressed and 2048 files per device per day; 14-day retention, cleaned at startup/hourly, including inactive devices.
