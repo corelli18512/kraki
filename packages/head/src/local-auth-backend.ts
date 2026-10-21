@@ -65,6 +65,10 @@ const CHALLENGE_NONCE_TTL_MS = 60_000;
  *  the oldest is dropped beyond this. */
 const MAX_CHALLENGE_NONCES_PER_DEVICE = 4;
 
+/** Unused pairing tokens a user may hold at once. Each is one `kraki pair`
+ *  (or setup) QR code; creating another beyond this voids the oldest. */
+const MAX_PAIRING_TOKENS_PER_USER = 5;
+
 /** Auth answer for a device of a deleted account: clients sign out and stop
  *  reconnecting instead of re-creating the account. */
 const ACCOUNT_DELETED = {
@@ -212,6 +216,12 @@ export class LocalAuthBackend implements AuthBackend {
   }
 
   createPairingToken(userId: string): { token: string; expiresIn: number } {
+    // Keep at most MAX_PAIRING_TOKENS_PER_USER outstanding: drop the oldest
+    // (the Map keeps insertion order).
+    const outstanding = [...this.pairingTokens].filter(([, data]) => data.userId === userId);
+    for (const [old] of outstanding.slice(0, Math.max(0, outstanding.length - MAX_PAIRING_TOKENS_PER_USER + 1))) {
+      this.pairingTokens.delete(old);
+    }
     const token = `pt_${randomBytes(32).toString('hex')}`;
     this.pairingTokens.set(token, {
       userId,

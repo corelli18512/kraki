@@ -40,7 +40,10 @@ export function handleUpdatePreferences(server: HeadServer, ws: WebSocket, state
   if (!state.userId) return;
   const prefs = msg.preferences as Record<string, unknown> | undefined;
   if (!prefs || typeof prefs !== 'object') return;
-  server.storage.updatePreferences(state.userId, prefs);
+  if (!server.storage.updatePreferences(state.userId, prefs)) {
+    getLogger().warn('Preferences update not stored (unknown user or over the size limit)', { userId: state.userId });
+    return;
+  }
   // Read back the full merged preferences
   const fullUser = server.storage.getUser(state.userId);
   const merged = publicPreferences(fullUser?.preferences ?? prefs);
