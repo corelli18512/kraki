@@ -5,6 +5,7 @@ options:
     iOS: "18.0"
     macOS: "15.0"
   xcodeVersion: "16.0"
+  developmentLanguage: en
   generateEmptyDirectories: false
   createIntermediateGroups: true
 
@@ -34,6 +35,9 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "5.9"
+    # Localization (Shared/AppLanguage.swift): String Catalogs, extracted on build.
+    LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"
+    SWIFT_EMIT_LOC_STRINGS: "YES"
   configs:
     # Production builds record experience metrics (KrakiDiag) with the normal
     # app identity; the user can turn it off in Settings and the collector can
@@ -187,6 +191,9 @@ targets:
           - "**/.DS_Store"
       - path: Kraki/Core/Notifications/PushPreviewFormat.swift
       - path: Kraki/Core/Crypto/DeviceTrust.swift
+      # Same String Catalog as the app, so push fallback text is localized.
+      - path: Kraki/Resources/Localization/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - package: CoinfraCrypto
     settings:
@@ -255,6 +262,7 @@ targets:
       - path: KrakiTests/SteerPlacementTests.swift
       - path: KrakiTests/ComposerAnswerImagesTests.swift
       - path: KrakiTests/BuildInfoTests.swift
+      - path: KrakiTests/LocalizationTests.swift
       - path: KrakiTests/DeviceRenameTests.swift
     settings:
       base:
@@ -366,6 +374,8 @@ targets:
       - path: Kraki/Resources/build-info.json
         buildPhase: resources
       - path: Kraki/Features/Settings/DeleteAccountSection.swift
+      - path: Kraki/Shared/AppLanguage.swift
+      - path: Kraki/Resources/Localization
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift

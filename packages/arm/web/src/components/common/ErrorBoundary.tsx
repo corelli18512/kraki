@@ -1,10 +1,11 @@
+import { withTranslation, type WithTranslation } from 'react-i18next';
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { createLogger } from '../../lib/logger';
 
 const logger = createLogger('error-boundary');
 
-interface Props {
+interface Props extends WithTranslation<'app'> {
   children: ReactNode;
 }
 
@@ -13,7 +14,7 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
+class LocalizedErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false, error: null };
 
   static getDerivedStateFromError(error: Error): State {
@@ -25,20 +26,21 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   render() {
+    const { t } = this.props;
     if (this.state.hasError) {
       return (
         <div className="flex flex-1 items-center justify-center p-8">
           <div className="text-center">
             <span className="text-4xl">💥</span>
-            <h2 className="mt-3 text-sm font-semibold text-text-primary">Something went wrong</h2>
+            <h2 className="mt-3 text-sm font-semibold text-text-primary">{t('errors.unexpectedTitle')}</h2>
             <p className="mt-1 max-w-xs text-xs text-text-secondary">
-              {this.state.error?.message ?? 'An unexpected error occurred'}
+              {this.state.error?.message ?? t('errors.unexpected')}
             </p>
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
               className="mt-4 rounded-lg bg-kraki-500 px-4 py-2 text-xs font-medium text-white transition-all hover:bg-kraki-600 active:scale-95 active:bg-kraki-700"
             >
-              Try again
+              {t('errors.tryAgain')}
             </button>
           </div>
         </div>
@@ -47,3 +49,5 @@ export class ErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
+
+export const ErrorBoundary = withTranslation('app')(LocalizedErrorBoundary);

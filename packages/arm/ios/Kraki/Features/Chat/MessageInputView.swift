@@ -165,8 +165,10 @@ struct MessageInputView: View {
         guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
-            let name = device?.name ?? session?.deviceName ?? "Device"
-            return "\(name) is offline — message will deliver when it reconnects."
+            if let name = device?.name ?? session?.deviceName {
+                return String(localized: "\(name) is offline — message will deliver when it reconnects.")
+            }
+            return String(localized: "Device is offline — message will deliver when it reconnects.")
         }
         // Reconnecting is silent here (the title says "Connecting…"); input
         // keeps working and queues until the connection is back.
@@ -617,25 +619,25 @@ struct MessageInputView: View {
         .disabled(role == .stop ? (abortPending || !isDeviceReachable) : false)
         .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (role == .send && canSend && !isDeviceReachable ? 0.6 : 1))
         .accessibilityIdentifier(role == .voiceSend ? "voice-send" : role == .stop ? "chat-stop" : "chat-send")
-        .accessibilityLabel(role == .stop ? "Stop agent" : sendAccessibilityLabel)
-        .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
+        .accessibilityLabel(role == .stop ? String(localized: "Stop agent") : sendAccessibilityLabel)
+        .accessibilityHint(role == .stop ? String(localized: "Aborts the current agent turn") : sendAccessibilityHint)
     }
 
     private var sendAccessibilityLabel: String {
         switch submissionIntent {
-        case .answerQuestion: return "Submit answer"
-        case .denyPermission: return "Deny with reason"
-        case .steer: return "Steer agent"
-        case .prompt: return "Send message"
+        case .answerQuestion: return String(localized: "Submit answer")
+        case .denyPermission: return String(localized: "Deny with reason")
+        case .steer: return String(localized: "Steer agent")
+        case .prompt: return String(localized: "Send message")
         }
     }
 
     private var sendAccessibilityHint: String {
         switch submissionIntent {
-        case .answerQuestion: return "Answers the pending question"
-        case .denyPermission: return "Denies the permission with this reason"
-        case .steer: return "Interjects into the active agent turn"
-        case .prompt: return "Sends the current message"
+        case .answerQuestion: return String(localized: "Answers the pending question")
+        case .denyPermission: return String(localized: "Denies the permission with this reason")
+        case .steer: return String(localized: "Interjects into the active agent turn")
+        case .prompt: return String(localized: "Sends the current message")
         }
     }
 
@@ -723,10 +725,10 @@ struct MessageInputView: View {
     private var textFieldForMode: some View {
         let placeholder: String = {
             switch submissionIntent {
-            case .denyPermission: return "Deny with reason…"
-            case .answerQuestion: return "Type your answer…"
-            case .steer: return "Steer the agent…"
-            case .prompt: return "Send a message…"
+            case .denyPermission: return String(localized: "Deny with reason…")
+            case .answerQuestion: return String(localized: "Type your answer…")
+            case .steer: return String(localized: "Steer the agent…")
+            case .prompt: return String(localized: "Send a message…")
             }
         }()
 
@@ -879,7 +881,7 @@ struct MessageInputView: View {
     private func showSubmitFailure() {
         submitFailureTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) {
-            submitFailure = "Couldn't send — your text is kept. Try again."
+            submitFailure = String(localized: "Couldn't send — your text is kept. Try again.")
         }
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         submitFailureTask = Task { @MainActor in
@@ -951,13 +953,13 @@ struct MessageInputView: View {
         case .image(let jpeg):
             imageData = jpeg; imageMimeType = "image/jpeg"
         case .unreadable:
-            imageAttachError = "Couldn't read that image."; selectedPhoto = nil
+            imageAttachError = String(localized: "Couldn't read that image."); selectedPhoto = nil
         case .unsupported:
-            imageAttachError = "That file isn't a supported image format."; selectedPhoto = nil
+            imageAttachError = String(localized: "That file isn't a supported image format."); selectedPhoto = nil
         case .tooLarge:
             // Reset the picker so the user can pick a smaller / different
             // image instead of sending with a silently missing attachment.
-            imageAttachError = "That image is too large to send (over 3 MB after compression). Try a smaller picture."
+            imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
             selectedPhoto = nil; imageData = nil
         }
     }

@@ -764,7 +764,7 @@ private struct MacPendingSessionView: View {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 34))
                     .foregroundStyle(.red)
-                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? "Couldn't fork session" : "Couldn't start session")
+                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? String(localized: "Couldn't fork session") : String(localized: "Couldn't start session"))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.textTitle)
                 Text(reason)
@@ -774,7 +774,7 @@ private struct MacPendingSessionView: View {
                     .frame(maxWidth: 360)
             } else {
                 ProgressView().controlSize(.large)
-                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? "Copying session…" : "Starting session…")
+                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? String(localized: "Copying session…") : String(localized: "Starting session…"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
             }
@@ -799,14 +799,14 @@ private struct InspectorPane: View {
                     HStack(spacing: 12) {
                         AgentAvatar(agent: session.agent, sessionId: session.id, size: .md, status: session.state)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(session.displayTitle)
+                            Text(verbatim: session.displayTitle)
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color.textTitle)
                             HStack(spacing: 5) {
                                 Circle()
                                     .fill(Color.modeColor(session.mode))
                                     .frame(width: 5, height: 5)
-                                Text(session.mode.rawValue.uppercased())
+                                Text(modeTitle(session.mode).uppercased())
                                     .font(.system(size: 9, weight: .heavy))
                                     .tracking(0.4)
                                     .foregroundStyle(Color.modeColor(session.mode))
@@ -818,24 +818,24 @@ private struct InspectorPane: View {
                     Divider().overlay(Color.borderPrimary)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader("Identity")
-                        LabeledRow(label: "Agent", value: session.agent)
-                        LabeledRow(label: "Model", value: session.model ?? "—")
-                        LabeledRow(label: "Mode",  value: session.mode.rawValue)
+                        sectionHeader(String(localized: "Identity"))
+                        LabeledRow(label: String(localized: "Agent"), value: session.agent)
+                        LabeledRow(label: String(localized: "Model"), value: session.model ?? "—")
+                        LabeledRow(label: String(localized: "Mode"),  value: modeTitle(session.mode))
                     }
 
                     if let device = appState.deviceStore.devices[session.deviceId] {
                         VStack(alignment: .leading, spacing: 8) {
-                            sectionHeader("Device")
-                            LabeledRow(label: "Name",   value: device.name)
-                            LabeledRow(label: "Role",   value: device.role.displayName)
-                            LabeledRow(label: "Status", value: device.online ? "Online" : "Offline")
+                            sectionHeader(String(localized: "Device"))
+                            LabeledRow(label: String(localized: "Name"),   value: device.name)
+                            LabeledRow(label: String(localized: "Role"),   value: device.role.displayName)
+                            LabeledRow(label: String(localized: "Status"), value: device.online ? String(localized: "Online") : String(localized: "Offline"))
                         }
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader("Timeline")
-                        LabeledRow(label: "Created",
+                        sectionHeader(String(localized: "Timeline"))
+                        LabeledRow(label: String(localized: "Created"),
                                    value: session.createdAt.formatted(date: .abbreviated, time: .shortened))
                     }
                 }
@@ -860,6 +860,14 @@ private struct InspectorPane: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
             .background(Color.surfacePrimary)
+        }
+    }
+
+    private func modeTitle(_ mode: SessionMode) -> String {
+        switch mode {
+        case .safe: String(localized: "safe", comment: "Session mode name (lowercase), Inspector")
+        case .auto: String(localized: "auto", comment: "Session mode name (lowercase), Inspector")
+        case .delegate: String(localized: "delegate", comment: "Session mode name (lowercase), Inspector")
         }
     }
 

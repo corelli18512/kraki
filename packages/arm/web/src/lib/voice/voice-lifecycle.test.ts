@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelDictation, configureVoiceTransport, dismissVoiceError, finishDictation, onAuthOk, onLeaseDenied, onLeaseGrant, resetVoice, startDictation, useVoice, voiceSettings } from './voice';
 import { diag } from '../diag';
+import { i18next } from '../../i18n';
 
 class SpeechSocket {
   static OPEN = 1;
@@ -130,6 +131,16 @@ describe('voice.summary controller hooks', () => {
     });
     await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
     expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'lease', cause: 'network' }));
+  });
+  it('keeps connection-close telemetry independent of translated user-visible copy', async () => {
+    const summary = summaries();
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+      SpeechSocket.latest.onclose?.();
+      expect(useVoice.getState().error).toBe('语音连接已关闭。请重试。');
+      expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', cause: 'network' }));
+    } finally { await i18next.changeLanguage('en'); }
   });
   it('invalid broker configuration fails at preflight', async () => {
     const summary = summaries();

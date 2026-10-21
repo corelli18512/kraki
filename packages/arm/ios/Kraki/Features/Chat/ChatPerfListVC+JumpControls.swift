@@ -79,7 +79,7 @@ extension ChatPerfListVC {
         jumpButton.addTarget(self, action: #selector(onBottomTapped), for: .touchUpInside)
         jumpButton.alpha = 0
         jumpButton.isHidden = true
-        jumpButton.accessibilityLabel = "Jump to latest"
+        jumpButton.accessibilityLabel = String(localized: "Jump to latest")
 
         blur.accessibilityIdentifier = "jump-latest-material"
         view.addSubview(blur)
@@ -122,7 +122,7 @@ extension ChatPerfListVC {
         latestMessageStartButton.addTarget(self, action: #selector(onLatestMessageStartTapped), for: .touchUpInside)
         latestMessageStartButton.alpha = 0
         latestMessageStartButton.isHidden = true
-        latestMessageStartButton.accessibilityLabel = "Jump to previous reply start"
+        latestMessageStartButton.accessibilityLabel = String(localized: "Jump to previous reply start")
 
         startBlur.accessibilityIdentifier = "jump-start-material"
         view.addSubview(startBlur)

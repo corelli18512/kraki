@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { SessionSummary } from '@kraki/protocol';
 import type { SessionCard } from '../types/store';
 
@@ -45,7 +46,7 @@ export function getSessionStatus(
 /** A Session's name everywhere (list, header, info): its title, else the
  *  agent's auto title, else "New Session" — the same as iOS and Mac. */
 export function sessionDisplayTitle(session: { title?: string | null; autoTitle?: string | null }): string {
-  return session.title?.trim() || session.autoTitle?.trim() || 'New Session';
+  return session.title?.trim() || session.autoTitle?.trim() || t('chat:session.new');
 }
 
 /** A model's name as its agent reports it (what the model pickers show),

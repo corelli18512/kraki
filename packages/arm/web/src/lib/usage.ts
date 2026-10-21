@@ -3,6 +3,8 @@
  * DeviceStore usage helpers (merge across devices, the current Session's
  * account, refresh targets) for the Web / Kraki for Windows.
  */
+import { t } from '../i18n';
+import { formatList, formatNumber, formatRelativeTime } from '../i18n/format';
 import type { AccountUsage, AccountUsageWindow, DeviceSummary } from '@kraki/protocol';
 
 export interface DeviceUsageSnapshot {
@@ -51,24 +53,22 @@ export function isStale(a: AccountUsage, now = Date.now()): boolean {
 }
 
 export function readStatus(a: AccountUsage, now = Date.now()): string | null {
-  if (a.error === 'auth') return 'Sign-in needed';
+  if (a.error === 'auth') return t('usage:status.signIn');
   if (a.error === 'rate_limited') {
     const retry = a.retryAt ? Date.parse(a.retryAt) : NaN;
-    if (Number.isFinite(retry) && retry > now) return `Rate limited · retry in ${Math.max(1, Math.ceil((retry - now) / 60_000))}m`;
-    return 'Rate limited · try refreshing';
+    if (Number.isFinite(retry) && retry > now) return t('usage:status.retryIn', { time: formatNumber(Math.max(1, Math.ceil((retry - now) / 60_000)), { style: 'unit', unit: 'minute', unitDisplay: 'narrow', useGrouping: false }) });
+    return t('usage:status.rateLimited');
   }
-  if (a.error) return "Couldn't refresh";
-  return isStale(a, now) ? 'Update overdue' : null;
+  if (a.error) return t('usage:status.failed');
+  return isStale(a, now) ? t('usage:status.overdue') : null;
 }
 
 export function lastUpdatedText(a: AccountUsage, now = Date.now()): string {
   const f = fetchedDate(a);
-  if (f === null) return 'Not updated yet';
+  if (f === null) return t('usage:status.notUpdated');
   const age = Math.max(0, (now - f) / 1000);
-  if (age < 60) return 'Updated just now';
-  if (age < 3600) return `Updated ${Math.floor(age / 60)}m ago`;
-  if (age < 86400) return `Updated ${Math.floor(age / 3600)}h ago`;
-  return `Updated ${Math.floor(age / 86400)}d ago`;
+  if (age < 60) return t('usage:status.updatedNow');
+  return t('usage:status.updated', { time: formatRelativeTime(f, now) });
 }
 
 export const providerTitle = (a: AccountUsage) => (a.provider === 'codex' ? 'GPT' : 'Claude');
@@ -97,17 +97,18 @@ export function shortReset(resetsAt: string | undefined, now = Date.now()): stri
   if (!resetsAt) return '—';
   const s = Math.floor((Date.parse(resetsAt) - now) / 1000);
   if (!Number.isFinite(s)) return '—';
-  if (s <= 60) return 'now';
+  if (s <= 60) return t('usage:reset.now');
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
-  return `${m}m`;
+  const unit = (value: number, name: string) => formatNumber(value, { style: 'unit', unit: name, unitDisplay: 'narrow', useGrouping: false });
+  if (d > 0) return h > 0 ? t('usage:reset.pair', { first: unit(d, 'day'), second: unit(h, 'hour') }) : unit(d, 'day');
+  if (h > 0) return m > 0 ? t('usage:reset.pair', { first: unit(h, 'hour'), second: unit(m, 'minute') }) : unit(h, 'hour');
+  return unit(m, 'minute');
 }
 
 export function windowName(w: AccountUsageWindow): string {
-  if (w.kind === 'five_hour') return '5h';
-  if (w.kind === 'weekly') return 'Weekly';
-  return w.title ?? 'Limit';
+  if (w.kind === 'five_hour') return t('usage:window.fiveHour');
+  if (w.kind === 'weekly') return t('usage:window.weekly');
+  return w.title ?? t('usage:window.limit');
 }
 
 export type RingState = 'ok' | 'mid' | 'low' | 'out' | 'stale' | 'none';
@@ -187,6 +188,8 @@ export function canRefreshUsage(state: UsageRefreshState | undefined, snapshot: 
 
 export function usageUpdateHint(devices: DeviceSummary[]): string {
   const names = devices.map((d) => d.name);
-  const list = names.length > 2 ? `${names[0]} and ${names.length - 1} more` : names.join(' and ');
-  return `Update Kraki on ${list} to see ${devices.length === 1 ? 'its' : 'their'} accounts`;
+  const list = names.length > 2
+    ? t('usage:update.more', { name: names[0], count: names.length - 1, number: formatNumber(names.length - 1, { useGrouping: false }) })
+    : formatList(names);
+  return t('usage:update.hint', { list, count: devices.length });
 }

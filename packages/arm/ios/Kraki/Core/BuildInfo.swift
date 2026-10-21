@@ -28,8 +28,8 @@ struct BuildInfo: Decodable, Equatable {
     }
 
     var runLabel: String {
-        guard hasBuildRecord, let runId, let runAttempt else { return "Local build" }
-        return runAttempt == "1" ? runId : "\(runId) · attempt \(runAttempt)"
+        guard hasBuildRecord, let runId, let runAttempt else { return String(localized: "Local build") }
+        return runAttempt == "1" ? runId : String(localized: "\(runId) · attempt \(runAttempt)")
     }
 
     var runURL: URL? {

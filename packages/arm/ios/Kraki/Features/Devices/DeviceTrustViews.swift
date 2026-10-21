@@ -505,9 +505,9 @@ struct PastePairingLinkSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(computer.map { "Pair with \($0.name)" } ?? "Pair with a computer")
+            Text(computer.map { String(localized: "Pair with \($0.name)") } ?? String(localized: "Pair with a computer"))
                 .font(.system(size: 17, weight: .semibold))
-            Text(trustCopy: "On the computer, run `kraki connect --url-only` and paste the link it prints here.")
+            Text(trustCopy: String(localized: "On the computer, run `kraki connect --url-only` and paste the link it prints here."))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -547,19 +547,19 @@ struct PastePairingLinkSheet: View {
 
     private func submit() {
         guard let link = PairingLink(string: text) else {
-            error = "That isn't a Kraki pairing link."
+            error = String(localized: "That isn't a Kraki pairing link.")
             return
         }
         guard let trust = link.trust else {
-            error = "This link is from an older Kraki. Update Kraki on the computer, then run `kraki connect` again."
+            error = String(localized: "This link is from an older Kraki. Update Kraki on the computer, then run `kraki connect` again.")
             return
         }
         if let computer, computer.id != trust.tentacleId {
-            error = "This link is for a different computer."
+            error = String(localized: "This link is for a different computer.")
             return
         }
         guard appState.deviceStore.devices[trust.tentacleId] != nil else {
-            error = "That computer isn't on your account. Sign in to the same account on both."
+            error = String(localized: "That computer isn't on your account. Sign in to the same account on both.")
             return
         }
         if appState.pairingLinkChangesKey(link) {

@@ -257,11 +257,11 @@ struct SessionsSidebarView: View {
     private var deviceFilterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                filterPill(label: "All", isSelected: selectedDeviceFilter == nil) {
+                filterPill(label: String(localized: "All"), isAll: true, isSelected: selectedDeviceFilter == nil) {
                     selectedDeviceFilter = nil
                 }
                 ForEach(tentacleDevices) { device in
-                    filterPill(label: device.name,
+                    filterPill(label: device.name, isAll: false,
                                isSelected: selectedDeviceFilter == device.id) {
                         selectedDeviceFilter = device.id
                     }
@@ -274,7 +274,7 @@ struct SessionsSidebarView: View {
     }
 
     @ViewBuilder
-    private func filterPill(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private func filterPill(label: String, isAll: Bool, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
@@ -292,7 +292,7 @@ struct SessionsSidebarView: View {
         }
         .clipShape(Capsule())
         .buttonStyle(.plain)
-        .help(label == "All" ? "Show sessions on all devices" : "Show sessions on \(label)")
+        .help(isAll ? String(localized: "Show sessions on all devices") : String(localized: "Show sessions on \(label)"))
     }
 
     // MARK: - Session list
@@ -374,10 +374,10 @@ struct SessionsSidebarView: View {
             }
         }
         .contextMenu {
-            Button(session.pinned ? "Unpin" : "Pin") {
+            Button(session.pinned ? String(localized: "Unpin") : String(localized: "Pin")) {
                 appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
             }
-            Button(appState.sessionStore.isUnread(session.id) ? "Mark Read" : "Mark Unread") {
+            Button(appState.sessionStore.isUnread(session.id) ? String(localized: "Mark Read") : String(localized: "Mark Unread")) {
                 if appState.sessionStore.isUnread(session.id) {
                     appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
                 } else {

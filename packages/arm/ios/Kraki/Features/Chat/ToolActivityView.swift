@@ -134,7 +134,7 @@ struct ToolActivityView: View {
     @ViewBuilder
     private var argsSection: some View {
         if let argsRef {
-            lazySection(title: "Arguments", ref: argsRef)
+            lazySection(title: String(localized: "Arguments"), ref: argsRef)
         } else if let args = inlineArgs, !args.isEmpty {
             // Legacy inline path (permission prompt).
             VStack(alignment: .leading, spacing: 2) {
@@ -154,7 +154,7 @@ struct ToolActivityView: View {
     @ViewBuilder
     private var resultSection: some View {
         if let resultRef {
-            lazySection(title: "Result", ref: resultRef)
+            lazySection(title: String(localized: "Result"), ref: resultRef)
         }
     }
 
@@ -176,7 +176,7 @@ struct ToolActivityView: View {
         switch attachmentStore.state(for: ref.id) {
         case .ready(_, let data):
             ScrollView {
-                Text(String(data: data, encoding: .utf8) ?? "(non-utf8 bytes)")
+                Text(String(data: data, encoding: .utf8) ?? String(localized: "(non-utf8 bytes)"))
                     .font(.caption2)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.secondary)
@@ -264,7 +264,7 @@ struct SimpleDiffView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(oldVisible.enumerated()), id: \.offset) { _, line in
-                Text("- \(line)")
+                Text(verbatim: "- \(line)")
                     .font(.caption2)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.red)
@@ -274,7 +274,7 @@ struct SimpleDiffView: View {
                     .background(Color.red.opacity(0.08))
             }
             ForEach(Array(newVisible.enumerated()), id: \.offset) { _, line in
-                Text("+ \(line)")
+                Text(verbatim: "+ \(line)")
                     .font(.caption2)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.green)
@@ -304,12 +304,15 @@ struct SimpleDiffView: View {
 
     private func expandedLabel(oldHidden: Int, newHidden: Int) -> String {
         if expanded {
-            return "  Collapse"
+            return String(localized: "  Collapse")
         }
-        var pieces: [String] = []
-        if oldHidden > 0 { pieces.append("\(oldHidden) removed") }
-        if newHidden > 0 { pieces.append("\(newHidden) added") }
-        return "  \(pieces.joined(separator: ", ")) — tap to expand"
+        if oldHidden > 0 && newHidden > 0 {
+            return String(localized: "  \(oldHidden) removed, \(newHidden) added — tap to expand")
+        }
+        if oldHidden > 0 {
+            return String(localized: "  \(oldHidden) removed — tap to expand")
+        }
+        return String(localized: "  \(newHidden) added — tap to expand")
     }
 }
 

@@ -21,8 +21,8 @@ enum DeviceDates {
     static func relative(_ raw: String?, now: Date = Date()) -> String? {
         guard let date = parse(raw) else { return nil }
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return "today" }
-        if cal.isDateInYesterday(date) { return "yesterday" }
+        if cal.isDateInToday(date) { return String(localized: "today") }
+        if cal.isDateInYesterday(date) { return String(localized: "yesterday") }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }

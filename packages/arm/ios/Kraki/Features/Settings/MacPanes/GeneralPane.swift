@@ -26,6 +26,8 @@ struct GeneralPane: View {
                 .pickerStyle(.segmented)
             }
 
+            MacLanguageSection()
+
             Section("Account Usage") {
                 Toggle("Hold \(usagePeek.hotkey.shortcut.display) to peek at account usage", isOn: Binding(
                     get: { usagePeek.hotkey.enabled },
@@ -113,8 +115,8 @@ final class LoginItemSetting {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            self.error = on ? "Couldn't add Kraki to login items: \(error.localizedDescription)"
-                            : "Couldn't remove Kraki from login items: \(error.localizedDescription)"
+            self.error = on ? String(localized: "Couldn't add Kraki to login items: \(error.localizedDescription)")
+                            : String(localized: "Couldn't remove Kraki from login items: \(error.localizedDescription)")
         }
         let status = SMAppService.mainApp.status
         enabled = status == .enabled || status == .requiresApproval
@@ -122,4 +124,34 @@ final class LoginItemSetting {
     }
 }
 
+/// Settings › General › Language. Foundation picks the bundle language at
+/// launch, so a change asks to relaunch (or applies next time).
+private struct MacLanguageSection: View {
+    @State private var selection: AppLanguage? = AppLanguage.override
+    @State private var pendingRelaunch = false
+
+    var body: some View {
+        Section {
+            Picker("Language", selection: $selection) {
+                Text("System Default").tag(AppLanguage?.none)
+                Divider()
+                ForEach(AppLanguage.allCases) { language in
+                    Text(verbatim: language.nativeName).tag(Optional(language))
+                }
+            }
+            .accessibilityIdentifier("settings-language")
+            .onChange(of: selection) { _, newValue in
+                if AppLanguage.setOverride(newValue) { pendingRelaunch = true }
+            }
+            Text("Applies to this device only.")
+                .font(.system(size: 11)).foregroundStyle(Color.textMuted)
+        }
+        .alert("Relaunch Kraki to change the language?", isPresented: $pendingRelaunch) {
+            Button("Relaunch Now") { AppLanguage.relaunch() }
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("Kraki will use the new language the next time it opens.")
+        }
+    }
+}
 #endif

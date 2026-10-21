@@ -52,14 +52,14 @@ enum SessionCardStatus: Equatable {
 
     var accessibilityLabel: String? {
         switch self {
-        case .active: return "Running"
-        case .compacting: return "Compacting"
-        case .waiting: return "Waiting for an answer"
-        case .approval: return "Waiting for approval"
-        case .error: return "Failed"
-        case .offline: return "Offline"
-        case .agentMessage: return "Last message from agent"
-        case .humanMessage: return "Last message from you"
+        case .active: return String(localized: "Running")
+        case .compacting: return String(localized: "Compacting")
+        case .waiting: return String(localized: "Waiting for an answer")
+        case .approval: return String(localized: "Waiting for approval")
+        case .error: return String(localized: "Failed")
+        case .offline: return String(localized: "Offline")
+        case .agentMessage: return String(localized: "Last message from agent")
+        case .humanMessage: return String(localized: "Last message from you")
         case .delivery(let delivery): return delivery.accessibilityLabel
         case .idle: return nil
         }
@@ -230,9 +230,9 @@ enum SessionTimeFormatter {
         guard let date = ISO8601.parse(iso) else { return "" }
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return timeFormatter.string(from: date) }
-        if calendar.isDateInYesterday(date) { return "yesterday" }
+        if calendar.isDateInYesterday(date) { return String(localized: "yesterday") }
         let days = calendar.dateComponents([.day], from: date, to: Date()).day ?? 0
-        return "\(max(days, 2))d ago"
+        return String(localized: "\(max(days, 2))d ago")
     }
 }
 

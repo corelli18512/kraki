@@ -226,8 +226,8 @@ enum DeviceRole: String, Codable, Sendable {
     /// computer that runs their agents.
     var displayName: String {
         switch self {
-        case .tentacle: return "Computer"
-        case .app: return "App"
+        case .tentacle: return String(localized: "Computer")
+        case .app: return String(localized: "App")
         }
     }
 }

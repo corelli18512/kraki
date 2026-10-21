@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -32,6 +33,7 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
   style?: CSSProperties;
   onShowSteps?: () => void;
 }) {
+  const { t } = useTranslation('chat');
   const bubble = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -101,7 +103,7 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
           ref={menu}
           className="kmessage-menu"
           role="menu"
-          aria-label="Message actions"
+          aria-label={t('message.actions')}
           style={{ left: context.x, top: context.y }}
           onContextMenu={(event) => event.preventDefault()}
           onKeyDown={(event) => {
@@ -118,10 +120,10 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
         >
           {context.text && (
             <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(context.text); close(true); }}>
-              {context.selection ? 'Copy Selection' : 'Copy'}
+              {context.selection ? t('message.copySelection') : t('message.copy')}
             </button>
           )}
-          {onShowSteps && <button type="button" role="menuitem" onClick={() => { close(true); onShowSteps(); }}>Show Steps</button>}
+          {onShowSteps && <button type="button" role="menuitem" onClick={() => { close(true); onShowSteps(); }}>{t('message.showSteps')}</button>}
         </div>, document.body,
       )}
     </div>

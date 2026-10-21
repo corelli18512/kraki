@@ -1,4 +1,5 @@
 // OS preference helpers; selected external CLI is never used to take ownership.
+const i18n = require('./i18n.cjs');
 const { execFile } = require('node:child_process');
 const { existsSync, statSync } = require('node:fs');
 const path = require('node:path');
@@ -12,10 +13,10 @@ function isKrakiExecutable(file) {
 }
 async function probeCli(selected) {
   const file = selected || (await exec(process.platform === 'win32' ? 'where.exe' : 'which', ['kraki'])).split(/\r?\n/)[0];
-  if (!isKrakiExecutable(file)) throw new Error('Select an existing kraki executable.');
+  if (!isKrakiExecutable(file)) throw new Error(i18n.t('error.selectExecutable'));
   const output = await exec(file, ['--version']);
   const version = /\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/.exec(output)?.[0];
-  if (!version) throw new Error('The selected CLI did not report a Kraki version.');
+  if (!version) throw new Error(i18n.t('error.cliVersion'));
   return { externalCliPath: file, externalCliVersion: version };
 }
 function isSafeUsageShortcut(shortcut) {

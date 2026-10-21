@@ -138,9 +138,9 @@ struct BubbleImageGallery: View {
         entries.map { entry in
             switch entry {
             case .image(let id, let image):
-                return (id, IOSImagePreviewItem(id: id, image: image, title: "Image"))
+                return (id, IOSImagePreviewItem(id: id, image: image, title: String(localized: "Image")))
             case .ref(let ref):
-                return (ref.id, IOSImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? "Image"))
+                return (ref.id, IOSImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? String(localized: "Image")))
             }
         }
     }
@@ -188,12 +188,12 @@ struct BubbleImageGallery: View {
                     imageButton(image: image, entryID: ref.id, cornerRadius: 12)
                         .frame(width: size.width, height: size.height)
                 } else {
-                    errorPlaceholder(ref, label: "Invalid image", size: size)
+                    errorPlaceholder(ref, label: String(localized: "Invalid image"), size: size)
                 }
             case .error(let reason):
                 errorPlaceholder(
                     ref,
-                    label: reason.isEmpty ? "Couldn't load image" : reason,
+                    label: reason.isEmpty ? String(localized: "Couldn't load image") : reason,
                     size: size
                 )
             case .awaitingChunks, .fetching, .none:
@@ -218,7 +218,7 @@ struct BubbleImageGallery: View {
                     )
                     .zIndex(Double(visible.count - index))
             }
-            Text("\(entries.count)")
+            Text(verbatim: "\(entries.count)")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
@@ -253,12 +253,12 @@ struct BubbleImageGallery: View {
                         .frame(width: width, height: IOSImageGalleryLayout.multiCardHeight)
                         .overlay(cardBorder)
                 } else {
-                    stackedError(ref, label: "Invalid image", width: width)
+                    stackedError(ref, label: String(localized: "Invalid image"), width: width)
                 }
             case .error(let reason):
                 stackedError(
                     ref,
-                    label: reason.isEmpty ? "Couldn't load image" : reason,
+                    label: reason.isEmpty ? String(localized: "Couldn't load image") : reason,
                     width: width
                 )
             case .awaitingChunks, .fetching, .none:
@@ -290,7 +290,7 @@ struct BubbleImageGallery: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(entries.count > 1 ? "Open image gallery" : "Open image preview")
+        .accessibilityLabel(entries.count > 1 ? String(localized: "Open image gallery") : String(localized: "Open image preview"))
     }
 
     private func placeholderSize(_ ref: ContentRef) -> CGSize {
@@ -314,7 +314,7 @@ struct BubbleImageGallery: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(entries.count > 1 ? "Open image gallery" : "Open image preview")
+        .accessibilityLabel(entries.count > 1 ? String(localized: "Open image gallery") : String(localized: "Open image preview"))
     }
 
     private func errorPlaceholder(_ ref: ContentRef, label: String, size: CGSize) -> some View {
@@ -453,7 +453,7 @@ struct IOSImagePreviewGallery: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if selection.items.count > 1 {
-                        Text("\(index + 1) / \(selection.items.count)")
+                        Text(verbatim: "\(index + 1) / \(selection.items.count)")
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.62))
                     }
@@ -472,7 +472,7 @@ struct IOSImagePreviewGallery: View {
                 Spacer()
                 if selection.items.count > 1 {
                     HStack(spacing: 22) {
-                        navigationButton("chevron.left", label: "Previous image") {
+                        navigationButton("chevron.left", label: String(localized: "Previous image")) {
                             show(index - 1)
                         }
                         .disabled(index == 0)
@@ -480,7 +480,7 @@ struct IOSImagePreviewGallery: View {
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.76))
                             .frame(minWidth: 64)
-                        navigationButton("chevron.right", label: "Next image") {
+                        navigationButton("chevron.right", label: String(localized: "Next image")) {
                             show(index + 1)
                         }
                         .disabled(index == selection.items.count - 1)
@@ -554,10 +554,10 @@ private struct IOSImagePreviewPage: View {
                 if let image = AttachmentImageCache.image(id: id, data: data) {
                     IOSZoomableImageCanvas(image: image, onBackdropTap: onBackdropTap)
                 } else {
-                    message("Invalid image", retry: false)
+                    message(String(localized: "Invalid image"), retry: false)
                 }
             case .error(let reason):
-                message(reason.isEmpty ? "Couldn't load image" : reason, retry: true)
+                message(reason.isEmpty ? String(localized: "Couldn't load image") : reason, retry: true)
             case .awaitingChunks(let received, let total?) where total > 1:
                 loading(fraction: Double(received) / Double(total))
             default:
@@ -572,7 +572,7 @@ private struct IOSImagePreviewPage: View {
                 ProgressView(value: fraction)
                     .progressViewStyle(.circular)
                     .tint(.white)
-                Text("\(Int(fraction * 100))%")
+                Text(verbatim: (Double(Int(fraction * 100)) / 100).formatted(.percent.precision(.fractionLength(0))))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.7))
             } else {

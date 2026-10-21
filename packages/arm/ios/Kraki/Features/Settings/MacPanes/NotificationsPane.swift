@@ -45,14 +45,14 @@ struct NotificationsPane: View {
 
     private var statusText: String {
         switch authStatus {
-        case .authorized: return "Granted"
-        case .provisional: return "Provisional"
+        case .authorized: return String(localized: "Granted")
+        case .provisional: return String(localized: "Provisional")
         // macOS also reports a request nobody has answered yet (its banner is
         // still in Notification Center) as denied: don't say the person did.
-        case .denied: return "Off — turn on in System Settings"
-        case .notDetermined: return "Not asked yet"
-        case .ephemeral: return "Ephemeral"
-        @unknown default: return "Unknown"
+        case .denied: return String(localized: "Off — turn on in System Settings")
+        case .notDetermined: return String(localized: "Not asked yet")
+        case .ephemeral: return String(localized: "Ephemeral")
+        @unknown default: return String(localized: "Unknown")
         }
     }
 

@@ -78,7 +78,7 @@ struct MacCommands: Commands {
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
 
-            Button(inspectorShown ? "Hide Inspector" : "Show Inspector") {
+            Button(inspectorShown ? String(localized: "Hide Inspector") : String(localized: "Show Inspector")) {
                 inspectorShown.toggle()
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
@@ -165,14 +165,14 @@ struct MacCommands: Commands {
             }
             .disabled(!hasActiveSession)
 
-            Button(activeSessionPinned ? "Unpin Session" : "Pin Session") {
+            Button(activeSessionPinned ? String(localized: "Unpin Session") : String(localized: "Pin Session")) {
                 guard let id = appState.sessionStore.activeSessionId,
                       let s = appState.sessionStore.sessions[id] else { return }
                 appState.commandSender?.pinSession(sessionId: id, pinned: !s.pinned)
             }
             .disabled(!hasActiveSession)
 
-            Button(activeSessionUnread ? "Mark Read" : "Mark Unread") {
+            Button(activeSessionUnread ? String(localized: "Mark Read") : String(localized: "Mark Unread")) {
                 guard let id = appState.sessionStore.activeSessionId,
                       let session = appState.sessionStore.sessions[id] else { return }
                 if appState.sessionStore.isUnread(id) {
@@ -322,12 +322,12 @@ enum MacReconnectConfirmation {
         guard running > 0 else { return true }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Reconnect this Mac?"
+        alert.messageText = String(localized: "Reconnect this Mac?")
         alert.informativeText = running == 1
-            ? "A session is running on this Mac. Reconnecting restarts Kraki here and stops it."
-            : "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them."
-        alert.addButton(withTitle: "Reconnect")
-        alert.addButton(withTitle: "Cancel")
+            ? String(localized: "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.")
+            : String(localized: "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them.")
+        alert.addButton(withTitle: String(localized: "Reconnect"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 }

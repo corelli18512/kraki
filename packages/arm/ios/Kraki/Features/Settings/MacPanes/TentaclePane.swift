@@ -113,7 +113,7 @@ struct TentaclePane: View {
             LabeledContent("Coding agents") {
                 Button("Check Coding Agents…") { openWindow(id: "local-agents") }
             }
-            LabeledContent("Version", value: tentacleCLI.builtIn.version ?? "unknown")
+            LabeledContent("Version", value: tentacleCLI.builtIn.version ?? String(localized: "unknown"))
             if tentacleCLI.externalCLI != nil {
                 Text("The kraki CLI on this Mac stays usable for commands like `kraki status` and `kraki logs`; Kraki keeps running the background service.")
                     .font(.caption)
@@ -160,7 +160,7 @@ struct TentaclePane: View {
                     .foregroundStyle(Color(hex: 0x34D399))
                 LabeledContent("Path", value: path)
                     .textSelection(.enabled)
-                LabeledContent("Version", value: version ?? "unknown")
+                LabeledContent("Version", value: version ?? String(localized: "unknown"))
             }
         }
     }
@@ -275,7 +275,7 @@ struct TentaclePane: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.title = "Locate kraki executable"
+        panel.title = String(localized: "Locate kraki executable")
         panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
         if panel.runModal() == .OK, let url = panel.url {
             tentacleCLI.setBinaryPathOverride(url.path)

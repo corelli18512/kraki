@@ -42,16 +42,16 @@ struct ExistingCLIChoiceView: View {
             VStack(spacing: 10) {
                 option(
                     mode: .builtIn,
-                    title: "Use Kraki for Mac",
-                    badge: "Recommended",
-                    detail: "Kraki for Mac runs Kraki in the background and updates it with the app. Your sign-in and sessions carry over. You'll allow Full Disk Access for Kraki once.",
+                    title: String(localized: "Use Kraki for Mac"),
+                    badge: String(localized: "Recommended"),
+                    detail: String(localized: "Kraki for Mac runs Kraki in the background and updates it with the app. Your sign-in and sessions carry over. You'll allow Full Disk Access for Kraki once."),
                     identifier: "mac.ownerChoice.builtIn"
                 )
                 option(
                     mode: .external,
-                    title: "Keep the command-line version",
+                    title: String(localized: "Keep the command-line version"),
                     badge: nil,
-                    detail: "Kraki for Mac uses the install you already have. You keep updating it from Terminal.",
+                    detail: String(localized: "Kraki for Mac uses the install you already have. You keep updating it from Terminal."),
                     identifier: "mac.ownerChoice.external"
                 )
             }
@@ -75,7 +75,7 @@ struct ExistingCLIChoiceView: View {
 
     private var subtitle: String {
         let version = tentacleCLI.externalCLI?.version.map { " (\($0))" } ?? ""
-        return "The command-line version of Kraki\(version) already runs your agents in the background. You only need one of them."
+        return String(localized: "The command-line version of Kraki\(version) already runs your agents in the background. You only need one of them.")
     }
 
     private func option(mode: TentacleMode, title: String, badge: String?, detail: String, identifier: String) -> some View {

@@ -1,0 +1,19 @@
+{
+  "time": {
+    "justNow": "刚刚"
+  },
+  "action": {
+    "cancel": "取消",
+    "done": "完成",
+    "ok": "好",
+    "save": "保存",
+    "close": "关闭",
+    "retry": "重试",
+    "copy": "复制",
+    "copied": "已复制",
+    "delete": "删除",
+    "rename": "重命名",
+    "continue": "继续",
+    "back": "返回"
+  }
+}

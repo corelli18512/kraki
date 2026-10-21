@@ -46,7 +46,7 @@ struct ModePickerView: View {
 
     private var collapsedPill: some View {
         TintedSegmentedControl(
-            items: [currentMode.rawValue.capitalized],
+            items: [currentMode.chatLocalizedTitle],
             selection: .constant(0),
             tintColor: UIColor(modeColor(currentMode))
         )
@@ -61,7 +61,7 @@ struct ModePickerView: View {
 
     private var expandedPicker: some View {
         TintedSegmentedControl(
-            items: Self.allModes.map { $0.rawValue.capitalized },
+            items: Self.allModes.map { $0.chatLocalizedTitle },
             selection: Binding(
                 get: { Self.allModes.firstIndex(of: currentMode) ?? 1 },
                 set: { selectMode(Self.allModes[$0]) }

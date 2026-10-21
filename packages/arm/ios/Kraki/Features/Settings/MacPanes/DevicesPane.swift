@@ -61,7 +61,7 @@ struct DevicesPane: View {
         .formStyle(.grouped)
         .sheet(isPresented: $showingPairing) { PairingSheet() }
         .alert(
-            "Rename \(renaming?.name ?? "device")",
+            "Rename \(renaming?.name ?? String(localized: "device"))",
             isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
         ) {
             TextField(renaming?.ownName ?? "", text: $nameDraft)
@@ -77,7 +77,7 @@ struct DevicesPane: View {
             Text("Shown on all your devices. Leave it empty to use \"\(renaming?.ownName ?? "")\".")
         }
         .alert(
-            "Remove \(removing?.name ?? "device")?",
+            "Remove \(removing?.name ?? String(localized: "device"))?",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
         ) {
             Button("Cancel", role: .cancel) { removing = nil }
@@ -113,8 +113,8 @@ private struct DeviceRow: View {
             date = sql.date(from: raw)
         }
         guard let date else { return nil }
-        if Calendar.current.isDateInToday(date) { return "today" }
-        if Calendar.current.isDateInYesterday(date) { return "yesterday" }
+        if Calendar.current.isDateInToday(date) { return String(localized: "today") }
+        if Calendar.current.isDateInYesterday(date) { return String(localized: "yesterday") }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 

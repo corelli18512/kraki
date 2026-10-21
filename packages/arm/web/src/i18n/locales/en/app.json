@@ -1,0 +1,56 @@
+{
+  "connection": {
+    "errorTitle": "Connection Error",
+    "disconnected": "Disconnected",
+    "failed": "Could not connect to the relay server. Make sure the head is running.",
+    "lost": "Lost connection to the relay server.",
+    "connect": "Connect now",
+    "connecting": "Connecting…"
+  },
+  "devices": {
+    "title": "Devices",
+    "phoneTitle": "Use Kraki on your phone",
+    "phoneDetail": "Scan a code with your phone to see and run your sessions there.",
+    "showCode": "Show Code…"
+  },
+  "dashboard": {
+    "authenticating": "Authenticating…",
+    "welcome": "Welcome to Kraki",
+    "signInDetail": "Sign in to connect to your coding agent sessions.",
+    "signIn": "Sign in with GitHub",
+    "or": "or",
+    "scan": "Scan QR Code",
+    "privacy": "Privacy Policy",
+    "downloadMac": "Use this Mac's coding agents? Download Kraki for Mac",
+    "connecting": "Connecting to relay…",
+    "selectSession": "Select a session from the sidebar to get started",
+    "generateQr": "Run <command>kraki connect</command> to generate a QR code."
+  },
+  "errors": {
+    "dismiss": "Dismiss error",
+    "unexpectedTitle": "Something went wrong",
+    "unexpected": "An unexpected error occurred",
+    "tryAgain": "Try again",
+    "connectFirst": "Connect to Kraki first. The account is deleted on the server.",
+    "noAnswer": "Kraki didn't answer. Check the connection and try again.",
+    "noTarget": "Cannot send: no target device for this session. Try reconnecting.",
+    "deleteAccount": "Couldn't delete the account. Try again.",
+    "permissionSend": "Couldn’t send. Try again.",
+    "permissionUnconfirmed": "Not confirmed by the agent. Try again."
+  },
+  "scanner": {
+    "denied": "Camera access denied. Check your browser or device settings.",
+    "back": "Go back",
+    "pointAt": "Point at the QR code from <command>kraki connect</command>"
+  },
+  "pairing": {
+    "confirmTitle": "Connect to a self-hosted server?",
+    "confirmDetail": "This code asks to connect to <b></b>, which is not a Kraki server. Continue only if you set up this server yourself.",
+    "connect": "Connect",
+    "appTitle": "Open in the Kraki app",
+    "install": "Install Kraki for iPhone, then scan the code on your computer again.",
+    "unavailable": "Kraki for iPhone is not available yet. You can connect in this browser instead.",
+    "getApp": "Get Kraki for iPhone",
+    "browser": "Continue in browser"
+  }
+}

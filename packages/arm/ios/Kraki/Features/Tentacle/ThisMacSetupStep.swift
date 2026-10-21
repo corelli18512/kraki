@@ -15,7 +15,7 @@ import SwiftUI
 struct ThisMacSetupStep: View {
     let binaryPath: String
     /// "Step 1 of 2" for new users; nil when there is no sign-in step after.
-    var stepLabel: String? = "Step 1 of 2"
+    var stepLabel: String? = String(localized: "Step 1 of 2")
     let onContinue: () -> Void
     let onSkip: () -> Void
 
@@ -23,7 +23,7 @@ struct ThisMacSetupStep: View {
     @State private var hasFullDiskAccess: Bool
     private let pollsFullDiskAccess: Bool
 
-    init(binaryPath: String, stepLabel: String? = "Step 1 of 2", onContinue: @escaping () -> Void, onSkip: @escaping () -> Void) {
+    init(binaryPath: String, stepLabel: String? = String(localized: "Step 1 of 2"), onContinue: @escaping () -> Void, onSkip: @escaping () -> Void) {
         self.binaryPath = binaryPath
         self.stepLabel = stepLabel
         self.onContinue = onContinue
@@ -48,11 +48,11 @@ struct ThisMacSetupStep: View {
     var body: some View {
         StepCard(
             step: stepLabel,
-            title: "Set up this Mac",
-            detail: "Kraki runs the coding agents installed on this Mac, so you can use them from here, your phone and your other computers."
+            title: String(localized: "Set up this Mac"),
+            detail: String(localized: "Kraki runs the coding agents installed on this Mac, so you can use them from here, your phone and your other computers.")
         ) {
             VStack(spacing: 14) {
-                section(title: "Coding agents") {
+                section(title: String(localized: "Coding agents")) {
                     LocalAgentsPanel(check: check, binaryPath: binaryPath)
                 }
                 fullDiskAccessSection
@@ -74,15 +74,15 @@ struct ThisMacSetupStep: View {
     // MARK: Full Disk Access
 
     private var fullDiskAccessSection: some View {
-        section(title: "Full Disk Access") {
+        section(title: String(localized: "Full Disk Access")) {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: hasFullDiskAccess ? "checkmark.circle.fill" : "lock.circle")
                     .foregroundStyle(hasFullDiskAccess ? Color.green : Color.textMuted)
                     .frame(width: 14)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(hasFullDiskAccess
-                         ? "Allowed. Agents can work in any folder without macOS prompts."
-                         : "Agents read and edit files across your projects. Allow it once and macOS won't interrupt them with permission prompts.")
+                         ? String(localized: "Allowed. Agents can work in any folder without macOS prompts.")
+                         : String(localized: "Agents read and edit files across your projects. Allow it once and macOS won't interrupt them with permission prompts."))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Color.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -114,9 +114,9 @@ struct ThisMacSetupStep: View {
 
     static func blockingReason(isChecking: Bool, readyAgents: Int, hasFullDiskAccess: Bool) -> String? {
         if readyAgents == 0 {
-            return isChecking ? "Checking the agents on this Mac…" : "Set up at least one coding agent, then click Check Again."
+            return isChecking ? String(localized: "Checking the agents on this Mac…") : String(localized: "Set up at least one coding agent, then click Check Again.")
         }
-        if !hasFullDiskAccess { return "Allow Full Disk Access to continue." }
+        if !hasFullDiskAccess { return String(localized: "Allow Full Disk Access to continue.") }
         return nil
     }
 

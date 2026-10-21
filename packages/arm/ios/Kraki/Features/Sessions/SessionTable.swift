@@ -449,7 +449,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 
         // Unread (rightmost — closest to swipe edge). Seq-derived.
         let isUnread = appState.sessionStore.isUnread(sessionId)
-        let unreadAction = UIContextualAction(style: .normal, title: isUnread ? "Read" : "Unread") { _, _, completion in
+        let unreadAction = UIContextualAction(style: .normal, title: isUnread ? String(localized: "Read") : String(localized: "Unread")) { _, _, completion in
             if isUnread {
                 appState.commandSender?.markRead(sessionId: sessionId, seq: session.lastSeq)
             } else {
@@ -459,11 +459,11 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         unreadAction.image = renderLucideIconForSwipe(isUnread ? .bellOff : .bellRing)
         unreadAction.backgroundColor = Self.unreadActionColor
-        unreadAction.accessibilityLabel = isUnread ? "Mark as Read" : "Mark as Unread"
+        unreadAction.accessibilityLabel = isUnread ? String(localized: "Mark as Read") : String(localized: "Mark as Unread")
 
         // Pin (left)
         let pinned = session.pinned
-        let pinAction = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, completion in
+        let pinAction = UIContextualAction(style: .normal, title: pinned ? String(localized: "Unpin") : String(localized: "Pin")) { _, _, completion in
             appState.commandSender?.pinSession(sessionId: sessionId, pinned: !pinned)
             completion(true)
         }

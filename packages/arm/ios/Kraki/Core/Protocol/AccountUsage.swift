@@ -79,24 +79,24 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
 
     func readStatus(now: Date = Date()) -> String? {
         switch error {
-        case "auth": return "Sign-in needed"
+        case "auth": return String(localized: "Sign-in needed")
         case "rate_limited":
             if let retry = retryDate, retry > now {
-                return "Rate limited · retry in \(max(1, Int(ceil(retry.timeIntervalSince(now) / 60))))m"
+                return String(localized: "Rate limited · retry in \(max(1, Int(ceil(retry.timeIntervalSince(now) / 60))))m")
             }
-            return "Rate limited · try refreshing"
-        case .some: return "Couldn't refresh"
-        case .none: return isStale(now: now) ? "Update overdue" : nil
+            return String(localized: "Rate limited · try refreshing")
+        case .some: return String(localized: "Couldn't refresh")
+        case .none: return isStale(now: now) ? String(localized: "Update overdue") : nil
         }
     }
 
     func lastUpdatedText(now: Date = Date()) -> String {
-        guard let date = fetchedDate else { return "Not updated yet" }
+        guard let date = fetchedDate else { return String(localized: "Not updated yet") }
         let age = max(0, now.timeIntervalSince(date))
-        if age < 60 { return "Updated just now" }
-        if age < 3600 { return "Updated \(Int(age / 60))m ago" }
-        if age < 86400 { return "Updated \(Int(age / 3600))h ago" }
-        return "Updated \(Int(age / 86400))d ago"
+        if age < 60 { return String(localized: "Updated just now") }
+        if age < 3600 { return String(localized: "Updated \(Int(age / 60))m ago") }
+        if age < 86400 { return String(localized: "Updated \(Int(age / 3600))h ago") }
+        return String(localized: "Updated \(Int(age / 86400))d ago")
     }
 
     var providerTitle: String { provider == "codex" ? "GPT" : "Claude" }

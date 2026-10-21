@@ -52,20 +52,20 @@ final class LocalAgentsCheck {
 
     static let catalog: [CatalogEntry] = [
         CatalogEntry(id: "claude", name: "Claude Code", maker: "Anthropic",
-                     blurb: "Anthropic's coding agent.",
-                     detect: "Found as `claude` in Terminal, or inside the Claude desktop app.",
+                     blurb: String(localized: "Anthropic's coding agent."),
+                     detect: String(localized: "Found as `claude` in Terminal, or inside the Claude desktop app."),
                      installURL: URL(string: "https://code.claude.com/docs/en/setup")!),
         CatalogEntry(id: "codex", name: "Codex", maker: "OpenAI",
-                     blurb: "OpenAI's coding agent.",
-                     detect: "Found as `codex` in Terminal, or inside the ChatGPT desktop app.",
+                     blurb: String(localized: "OpenAI's coding agent."),
+                     detect: String(localized: "Found as `codex` in Terminal, or inside the ChatGPT desktop app."),
                      installURL: URL(string: "https://developers.openai.com/codex/cli")!),
         CatalogEntry(id: "copilot", name: "GitHub Copilot CLI", maker: "GitHub",
-                     blurb: "GitHub Copilot in the terminal. Needs a Copilot plan.",
-                     detect: "Found as `copilot` in Terminal.",
+                     blurb: String(localized: "GitHub Copilot in the terminal. Needs a Copilot plan."),
+                     detect: String(localized: "Found as `copilot` in Terminal."),
                      installURL: URL(string: "https://github.com/features/copilot/cli")!),
         CatalogEntry(id: "pi", name: "Pi", maker: "Earendil",
-                     blurb: "An open coding agent that works with many model providers and your own API keys.",
-                     detect: "Found as `pi` in Terminal.",
+                     blurb: String(localized: "An open coding agent that works with many model providers and your own API keys."),
+                     detect: String(localized: "Found as `pi` in Terminal."),
                      installURL: URL(string: "https://github.com/earendil-works/pi#readme")!),
     ]
 
@@ -173,7 +173,7 @@ final class LocalAgentsCheck {
         } catch {
             out.fileHandleForReading.readabilityHandler = nil
             isRunning = false
-            failure = "Couldn't check the agents on this Mac: \(error.localizedDescription)"
+            failure = String(localized: "Couldn't check the agents on this Mac: \(error.localizedDescription)")
         }
     }
 
@@ -208,7 +208,7 @@ final class LocalAgentsCheck {
             guard agent.status == .checking else { return agent }
             var a = agent
             a.status = .error
-            a.hint = "Couldn't check \(agent.name)."
+            a.hint = String(localized: "Couldn't check \(agent.name).")
             return a
         }
     }

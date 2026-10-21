@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import createDOMPurify from 'dompurify';
 import purifierSource from 'dompurify/dist/purify.min.js?raw';
 import { loadReportMermaidRuntime } from './report-mermaid';
@@ -15,7 +16,7 @@ const scriptText = (source: string): string => source.replace(/<\/script/gi, '<\
 export async function prepareReportPreview(original: string): Promise<string> {
   const purifier = createDOMPurify(window);
   const root = purifier.sanitize(original, { ...REPORT_PREVIEW_POLICY, RETURN_DOM: true });
-  if (!(root instanceof HTMLHtmlElement)) throw new Error('Report sanitization failed.');
+  if (!(root instanceof HTMLHtmlElement)) throw new Error(t('chat:report.sanitizationFailed'));
   restrictReportPreviewUrls(root);
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
   let library = '';

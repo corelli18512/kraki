@@ -409,16 +409,16 @@ final class AuthManager {
             // the socket authenticated-but-stuck on the login screen.
             Task { @MainActor [weak self] in
                 guard let self, let appState = self.appState else { return }
-                appState.lastError = "Keychain access was denied. Retrying with CLI credentials…"
+                appState.lastError = String(localized: "Keychain access was denied. Retrying with CLI credentials…")
                 if !(await appState.attemptCLILogin()) {
                     appState.onAuthFailed(
-                        error: "Keychain access was denied. Allow Kraki in Keychain Access or sign in again with the CLI."
+                        error: String(localized: "Keychain access was denied. Allow Kraki in Keychain Access or sign in again with the CLI.")
                     )
                 }
             }
             #else
             appState?.onAuthFailed(
-                error: "Challenge signing failed: \(error.localizedDescription)"
+                error: String(localized: "Challenge signing failed: \(error.localizedDescription)")
             )
             #endif
         }
@@ -436,7 +436,7 @@ final class AuthManager {
         guard let deviceId = message["deviceId"] as? String, !deviceId.isEmpty else {
             KLog.d("❌ auth_ok with missing/empty deviceId — failing auth")
             clearStoredCredentials()
-            appState.onAuthFailed(error: "Server response missing device identifier.")
+            appState.onAuthFailed(error: String(localized: "Server response missing device identifier."))
             return
         }
         KLog.d("✅ auth_ok — deviceId: \(deviceId.prefix(12))...")
@@ -585,7 +585,7 @@ final class AuthManager {
             // this device's key, so only Kraki's own relays are followed.
             guard Self.isAllowedRegionRedirect(redirect) else {
                 KLog.d("⚠️ Ignoring wrong_region redirect to an untrusted relay")
-                appState.onAuthFailed(error: "This server asked Kraki to connect somewhere it doesn't trust.")
+                appState.onAuthFailed(error: String(localized: "This server asked Kraki to connect somewhere it doesn't trust."))
                 return
             }
             KLog.d("🌏 wrong_region → \(redirect)")
@@ -606,7 +606,7 @@ final class AuthManager {
         if usesEphemeralOpenAuth {
             // A local relay failure says nothing about production credentials.
             // Keep them untouched and let the dev socket retry normally.
-            appState.lastError = reason ?? "Local development relay authentication failed. Reconnecting…"
+            appState.lastError = reason ?? String(localized: "Local development relay authentication failed. Reconnecting…")
             appState.wsClient?.recover(reason: "auth_retry")
         } else if recoverableCLIOutage {
             // The GitHub token has already been loaded and remains process-local.
@@ -614,7 +614,7 @@ final class AuthManager {
             // retry on a replacement socket instead of falling back to LoginView
             // or stale Keychain challenge auth.
             KLog.d("⏳ CLI auth backend unavailable — keeping token, reconnecting")
-            appState.lastError = reason ?? "Authentication service temporarily unavailable. Reconnecting…"
+            appState.lastError = reason ?? String(localized: "Authentication service temporarily unavailable. Reconnecting…")
             appState.wsClient?.recover(reason: "auth_retry")
         } else if storedDeviceId != nil {
             // Only destroy the persisted pairing on a DETERMINISTIC failure —
@@ -643,7 +643,7 @@ final class AuthManager {
                 // start clean (1-07 of the 2026-10-13 review).
                 appState.resetIdentity(clearRelayURL: false)
                 appState.onAuthFailed(
-                    error: reason ?? "Authentication failed. Please scan a new pairing QR code."
+                    error: reason ?? String(localized: "Authentication failed. Please scan a new pairing QR code.")
                 )
                 #if os(macOS)
                 if failedWithoutCLIToken {
@@ -660,12 +660,12 @@ final class AuthManager {
                 // Transient: keep the paired identity and reconnect — the next
                 // challenge attempt succeeds once the backend recovers.
                 KLog.d("⏳ Transient auth error (code=\(code ?? "nil")) — keeping credentials, reconnecting")
-                appState.lastError = reason ?? "Authentication temporarily unavailable. Reconnecting…"
+                appState.lastError = reason ?? String(localized: "Authentication temporarily unavailable. Reconnecting…")
                 appState.wsClient?.recover(reason: "auth_retry")
             }
         } else {
             appState.onAuthFailed(
-                error: reason ?? "Authentication failed. Scan a pairing QR code to get started."
+                error: reason ?? String(localized: "Authentication failed. Scan a pairing QR code to get started.")
             )
             if appState.connectionStatus == .awaitingLogin {
                 requestAuthInfo()
@@ -863,7 +863,7 @@ final class AuthManager {
                   let code = cb.queryItems?.first(where: { $0.name == "code" })?.value,
                   let returned = cb.queryItems?.first(where: { $0.name == "state" })?.value,
                   returned == csrfState else {
-                self.appState?.onAuthFailed(error: "Invalid callback from GitHub")
+                self.appState?.onAuthFailed(error: String(localized: "Invalid callback from GitHub"))
                 return
             }
 
@@ -884,7 +884,7 @@ final class AuthManager {
             self.oauthSession = nil
             self.oauthContextProvider = nil
             self.appState?.isOAuthInFlight = false
-            self.appState?.onAuthFailed(error: "Couldn't open the GitHub sign-in window. Please try again.")
+            self.appState?.onAuthFailed(error: String(localized: "Couldn't open the GitHub sign-in window. Please try again."))
         }
     }
 

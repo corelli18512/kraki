@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Web-side attachment cache and chunk reassembly.
  *
@@ -27,6 +28,16 @@ import { openDB, type IDBPDatabase } from 'idb';
 import { createLogger } from './logger';
 
 const logger = createLogger('attachments');
+
+type AttachmentErrorCode = keyof typeof import('../i18n/locales/en/chat.json')['attachments']['errors'];
+interface LocalAttachmentError {
+  code: AttachmentErrorCode;
+  reason: string;
+}
+
+function attachmentError(code: AttachmentErrorCode, params: Record<string, string | number> = {}): LocalAttachmentError {
+  return { code, reason: t(`chat:attachments.errors.${code}`, params) };
+}
 
 const DB_NAME = 'kraki-attachments';
 const DB_VERSION = 1;
@@ -168,15 +179,15 @@ export async function ingestChunk(
 
   const ref = expectedRefs.get(id);
   if (!ref) {
-    setAttachmentError(id, 'Attachment metadata unavailable');
+    setAttachmentError(id, attachmentError('metadataUnavailable'));
     return 'terminal-error';
   }
   if (!Number.isInteger(index) || !Number.isInteger(total) || total <= 0 || index < 0 || index >= total) {
-    setAttachmentError(id, 'Invalid attachment chunk index');
+    setAttachmentError(id, attachmentError('invalidIndex'));
     return 'terminal-error';
   }
   if (mimeType !== ref.mimeType) {
-    setAttachmentError(id, `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`);
+    setAttachmentError(id, attachmentError('mimeMismatch', { expected: ref.mimeType, actual: mimeType || t('chat:attachments.errors.empty') }));
     return 'terminal-error';
   }
 
@@ -204,11 +215,11 @@ export async function ingestChunk(
   }
 
   if (current.total !== null && current.total !== total) {
-    setAttachmentError(id, `Attachment chunk count changed from ${current.total} to ${total}`);
+    setAttachmentError(id, attachmentError('chunkCountChanged', { before: current.total, after: total }));
     return 'terminal-error';
   }
   if (current.mimeType !== null && current.mimeType !== mimeType) {
-    setAttachmentError(id, 'Attachment MIME type changed during transfer');
+    setAttachmentError(id, attachmentError('mimeChanged'));
     return 'terminal-error';
   }
   if (current.received.has(index)) return 'accepted';
@@ -217,13 +228,13 @@ export async function ingestChunk(
     decodedLength = base64Length(data);
     if (decodedLength < 0) throw new Error('negative decoded length');
   } catch {
-    setAttachmentError(id, 'Attachment chunk is not valid base64');
+    setAttachmentError(id, attachmentError('invalidBase64'));
     return 'terminal-error';
   }
   let receivedBytes = decodedLength;
   for (const chunk of current.received.values()) receivedBytes += base64Length(chunk);
   if (receivedBytes > ref.size) {
-    setAttachmentError(id, `Attachment exceeds declared size ${ref.size}`);
+    setAttachmentError(id, attachmentError('sizeExceeded', { size: ref.size }));
     return 'terminal-error';
   }
   current.received.set(index, data);
@@ -236,7 +247,7 @@ export async function ingestChunk(
     for (let i = 0; i < total; i++) {
       const chunk = current.received.get(i);
       if (chunk === undefined) {
-        setAttachmentError(id, `Attachment is missing chunk ${i}`);
+        setAttachmentError(id, attachmentError('missingChunk', { index: i }));
         return 'terminal-error';
       }
       chunks.push(chunk);
@@ -261,7 +272,7 @@ export async function ingestChunk(
       void persistToIDB({ id, mimeType, size: blob.size, blob, lastAccessed: Date.now() });
       notify(id);
     } catch (err) {
-      setAttachmentError(id, `Attachment decode failed: ${(err as Error).message}`);
+      setAttachmentError(id, attachmentError('decodeFailed', { error: (err as Error).message }));
       return 'terminal-error';
     }
   } else {
@@ -278,10 +289,12 @@ function clearPushTimeout(id: string): void {
   }
 }
 
-function setAttachmentError(id: string, reason: string): void {
+function setAttachmentError(id: string, error: string | LocalAttachmentError): void {
+  const reason = typeof error === 'string' ? error : error.reason;
   states.set(id, { kind: 'error', reason });
   clearPushTimeout(id);
-  logger.warn('attachment rejected', { id, reason });
+  // Local failures log stable codes, never cached localized UI copy.
+  logger.warn('attachment rejected', { id, reason: typeof error === 'string' ? error : error.code });
   notify(id);
 }
 
@@ -291,21 +304,21 @@ export function failAttachment(ref: ContentRef, reason: string): void {
   setAttachmentError(ref.id, reason);
 }
 
-async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<string | null> {
+async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<LocalAttachmentError | null> {
   if (!/^[0-9a-f]{32}$/i.test(ref.id)) {
-    return 'Attachment id is not a valid content hash';
+    return attachmentError('invalidHash');
   }
   if (mimeType !== ref.mimeType) {
-    return `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`;
+    return attachmentError('mimeMismatch', { expected: ref.mimeType, actual: mimeType || t('chat:attachments.errors.empty') });
   }
   if (blob.size !== ref.size) {
-    return `Attachment size mismatch: expected ${ref.size}, got ${blob.size}`;
+    return attachmentError('sizeMismatch', { expected: ref.size, actual: blob.size });
   }
   const bytes = await blobToArrayBuffer(blob);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
   if (!hex.startsWith(ref.id.toLowerCase())) {
-    return 'Attachment checksum mismatch';
+    return attachmentError('checksumMismatch');
   }
   return null;
 }
@@ -315,10 +328,10 @@ function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   if (typeof modernBlob.arrayBuffer === 'function') return modernBlob.arrayBuffer();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read attachment blob'));
+    reader.onerror = () => reject(reader.error ?? new Error(t('chat:attachments.errors.readFailed')));
     reader.onload = () => {
       if (reader.result instanceof ArrayBuffer) resolve(reader.result);
-      else reject(new Error('Attachment blob did not produce bytes'));
+      else reject(new Error(t('chat:attachments.errors.noBytes')));
     };
     reader.readAsArrayBuffer(blob);
   });
@@ -346,7 +359,7 @@ export async function hydrateFromIDB(ref: ContentRef): Promise<boolean> {
     const validationError = await validateBlob(ref, got.mimeType, got.blob);
     if (validationError) {
       await db.delete(STORE_NAME, ref.id);
-      logger.warn('discarded invalid attachment cache entry', { id: ref.id, reason: validationError });
+      logger.warn('discarded invalid attachment cache entry', { id: ref.id, reason: validationError.code });
       return false;
     }
     states.set(ref.id, { kind: 'ready', mimeType: got.mimeType, blob: got.blob });
@@ -356,7 +369,7 @@ export async function hydrateFromIDB(ref: ContentRef): Promise<boolean> {
     return true;
   } catch (err) {
     await deleteFromIDB(ref.id);
-    logger.warn('failed to hydrate attachment from IDB', { id: ref.id, error: (err as Error).message });
+    logger.warn('failed to hydrate attachment from IDB', { id: ref.id, error: (err as Error).name });
     return false;
   }
 }

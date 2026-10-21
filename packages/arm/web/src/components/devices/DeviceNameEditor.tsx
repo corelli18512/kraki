@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { MAX_DEVICE_NAME_LENGTH, normalizeDeviceName, type DeviceSummary } from '@kraki/protocol';
+import { useTranslation } from 'react-i18next';
 import { wsClient } from '../../lib/ws-client';
 
 /**
@@ -10,6 +11,7 @@ import { wsClient } from '../../lib/ws-client';
  * with `device_renamed`, on every device of the account.
  */
 export function DeviceNameEditor({ device, className }: { device: DeviceSummary; className?: string }) {
+  const { t } = useTranslation('devices');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   // Draft before an IME composition started: restored if the composed text
@@ -32,7 +34,7 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
       <input
         autoFocus
         onFocus={(e) => e.currentTarget.select()}
-        aria-label="Device name"
+        aria-label={t('rename.field')}
         value={draft}
         placeholder={ownName}
         // Limit by code points like the relay (HTML maxLength counts UTF-16
@@ -64,8 +66,8 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
     <button
       type="button"
       className={`group flex min-w-0 items-center gap-1 text-left ${className ?? ''}`}
-      title={device.defaultName ? `Rename (its own name: ${device.defaultName})` : 'Rename'}
-      aria-label={`Rename ${device.name}`}
+      title={device.defaultName ? t('rename.titleWithOwn', { name: device.defaultName }) : t('rename.title')}
+      aria-label={t('rename.label', { name: device.name })}
       onClick={() => {
         setDraft(device.name);
         setEditing(true);

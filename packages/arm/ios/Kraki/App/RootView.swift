@@ -238,7 +238,7 @@ struct IOSEntryGateView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 156, height: 156)
-                .accessibilityLabel("Kraki")
+                .accessibilityLabel(Text(verbatim: "Kraki"))
         }
         .ignoresSafeArea()
         .accessibilityIdentifier("ios.entry.launching")

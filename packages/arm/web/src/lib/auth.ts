@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
 import type { AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
@@ -198,16 +199,16 @@ export function processAuthError(
       deps.clearStoredDeviceId();
       store.setLastError(
         authError.code === 'account_deleted'
-          ? 'Your Kraki account was deleted.'
+          ? t('settings:deletion.deleted')
           : oauthAvailable
-          ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
-          : 'Authentication failed. Please scan a new pairing QR code.',
+          ? t('settings:auth.signInAgain')
+          : t('settings:auth.scanAgain'),
       );
     } else {
       // Transient: keep the paired identity and just reconnect — the next
       // challenge attempt succeeds once the backend recovers.
       logger.warn('Auth failed for stored device (transient), keeping credentials', { code: authError.code });
-      store.setLastError('Authentication temporarily unavailable. Reconnecting…');
+      store.setLastError(t('settings:auth.reconnecting'));
     }
     deps.disconnect();
     deps.connect();
@@ -215,8 +216,8 @@ export function processAuthError(
     store.setReconnectState(0, null);
     store.setLastError(
       oauthAvailable
-        ? 'Authentication failed. Sign in with GitHub or scan a pairing QR code.'
-        : 'Authentication failed. Scan a pairing QR code.',
+        ? t('settings:auth.signIn')
+        : t('settings:auth.scan'),
     );
     store.setStatus('awaiting_login');
   }

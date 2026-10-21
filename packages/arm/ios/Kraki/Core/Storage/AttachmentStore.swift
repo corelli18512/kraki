@@ -456,7 +456,7 @@ final class AttachmentStore {
         if count >= Self.maxAttempts {
             wants[key.id] = nil
             attempts[key.id] = nil
-            states[key.id] = .error(reason: "Timed out loading this attachment")
+            states[key.id] = .error(reason: String(localized: "Timed out loading this attachment"))
         }
         pump()
     }
@@ -519,7 +519,7 @@ final class AttachmentStore {
             }
             clearFlights(for: id)
             guard Self.matchesID(assembled, id) else {
-                states[id] = .error(reason: "This attachment failed verification")
+                states[id] = .error(reason: String(localized: "This attachment failed verification"))
                 pump()
                 return
             }

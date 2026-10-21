@@ -103,7 +103,7 @@ struct StepsSheetView: View {
                     onOpen: { subagentPath.append($0) },
                     stepView: { stepView($0) }
                 )
-                .navigationTitle(mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } ?? "Subagent")
+                .navigationTitle(mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } ?? String(localized: "Subagent"))
                 .navigationBarTitleDisplayMode(.inline)
                 .background(Color.surfacePrimary)
             }
@@ -143,7 +143,7 @@ struct StepsSheetView: View {
         case "tool_start", "tool_complete":
             ToolActivityView(
                 type: message.type == "tool_start" ? .start : .complete,
-                toolName: message.toolName ?? "tool",
+                toolName: message.toolName ?? String(localized: "tool"),
                 headline: message.headline,
                 argsRef: message.argsRef,
                 resultRef: message.resultRef,
@@ -160,7 +160,7 @@ struct StepsSheetView: View {
                     .textSelection(.enabled)
             }
         case "error":
-            Label(message.content ?? message.result ?? "Error", systemImage: "exclamationmark.triangle")
+            Label(message.content ?? message.result ?? String(localized: "Error"), systemImage: "exclamationmark.triangle")
                 .font(.subheadline)
                 .foregroundStyle(.red)
         case "permission":

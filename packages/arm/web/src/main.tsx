@@ -1,3 +1,6 @@
+// Localization first: bundled resources only (no relay client), so the
+// pairing interstitial below is already in the user's language.
+import './i18n';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 

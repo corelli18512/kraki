@@ -237,7 +237,9 @@ final class TentacleCLIManager {
                     let output = [result?.stderr, result?.stdout].compactMap { $0 }.joined(separator: "\n")
                     let detail = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
                         .last { !$0.isEmpty } ?? ""
-                    lastError = "Couldn't stop the command-line Kraki." + (detail.isEmpty ? "" : " \(detail)")
+                    lastError = detail.isEmpty
+                        ? String(localized: "Couldn't stop the command-line Kraki.")
+                        : String(localized: "Couldn't stop the command-line Kraki. \(detail)")
                     await refreshDaemonState()
                     return
                 }
@@ -295,7 +297,7 @@ final class TentacleCLIManager {
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            daemonState = .error("status query failed")
+            daemonState = .error(String(localized: "status query failed"))
             return
         }
 
@@ -469,7 +471,7 @@ final class TentacleCLIManager {
             try? await Task.sleep(nanoseconds: 400_000_000)
             await refreshDaemonState()
         } else {
-            daemonState = .error(result?.stderr ?? "kraki start failed")
+            daemonState = .error(result?.stderr ?? String(localized: "kraki start failed"))
         }
     }
 
@@ -519,12 +521,12 @@ final class TentacleCLIManager {
             try? await Task.sleep(nanoseconds: 500_000_000)
             builtIn.kickstart()
         } catch {
-            daemonState = .error("Couldn't reconnect this Mac: \(error.localizedDescription)")
+            daemonState = .error(String(localized: "Couldn't reconnect this Mac: \(error.localizedDescription)"))
         }
     }
 
     static let launchdStuckMessage =
-        "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this."
+        String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
 
     /// True while the user's launchd domain only spawns jobs on explicit
     /// demand (`on-demand count` > 0 in `launchctl print gui/<uid>`): the
@@ -575,7 +577,7 @@ final class TentacleCLIManager {
     private func startBuiltIn() async {
         switch installLocation {
         case .translocated, .diskImage:
-            daemonState = .error("Move Kraki to the Applications folder before starting it.")
+            daemonState = .error(String(localized: "Move Kraki to the Applications folder before starting it."))
             return
         case .stable:
             break
@@ -593,7 +595,7 @@ final class TentacleCLIManager {
                 return
             }
         } catch {
-            daemonState = .error("Couldn't bring this Mac online: \(error.localizedDescription)")
+            daemonState = .error(String(localized: "Couldn't bring this Mac online: \(error.localizedDescription)"))
             return
         }
         // The worker publishes its PID within a second or two; poll briefly so
@@ -618,23 +620,23 @@ final class TentacleCLIManager {
 
     func requestPairingPayload() async throws -> PairingPayload {
         guard case .available(let path, _) = installState else {
-            throw TentacleCLIError("Kraki CLI not available")
+            throw TentacleCLIError(String(localized: "Kraki CLI not available"))
         }
         guard let result = await runCapturing(binary: path, args: ["connect", "--json"]) else {
-            throw TentacleCLIError("Failed to spawn kraki connect")
+            throw TentacleCLIError(String(localized: "Failed to spawn kraki connect"))
         }
         guard let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw TentacleCLIError("Non-JSON output from kraki connect")
+            throw TentacleCLIError(String(localized: "Non-JSON output from kraki connect"))
         }
         if let ok = json["ok"] as? Bool, !ok {
-            let err = json["error"] as? String ?? "unknown"
-            throw TentacleCLIError("kraki connect: \(err)")
+            let err = json["error"] as? String ?? String(localized: "unknown")
+            throw TentacleCLIError(String(localized: "kraki connect: \(err)"))
         }
         guard let url = json["url"] as? String,
               let token = json["token"] as? String,
               let relay = json["relay"] as? String else {
-            throw TentacleCLIError("Malformed payload from kraki connect")
+            throw TentacleCLIError(String(localized: "Malformed payload from kraki connect"))
         }
         let expiresAt: Date
         if let iso = json["expiresAt"] as? String,

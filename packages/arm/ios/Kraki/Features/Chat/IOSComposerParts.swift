@@ -34,7 +34,7 @@ struct IOSVoiceLiveTranscript: View {
                     Text(Self.status(state)).foregroundStyle(.secondary)
                 }
             } else {
-                Text(preview.prefix + preview.spoken + preview.suffix).foregroundStyle(.primary)
+                Text(verbatim: preview.prefix + preview.spoken + preview.suffix).foregroundStyle(.primary)
             }
         }
         .font(.body)
@@ -43,10 +43,10 @@ struct IOSVoiceLiveTranscript: View {
 
     static func status(_ state: KrakiVoiceInputController.State) -> String {
         switch state {
-        case .waitingForConnection: return "Connecting…"
-        case .requestingPermission: return "Allow microphone access…"
-        case .recording: return "Listening…"
-        default: return "Starting…"
+        case .waitingForConnection: return String(localized: "Connecting…")
+        case .requestingPermission: return String(localized: "Allow microphone access…")
+        case .recording: return String(localized: "Listening…")
+        default: return String(localized: "Starting…")
         }
     }
 }

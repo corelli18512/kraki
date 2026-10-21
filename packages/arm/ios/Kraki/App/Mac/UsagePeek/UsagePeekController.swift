@@ -273,7 +273,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
 
         let panel = UsagePeekPanel(contentRect: NSRect(origin: .zero, size: compactSize),
                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "Account Usage"
+        panel.title = String(localized: "Account Usage")
         panel.identifier = NSUserInterfaceItemIdentifier("kraki-usage-peek-panel")
         panel.level = .floating
         panel.isFloatingPanel = true

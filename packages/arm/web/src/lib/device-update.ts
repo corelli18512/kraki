@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 // "Is a newer Kraki available on this computer?" — see protocol DeviceUpdateInfo.
 // Tentacles ≥ 0.36 report it in device_greeting.update; older ones are compared
 // with the newest tentacle any computer on the account has seen published.
@@ -60,14 +61,14 @@ export function displayVersion(deviceId: string, updates: Map<string, DeviceUpda
 }
 
 export function updateTitle(u: AvailableUpdate): string {
-  return `${u.installedVia === 'mac-app' ? 'Kraki for Mac' : 'Kraki'} ${u.latest} is available`;
+  return t('devices:updateHelp.available', { product: u.installedVia === 'mac-app' ? 'Kraki for Mac' : 'Kraki', version: u.latest });
 }
 
 export function updateHowTo(u: AvailableUpdate): string {
-  if (u.installedVia === 'mac-app') return 'Open Kraki on that Mac and choose Kraki → Check for Updates…';
-  if (u.installedVia === 'windows-app') return 'Install the latest Kraki for Windows on that PC. Kraki updates with the app.';
-  if (u.installedVia === 'legacy') return 'Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`.';
-  return 'Run `kraki update` on that computer.';
+  if (u.installedVia === 'mac-app') return t('devices:updateHelp.mac');
+  if (u.installedVia === 'windows-app') return t('devices:updateHelp.windows');
+  if (u.installedVia === 'legacy') return t('devices:updateHelp.legacy');
+  return t('devices:updateHelp.cli');
 }
 
 export type UpdatePhase = 'requested' | import('@kraki/protocol').DeviceUpdatePhase;

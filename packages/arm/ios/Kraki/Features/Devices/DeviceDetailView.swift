@@ -59,9 +59,9 @@ struct DeviceDetailView: View {
     }
 
     private var statusLabel: String {
-        if device.online, let m = models, !m.isEmpty { return "Online" }
-        if device.online { return "Connecting…" }
-        return "Offline"
+        if device.online, let m = models, !m.isEmpty { return String(localized: "Online") }
+        if device.online { return String(localized: "Connecting…") }
+        return String(localized: "Offline")
     }
 
     private var statusColor: Color {
@@ -81,23 +81,23 @@ struct DeviceDetailView: View {
                     HStack {
                         Text("Name").foregroundStyle(.secondary)
                         Spacer()
-                        Text(device.name).foregroundStyle(.primary).lineLimit(1)
+                        Text(verbatim: device.name).foregroundStyle(.primary).lineLimit(1)
                         Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
                     }
                     .font(.subheadline)
                 }
                 .accessibilityLabel("Rename \(device.name)")
                 .accessibilityIdentifier("device.rename")
-                infoRow("Status", value: statusLabel, valueColor: statusColor)
+                infoRow(String(localized: "Status"), value: statusLabel, valueColor: statusColor)
                 if !agentNames.isEmpty {
-                    infoRow("Coding agents", value: agentNames)
+                    infoRow(String(localized: "Coding agents"), value: agentNames)
                 }
                 if DeviceDates.parse(device.createdAt) != nil {
-                    infoRow("Added", value: formatDate(device.createdAt))
+                    infoRow(String(localized: "Added"), value: formatDate(device.createdAt))
                 }
-                infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
+                infoRow(String(localized: "Last online"), value: device.online ? String(localized: "Now") : formatDate(device.lastSeen))
                 if let version {
-                    infoRow("Version", value: version)
+                    infoRow(String(localized: "Version"), value: version)
                 }
             }
 
@@ -126,7 +126,7 @@ struct DeviceDetailView: View {
                     DisclosureGroup(isExpanded: $modelsExpanded) {
                         FlowLayout(spacing: 6) {
                             ForEach(models, id: \.self) { model in
-                                Text(model)
+                                Text(verbatim: model)
                                     .font(.caption)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
@@ -156,7 +156,7 @@ struct DeviceDetailView: View {
                             HStack {
                                 AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm, status: session.state)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(session.displayTitle)
+                                    Text(verbatim: session.displayTitle)
                                         .font(.subheadline)
                                         .lineLimit(1)
                                     Text(sessionListTimestamp(for: session))

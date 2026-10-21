@@ -79,7 +79,7 @@ extension ChatPerfListVC {
             unseenBadge.layer.borderColor = UIColor.systemBackground
                 .resolvedColor(with: traitCollection).cgColor
             unseenBadge.isHidden = false
-            jumpButton.accessibilityValue = "\(unseenArrivals) new"
+            jumpButton.accessibilityValue = String(localized: "\(unseenArrivals) new")
         } else {
             unseenBadge.isHidden = true
             jumpButton.accessibilityValue = nil

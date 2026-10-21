@@ -31,7 +31,7 @@ struct MenuBarExtraView: View {
                     Button {
                         openKraki(selecting: item.id)
                     } label: {
-                        Text(item.title)
+                        Text(verbatim: item.title)
                         Text(item.reason)
                     }
                 }
@@ -72,14 +72,18 @@ struct MenuBarExtraView: View {
         .keyboardShortcut(",", modifiers: .command)
 
         Button(tentacleCLI.managesOnlinePresence && tentacleCLI.canGoOffline
-               ? "Quit Kraki and Go Offline…" : "Quit Kraki") {
+               ? String(localized: "Quit Kraki and Go Offline…") : String(localized: "Quit Kraki")) {
             MacPresenceController.shared.quitGoingOffline()
         }
     }
 
     private var accountUsageTitle: String {
-        let base = usagePeek.peek.isVisible ? "Hide Account Usage" : "Show Account Usage"
-        return usageHotKey.enabled ? "\(base)  (\(usageHotKey.shortcut.display))" : base
+        if usageHotKey.enabled {
+            return usagePeek.peek.isVisible
+                ? String(localized: "Hide Account Usage  (\(usageHotKey.shortcut.display))")
+                : String(localized: "Show Account Usage  (\(usageHotKey.shortcut.display))")
+        }
+        return usagePeek.peek.isVisible ? String(localized: "Hide Account Usage") : String(localized: "Show Account Usage")
     }
 
     @ViewBuilder
@@ -136,7 +140,7 @@ struct MenuBarIconLabel: View {
 
     var body: some View {
         Image(nsImage: icon)
-            .accessibilityLabel("Kraki")
+            .accessibilityLabel(Text(verbatim: "Kraki"))
     }
 
     private var icon: NSImage {
@@ -195,8 +199,8 @@ enum MenuBarNeedsYou {
             guard let title = titles[id] else { return nil }
             let reason: String
             switch preview.type {
-            case "permission": reason = "Waiting for your approval"
-            case "question": reason = "Asked you a question"
+            case "permission": reason = String(localized: "Waiting for your approval")
+            case "question": reason = String(localized: "Asked you a question")
             default: return nil
             }
             return Item(id: id, title: title, reason: reason, timestamp: preview.timestamp)

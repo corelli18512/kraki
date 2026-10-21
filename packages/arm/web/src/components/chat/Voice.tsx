@@ -4,10 +4,12 @@
  *   Cancel · level meter · m:ss · Edit; the round button sends.
  * Send uses the corrected text; Edit puts it in the draft to change first.
  */
+import { useTranslation } from 'react-i18next';
+import { formatNumber } from '../../i18n/format';
 import { useEffect, useState } from 'react';
 import { Loader2, Mic, TextCursor, X } from 'lucide-react';
 import {
-  CONSENT_MESSAGE, CONSENT_TITLE, acceptConsent, cancelDictation, declineConsent, dismissVoiceError,
+  acceptConsent, consentMessage, consentTitle, cancelDictation, declineConsent, dismissVoiceError,
   finishDictation, startDictation, transcriptPieces, useVoice, wordLines, type VoiceFinish, type StageVoice,
 } from '../../lib/voice/voice';
 import type { VoiceContext } from '../../lib/voice/context';
@@ -49,14 +51,15 @@ function withWords(c: VoiceContext): VoiceContext {
 }
 
 export function MicButton({ owner, onStart, disabled }: { owner: string; onStart: () => void; disabled?: boolean }) {
+  const { t } = useTranslation('chat');
   const d = useDictation(owner);
   if (!d.available) return null;
   return (
     <button
       type="button"
       className="kmic"
-      aria-label="Dictate"
-      title="Dictate"
+      aria-label={t('voice.dictate')}
+      title={t('voice.dictate')}
       data-testid="voice-mic"
       disabled={disabled || d.phase === 'finishing'}
       onClick={() => (d.active ? undefined : onStart())}
@@ -79,18 +82,19 @@ export function VoiceTranscript({ owner }: { owner: string }) {
 
 function elapsed(from: number | null) {
   const s = from ? Math.max(0, Math.floor((Date.now() - from) / 1000)) : 0;
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  return `${formatNumber(Math.floor(s / 60), { useGrouping: false })}:${formatNumber(s % 60, { minimumIntegerDigits: 2, useGrouping: false })}`;
 }
 
 /** Cancel · meter · time · Edit (iOS/Mac recordingControls). */
 export function VoiceRow({ owner }: { owner: string }) {
+  const { t } = useTranslation('chat');
   const d = useDictation(owner);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 500); return () => clearInterval(t); }, []);
   const bars = Array.from({ length: 8 }, (_, i) => d.levels[d.levels.length - 8 + i] ?? 0);
   return (
     <div className="kvoice-row">
-      <button type="button" className="kvoice-chip" onClick={cancelDictation} data-testid="voice-cancel"><X aria-hidden />Cancel</button>
+      <button type="button" className="kvoice-chip" onClick={cancelDictation} data-testid="voice-cancel"><X aria-hidden />{t('voice.cancel')}</button>
       <span className="kvoice-bars" aria-hidden>
         {bars.map((v, i) => {
           const weight = 0.6 + 0.4 * (1 - Math.abs(i - 3.5) / 3.5);
@@ -99,24 +103,26 @@ export function VoiceRow({ owner }: { owner: string }) {
       </span>
       <span className="kvoice-time">{elapsed(d.startedAt)}</span>
       <span className="kvoice-spacer" />
-      <button type="button" className="kvoice-chip is-edit" disabled={d.phase !== 'recording'} onClick={() => finishDictation('edit')} data-testid="voice-edit"><TextCursor aria-hidden />Edit</button>
+      <button type="button" className="kvoice-chip is-edit" disabled={d.phase !== 'recording'} onClick={() => finishDictation('edit')} data-testid="voice-edit"><TextCursor aria-hidden />{t('voice.edit')}</button>
     </div>
   );
 }
 
 export function VoiceError({ owner }: { owner: string }) {
+  const { t } = useTranslation('chat');
   const d = useDictation(owner);
   if (!d.error) return null;
   return (
     <div className="kvoice-error" role="alert">
       <span>{d.error}</span>
-      <button type="button" aria-label="Dismiss" onClick={dismissVoiceError}><X aria-hidden /></button>
+      <button type="button" aria-label={t('voice.dismiss')} onClick={dismissVoiceError}><X aria-hidden /></button>
     </div>
   );
 }
 
 /** One-time notice before the first recording (VoiceConsent). */
 export function VoiceConsentHost() {
+  const { t } = useTranslation('chat');
   const pending = useVoice((s) => s.consentPending);
   useEffect(() => {
     if (!pending) return;
@@ -127,12 +133,12 @@ export function VoiceConsentHost() {
   if (!pending) return null;
   return (
     <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) declineConsent(); }}>
-      <div role="alertdialog" aria-modal="true" aria-label={CONSENT_TITLE} data-testid="voice-consent" className="w-full max-w-md rounded-2xl border border-border-primary bg-surface-primary p-5 shadow-2xl">
-        <h3 className="text-[15px] font-semibold text-text-primary">{CONSENT_TITLE}</h3>
-        <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-text-secondary">{CONSENT_MESSAGE}</p>
+      <div role="alertdialog" aria-modal="true" aria-label={consentTitle()} data-testid="voice-consent" className="w-full max-w-md rounded-2xl border border-border-primary bg-surface-primary p-5 shadow-2xl">
+        <h3 className="text-[15px] font-semibold text-text-primary">{consentTitle()}</h3>
+        <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-text-secondary">{consentMessage()}</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={declineConsent} className="rounded-lg px-3 py-1.5 text-sm text-text-primary hover:bg-surface-secondary">Cancel</button>
-          <button type="button" onClick={acceptConsent} className="rounded-lg bg-kraki-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-kraki-600" data-testid="voice-consent-continue">Continue</button>
+          <button type="button" onClick={declineConsent} className="rounded-lg px-3 py-1.5 text-sm text-text-primary hover:bg-surface-secondary">{t('voice.cancel')}</button>
+          <button type="button" onClick={acceptConsent} className="rounded-lg bg-kraki-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-kraki-600" data-testid="voice-consent-continue">{t('voice.continue')}</button>
         </div>
       </div>
     </div>

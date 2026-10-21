@@ -778,7 +778,7 @@ final class CommandSender {
         store.applyLocalResolution(sessionId, promptId: promptId, decision: decision)
         guard transmit() else {
             store.revertLocalResolution(sessionId, promptId: promptId,
-                                        message: "Couldn't send. Try again.")
+                                        message: String(localized: "Couldn't send. Try again."))
             return false
         }
         let timeout = confirmationTimeout
@@ -788,7 +788,7 @@ final class CommandSender {
                 guard let self, store.isLocalResolutionPending(sessionId, promptId: promptId) else { return }
                 if self.isDeliveryPathUp(sessionId) {
                     store.revertLocalResolution(sessionId, promptId: promptId,
-                                                message: "Not confirmed by the agent. Try again.")
+                                                message: String(localized: "Not confirmed by the agent. Try again."))
                     return
                 }
             }
@@ -1023,7 +1023,7 @@ final class CommandSender {
                   appState.sessionStore.isPending(placeholderId) else { return }
             appState.sessionStore.setPendingError(
                 placeholderId,
-                reason: "Request timed out"
+                reason: String(localized: "Request timed out")
             )
             // The computer may still create the session later. Keep the first
             // message so it lands in that session's draft instead of being lost
@@ -1051,7 +1051,7 @@ final class CommandSender {
         // cannot be sent (offline), the session would come back with the next
         // session list — with its local history already gone.
         guard send(["type": "delete_session", "payload": [:] as [String: Any]], sessionId: sessionId) else {
-            appState.lastError = "Couldn't delete the session while offline. Try again when connected."
+            appState.lastError = String(localized: "Couldn't delete the session while offline. Try again when connected.")
             return
         }
         appState.sessionStore.removeSession(sessionId)
@@ -1146,7 +1146,7 @@ final class CommandSender {
 
     func deleteArchivedSessions(targetDeviceId: String) {
         guard send(["type": "delete_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]]) else {
-            appState?.lastError = "Couldn't delete archived sessions while offline. Try again when connected."
+            appState?.lastError = String(localized: "Couldn't delete archived sessions while offline. Try again when connected.")
             return
         }
         appState?.sessionStore.archivedSessions[targetDeviceId] = []

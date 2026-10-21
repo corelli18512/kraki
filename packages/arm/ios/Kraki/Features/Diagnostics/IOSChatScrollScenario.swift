@@ -186,7 +186,7 @@ private final class IOSVisibleScrollScenarioRunner {
         viewController.updateBottomContentInset(24)
         collectionView.layoutIfNeeded()
         let tailButton = buttons(in: viewController.view)
-            .first { $0.accessibilityLabel == "Jump to latest" }
+            .first { $0.accessibilityLabel == String(localized: "Jump to latest") }
         tailButton?.sendActions(for: .touchUpInside)
         await pause(1_500)
         collectionView.layoutIfNeeded()
@@ -197,7 +197,7 @@ private final class IOSVisibleScrollScenarioRunner {
 
         status = "4/6 · Latest-message start navigation"
         let startButton = buttons(in: viewController.view)
-            .first { $0.accessibilityLabel == "Jump to previous reply start" }
+            .first { $0.accessibilityLabel == String(localized: "Jump to previous reply start") }
         startButton?.sendActions(for: .touchUpInside)
         await pause(1_500)
         collectionView.layoutIfNeeded()
@@ -209,7 +209,7 @@ private final class IOSVisibleScrollScenarioRunner {
 
         status = "5/6 · One older page in one continuous gesture"
         let tailAfterStart = buttons(in: viewController.view)
-            .first { $0.accessibilityLabel == "Jump to latest" }
+            .first { $0.accessibilityLabel == String(localized: "Jump to latest") }
         tailAfterStart?.sendActions(for: .touchUpInside)
         await pause(1_500)
         let initialTop = topSeq()

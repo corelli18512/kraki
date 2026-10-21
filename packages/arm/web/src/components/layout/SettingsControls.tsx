@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
 import { useEffect, useRef } from 'react';
 import './settings.css';
@@ -66,6 +67,7 @@ export function SettingsAlert({
   stacked?: boolean;
   viewport?: boolean;
 }) {
+  const { t } = useTranslation('settings');
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -113,7 +115,7 @@ export function SettingsAlert({
         {body && <p>{body}</p>}
         <div className={`kp-alert-actions${stacked ? ' is-stacked' : ''}`}>
           <button type="button" onClick={onCancel}>
-            Cancel
+            {t('actions.cancel')}
           </button>
           <button type="button" className="is-destructive" onClick={onConfirm}>
             {confirm}

@@ -66,7 +66,7 @@ class NotificationService: UNNotificationServiceExtension {
         // the relay and is replaced by generic text.
         content.title = "Kraki"
         content.subtitle = ""
-        content.body = "Open Kraki to view the update."
+        content.body = String(localized: "Open Kraki to view the update.")
         let legacyAllowed = DeviceTrustPush.legacyPreviewAllowed()
         // The outer session id is the relay's word: never a tap target once
         // a computer is pinned (a verified preview sets it again below).
@@ -113,7 +113,7 @@ class NotificationService: UNNotificationServiceExtension {
         if let contentHandler = contentHandler, let content = bestAttemptContent {
             content.title = "Kraki"
             content.subtitle = ""
-            content.body = "Open Kraki to view the update."
+            content.body = String(localized: "Open Kraki to view the update.")
             content.sound = .default
             contentHandler(content)
         }

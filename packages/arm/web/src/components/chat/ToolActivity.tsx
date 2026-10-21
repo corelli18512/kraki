@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
 import {
   Loader2, CheckCircle2, XCircle, CircleMinus, BookText, ChevronsLeftRightEllipsis,
@@ -26,6 +27,7 @@ export function ToolActivity({
   type, toolName, headline, args, argsRef, resultRef, sessionId, requestPull,
   success, termination, cancelled, forceExpanded,
 }: ToolActivityProps) {
+  const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
   const isExpanded = forceExpanded ?? expanded;
   const running = type === 'start' && !cancelled;
@@ -38,7 +40,7 @@ export function ToolActivity({
   return (
     <div className="ktool">
       <button type="button" className="ktool-head" disabled={!expandable}
-        aria-label={`${running ? 'Running ' : stopped ? 'Stopped ' : ''}${toolName}${displayHeadline ? ` ${displayHeadline}` : ''}`}
+        aria-label={running ? t('tool.runningLabel', { tool: toolName, headline: displayHeadline ? ` ${displayHeadline}` : '' }) : stopped ? t('tool.stoppedLabel', { tool: toolName, headline: displayHeadline ? ` ${displayHeadline}` : '' }) : `${toolName}${displayHeadline ? ` ${displayHeadline}` : ''}`}
         aria-expanded={expandable ? isExpanded : undefined} onClick={() => setExpanded(!expanded)}>
         <span className="ktool-icon">
           <ToolIcon aria-hidden />
@@ -50,9 +52,9 @@ export function ToolActivity({
       </button>
       {isExpanded && expandable && (
         <div className="ktool-detail">
-          {argsRef ? <LazySection title="Arguments" refValue={argsRef} sessionId={sessionId} requestPull={requestPull} argumentsBody />
-            : args && <section><h4>Arguments</h4><pre>{formatToolArguments(args)}</pre></section>}
-          {resultRef && <LazySection title="Result" refValue={resultRef} sessionId={sessionId} requestPull={requestPull} />}
+          {argsRef ? <LazySection title={t('tool.arguments')} refValue={argsRef} sessionId={sessionId} requestPull={requestPull} argumentsBody />
+            : args && <section><h4>{t('tool.arguments')}</h4><pre>{formatToolArguments(args)}</pre></section>}
+          {resultRef && <LazySection title={t('tool.result')} refValue={resultRef} sessionId={sessionId} requestPull={requestPull} />}
         </div>
       )}
     </div>
@@ -109,6 +111,7 @@ function LazySection({ title, refValue, sessionId, requestPull, argumentsBody }:
   title: string; refValue: ContentRef; sessionId: string;
   requestPull: (sessionId: string, ref: ContentRef) => void; argumentsBody?: boolean;
 }) {
+  const { t } = useTranslation('chat');
   const { status, text, error } = useAttachmentText(refValue, sessionId, requestPull, true);
   let body = text;
   if (argumentsBody && text) {
@@ -120,8 +123,8 @@ function LazySection({ title, refValue, sessionId, requestPull, argumentsBody }:
   return (
     <section>
       <h4>{title}</h4>
-      {status === 'loading' && <p className="ktool-loading"><span className="kspinner" />Loading…</p>}
-      {status === 'error' && <p className="kstep-bad">Couldn't load: {error}</p>}
+      {status === 'loading' && <p className="ktool-loading"><span className="kspinner" />{t('tool.loading')}</p>}
+      {status === 'error' && <p className="kstep-bad">{t('tool.loadFailed', { error })}</p>}
       {status === 'ready' && <pre className={!argumentsBody && body?.endsWith('\n') ? 'ktool-final-line' : undefined}>{body}</pre>}
     </section>
   );

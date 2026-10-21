@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next';
 import { AccountDeletedNotice } from '../components/layout/DeleteAccount';
 import { KrakiLogo } from '../components/KrakiLogo';
 import { useState, useCallback, useEffect } from 'react';
@@ -27,6 +28,7 @@ function GitHubMark({ className }: { className?: string }) {
  * and as fallback on desktop when no session is selected.
  */
 export function DashboardPage() {
+  const { t } = useTranslation('app');
   const status = useStore((s) => s.status);
   const githubClientId = useStore((s) => s.githubClientId);
   const clientId = getOAuthClientId(githubClientId);
@@ -70,16 +72,16 @@ export function DashboardPage() {
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface-primary/80">
             <div className="flex flex-col items-center gap-3">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-              <p className="text-sm text-text-secondary">Authenticating…</p>
+              <p className="text-sm text-text-secondary">{t('dashboard.authenticating')}</p>
             </div>
           </div>
         )}
         <AccountDeletedNotice />
         <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
-        <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
+        <h2 className="text-lg font-semibold text-text-primary animate-fade-up">{t('dashboard.welcome')}</h2>
         {oauthAvailable && (
           <p className="mt-2 max-w-sm text-sm text-text-secondary animate-fade-up">
-            Sign in to connect to your coding agent sessions.
+            {t('dashboard.signInDetail')}
           </p>
         )}
 
@@ -89,14 +91,14 @@ export function DashboardPage() {
             className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f] dark:bg-[#f0f0f0] dark:text-[#24292f] dark:hover:bg-[#d0d0d0] animate-fade-up"
           >
             <GitHubMark className="h-5 w-5" />
-            Sign in with GitHub
+            {t('dashboard.signIn')}
           </button>
         )}
 
         {oauthAvailable && (
           <div className="mt-6 flex items-center gap-3 text-text-muted animate-fade-up-d2">
             <div className="h-px w-12 bg-border-primary" />
-            <span className="text-xs">or</span>
+            <span className="text-xs">{t('dashboard.or')}</span>
             <div className="h-px w-12 bg-border-primary" />
           </div>
         )}
@@ -106,11 +108,11 @@ export function DashboardPage() {
           className={`${oauthAvailable ? 'mt-4' : 'mt-6'} inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border-primary bg-surface-secondary px-5 py-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-surface-tertiary animate-fade-up-d2`}
         >
           <ScanQrCode className="h-5 w-5" />
-          Scan QR Code
+          {t('dashboard.scan')}
         </button>
 
         <p className="mt-4 max-w-sm text-xs text-text-muted animate-fade-up-d3">
-          Run <code className="rounded bg-surface-secondary px-1 py-0.5">kraki connect</code> to generate a QR code.
+          <Trans t={t} i18nKey="dashboard.generateQr" components={{ command: <code className="rounded bg-surface-secondary px-1 py-0.5" /> }} />
         </p>
 
         <p className="mt-6 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted animate-fade-up-d3">
@@ -119,7 +121,7 @@ export function DashboardPage() {
 
         <a href="https://app.kraki.chat/privacy/" target="_blank" rel="noreferrer"
           className="mt-4 text-xs text-text-muted underline underline-offset-2 hover:text-text-primary">
-          Privacy Policy
+          {t('dashboard.privacy')}
         </a>
 
         {onMac && (
@@ -127,7 +129,7 @@ export function DashboardPage() {
             href={macDmgUrl}
             className="mt-6 text-xs text-text-muted underline-offset-2 hover:text-text-primary hover:underline animate-fade-up-d3"
           >
-            Use this Mac's coding agents? Download Kraki for Mac
+            {t('dashboard.downloadMac')}
           </a>
         )}
 
@@ -142,7 +144,7 @@ export function DashboardPage() {
     return (
       <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-        <p className="mt-4 text-sm text-text-secondary">Connecting to relay…</p>
+        <p className="mt-4 text-sm text-text-secondary">{t('dashboard.connecting')}</p>
       </div>
     );
   }
@@ -163,10 +165,10 @@ export function DashboardPage() {
         <div className="text-center">
           <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
           <p className="text-sm font-medium text-text-primary animate-fade-up">
-            Welcome to Kraki
+            {t('dashboard.welcome')}
           </p>
           <p className="mt-1 text-xs text-text-muted animate-fade-up">
-            Select a session from the sidebar to get started
+            {t('dashboard.selectSession')}
           </p>
         </div>
       </div>

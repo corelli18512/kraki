@@ -110,12 +110,12 @@ struct ArchiveSettingsSection: View {
                     }
                 )) {
                     ForEach(Self.choices, id: \.self) { d in
-                        Text(d == 0 ? "Never" : "\(d) days").tag(d)
+                        Text(d == 0 ? String(localized: "Never") : String(localized: "\(d) days")).tag(d)
                     }
                 }
                 let count = appState.sessionStore.archivedCount
                 if count > 0 {
-                    Button("Delete \(count) Archived Session\(count == 1 ? "" : "s")…", role: .destructive) {
+                    Button("Delete \(count) Archived Sessions…", role: .destructive) {
                         confirmDelete = true
                     }
                     .confirmationDialog(

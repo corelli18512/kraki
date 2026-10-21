@@ -23,7 +23,7 @@ struct NewSessionComposer: View {
     @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
 
-    var placeholder = "Describe a task, e.g. “Fix the failing tests in my-app”"
+    var placeholder = String(localized: "Describe a task, e.g. “Fix the failing tests in my-app”")
     var minLines = 3
     var onCreated: () -> Void = {}
     /// Tests observe which computer the composer picked.
@@ -239,8 +239,8 @@ struct NewSessionComposer: View {
     }
 
     private var devicePill: some View {
-        pill(.device, help: selectedDevice?.name ?? "Choose a computer") {
-            PillLabel(text: selectedDevice.map { $0.id == localDeviceId ? "This Mac" : $0.name } ?? "Choose a computer",
+        pill(.device, help: selectedDevice?.name ?? String(localized: "Choose a computer")) {
+            PillLabel(text: selectedDevice.map { $0.id == localDeviceId ? String(localized: "This Mac") : $0.name } ?? String(localized: "Choose a computer"),
                       dot: selectedDevice?.online == true ? Color(hex: 0x34D399) : Color.textMuted)
         } content: {
             DeviceChoiceList(online: onlineTentacles, offline: offlineTentacles, localId: localDeviceId,
@@ -265,7 +265,7 @@ struct NewSessionComposer: View {
 
     private var modelPill: some View {
         pill(.model, enabled: models.count > 1, help: MacControlHelp.modelPill(choices: models.count)) {
-            PillLabel(text: selectedModel.isEmpty ? "Model" : modelName(selectedModel), showsChevron: models.count > 1)
+            PillLabel(text: selectedModel.isEmpty ? String(localized: "Model") : modelName(selectedModel), showsChevron: models.count > 1)
         } content: {
             ModelChoiceList(models: models, name: modelName, selected: selectedModel) { selectedModel = $0; openPill = nil }
         }
@@ -274,7 +274,7 @@ struct NewSessionComposer: View {
 
     private func effortPill(_ efforts: [ReasoningEffort]) -> some View {
         pill(.effort, help: MacControlHelp.effortPill) {
-            PillLabel(text: reasoningEffort.map { "\(Self.effortLabel($0)) thinking" } ?? "Thinking",
+            PillLabel(text: reasoningEffort.map { String(localized: "\(Self.effortLabel($0)) thinking") } ?? String(localized: "Thinking"),
                       symbol: Self.effortSymbol(reasoningEffort))
         } content: {
             EffortChoiceList(efforts: efforts, selected: reasoningEffort) { reasoningEffort = $0; openPill = nil }
@@ -473,8 +473,8 @@ struct NewSessionComposer: View {
             MacComposerControlGeometryProbe(identifier: "mac.newSession.create")
             #endif
         }
-        .help(voiceOwnsComposer ? "Start session with what you said" : "Start session (Return)")
-        .accessibilityLabel(voiceOwnsComposer ? "Send voice message" : "Start session")
+        .help(voiceOwnsComposer ? String(localized: "Start session with what you said") : String(localized: "Start session (Return)"))
+        .accessibilityLabel(voiceOwnsComposer ? String(localized: "Send voice message") : String(localized: "Start session"))
         .accessibilityIdentifier("mac.newSession.create")
     }
 
@@ -483,7 +483,7 @@ struct NewSessionComposer: View {
     @ViewBuilder
     private var statusLine: some View {
         if tentacles.isEmpty || onlineTentacles.isEmpty {
-            hint("moon.zzz", "No computer is online. Open Kraki on a computer to start a session there.")
+            hint("moon.zzz", String(localized: "No computer is online. Open Kraki on a computer to start a session there."))
         } else {
             switch availability {
             case .ready:
@@ -491,13 +491,15 @@ struct NewSessionComposer: View {
             case .connecting:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("Connecting to \(selectedDevice?.name ?? "the computer")…")
+                    Text(selectedDevice.map { String(localized: "Connecting to \($0.name)…") }
+                         ?? String(localized: "Connecting to the computer…"))
                         .font(.system(size: 11.5)).foregroundStyle(Color.textMuted)
                 }.padding(.leading, 4)
             case .offline:
-                hint("moon.zzz", "\(selectedDevice?.name ?? "This computer") is offline. Pick another one above.")
+                hint("moon.zzz", selectedDevice.map { String(localized: "\($0.name) is offline. Pick another one above.") }
+                     ?? String(localized: "This computer is offline. Pick another one above."))
             case .noAgents:
-                NoAgentsGuide(deviceName: selectedIsThisMac ? "this Mac" : (selectedDevice?.name ?? "this computer"),
+                NoAgentsGuide(deviceName: selectedDevice?.name,
                               isThisMac: selectedIsThisMac,
                               checkAgain: selectedIsThisMac ? { await recheckLocalAgents() } : nil)
                     .padding(14)
@@ -599,11 +601,11 @@ struct NewSessionComposer: View {
 
     static func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .xhigh: return "Extra high"
-        case .max: return "Max"
+        case .low: return String(localized: "Low")
+        case .medium: return String(localized: "Medium")
+        case .high: return String(localized: "High")
+        case .xhigh: return String(localized: "Extra high")
+        case .max: return String(localized: "Max")
         }
     }
 
@@ -714,10 +716,10 @@ struct DeviceChoiceList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ChoiceSection(title: "Online") {
+            ChoiceSection(title: String(localized: "Online")) {
                 ForEach(online, id: \.id) { d in
-                    ChoiceRow(title: d.id == localId ? "This Mac" : d.name,
-                              detail: updates.contains(d.id) ? "Update available" : (d.id == localId ? d.name : nil),
+                    ChoiceRow(title: d.id == localId ? String(localized: "This Mac") : d.name,
+                              detail: updates.contains(d.id) ? String(localized: "Update available") : (d.id == localId ? d.name : nil),
                               selected: d.id == selected,
                               mark: { Image(systemName: d.id == localId ? "laptopcomputer" : "desktopcomputer")
                                         .foregroundStyle(Color(hex: 0x34D399)) },
@@ -725,9 +727,9 @@ struct DeviceChoiceList: View {
                 }
             }
             if !offline.isEmpty {
-                ChoiceSection(title: "Offline") {
+                ChoiceSection(title: String(localized: "Offline")) {
                     ForEach(offline.prefix(6), id: \.id) { d in
-                        ChoiceRow(title: d.name, detail: "Open Kraki on it to use it", enabled: false,
+                        ChoiceRow(title: d.name, detail: String(localized: "Open Kraki on it to use it"), enabled: false,
                                   mark: { Image(systemName: "desktopcomputer").foregroundStyle(Color.textMuted) })
                     }
                     if offline.count > 6 {
@@ -749,7 +751,7 @@ struct AgentChoiceList: View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(agents, id: \.id) { a in
                 let n = a.models?.count ?? 0
-                ChoiceRow(title: AgentInfo.from(a.id).label, detail: "\(n) \(n == 1 ? "model" : "models")",
+                ChoiceRow(title: AgentInfo.from(a.id).label, detail: String(localized: "\(n) models"),
                           selected: a.id == selected,
                           mark: { AgentGlyph(agent: a.id, size: 15) },
                           action: { choose(a.id) })
@@ -785,10 +787,10 @@ struct EffortChoiceList: View {
     let choose: (ReasoningEffort) -> Void
     private func detail(_ e: ReasoningEffort) -> String {
         switch e {
-        case .low: return "Fastest replies"
-        case .medium: return "Balanced"
-        case .high: return "Thinks longer on hard problems"
-        case .xhigh, .max: return "Most thorough, slowest"
+        case .low: return String(localized: "Fastest replies")
+        case .medium: return String(localized: "Balanced")
+        case .high: return String(localized: "Thinks longer on hard problems")
+        case .xhigh, .max: return String(localized: "Most thorough, slowest")
         }
     }
     var body: some View {
@@ -816,7 +818,7 @@ struct MacStartSessionView: View {
             Spacer(minLength: 0)
             VStack(spacing: 22) {
                 VStack(spacing: 8) {
-                    Text(firstTime ? "What should we work on first?" : "What's next?")
+                    Text(firstTime ? String(localized: "What should we work on first?") : String(localized: "What's next?"))
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(Color.textTitle)
                 }
@@ -865,7 +867,7 @@ struct NewSessionSheet: View {
                 .keyboardShortcut(.cancelAction)
                 .help("Cancel (Esc)")
             }
-            NewSessionComposer(placeholder: "Describe a task", minLines: 4) {
+            NewSessionComposer(placeholder: String(localized: "Describe a task"), minLines: 4) {
                 isPresented = false
             }
             Text("Return to start · Shift-Return for a new line · Esc to cancel")

@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next';
+import { t } from '../../i18n';
 import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
@@ -5,11 +7,13 @@ import { diag } from '../../lib/diag';
 import './performance-notice.css';
 
 /** Same copy as Mac/iPhone PerformanceNoticeCopy. */
-export const PERFORMANCE_NOTICE = {
-  title: 'Help Improve Kraki',
-  explanation: 'Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments.',
-  settingsHint: 'You can change this anytime in Settings › Privacy.',
-};
+export function performanceNoticeCopy() {
+  return {
+    title: t('settings:performanceNotice.title'),
+    explanation: t('settings:performanceNotice.explanation'),
+    settingsHint: t('settings:performanceNotice.settingsHint'),
+  };
+}
 export const NOTICE_SEEN_KEY = 'kraki.diag.noticeSeen';
 
 /** One-time, non-modal card after sign-in (Mac PerformanceNotice): shown once
@@ -17,6 +21,8 @@ export const NOTICE_SEEN_KEY = 'kraki.diag.noticeSeen';
  *  Share" turns it off; either button marks it seen. Afterwards it lives in
  *  Settings › Privacy only. */
 export function PerformanceNoticeHost({ settleMs = 1500 }: { settleMs?: number }) {
+  const { t } = useTranslation('settings');
+  const copy = performanceNoticeCopy();
   const connected = useStore((s) => s.status === 'connected');
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -32,12 +38,12 @@ export function PerformanceNoticeHost({ settleMs = 1500 }: { settleMs?: number }
   };
   return (
     <section className="kperf-notice" role="dialog" aria-modal="false" aria-labelledby="kperf-title" data-testid="performance-notice">
-      <h2 id="kperf-title"><Sparkles aria-hidden />{PERFORMANCE_NOTICE.title}</h2>
-      <p>{PERFORMANCE_NOTICE.explanation}</p>
-      <p className="kperf-hint">{PERFORMANCE_NOTICE.settingsHint}</p>
+      <h2 id="kperf-title"><Sparkles aria-hidden />{copy.title}</h2>
+      <p>{copy.explanation}</p>
+      <p className="kperf-hint">{copy.settingsHint}</p>
       <div className="kperf-actions">
-        <button type="button" className="kperf-secondary" onClick={() => choose(false)}>Don't Share</button>
-        <button type="button" className="kperf-primary" autoFocus onClick={() => choose(true)}>OK</button>
+        <button type="button" className="kperf-secondary" onClick={() => choose(false)}>{t('performanceNotice.decline')}</button>
+        <button type="button" className="kperf-primary" autoFocus onClick={() => choose(true)}>{t('performanceNotice.ok')}</button>
       </div>
     </section>
   );

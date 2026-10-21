@@ -16,7 +16,7 @@ struct SubagentCardRow: View {
             HStack(spacing: 10) {
                 SubagentStatusIcon(status: SubagentSteps.status(of: message))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(info?.name ?? message.toolName ?? "subagent")
+                    Text(verbatim: info?.name ?? message.toolName ?? String(localized: "subagent"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.textTitle)
                         .lineLimit(1)
@@ -95,8 +95,8 @@ struct SubagentPageView<StepView: View>: View {
                     let steps = SubagentSteps.steps(merged, under: dispatchId)
                     if steps.isEmpty {
                         Text(SubagentSteps.status(of: dispatch) == .running
-                             ? "Working… its steps appear here as it reports them."
-                             : "The agent did not report this subagent's steps.")
+                             ? String(localized: "Working… its steps appear here as it reports them.")
+                             : String(localized: "The agent did not report this subagent's steps."))
                             .font(.footnote)
                             .foregroundStyle(Color.textSecondary)
                     }

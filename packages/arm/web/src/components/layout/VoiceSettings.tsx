@@ -1,3 +1,5 @@
+import { formatNumber } from '../../i18n/format';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { MicOff, Plus, Trash2 } from 'lucide-react';
 import { editWords, useVoice, voiceSettings } from '../../lib/voice/voice';
@@ -10,6 +12,7 @@ function CustomWordRow({
   word: { term: string; heardAs: string };
   onError: (error: string | null) => void;
 }) {
+  const { t } = useTranslation('settings');
   const [term, setTerm] = useState(word.term);
   const [heard, setHeard] = useState(word.heardAs);
   useEffect(() => {
@@ -23,9 +26,9 @@ function CustomWordRow({
   return (
     <li className="kp-row" style={{ gap: 10 }}>
       <input
-        aria-label={`Word or name: ${word.term}`}
+        aria-label={t('voice.wordLabel', { word: word.term })}
         value={term}
-        placeholder="e.g. PostgreSQL"
+        placeholder={t('voice.wordPlaceholder')}
         onChange={(e) => setTerm(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
@@ -34,9 +37,9 @@ function CustomWordRow({
         className="w-[180px] min-w-0 rounded border border-border-primary bg-surface-primary px-2 py-1"
       />
       <input
-        aria-label={`Often recognized as: ${word.term}`}
+        aria-label={t('voice.recognizedLabel', { word: word.term })}
         value={heard}
-        placeholder="Optional, e.g. post gress, postgres Q L"
+        placeholder={t('voice.heardPlaceholder')}
         onChange={(e) => setHeard(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
@@ -46,7 +49,7 @@ function CustomWordRow({
       />
       <button
         type="button"
-        aria-label={`Remove ${word.term}`}
+        aria-label={t('voice.removeWord', { word: word.term })}
         className="text-text-muted hover:text-red-500"
         onClick={() => onError(editWords([{ op: 'remove', term: word.term }]))}
       >
@@ -60,6 +63,7 @@ function CustomWordRow({
  *  Mac). It is saved once focus leaves the row with a word in it; an empty
  *  row is never sent and can be discarded with the remove button. */
 function NewWordRow({ onCommit, onDiscard }: { onCommit: (term: string, heard: string) => boolean; onDiscard: () => void }) {
+  const { t } = useTranslation('settings');
   const [term, setTerm] = useState('');
   const [heard, setHeard] = useState('');
   const commit = () => { if (term.trim()) onCommit(term, heard); };
@@ -72,24 +76,24 @@ function NewWordRow({ onCommit, onDiscard }: { onCommit: (term: string, heard: s
     >
       <input
         autoFocus
-        aria-label="Custom word"
+        aria-label={t('voice.customWord')}
         value={term}
-        placeholder="e.g. PostgreSQL"
+        placeholder={t('voice.wordPlaceholder')}
         onChange={(e) => setTerm(e.target.value)}
         onKeyDown={enter}
         className="w-[180px] min-w-0 rounded border border-border-primary bg-surface-primary px-2 py-1"
       />
       <input
-        aria-label="Often heard as"
+        aria-label={t('voice.heardAs')}
         value={heard}
-        placeholder="Optional, e.g. post gress, postgres Q L"
+        placeholder={t('voice.heardPlaceholder')}
         onChange={(e) => setHeard(e.target.value)}
         onKeyDown={enter}
         className="min-w-0 flex-1 rounded border border-border-primary bg-surface-primary px-2 py-1"
       />
       <button
         type="button"
-        aria-label="Remove new word"
+        aria-label={t('voice.removeNew')}
         className="text-text-muted hover:text-red-500"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onDiscard}
@@ -103,6 +107,7 @@ function NewWordRow({ onCommit, onDiscard }: { onCommit: (term: string, heard: s
 let nextDraftId = 0;
 
 export function VoiceSettings() {
+  const { t } = useTranslation('settings');
   const available = useVoice((s) => !!s.capability);
   const words = useVoice((s) => s.words);
   const pending = useVoice((s) => s.outbox.length > 0);
@@ -125,15 +130,15 @@ export function VoiceSettings() {
           <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
             <MicOff size={18} className="shrink-0 text-text-muted" />
             <p className="kp-unavailable">
-              Voice input isn't available with this relay. Your Custom Words still sync to your other devices.
+              {t('voice.unavailable')}
             </p>
           </div>
         </SettingsSection>
       )}
-      <SettingsSection footer="After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider.">
-        <SettingsRow label="Correct Transcripts">
+      <SettingsSection footer={t('voice.correctionFooter')}>
+        <SettingsRow label={t('voice.correct')}>
           <SettingsSwitch
-            label="Correct Transcripts"
+            label={t('voice.correct')}
             testId="voice-correction"
             on={correction}
             onChange={(v) => {
@@ -142,10 +147,10 @@ export function VoiceSettings() {
           />
         </SettingsRow>
       </SettingsSection>
-      <SettingsSection footer="Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent.">
-        <SettingsRow label="Use Conversation Context">
+      <SettingsSection footer={t('voice.contextFooter')}>
+        <SettingsRow label={t('voice.context')}>
           <SettingsSwitch
-            label="Use Conversation Context"
+            label={t('voice.context')}
             testId="voice-context"
             on={voiceSettings.shareContext}
             disabled={!correction}
@@ -156,20 +161,20 @@ export function VoiceSettings() {
         </SettingsRow>
       </SettingsSection>
       <SettingsSection
-        title="Custom Words"
-        footer="Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate."
+        title={t('voice.words')}
+        footer={t('voice.wordsFooter')}
       >
         <fieldset disabled={!correction} className="disabled:opacity-50">
           <ul data-testid="voice-words">
             {rows === 0 && (
               <li className="kp-row">
-                <p className="kp-foot">No custom words yet. Add names and terms voice input gets wrong.</p>
+                <p className="kp-foot">{t('voice.emptyWords')}</p>
               </li>
             )}
             {rows > 0 && (
               <li className="kp-row text-[11px] text-text-secondary" style={{ justifyContent: 'flex-start', gap: 10 }}>
-                <span className="w-[180px]">Word or name</span>
-                <span>Often recognized as (optional)</span>
+                <span className="w-[180px]">{t('voice.word')}</span>
+                <span>{t('voice.recognizedOptional')}</span>
               </li>
             )}
             {words.map((w) => (
@@ -191,9 +196,9 @@ export function VoiceSettings() {
               onClick={() => setDrafts((d) => [...d, nextDraftId++])}
             >
               <Plus size={14} />
-              Add Word
+              {t('voice.add')}
             </button>
-            <span className="kp-foot">{words.length} / 100</span>
+            <span className="kp-foot">{t('voice.wordCount', { number: formatNumber(words.length), limit: formatNumber(100) })}</span>
           </div>
         </fieldset>
         {error && (
@@ -201,7 +206,7 @@ export function VoiceSettings() {
             {error}
           </p>
         )}
-        {pending && <p className="kp-foot">Syncing…</p>}
+        {pending && <p className="kp-foot">{t('voice.syncing')}</p>}
       </SettingsSection>
     </div>
   );

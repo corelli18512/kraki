@@ -7,11 +7,11 @@ enum SessionDeliveryStatus: Equatable {
 
     var accessibilityLabel: String {
         switch self {
-        case .correcting: return "Correcting voice message before sending"
-        case .sending: return "Sending, awaiting confirmation"
-        case .unconfirmed: return "Awaiting delivery confirmation"
-        case .failed: return "Send failed"
-        case .queued: return "Waiting for connection"
+        case .correcting: return String(localized: "Correcting voice message before sending")
+        case .sending: return String(localized: "Sending, awaiting confirmation")
+        case .unconfirmed: return String(localized: "Awaiting delivery confirmation")
+        case .failed: return String(localized: "Send failed")
+        case .queued: return String(localized: "Waiting for connection")
         }
     }
 }
@@ -45,15 +45,16 @@ struct SessionPendingPreview: Equatable {
         }
         let content = message.content?.collapseWhitespace() ?? ""
         let fallback = message.payload["attachments"] != nil ? "[image]" : "…"
-        let prefix: String
+        let preview = content.isEmpty ? fallback : content
+        let text: String
         switch status {
-        case .failed: prefix = "Send failed · "
-        case .unconfirmed: prefix = "Awaiting confirmation · "
-        case .queued: prefix = "Waiting for connection · "
-        default: prefix = ""
+        case .failed: text = String(localized: "Send failed · \(preview)")
+        case .unconfirmed: text = String(localized: "Awaiting confirmation · \(preview)")
+        case .queued: text = String(localized: "Waiting for connection · \(preview)")
+        default: text = preview
         }
         return Self(clientId: message.payload["clientId"]?.stringValue ?? "",
-                    text: prefix + (content.isEmpty ? fallback : content),
+                    text: text,
                     timestamp: message.timestamp ?? "", status: status)
     }
 

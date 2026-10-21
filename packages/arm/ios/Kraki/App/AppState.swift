@@ -432,10 +432,10 @@ final class AppState {
         let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
         guard !open.isEmpty else { return nil }
         if open.contains(DeviceStore.unmatchedQRMarker) {
-            return (open, "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support.")
+            return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
         }
         let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
-        return (open, "The relay reported a new encryption key for \(names.isEmpty ? "a computer" : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code.")
+        return (open, String(localized: "The relay reported a new encryption key for \(names.isEmpty ? String(localized: "a computer") : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code."))
     }
 
     /// True from the moment the user taps "Sign in with GitHub" until
@@ -478,15 +478,15 @@ final class AppState {
     /// User-facing connection notice for the Mac window (nil when online).
     var connectionNotice: String? {
         guard showsReconnecting, connectionStatus != .connected else { return nil }
-        return hasCompletedInitialConnect ? "Connecting…" : "Signing in…"
+        return hasCompletedInitialConnect ? String(localized: "Connecting…") : String(localized: "Signing in…")
     }
 
     /// Title-area status for an open conversation (nil = show its title).
     /// Reconnecting and catching up are silent elsewhere; this is the only
     /// place they surface, and only after they have lasted a moment.
     func conversationTitleStatus(syncing: Bool) -> String? {
-        if showsReconnecting { return hasCompletedInitialConnect ? "Connecting…" : "Signing in…" }
-        if syncing { return "Syncing…" }
+        if showsReconnecting { return hasCompletedInitialConnect ? String(localized: "Connecting…") : String(localized: "Signing in…") }
+        if syncing { return String(localized: "Syncing…") }
         return nil
     }
 

@@ -21,7 +21,7 @@ struct AgentInstallLink: Identifiable {
 }
 
 struct NoAgentsGuide: View {
-    let deviceName: String
+    let deviceName: String?
     /// True when the device is this Mac's own tentacle.
     var isThisMac: Bool = false
     /// Re-detect agents (restarts the local tentacle). nil for remote devices.
@@ -30,15 +30,21 @@ struct NoAgentsGuide: View {
     @Environment(\.openURL) private var openURL
     @State private var checking = false
 
+    private var title: String {
+        if isThisMac { return String(localized: "No coding agent on this Mac") }
+        if let deviceName { return String(localized: "No coding agent on \(deviceName)") }
+        return String(localized: "No coding agent on this computer")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(isThisMac ? "No coding agent on this Mac" : "No coding agent on \(deviceName)")
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)
                 Text(isThisMac
-                     ? "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again."
-                     : "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it.")
+                     ? String(localized: "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again.")
+                     : String(localized: "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it."))
                     .font(.system(size: 12))
                     .foregroundStyle(Color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

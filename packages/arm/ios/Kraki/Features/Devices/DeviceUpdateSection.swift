@@ -44,7 +44,7 @@ struct DeviceUpdateSection: View {
 
     private var busyTitle: String {
         let n = store.updateProgress[device.id]?.runningSessions ?? 0
-        return n == 1 ? "1 session is running" : "\(n) sessions are running"
+        return String(localized: "\(n) sessions are running")
     }
 
     private func version(_ v: String?) -> String { v.map { "Kraki \($0)" } ?? "Kraki" }
@@ -58,10 +58,10 @@ struct DeviceUpdateSection: View {
             progress(p, now: now)
         } else if let u = store.availableUpdate(for: device.id) {
             StatusRow(symbol: "arrow.down.circle.fill", tint: .krakiPrimary,
-                      title: "\(u.isMacApp ? "Kraki for Mac" : "Kraki") \(u.latest) is available",
+                      title: u.isMacApp ? String(localized: "Kraki for Mac \(u.latest) is available") : String(localized: "Kraki \(u.latest) is available"),
                       detail: u.remote ? nil : blockedText(u))
             if u.remote {
-                ActionRow(title: "Update Now", identifier: "device.update.button") {
+                ActionRow(title: String(localized: "Update Now"), identifier: "device.update.button") {
                     appState.commandSender?.updateDevice(device.id)
                 }
                 .disabled(!device.online)
@@ -80,8 +80,8 @@ struct DeviceUpdateSection: View {
 
     private func blockedText(_ u: AvailableUpdate) -> String {
         switch store.deviceUpdates[device.id]?.remoteBlock {
-        case "disabled": return "Updating from other devices is turned off on that computer. \(u.howTo)"
-        case "not_writable": return "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer."
+        case "disabled": return String(localized: "Updating from other devices is turned off on that computer. \(u.howTo)")
+        case "not_writable": return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
         default: return u.howTo
         }
     }
@@ -91,47 +91,47 @@ struct DeviceUpdateSection: View {
         let target = version(p.to)
         switch p.phase {
         case .requested:
-            StatusRow(spinner: true, title: "Asking \(device.name) to update…")
+            StatusRow(spinner: true, title: String(localized: "Asking \(device.name) to update…"))
         case .busy:
             StatusRow(symbol: "exclamationmark.circle.fill", tint: .orange, title: busyTitle,
-                      detail: "Updating restarts Kraki and stops them.")
-            ActionRow(title: "Choose…") { askBusy = true }
+                      detail: String(localized: "Updating restarts Kraki and stops them."))
+            ActionRow(title: String(localized: "Choose…")) { askBusy = true }
         case .waiting_idle:
-            StatusRow(spinner: true, title: "Waiting for sessions to finish",
-                      detail: "\(target) installs as soon as nothing is running on \(device.name).")
+            StatusRow(spinner: true, title: String(localized: "Waiting for sessions to finish"),
+                      detail: String(localized: "\(target) installs as soon as nothing is running on \(device.name)."))
         case .downloading:
-            StatusRow(spinner: true, title: "Downloading \(target)…", progress: p.progress)
+            StatusRow(spinner: true, title: String(localized: "Downloading \(target)…"), progress: p.progress)
         case .installing where now.timeIntervalSince(p.at) > Self.installTimeout:
             if device.online {
                 StatusRow(symbol: "exclamationmark.triangle.fill", tint: .orange,
-                          title: "The update didn’t finish",
-                          detail: p.from.map { "\(device.name) is back online but still runs Kraki \($0)." }
-                              ?? "\(device.name) is back online, but \(target) wasn’t installed.")
-                ActionRow(title: "Try Again") { appState.commandSender?.updateDevice(device.id) }
-                ActionRow(title: "Dismiss", tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+                          title: String(localized: "The update didn’t finish"),
+                          detail: p.from.map { String(localized: "\(device.name) is back online but still runs Kraki \($0).") }
+                              ?? String(localized: "\(device.name) is back online, but \(target) wasn’t installed."))
+                ActionRow(title: String(localized: "Try Again")) { appState.commandSender?.updateDevice(device.id) }
+                ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
             } else {
                 StatusRow(symbol: "exclamationmark.triangle.fill", tint: .orange,
-                          title: "\(device.name) isn’t back online yet",
-                          detail: "If it doesn’t return, open Kraki on that computer.")
+                          title: String(localized: "\(device.name) isn’t back online yet"),
+                          detail: String(localized: "If it doesn’t return, open Kraki on that computer."))
             }
         case .installing:
-            StatusRow(spinner: true, title: "Installing \(target)…",
-                      detail: device.online ? nil : "Kraki is restarting on \(device.name).")
+            StatusRow(spinner: true, title: String(localized: "Installing \(target)…"),
+                      detail: device.online ? nil : String(localized: "Kraki is restarting on \(device.name)."))
         case .updated:
-            StatusRow(symbol: "checkmark.circle.fill", tint: .green, title: "Updated to \(target)",
-                      detail: "\(device.name) is up to date.")
+            StatusRow(symbol: "checkmark.circle.fill", tint: .green, title: String(localized: "Updated to \(target)"),
+                      detail: String(localized: "\(device.name) is up to date."))
         case .rolled_back:
             StatusRow(symbol: "arrow.uturn.backward.circle.fill", tint: .orange,
-                      title: "Update didn’t work",
-                      detail: "\(target) didn’t start, so \(device.name) went back to \(version(p.from)). Nothing changed.")
-            ActionRow(title: "Dismiss", tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+                      title: String(localized: "Update didn’t work"),
+                      detail: String(localized: "\(target) didn’t start, so \(device.name) went back to \(version(p.from)). Nothing changed."))
+            ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
         case .failed:
-            StatusRow(symbol: "xmark.circle.fill", tint: .red, title: "Couldn’t update",
-                      detail: p.error ?? "Something went wrong. Nothing was changed.")
+            StatusRow(symbol: "xmark.circle.fill", tint: .red, title: String(localized: "Couldn’t update"),
+                      detail: p.error ?? String(localized: "Something went wrong. Nothing was changed."))
             if store.availableUpdate(for: device.id)?.remote == true, device.online {
-                ActionRow(title: "Try Again") { appState.commandSender?.updateDevice(device.id) }
+                ActionRow(title: String(localized: "Try Again")) { appState.commandSender?.updateDevice(device.id) }
             }
-            ActionRow(title: "Dismiss", tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+            ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
         }
     }
 }

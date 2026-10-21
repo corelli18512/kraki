@@ -1,3 +1,5 @@
+import { t as translate } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { Check, CircleCheck, CircleStop, CircleX, Lock, OctagonX, X } from 'lucide-react';
 import type { CardActionState } from '@kraki/protocol';
 import type { CardAction } from '../../lib/chat/spine';
@@ -32,6 +34,7 @@ function argsSummary(toolName: string | undefined, args: Record<string, unknown>
 }
 
 export function ActionSlot({ action, handlers }: { action: SlotAction; handlers: ActionHandlers }) {
+  const { t } = useTranslation('chat');
   switch (action.type) {
     case 'tool_start':
     case 'tool_complete': {
@@ -43,7 +46,7 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
           {running ? <span className="kspinner" aria-hidden /> : ok
             ? <CircleCheck className="kslot-icon text-green-500" aria-hidden />
             : <CircleX className="kslot-icon text-red-500" aria-hidden />}
-          <span className="kslot-tool-name">{p.toolName ?? 'tool'}</span>
+          <span className="kslot-tool-name">{p.toolName ?? t('action.tool')}</span>
           {p.headline && <span className="kslot-tool-headline">{p.headline}</span>}
         </div>
       );
@@ -53,7 +56,7 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
       return (
         <div className="kslot-tool">
           <span className="kspinner" aria-hidden />
-          <span className="kslot-muted">{running === 1 ? '1 tool running in parallel…' : `${running} tools running in parallel…`}</span>
+          <span className="kslot-muted">{t('action.parallel', { count: running })}</span>
         </div>
       );
     }
@@ -67,7 +70,7 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
               key={choice}
               type="button"
               className="kchoice"
-              aria-label={`Answer: ${choice}`}
+              aria-label={t('action.answer', { choice })}
               onClick={() => handlers.onAnswer?.(action.id, choice)}
             >
               {choice}
@@ -83,7 +86,7 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
       return (
         <div className={`kslot-outcome ${failed ? 'is-failed' : ''}`}>
           {failed ? <OctagonX className="kslot-icon" aria-hidden /> : <CircleStop className="kslot-icon" aria-hidden />}
-          <span className="kslot-outcome-label">{failed ? 'Turn failed' : 'Stopped'}</span>
+          <span className="kslot-outcome-label">{failed ? t('action.turnFailed') : t('action.stopped')}</span>
           {detail && <span className="kslot-outcome-detail">{detail}</span>}
         </div>
       );
@@ -100,17 +103,18 @@ function diffLines(args?: Record<string, unknown>, max = 14): string[] | null {
   const lines = content.split('\n').filter((l) => !l.startsWith('---') && !l.startsWith('+++'));
   const isDiff = lines.some((l) => l.startsWith('+') || l.startsWith('-') || l.startsWith('@@'));
   const shown = (isDiff ? lines : lines.map((l) => `+${l}`));
-  return shown.length > max ? [...shown.slice(0, max), `… ${shown.length - max} more lines`] : shown;
+  return shown.length > max ? [...shown.slice(0, max), translate('chat:action.moreLines', { count: shown.length - max })] : shown;
 }
 
 function PermissionSlot({ action, handlers }: { action: Extract<CardActionState, { type: 'permission' }>; handlers: ActionHandlers }) {
+  const { t } = useTranslation('chat');
   const p = action.payload as {
     id: string; toolName?: string; description?: string; args?: Record<string, unknown>;
     decision?: string; localPending?: boolean; localError?: string;
   };
-  const description = (p.description || `Run ${p.toolName ?? 'tool'}`).trim();
+  const description = (p.description || t('action.run', { tool: p.toolName ?? t('action.tool') })).trim();
   // Written like a question (Mac/iOS PermissionPromptCopy).
-  const title = p.decision || description.endsWith('?') ? description : `${description}?`;
+  const title = p.decision || description.endsWith('?') ? description : p.description ? `${description}?` : t('action.runQuestion', { tool: p.toolName ?? t('action.tool') });
   const summary = argsSummary(p.toolName, p.args);
   const decide = (decision: PermissionDecision) => handlers.onPermission?.(p.id, p.toolName, decision);
   const denied = p.decision === 'deny';
@@ -120,11 +124,11 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
       <div className="kslot-permission-head">
         <div className="kslot-permission-q">{title}</div>
         {!p.decision && (
-          <div className="kslot-permission-caption"><Lock className="kslot-lock" aria-hidden />Needs your approval · Safe mode</div>
+          <div className="kslot-permission-caption"><Lock className="kslot-lock" aria-hidden />{t('action.approvalCaption')}</div>
         )}
       </div>
       {diff ? (
-        <pre className="kslot-permission-args is-diff" aria-label="Proposed change">
+        <pre className="kslot-permission-args is-diff" aria-label={t('action.proposedChange')}>
           {diff.map((line, i) => (
             <div key={i} style={{ color: line.startsWith('+') ? '#16a34a' : line.startsWith('-') ? '#dc2626' : undefined }}>{line || ' '}</div>
           ))}
@@ -134,16 +138,16 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
         <div className="kslot-permission-outcome">
           <span className={`kperm-outcome ${denied ? 'is-denied' : ''}`}>
             {denied ? <X aria-hidden /> : <Check aria-hidden />}
-            {p.decision === 'always_allow' ? 'Always allowed' : denied ? 'Denied' : 'Approved'}
+            {p.decision === 'always_allow' ? t('action.alwaysAllowed') : denied ? t('action.denied') : t('action.approved')}
           </span>
-          {p.localPending && <span className="kslot-muted">Sending…</span>}
+          {p.localPending && <span className="kslot-muted">{t('action.sending')}</span>}
         </div>
       )}
       {p.localError && <div className="kslot-permission-error">{p.localError}</div>}
       {!p.decision && (
         <div className="kslot-permission-buttons">
-          <button type="button" className="kchoice kperm-approve" aria-label="Approve permission" onClick={() => decide('approve')}><Check aria-hidden />Approve</button>
-          <button type="button" className="kchoice kperm-deny" aria-label="Deny permission" onClick={() => decide('deny')}><X aria-hidden />Deny</button>
+          <button type="button" className="kchoice kperm-approve" aria-label={t('action.approveLabel')} onClick={() => decide('approve')}><Check aria-hidden />{t('action.approve')}</button>
+          <button type="button" className="kchoice kperm-deny" aria-label={t('action.denyLabel')} onClick={() => decide('deny')}><X aria-hidden />{t('action.deny')}</button>
         </div>
       )}
     </div>

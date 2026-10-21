@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
   }),
   deviceName: arg('kraki-device-name') || 'Kraki Desktop',
   hostName: arg('kraki-host'),
+  /** Resolved UI language ('en' | 'zh-Hans') for the tray, dialogs and toasts. */
+  setLanguage: (code) => ipcRenderer.send('kraki:language', String(code)),
   setBadge: (count) => ipcRenderer.send('kraki:badge', Number(count) || 0),
   builtIn: arg('kraki-builtin') === '1' ? {
     state: () => ipcRenderer.invoke('kraki:builtin-state'),

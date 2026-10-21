@@ -92,7 +92,7 @@ extension MessageRouter {
         let failed = (action?["type"] as? String) == "failed"
         let draft = payload?["draft"] as? String ?? ""
         updatePreview(sessionId,
-                      text: draft.isEmpty ? (failed ? "Turn failed" : "Stopped") : draft,
+                      text: draft.isEmpty ? (failed ? String(localized: "Turn failed") : String(localized: "Stopped")) : draft,
                       type: failed ? "error" : "agent",
                       timestamp: timestamp)
     }

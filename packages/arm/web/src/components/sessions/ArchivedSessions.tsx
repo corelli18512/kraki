@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { SettingsAlert } from '../layout/SettingsControls';
 import { useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
@@ -19,6 +20,7 @@ export function useArchivedCount(): number {
  * Opening one restores it.
  */
 export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; selectedId?: string }) {
+  const { t } = useTranslation(['sessions', 'common']);
   const count = useArchivedCount();
   const info = useStore((s) => s.archiveInfo);
   const archived = useStore((s) => s.archivedSessions);
@@ -44,9 +46,9 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
       <button type="button" className="ksb-archived-toggle" aria-expanded={open} onClick={toggle}>
         {open ? <ChevronDown /> : <ChevronRight />}
         <Archive />
-        <span>Archived ({count})</span>
+        <span>{t('archive.heading', { count })}</span>
       </button>
-      {open && rows.length === 0 && <p className="ksb-archived-hint">Loading…</p>}
+      {open && rows.length === 0 && <p className="ksb-archived-hint">{t('archive.loading')}</p>}
       {open && rows.map(({ deviceId, digest }) => (
         <SessionRow
           key={digest.id}
@@ -80,6 +82,7 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
 
 /** Settings: auto-archive days and deleting archived sessions (F2). */
 export function ArchiveSettings() {
+  const { t } = useTranslation(['sessions', 'common']);
   const info = useStore((s) => s.archiveInfo);
   const count = useArchivedCount();
   const [confirming, setConfirming] = useState(false);
@@ -90,7 +93,7 @@ export function ArchiveSettings() {
   return (
     <div className="space-y-2">
       <label className="kp-group kp-row" style={{ padding: '8px 10px' }}>
-        <span>Archive After</span>
+        <span>{t('archive.after')}</span>
         <select
           className="rounded-md bg-transparent px-2 text-[13px]"
           value={days}
@@ -99,17 +102,17 @@ export function ArchiveSettings() {
             for (const id of deviceIds) wsClient.setAutoArchiveDays(id, value);
           }}
         >
-          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
-          <option value={0}>Never</option>
+          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{t('archive.days', { count: d })}</option>)}
+          <option value={0}>{t('archive.never')}</option>
         </select>
       </label>
-      <p className="kp-section-footer">Sessions without new messages for this long are archived. Pinned sessions are never archived.</p>
+      <p className="kp-section-footer">{t('archive.detail')}</p>
       {count > 0 && !confirming && (
         <button type="button" className="text-sm text-red-500 hover:underline" onClick={() => setConfirming(true)}>
-          Delete {count} Archived Session{count === 1 ? '' : 's'}…
+          {t('archive.delete', { count })}
         </button>
       )}
-      {confirming && <SettingsAlert title="Delete archived sessions from your computers? This can't be undone." body="" confirm="Delete" onCancel={() => setConfirming(false)} onConfirm={() => {
+      {confirming && <SettingsAlert title={t('archive.deleteConfirm')} body="" confirm={t('common:action.delete')} onCancel={() => setConfirming(false)} onConfirm={() => {
         for (const [id, i] of info) if (i.count > 0) wsClient.deleteArchivedSessions(id);
         setConfirming(false);
       }} />}

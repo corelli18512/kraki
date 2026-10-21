@@ -42,7 +42,7 @@ struct AboutPane: View {
                 .shadow(color: Color.black.opacity(0.18), radius: 18, y: 8)
 
             VStack(spacing: 4) {
-                Text("KRAKI")
+                Text(verbatim: "KRAKI")
                     .font(.system(size: 18, weight: .heavy, design: .monospaced))
                     .tracking(3.5)
                     .foregroundStyle(Color.textTitle)
@@ -54,9 +54,9 @@ struct AboutPane: View {
             }
 
             VStack(spacing: 3) {
-                versionRow("Kraki for Mac", value: "\(version) (\(build))")
-                versionRow("Background Service", value: tentacleVersion)
-                versionRow("Relay", value: appState.relayVersion ?? "—")
+                versionRow(String(localized: "Kraki for Mac"), value: "\(version) (\(build))")
+                versionRow(String(localized: "Background Service"), value: tentacleVersion)
+                versionRow(String(localized: "Relay"), value: appState.relayVersion ?? "—")
             }
             .padding(.top, 6)
 
@@ -73,14 +73,14 @@ struct AboutPane: View {
             HStack(spacing: 16) {
                 Link("Website",       destination: URL(string: "https://kraki.chat")!)
                 Link("Documentation", destination: URL(string: "https://kraki.chat/docs")!)
-                Link("GitHub",        destination: URL(string: "https://github.com/corelli18512/kraki")!)
+                Link(destination: URL(string: "https://github.com/corelli18512/kraki")!) { Text(verbatim: "GitHub") }
             }
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Color.krakiPrimary)
 
             Spacer()
 
-            Text("© 2026 Kraki")
+            Text(verbatim: "© 2026 Kraki")
                 .font(.system(size: 10))
                 .foregroundStyle(Color.textMuted)
         }

@@ -58,3 +58,15 @@ describe('Mac NotificationDeduper desktop parity', () => {
     expect(JSON.parse(localStorage.getItem('kraki-desktop.notifications.recentIds')!)).toHaveLength(512);
   });
 });
+
+it('formats notifications in the active language at delivery time, keeping server summaries intact', async () => {
+  const { i18next } = await import('../i18n');
+  try {
+    await i18next.changeLanguage('zh-Hans');
+    expect(formatDesktopPreview({ type: 'permission' }).body).toBe('需要批准：请查看请求的操作。');
+    expect(formatDesktopPreview({ type: 'question', summary: 'User question?' }).body).toBe('提问：User question?');
+    expect(formatDesktopPreview({ type: 'idle', steps: 1 }).body).toBe('已完成 1 个步骤，无回复。');
+    expect(formatDesktopPreview({ type: 'idle', steps: 3 }).body).toBe('已完成 3 个步骤，无回复。');
+    expect(formatDesktopPreview({ type: 'idle', summary: 'Server reply' }).body).toBe('Server reply');
+  } finally { await i18next.changeLanguage('en'); }
+});
