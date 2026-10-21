@@ -7,10 +7,10 @@ import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
 import { getLogger } from '../logger.js';
 import { trace } from '../trace.js';
-import type { AuthBackend, AuthOutcome } from '../auth-backend.js';
+import type { AuthBackend, AuthOutcome, AuthResult } from '../auth-backend.js';
 import type { HeadServer } from '../server.js';
 import { broadcastDeviceJoined, getDeviceSummaries } from './presence.js';
-import { publicPreferences, type ClientState } from './shared.js';
+import { HEAD_FEATURES, publicPreferences, type ClientState } from './shared.js';
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
   metrics().authFailed(code);
@@ -32,14 +32,18 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
     return;
   }
   state.authInFlight = true;
+  state.authTiming = { startedAt: Date.now() };
   try {
     if (auth.method === 'challenge') {
       // Challenge is multi-step — start here, verify in handleChallengeResponse
+      const challengeStart = performance.now();
       const result = await server.authBackend.startChallenge(
         auth.deviceId,
         msg.device.encryptionKey,
         server.options.region,
       );
+      state.authTiming.challengeMs = Math.round(performance.now() - challengeStart);
+      metrics().authStages.challenge.observe(state.authTiming.challengeMs);
       if (!socketStillAuthenticating(server, ws, state)) return;
       if (!result.ok) {
         sendAuthError(server, ws, result.code as AuthErrorCode, result.message,
@@ -52,11 +56,15 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
       state.pendingAuthMethod = 'challenge';
       logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
       ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
+      state.authTiming.challengeSentAt = Date.now();
       return;
     }
 
     const renameClock = server.renameClock;
+    const tokenStart = performance.now();
     const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
+    state.authTiming.tokenMs = Math.round(performance.now() - tokenStart);
+    metrics().authStages.token.observe(state.authTiming.tokenMs);
     if (!socketStillAuthenticating(server, ws, state)) return;
     handleBackendAuthResult(server, ws, state, result, renameClock);
   } finally {
@@ -88,11 +96,16 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
 
   state.authInFlight = true;
   const renameClock = server.renameClock;
+  if (state.authTiming?.challengeSentAt) state.authTiming.signMs = Date.now() - state.authTiming.challengeSentAt;
+  const verifyStart = performance.now();
   server.authBackend.verifyChallenge(
     deviceId, nonce, msg.signature,
     pendingInfo?.encryptionKey,
     server.options.region,
   ).then(result => {
+    const verifyMs = Math.round(performance.now() - verifyStart);
+    metrics().authStages.verify.observe(verifyMs);
+    if (state.authTiming) state.authTiming.verifyMs = verifyMs;
     if (!socketStillAuthenticating(server, ws, state)) return;
     handleBackendAuthResult(server, ws, state, result, renameClock);
   }).catch(err => {
@@ -142,16 +155,44 @@ export function handleBackendAuthResult(
   trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
   metrics().inc('auth.ok');
 
+  const timing = state.authTiming;
+  const totalMs = timing ? Date.now() - timing.startedAt : undefined;
+  if (totalMs !== undefined) metrics().authStages.total.observe(totalMs);
   logger.info('Device authenticated (via backend)', {
     deviceId: result.deviceId,
     user: result.user.login,
     method: result.authMethod,
     ip: state.ip,
+    ...(result.local && { local: true }),
+    // Where the auth time went: backend steps vs the client's signing round trip.
+    ...(timing && { ms: { total: totalMs, challenge: timing.challengeMs, sign: timing.signMs, verify: timing.verifyMs, token: timing.tokenMs } }),
   });
+  state.authTiming = undefined;
 
-  // Mirror user + devices into local storage so edge-local operations
-  // (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth
-  // is delegated to a remote backend.
+  // Accepted from this edge's own copy: the local mirror is already what the
+  // account service last said (refreshed in the background); re-mirroring the
+  // cached list could revert a rename made here since.
+  if (!result.local) mirrorAuthResult(server, result, renameClockAtStart);
+
+  completeAuthHandshake(server, ws, {
+    deviceId: result.deviceId,
+    userId: result.userId,
+    user: result.user,
+    authMethod: result.authMethod,
+    devices: result.local ? undefined : result.devices,
+    githubClientId: result.githubClientId,
+    vapidPublicKey: result.vapidPublicKey,
+  });
+}
+
+/**
+ * Mirror user + devices into local storage so edge-local operations
+ * (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth is
+ * delegated to a remote backend. May rewrite `result.devices` entries renamed
+ * here after `renameClockAtStart`.
+ */
+export function mirrorAuthResult(server: HeadServer, result: AuthResult, renameClockAtStart: number): void {
+  const logger = getLogger();
   try {
     server.storage.upsertUser(
       result.user.id, result.user.login, result.user.provider, result.user.email,
@@ -193,16 +234,6 @@ export function handleBackendAuthResult(
   } catch (err) {
     logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
   }
-
-  completeAuthHandshake(server, ws, {
-    deviceId: result.deviceId,
-    userId: result.userId,
-    user: result.user,
-    authMethod: result.authMethod,
-    devices: result.devices,
-    githubClientId: result.githubClientId,
-    vapidPublicKey: result.vapidPublicKey,
-  });
 }
 
 /**
@@ -300,6 +331,7 @@ export function completeAuthHandshake(
     vapidPublicKey: params.vapidPublicKey ?? server.getVapidPublicKey(),
     relayVersion: server.options.version,
     pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+    features: HEAD_FEATURES,
     // Apps only: a tentacle has no use for the user's word list.
     ...(deviceRole === 'app' && { voiceVocabulary: server.storage.getVoiceVocabulary(params.userId) }),
     ...(server.getVoiceCapability() && { voice: server.getVoiceCapability() }),

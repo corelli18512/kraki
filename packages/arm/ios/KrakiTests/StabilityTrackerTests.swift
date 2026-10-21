@@ -261,3 +261,40 @@ final class StabilityTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.readies.map(\.previousExit), ["unclean", nil])
     }
 }
+
+// MARK: - Reconnect latency (diag review 2026-10-21)
+
+extension StabilityTrackerTests {
+    func testAKeptSocketMakesTheReturnCurrentAtOnce() throws {
+        coldOpenAndAuthenticate(viewing: true)
+        tracker.sessionListApplied(viewed: nil)
+        tracker.appHidden()
+        advance(12)
+        tracker.appVisible(hasCachedContent: true, viewing: true, keptConnection: true)
+        let ready = try XCTUnwrap(tracker.readies.last)
+        XCTAssertEqual(ready.kind, .warm)
+        XCTAssertEqual(ready.outcome, .ready)
+        XCTAssertTrue(ready.kept)
+        XCTAssertEqual(ready.viewCurrentMs, 0)
+        XCTAssertEqual(try XCTUnwrap(ready.backgroundMs), 12_000, accuracy: 1)
+    }
+
+    func testOpeningAChatDuringTheReconnectIsMeasuredAndFlagged() throws {
+        coldOpenAndAuthenticate(viewing: false)
+        tracker.sessionListApplied(viewed: nil)
+        tracker.appHidden()
+        advance(60)
+        tracker.appVisible(hasCachedContent: true, viewing: false)
+        tracker.connecting()
+        advance(0.1)
+        tracker.conversationOpened(sessionId: "s1", lastSeq: 10, localSeq: 8, online: false)
+        advance(0.2); tracker.socketOpen()
+        advance(0.6); tracker.authenticated()
+        advance(0.1); tracker.sessionListApplied(viewed: (sessionId: "s1", lastSeq: 10, localSeq: 8))
+        advance(0.3); tracker.conversationRendered(sessionId: "s1", localSeq: 10, lastSeq: 10, hasContent: true)
+        let open = try XCTUnwrap(tracker.opens.last)
+        XCTAssertTrue(open.reconnecting)
+        XCTAssertEqual(open.outcome, .current)
+        XCTAssertEqual(try XCTUnwrap(open.currentMs), 1200, accuracy: 1)
+    }
+}

@@ -35,7 +35,7 @@ export const fields: Record<string, Validator> = {
   dropped: number, durationMs: number, clickCount: number, eventNumber: number,
   attempt: number, status: number, bytes: number, events: number, firstSeq: number, lastSeq: number,
   // Stability summaries (StabilityTracker): durations, counts and tags only.
-  kind: choice('cold', 'warm', 'wake', 'typed', 'voice', 'answer', 'steer'),
+  kind: choice('cold', 'warm', 'wake', 'typed', 'voice', 'answer', 'steer', 'head'),
   outcome: choice('ready', 'abandoned', 'timeout', 'recovered', 'backgrounded', 'current', 'left',
     'delivered', 'deleted', 'cleared', 'final', 'failed', 'cancelled', 'departed', 'suspended', 'ended',
     'completed', 'stopped', 'superseded'),
@@ -52,6 +52,10 @@ export const fields: Record<string, Validator> = {
   confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number, correctionOn: bool,
   // reply.summary (ReplyTracker)
   firstActivityMs: number, firstTextMs: number, deltas: number, maxGapMs: number, stalls: number,
+  // ready.summary: the signed-in socket survived the background (no reconnect)
+  kept: bool,
+  // open.summary: opened while (re)connecting
+  reconnecting: bool,
 };
 /** Adding an event requires consciously extending this allowlist and its native call site. */
 export const schemas: Record<string, string[]> = {
@@ -75,8 +79,10 @@ export const schemas: Record<string, string[]> = {
   'list.snapshot': ['count', 'pending', 'firstSeq', 'lastSeq'],
   'session.view': ['source'],
   'ready.summary': ['kind', 'outcome', 'path', 'attempt', 'gap', 'viewing', 'backgroundMs', 'firstContentMs',
-    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit'],
-  'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs'],
+    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit', 'kept'],
+  // A head (catch-up) reply arrived: request → handled on the main thread.
+  'history.batch': ['kind', 'count', 'durationMs', 'viewing', 'attempt'],
+  'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs', 'reconnecting'],
   'send.summary': ['kind', 'outcome', 'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'restored',
     'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause'],
   'voice.summary': ['outcome', 'stage', 'cause', 'confirmed', 'textLength', 'warm', 'count', 'startMs', 'recordMs',

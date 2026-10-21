@@ -69,6 +69,9 @@ final class MessageProvider {
     /// Bumped by `resetSession`: an off-main read started before a reset
     /// (e.g. device trust dropping unauthenticated history) must not land.
     private var sessionGeneration: [String: Int] = [:]
+    /// When each outstanding head request left (diag `history.batch`: how long
+    /// catch-up waited on the network/Head/decrypt vs the Tentacle's reply).
+    private var headRequestedAt: [String: (at: TimeInterval, attempt: Int)] = [:]
 
     private weak var appState: AppState?
 
@@ -765,6 +768,18 @@ final class MessageProvider {
             if case .head = removedKind { return true }
             return false
         }()
+        if wasHeadRequest, let requested = headRequestedAt.removeValue(forKey: sessionId) {
+            #if KRAKI_DIAG
+            let waitMs = (ProcessInfo.processInfo.systemUptime - requested.at) * 1000
+            let viewing = appState.sessionSubscriptionController.desiredSessionId == sessionId
+            KrakiDiag.record(.history, session: sessionId, [
+                .kind: .tag("head"), .count: .int(messages.count), .durationMs: .number(waitMs),
+                .viewing: .bool(viewing), .attempt: .int(requested.attempt),
+            ])
+            #else
+            _ = requested
+            #endif
+        }
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
@@ -1031,6 +1046,16 @@ final class MessageProvider {
         guard let appState else { return }
         guard let tentacleDeviceId = appState.sessionStore.sessions[sessionId]?.deviceId,
               !tentacleDeviceId.isEmpty else { return }
+        // Before auth_ok the request cannot reach the Tentacle (the transport
+        // drops unauthenticated sends), yet its slot used to stay reserved:
+        // the post-auth session_list self-heal then saw `isLoadingHead` and
+        // skipped, so a Chat opened during reconnect waited out the full
+        // head timeout (diag: catch-up exactly 5.0 s after the tap). Leave the
+        // slot free; the session_list self-heal asks once we are signed in.
+        guard appState.connectionStatus == .connected else {
+            KLog.d("⏭️ [2/history request] session=\(sessionId.prefix(12)) skip=notAuthenticated reason=\(reason)")
+            return
+        }
 
         let slotKind: OutstandingKind = beforeSeq.map { .before($0) } ?? .head
         let kind = beforeSeq == nil ? "head" : "before=\(beforeSeq!)"
@@ -1059,10 +1084,12 @@ final class MessageProvider {
             appState?.sessionStore.markLoadFailed(sessionId)
         }
         addSlot(sessionId, RequestSlot(kind: slotKind, timeout: work))
+        if beforeSeq == nil { headRequestedAt[sessionId] = (ProcessInfo.processInfo.systemUptime, attempt) }
 
         appState.commandSender?.requestSessionMessages(
             sessionId: sessionId,
-            beforeSeq: beforeSeq
+            beforeSeq: beforeSeq,
+            afterSeq: beforeSeq == nil ? appState.messageStore.dbLastSeq(sessionId) : nil
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + (beforeSeq == nil ? Self.headRequestTimeout : 10), execute: work)
@@ -1154,6 +1181,7 @@ final class MessageProvider {
             for slot in slots { slot.timeout.cancel() }
         }
         outstanding.removeAll()
+        headRequestedAt.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
         tracePulled.removeAll()

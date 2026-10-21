@@ -22,6 +22,10 @@ export function handleControlMessage(server: HeadServer, ws: WebSocket, state: C
     case 'delete_account':        void handleDeleteAccount(server, ws, state); return true;
     case 'register_push_token':   handleRegisterPushToken(server, ws, state, msg); return true;
     case 'unregister_push_token': handleUnregisterPushToken(server, ws, state, msg); return true;
+    case 'app_visibility':
+      // Connection-scoped: a new socket starts visible again.
+      state.hidden = msg.visible === false;
+      return true;
     case 'dispatch_push': {
       const sender = state.deviceId ? server.storage.getDevice(state.deviceId) : undefined;
       const payload = msg.payload as { preview?: BlobPayload } | undefined;
@@ -111,7 +115,10 @@ export function firePushPreview(server: HeadServer, state: ClientState, pushPrev
   let offlineCount = 0;
   for (const device of server.storage.getDevicesByUser(senderUserId)) {
     if (device.id === senderDeviceId) continue;
-    if (server.connections.get(device.id)) onlineDeviceIds.push(device.id);
+    // A hidden app keeps its socket for a short grace period after leaving
+    // the screen; the user still has to be notified.
+    const ws = server.connections.get(device.id);
+    if (ws && !server.clients.get(ws)?.hidden) onlineDeviceIds.push(device.id);
     else offlineCount++;
   }
   trace('PUSH-FIRE', { sender: senderDeviceId, onlineCount: onlineDeviceIds.length, offlineCount, previewKeys: Object.keys(pushPreview.keys) });

@@ -53,7 +53,7 @@ export class LatencyHistogram {
 
 /** Every counter the relay keeps. A fixed list: a typo fails to compile. */
 export const COUNTERS = [
-  'auth.ok', 'auth.fail',
+  'auth.ok', 'auth.fail', 'auth.localChallenge', 'auth.localVerify', 'auth.localRevoked',
   'conn.opened', 'conn.closed', 'conn.stalledClosed', 'conn.pongTimeout',
   'pulse.frames.in', 'pulse.bytes.in', 'pulse.frames.out', 'pulse.bytes.out',
   'pulse.forwarded', 'pulse.deliveredToHead',
@@ -67,6 +67,14 @@ export class RelayMetrics {
   /** Time the relay spends handling one inbound pulse frame (decode, route,
    *  hand to the destination socket): the relay's own share of message latency. */
   readonly frameHandling = new LatencyHistogram();
+  /** Auth backend calls (account service round trips, or local) by step. */
+  readonly authStages = {
+    challenge: new LatencyHistogram(),
+    verify: new LatencyHistogram(),
+    token: new LatencyHistogram(),
+    /** First `auth` frame → `auth_ok` sent (includes the client's signing). */
+    total: new LatencyHistogram(),
+  };
   /** Auth failures by error code (`invalid_token`, `wrong_region`, …). */
   readonly authFailures = new Map<string, number>();
   private loopDelay: IntervalHistogram | null = null;
@@ -113,6 +121,7 @@ export class RelayMetrics {
       counters: Object.fromEntries(this.counters),
       authFailures: Object.fromEntries(this.authFailures),
       frameHandling: this.frameHandling.snapshot(),
+      authStages: Object.fromEntries(Object.entries(this.authStages).map(([k, h]) => [k, h.snapshot()])),
       lastHealthAgoSec: this.lastHealthAt === null ? null : Math.floor((Date.now() - this.lastHealthAt) / 1000),
     };
   }

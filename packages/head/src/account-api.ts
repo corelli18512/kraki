@@ -103,6 +103,9 @@ export class AccountApi {
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
           break;
+        case '/api/devices/status':
+          if (req.method === 'POST') return await this.handleDeviceStatus(req, res, caller!);
+          break;
         case '/api/devices/remove':
           if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
           break;
@@ -238,6 +241,21 @@ export class AccountApi {
     } else {
       this.json(res, 200, result);
     }
+    return true;
+  }
+
+  /** Service-key route: an edge asks which of the devices it accepts locally
+   *  may still sign in there (EdgeAuthCache revocation poll). A region-scoped
+   *  edge is always checked against its own region. */
+  private async handleDeviceStatus(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    const ids = body?.deviceIds;
+    if (!Array.isArray(ids) || ids.length > 2000 || !ids.every((id) => typeof id === 'string')) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'deviceIds (string[]) required' });
+      return true;
+    }
+    const region = caller.admin ? (typeof body?.headRegion === 'string' ? body.headRegion : undefined) : caller.region;
+    this.json(res, 200, { ok: true, statuses: this.backend.deviceStatuses(ids as string[], region) });
     return true;
   }
 

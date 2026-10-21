@@ -26,11 +26,12 @@ Principles:
   - `backgroundMs`: how long the app was in the background (or asleep)
   - `path`: wifi / cellular / wired / other / none
   - `previousExit`: cold only. `unclean` means the previous process died in the foreground — a crash, a hang killed by the system, or a force quit
+  - `kept`: warm only. The signed-in socket survived the background (iOS keeps it about 25 s, see `BackgroundSocketGrace`), so nothing reconnected and every milestone is 0
 - **outcome**: `ready`; `abandoned` (left before ready); `timeout` (not ready after 30 s).
 
 ### `outage.summary`: foreground outage
 Counts only outages while signed in, in the foreground, and not during an "open" process; deliberate background disconnects and sleep do not count.
-- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, etc.
+- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, `auth_reply_timeout` (a sent sign-in got no answer within 5 s, doubling to 20 s), etc. The same tags appear in `ws.state.source`.
 - Durations:
   - `detectMs`: last data received → outage detected (long for half-open connections)
   - `reconnectMs`: detected → re-authenticated
@@ -92,9 +93,14 @@ Starts when this device's own message comes back from the agent's computer (the 
 "Reply feels slow" splits into: `send.summary.confirmMs` (Kraki round trip) + `reply.summary.firstTextMs` (agent + one hop); stalls point at streaming.
 
 ### `open.summary`: opening a conversation
-Recorded only while online and not during an app-open or outage process.
-- Fields: `firstContentMs`, `viewCurrentMs`, `gap`
+Recorded while online, and also while an app-open or outage record is in progress (then `reconnecting: true`: the wait includes signing in again — "reconnected, opened the chat, Syncing…"). Not recorded offline with no reconnect running.
+- Fields: `firstContentMs`, `viewCurrentMs`, `gap`, `reconnecting`
 - outcome: `current` (caught up), `left` (left midway), `timeout`
+
+### `history.batch`: a catch-up (head) reply arrived
+- `durationMs`: the head request left this device → its reply was handled on the main thread. Compare with the Tentacle's `Replied to turn-aware session messages request` log line to split the Tentacle's share from the network / Head / decrypt queue.
+- `count`: messages in the reply (with `afterSeq` a reconnect usually gets 1–2, not a whole turn).
+- `viewing`: it was the conversation on screen. `attempt`: 0 for the first request, then timeout retries.
 
 ## Proposed targets (first draft; finalize after a week of data)
 

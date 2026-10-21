@@ -209,6 +209,22 @@ export class LocalAuthBackend implements AuthBackend {
     return this.storage.setDeviceDisplayName(deviceId, displayName);
   }
 
+  /**
+   * Whether each device may still sign in at `headRegion`: `ok`,
+   * `device_not_found`, `account_deleted` or `wrong_region`. Edges that
+   * accept known devices locally (EdgeAuthCache) poll this for revocations.
+   */
+  deviceStatuses(deviceIds: string[], headRegion?: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const deviceId of deviceIds) {
+      if (this.storage.isDeletedDevice(deviceId)) { out[deviceId] = 'account_deleted'; continue; }
+      const device = this.storage.getDevice(deviceId);
+      if (!device || !device.publicKey) { out[deviceId] = 'device_not_found'; continue; }
+      out[deviceId] = this.checkRegion(device.userId, headRegion) ? 'wrong_region' : 'ok';
+    }
+    return out;
+  }
+
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
     const device = this.storage.getDevice(deviceId);
     if (!device || device.userId !== userId) return false;

@@ -30,6 +30,8 @@ export interface ClientState {
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+  /** Auth step timings (ms epoch / durations) for the authenticated log line. */
+  authTiming?: { startedAt: number; challengeMs?: number; challengeSentAt?: number; signMs?: number; verifyMs?: number; tokenMs?: number };
   /** Replaced by a newer socket of the same device: closing, inert. */
   evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
@@ -50,7 +52,14 @@ export interface ClientState {
   bufferedAtPing?: number;
   /** Declared at auth: this client's Pulse accepts progress heartbeats. */
   pulseProgressAck?: boolean;
+  /** An app reported it left the screen but kept its socket for a short
+   *  grace period (`app_visibility`). Still online for delivery, but
+   *  notifications go out as if it were offline. */
+  hidden?: boolean;
 }
+
+/** Capabilities advertised in `auth_ok.features`. */
+export const HEAD_FEATURES = ['app_visibility'] as const;
 
 export interface HeadServerOptions {
   authProviders?: Map<string, AuthProvider>;

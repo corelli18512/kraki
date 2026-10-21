@@ -14,6 +14,13 @@ export interface RequestSessionMessagesMessage extends BaseEnvelope {
     sessionId: string;
     /** Load messages strictly before this seq. Omit to load from head. */
     beforeSeq?: number;
+    /**
+     * Head requests only: the requester already stores every message through
+     * this seq, so a head batch may start right after it instead of at the
+     * latest turn (a reconnect usually misses one or two messages, not a
+     * turn of ~100). Older Tentacles ignore it and send the whole turn.
+     */
+    afterSeq?: number;
   };
 }
 

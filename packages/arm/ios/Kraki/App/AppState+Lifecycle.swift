@@ -160,6 +160,9 @@ extension AppState {
         #if os(iOS)
         // Back before a deferred teardown ran: nothing was closed.
         if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
+        let keptSocket = backgroundSocketGrace.resume()
+        #else
+        let keptSocket = false
         #endif
         if isInBackground {
             isInBackground = false
@@ -170,7 +173,7 @@ extension AppState {
         #if KRAKI_DIAG
         KrakiDiag.phase("active")
         #endif
-        noteVisible()
+        noteVisible(keptSocket: keptSocket)
         #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
         // A notice deferred behind an open permission prompt gets another chance.
         if connectionStatus == .connected { Task { @MainActor in PerformanceNotice.shared.authenticated() } }
@@ -185,6 +188,8 @@ extension AppState {
         // to sign in with (the login/pairing screen owns that connection).
         #if os(macOS)
         let hasCredentials = isSigningInWithCredentials
+        // Launch connects once it knows which credential to use.
+        if launchResolvingCredentials, !hasCompletedInitialConnect { return }
         #else
         let hasCredentials = hasStoredCredentials
         #endif
@@ -212,6 +217,9 @@ extension AppState {
         #if KRAKI_DIAG
         KrakiDiag.phase("inactive")
         #endif
+        // Returning from the background passes `.inactive` 0.2–0.5 s before
+        // `.active` (diag). Start the socket now instead of waiting.
+        if isInBackground { startForegroundConnectEarly() }
         #if os(iOS)
         if let owner = iosVoiceComposer.sessionID { iosVoiceComposer.depart(sessionID: owner) }
         #endif
@@ -240,8 +248,37 @@ extension AppState {
             if backgroundVoiceFinisher.beginIfNeeded() { return }
         }
         iosVoiceComposer.retireKeepingDraft()
+        // Keep the signed-in relay socket for a short grace period (the Head
+        // pushes to us as if offline meanwhile); voice has nothing to finish.
+        if backgroundSocketGrace.begin() {
+            voiceInputController.suspendWarmConnection()
+            return
+        }
         #endif
         tearDownForBackground()
+    }
+
+    /// `.inactive` on the way back from the background: open the socket
+    /// before `.active` arrives. Same preconditions as the foreground path;
+    /// a kept or already-connecting socket is left alone.
+    func startForegroundConnectEarly() {
+        #if os(iOS)
+        if backgroundSocketGrace.isActive || backgroundVoiceFinisher.isActive { return }
+        #endif
+        #if os(macOS)
+        let hasCredentials = isSigningInWithCredentials
+        #else
+        let hasCredentials = hasStoredCredentials
+        #endif
+        guard hasCompletedInitialConnect || hasCredentials else { return }
+        guard let wsClient, wsClient.state == .disconnected else { return }
+        wsClient.resetBackoffAndReconnect()
+    }
+
+    /// Tell the Head whether the app is on screen (see BackgroundSocketGrace).
+    func sendAppVisibility(_ visible: Bool) {
+        guard relayFeatures.contains("app_visibility") else { return }
+        wsClient?.sendRaw("{\"type\":\"app_visibility\",\"visible\":\(visible)}")
     }
 
     /// Close the voice and relay sockets for the background (APNs takes over).
@@ -274,7 +311,12 @@ extension AppState {
             startStabilityTracking()
             if !isInBackground { noteVisible() }
             stability.connecting()
-        case .disconnected: break
+        case .disconnected:
+            #if os(iOS)
+            // A kept background socket dropped: do not reconnect from the
+            // background, close as a plain background would have.
+            if isInBackground, backgroundSocketGrace.isActive { backgroundSocketGrace.abandon() }
+            #endif
         }
         if state != .connected { foregroundActivity.stop() }
         switch state {

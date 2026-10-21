@@ -467,6 +467,7 @@ final class AuthManager {
         // A relay that acknowledges inbound data promptly lets Pulse pace large
         // uploads by acks; an older one only acks on idle heartbeats.
         appState.pulseManager?.acksPromptly = (message["pulseAckBytes"] as? Int ?? 0) > 0
+        appState.relayFeatures = Set(message["features"] as? [String] ?? [])
         let voiceCapability = (message["voice"] as? [String: Any]).flatMap(VoiceCapability.init(json:))
 
         if usesEphemeralOpenAuth {

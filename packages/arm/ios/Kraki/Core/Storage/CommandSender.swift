@@ -1181,9 +1181,12 @@ final class CommandSender {
     ///
     /// Reply arrives as a `session_messages_batch` envelope and is
     /// handled by `MessageProvider.handleBatch`.
-    func requestSessionMessages(sessionId: String, beforeSeq: Int? = nil) {
+    func requestSessionMessages(sessionId: String, beforeSeq: Int? = nil, afterSeq: Int? = nil) {
         var payload: [String: Any] = ["sessionId": sessionId]
         if let beforeSeq { payload["beforeSeq"] = beforeSeq }
+        // Head requests: everything through `afterSeq` is stored here, so a
+        // current Tentacle sends only what is missing (older ones ignore it).
+        if beforeSeq == nil, let afterSeq, afterSeq > 0 { payload["afterSeq"] = afterSeq }
         send(["type": "request_session_messages", "payload": payload], sessionId: sessionId)
     }
 

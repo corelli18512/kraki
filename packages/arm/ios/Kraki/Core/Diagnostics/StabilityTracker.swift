@@ -34,6 +34,9 @@ final class StabilityTracker {
         var outcome: Outcome = .ready
         /// Cold only: how the previous process ended ("clean", "unclean", "first").
         var previousExit: String?
+        /// Warm only: the signed-in socket survived the background (grace
+        /// period), so nothing had to reconnect.
+        var kept = false
     }
 
     /// Tapping a conversation while online: how long until its latest
@@ -45,6 +48,9 @@ final class StabilityTracker {
         /// Messages missing locally when it was opened.
         var gap = 0
         var outcome: Outcome = .current
+        /// Opened while (re)connecting: the wait includes signing in. Kept
+        /// separate so the online-open numbers stay comparable.
+        var reconnecting = false
     }
 
     struct Outage: Equatable {
@@ -116,7 +122,7 @@ final class StabilityTracker {
 
     /// The app is on screen. Starts a `cold` (first time in this process) or
     /// `warm` (back from the background) opening; no-op while visible.
-    func appVisible(hasCachedContent: Bool, viewing: Bool) {
+    func appVisible(hasCachedContent: Bool, viewing: Bool, keptConnection: Bool = false) {
         if let asleep = asleepAt {
             asleepAt = nil
             lastWake = now()
@@ -129,6 +135,15 @@ final class StabilityTracker {
         } else if let hidden = hiddenAt {
             hiddenAt = nil
             begin(.warm, since: hidden, hasCachedContent: true, viewing: viewing)
+            if keptConnection {
+                // Still signed in and receiving: current the moment it shows.
+                ready?.kept = true
+                ready?.wsOpenMs = 0
+                ready?.authedMs = 0
+                ready?.listFreshMs = 0
+                ready?.viewCurrentMs = 0
+                finishReady(.ready)
+            }
         }
     }
 
@@ -237,13 +252,18 @@ final class StabilityTracker {
     /// otherwise callers skip the (database) lookups entirely.
     var wantsConversationUpdates: Bool { ready != nil || target != nil || opening != nil }
 
-    /// The user opened a conversation. Recorded only while online and not
-    /// inside an opening/outage record (those already cover the wait).
+    /// The user opened a conversation. A tap while (re)connecting is recorded
+    /// too, flagged `reconnecting` (the most common slow case: "reconnected,
+    /// opened the chat, Syncing…" — previously not measured at all).
     func conversationOpened(sessionId: String, lastSeq: Int, localSeq: Int, online: Bool) {
         finishOpen(.left)
-        guard online, ready == nil, outage == nil, hiddenAt == nil, asleepAt == nil else { return }
+        let reconnecting = ready != nil || outage != nil
+        // Offline with no reconnect in progress: nothing to wait for.
+        guard online || reconnecting, hiddenAt == nil, asleepAt == nil else { return }
         let t = now()
-        opening = (sessionId, t, lastSeq, Open(gap: max(0, lastSeq - localSeq)))
+        var open = Open(gap: max(0, lastSeq - localSeq))
+        open.reconnecting = reconnecting
+        opening = (sessionId, t, lastSeq, open)
         generation += 1
         let token = generation
         schedule(Self.readyTimeout) { [weak self] in
