@@ -294,7 +294,9 @@ describe('challenge sign-in keeps the device\'s own name', () => {
     storage.upsertDevice('d1', 'u1', 'corelli-mbp', 'tentacle', 'desktop', exportPublicKey(keys.publicKey));
     storage.setDeviceDisplayName('d1', 'Work laptop');
 
-    const result = await backend.verifyChallenge('d1', 'nonce-1', signChallenge('nonce-1', keys.privateKey));
+    const challenge = await backend.startChallenge('d1');
+    if (!challenge.ok) throw new Error('no challenge');
+    const result = await backend.verifyChallenge('d1', challenge.nonce, signChallenge(challenge.nonce, keys.privateKey));
     expect(result.ok).toBe(true);
     expect(storage.getDevice('d1')).toMatchObject({ name: 'Work laptop', reportedName: 'corelli-mbp', displayName: 'Work laptop' });
     storage.close();
