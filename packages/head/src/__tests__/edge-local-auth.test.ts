@@ -1,7 +1,8 @@
 /**
  * Edge-local challenge auth (EdgeAuthCache): a device the account service
  * already verified signs in at the edge without a round trip; the account
- * service stays the authority (background re-verify + device status poll).
+ * service stays the authority (background status check of the device that
+ * signed in + periodic device status poll).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
@@ -31,7 +32,6 @@ describe('edge-local challenge auth', () => {
   let cache: EdgeAuthCache;
   let clock: number;
   let revoked: EdgeRevocation[];
-  let refreshed: AuthResult[];
   const keys = generateKeyPair();
 
   beforeEach(async () => {
@@ -53,9 +53,7 @@ describe('edge-local challenge auth', () => {
     clock = 1_000_000;
     cache = new EdgeAuthCache(edge.rawDb, { now: () => clock });
     revoked = [];
-    refreshed = [];
     remote.onRevoked = (r) => revoked.push(r);
-    remote.onRefreshed = (r) => refreshed.push(r);
   });
 
   afterEach(() => {
@@ -91,14 +89,17 @@ describe('edge-local challenge auth', () => {
     expect(calls.filter((c) => c.startsWith('/api/auth/'))).toEqual(['/api/auth/challenge', '/api/auth/verify']);
 
     calls = [];
+    clock += 1_000;
     const second = await signIn();
     expect(second.ok).toBe(true);
     expect(second.ok && second.local).toBe(true);
     expect(second.ok && second.deviceId).toBe('phone');
     expect(calls, 'nothing before auth_ok').toEqual([]);
     await settle();
-    expect(calls, 'one background re-verify').toEqual(['/api/auth/verify']);
-    expect(refreshed).toHaveLength(1);
+    // The account service only verifies nonces it issued: the background
+    // re-check asks for this device's status, and an 'ok' refreshes trust.
+    expect(calls, 'one background status check').toEqual(['/api/devices/status']);
+    expect(cache.lookup('phone')?.verifiedAt).toBe(clock);
 
     calls = [];
     await signIn();
@@ -114,7 +115,11 @@ describe('edge-local challenge auth', () => {
     const other = generateKeyPair();
     const result = await remote.verifyChallenge('phone', challenge.nonce, signChallenge(challenge.nonce, other.privateKey), 'enc-1');
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.code).toBe('invalid_signature');
+    // The edge nonce falls through to the account service, which did not
+    // issue it: a retryable refusal (never invalid_signature, which would
+    // make a real client drop its pairing).
+    expect(!result.ok && result.code).toBe('service_unavailable');
+    expect(cache.lookup('phone'), 'one bad attempt does not drop trust').toBeDefined();
   });
 
   it('a nonce is single-use and bound to its device', async () => {
@@ -136,7 +141,8 @@ describe('edge-local challenge auth', () => {
     calls = [];
     const result = await signIn('enc-2');
     expect(result.ok && result.local).toBeFalsy();
-    expect(calls).toEqual(['/api/auth/verify']);
+    // Challenge too: the account service only verifies nonces it issued.
+    expect(calls).toEqual(['/api/auth/challenge', '/api/auth/verify']);
     expect(account.getDevice('phone')?.encryptionKey).toBe('enc-2');
   });
 
@@ -153,15 +159,15 @@ describe('edge-local challenge auth', () => {
     expect(calls).toEqual(['/api/auth/challenge']);
   });
 
-  it('a revocation the poll has not seen yet is caught by the background re-verify', async () => {
+  it('a revocation the poll has not seen yet is caught by the background status check', async () => {
     await remote.enableLocalChallenge(cache, undefined, 60_000);
     await signIn();
     account.deleteDevice('phone');
-    clock += 120_000; // past the re-verify interval
+    clock += 120_000; // past the re-check interval
     const local = await signIn();
     expect(local.ok && local.local).toBe(true);
     await settle();
-    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'device_not_found' })]);
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
     expect(cache.lookup('phone')).toBeUndefined();
   });
 
