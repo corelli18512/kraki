@@ -75,6 +75,7 @@ final class CommandSender {
     /// a reconnect happened after they were sent). Re-sent once, as soon as
     /// the session's Tentacle is known, online and deduplicates retries.
     @ObservationIgnored private var needsResend = Set<String>()
+    @ObservationIgnored var resendCoalescer = ResendCoalescer()
     /// Payload deliveries this recent mean the link is busy, not broken: an
     /// echo queued behind a backlog legitimately takes longer. Heartbeats do
     /// not count, so a quiet healthy link still surfaces a lost input.
@@ -112,6 +113,8 @@ final class CommandSender {
         msg["seq"] = 0
         msg["timestamp"] = ISO8601.now()
         let accepted = appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
+        if accepted, payload["type"] as? String == "send_input",
+           let clientId = (payload["payload"] as? [String: Any])?["clientId"] as? String { resendCoalescer.handedOff(clientId) }
         #if KRAKI_DIAG
         if payload["type"] as? String == "send_input", let wire = payload["payload"] as? [String: Any],
            let clientId = wire["clientId"] as? String {
@@ -163,13 +166,13 @@ final class CommandSender {
         guard isSignedIn else { return false }
         // A steer's bubble appears now: the live card stays above it.
         if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
-        if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
-            undispatched.insert(clientId)
-        }
+        let handoffStart = Date()
+        let handedOff = send(["type": "send_input", "payload": payload], sessionId: sessionId)
+        if !handedOff { undispatched.insert(clientId) }
         appState?.sendMetrics.created(
             clientId, kind: answerTo != nil ? .answer : delivery == .steer ? .steer : .typed,
-            textLength: text.utf8.count, attachments: attachments?.count ?? 0,
-            pathUp: isDeliveryPathUp(sessionId))
+            textLength: text.utf8.count, attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId),
+            handoffMs: handedOff ? Date().timeIntervalSince(handoffStart) * 1000 : nil)
         #if KRAKI_DIAG
         diagAccepted = true
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("created")])
@@ -499,7 +502,7 @@ final class CommandSender {
                     }
                 } else if isDeliveryPathUp(sessionId), canResendAutomatically(sessionId) {
                     needsResend.remove(clientId)
-                    if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
+                    if resendCoalescer.isRedundant(clientId, reason: reason) { KLog.d("[Outbox] \(reason) resend coalesced") } else if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
                         setPendingState(sessionId, clientId: clientId, .sending)
                     }
                 } else {
@@ -512,7 +515,7 @@ final class CommandSender {
         }
     }
 
-    private func isDeliveryPathUp(_ sessionId: String) -> Bool {
+    func isDeliveryPathUp(_ sessionId: String) -> Bool {
         guard let appState else { return false }
         #if DEBUG
         if appState.testOutboundMessageHandler != nil { return true }
@@ -606,6 +609,7 @@ final class CommandSender {
         outboundPayloads.removeValue(forKey: clientId)
         undispatched.remove(clientId)
         needsResend.remove(clientId)
+        resendCoalescer.forget(clientId)
         // No-op when already finished as deleted; otherwise its echo landed.
         appState?.sendMetrics.finished(clientId, .delivered)
         persistOutbox()
@@ -636,6 +640,8 @@ final class CommandSender {
         var answerTo: String? = nil
         var state: String? = nil
         var afterSeq: Int? = nil
+        /// `SendTracker.Summary.Kind` (absent in outboxes written before 2026-10-22).
+        var kind: String? = nil
     }
 
     /// Pending payload key: the session head seq when the input was written.
@@ -671,7 +677,8 @@ final class CommandSender {
                     attachments: persistedAttachments,
                     answerTo: message.answerTo,
                     state: message.payload["localState"]?.stringValue,
-                    afterSeq: message.payload[Self.afterSeqKey]?.intValue
+                    afterSeq: message.payload[Self.afterSeqKey]?.intValue,
+                    kind: appState?.sendMetrics.kind(of: clientId)?.rawValue
                 ))
             }
         }
@@ -723,10 +730,12 @@ final class CommandSender {
             if let afterSeq = item.afterSeq { payload[Self.afterSeqKey] = AnyCodable(afterSeq) }
             appState?.sendMetrics.restored(
                 item.clientId,
-                kind: item.state == "correcting" ? .voice : item.answerTo != nil ? .answer
-                    : item.delivery == "steer" ? .steer : .typed,
+                kind: item.kind.flatMap(SendTracker.Summary.Kind.init(rawValue:))
+                    ?? (item.state == "correcting" ? .voice : item.answerTo != nil ? .answer
+                        : item.delivery == "steer" ? .steer : .typed),
                 createdAt: item.timestamp.flatMap { ISO8601.parse($0) },
-                failed: item.state == "failed" || item.state == "correcting")
+                failed: item.state == "failed" || item.state == "correcting",
+                textLength: item.text.utf8.count, attachments: item.attachments?.count ?? 0)
             var bucket = outbox[item.sessionId] ?? [:]
             bucket[item.clientId] = ChatMessage(
                 type: "pending_input", seq: 0, sessionId: item.sessionId, deviceId: nil,

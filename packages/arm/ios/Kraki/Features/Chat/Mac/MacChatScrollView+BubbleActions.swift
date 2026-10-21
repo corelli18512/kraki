@@ -49,37 +49,44 @@ extension MacChatScrollView {
 
         case .leftMouseUp:
             guard let pending = pendingBubbleActionClick else { return event }
+            pendingBubbleActionClick = nil
+            let rejected = completeBubbleActionClick(pending, atWindowPoint: windowPoint)
             #if KRAKI_DIAG
             if case .question(let questionId) = pending.capture {
-                KrakiDiag.record(.uiMouse, session: representedSessionId,
-                    [.questionId: .id(questionId), .phase: .tag("up"), .eventNumber: .int(event.eventNumber), .clickCount: .int(event.clickCount)])
+                var fields: [DiagField: DiagValue] = [.questionId: .id(questionId), .phase: .tag("up"),
+                                                      .eventNumber: .int(event.eventNumber), .clickCount: .int(event.clickCount)]
+                if let rejected { fields[.cause] = .tag(rejected) }
+                KrakiDiag.record(.uiMouse, session: representedSessionId, fields)
             }
+            #else
+            _ = rejected
             #endif
-            pendingBubbleActionClick = nil
-            guard !pending.cancelled,
-                  let context = chatDocumentView.actionCaptureContext(
-                    atWindowPoint: windowPoint
-                  ),
-                  context.capture == pending.capture else {
-                return nil
-            }
-            if let expectedTarget = pending.target {
-                guard chatDocumentView.actionHitTarget(
-                    for: pending.capture,
-                    atActionPoint: context.actionPoint
-                  ) == expectedTarget else { return nil }
-                dispatchBubbleAction(expectedTarget)
-            } else {
-                dispatchBubbleActionWhenReady(
-                    atActionPoint: context.actionPoint,
-                    expectedCapture: pending.capture
-                )
-            }
             return nil
 
         default:
             return event
         }
+    }
+
+    /// Dispatch a completed click, or say why it was dropped (Mac diag
+    /// 10-14/10-16: 2 of 14 first clicks on a question choice did nothing,
+    /// with no trace of which check refused them).
+    private func completeBubbleActionClick(
+        _ pending: (target: MacBubbleActionHitTarget?, capture: MacBubbleActionCapture, start: NSPoint, cancelled: Bool),
+        atWindowPoint windowPoint: NSPoint
+    ) -> String? {
+        if pending.cancelled { return "drag" }
+        guard let context = chatDocumentView.actionCaptureContext(atWindowPoint: windowPoint) else { return "outside" }
+        guard context.capture == pending.capture else { return "capture_changed" }
+        guard let expectedTarget = pending.target else {
+            dispatchBubbleActionWhenReady(atActionPoint: context.actionPoint, expectedCapture: pending.capture)
+            return nil
+        }
+        guard chatDocumentView.actionHitTarget(for: pending.capture, atActionPoint: context.actionPoint) == expectedTarget else {
+            return "target_changed"
+        }
+        dispatchBubbleAction(expectedTarget)
+        return nil
     }
 
     func dispatchBubbleAction(_ target: MacBubbleActionHitTarget) {
@@ -110,7 +117,15 @@ extension MacChatScrollView {
             dispatchBubbleAction(target)
             return
         }
-        guard attemptsRemaining > 0 else { return }
+        guard attemptsRemaining > 0 else {
+            #if KRAKI_DIAG
+            if case .question(let questionId) = expectedCapture {
+                KrakiDiag.record(.uiMouse, session: representedSessionId,
+                                 [.questionId: .id(questionId), .phase: .tag("up"), .cause: .tag("not_ready")])
+            }
+            #endif
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 120.0) { [weak self] in
             self?.dispatchBubbleActionWhenReady(
                 atActionPoint: point,

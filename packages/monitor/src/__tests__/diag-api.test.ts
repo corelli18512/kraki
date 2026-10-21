@@ -137,7 +137,7 @@ describe('off-band diagnostics', () => {
     const send = { ev: 'send.summary', seq: 3, t: Date.now(), m: 12, d: {
       kind: 'voice', outcome: 'delivered', shown: 'failed', shownMs: 4200, falseAlarm: false, manualRetries: 1,
       autoResends: 0, restored: 0, offline: false, attachments: 0, textLength: 478, background: true,
-      confirmMs: 16_000, correctionMs: 2100, cause: 'correction' } };
+      confirmMs: 16_000, correctionMs: 2100, cause: 'correction', handoffMs: 180, uploadMs: 2400 } };
     const voice = { ev: 'voice.summary', seq: 4, t: Date.now(), m: 13, d: {
       outcome: 'failed', stage: 'recording', cause: 'lease_denied_quota_exhausted', confirmed: false, textLength: 0,
       warm: true, count: 0, startMs: 120, recordMs: 5300, correctionOn: true } };

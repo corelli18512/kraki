@@ -22,6 +22,7 @@ enum DiagField: String {
     case kind, outcome, path, gap, viewing, backgroundMs, firstContentMs, wsOpenMs, authedMs, listFreshMs, viewCurrentMs
     case code, detectMs, reconnectMs, catchupMs, impactMs, visibleMs, pathChanged, afterWake, previousExit
     case shown, shownMs, falseAlarm, manualRetries, autoResends, offline, background, confirmMs, correctionMs, cause
+    case handoffMs, uploadMs
     case stage, confirmed, warm, startMs, recordMs, finalizeMs, correctionOn
     case firstActivityMs, firstTextMs, deltas, maxGapMs, stalls
     case kept, reconnecting

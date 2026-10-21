@@ -47,6 +47,7 @@ export const fields: Record<string, Validator> = {
   pathChanged: bool, afterWake: bool, previousExit: choice('clean', 'unclean', 'first'),
   shown: choice('none', 'unconfirmed', 'failed'), shownMs: number, falseAlarm: bool, manualRetries: number,
   autoResends: number, offline: bool, background: bool, confirmMs: number, correctionMs: number,
+  handoffMs: number, uploadMs: number, // send.summary, attachment sends: main-thread handoff, Relay ack of the upload
   cause: v => typeof v === 'string' && /^[a-z_]{1,48}$/.test(v), // coarse class, never a message
   stage: choice('preflight', 'permission', 'lease', 'recording', 'finishing'),
   confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number, correctionOn: bool,
@@ -63,7 +64,7 @@ export const schemas: Record<string, string[]> = {
   'app.phase': ['phase', 'pending'],
   'ws.state': ['state', 'attempt', 'source', 'count'],
   'ui.answer': ['questionId', 'origin', 'ix', 'clickCount', 'eventNumber', 'attempt'],
-  'ui.mouse': ['questionId', 'phase', 'eventNumber', 'clickCount'],
+  'ui.mouse': ['questionId', 'phase', 'eventNumber', 'clickCount', 'cause'], // cause: why a click was dropped
   'cmd.answer': ['questionId', 'textLength', 'pending', 'duplicate', 'source', 'stack', 'ix'],
   'cmd.input': ['clientId', 'answerTo', 'textLength', 'attachments', 'ix', 'source'],
   'cmd.handoff': ['clientId', 'answerTo', 'accepted', 'stack'],
@@ -84,7 +85,7 @@ export const schemas: Record<string, string[]> = {
   'history.batch': ['kind', 'count', 'durationMs', 'viewing', 'attempt'],
   'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs', 'reconnecting'],
   'send.summary': ['kind', 'outcome', 'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'restored',
-    'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause'],
+    'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause', 'handoffMs', 'uploadMs'],
   'voice.summary': ['outcome', 'stage', 'cause', 'confirmed', 'textLength', 'warm', 'count', 'startMs', 'recordMs',
     'finalizeMs', 'correctionOn'],
   'reply.summary': ['kind', 'outcome', 'durationMs', 'firstActivityMs', 'firstTextMs', 'deltas', 'maxGapMs', 'stalls'],
