@@ -669,6 +669,7 @@
 		F6582FAA807D4A92471EBCA8 /* PendingTailBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */; };
 		F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
 		F68223766885D060184C6278 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
+		F70733B590FDA80BAC3C0FB0 /* MacComposerTypingAttributesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D518B4154CCD103E51314 /* MacComposerTypingAttributesTests.swift */; };
 		F7469ADF2790C48517F2765F /* MessageStore+CardTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C21991B382385639B9398E8 /* MessageStore+CardTurn.swift */; };
 		F7876F1F5FF548F7C05C0BE7 /* LocalAgentsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */; };
 		F7B50B27C50074C2E07495C8 /* MessageRouter+DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */; };
@@ -1049,6 +1050,7 @@
 		A7F66F02FC54FEF2B7BA7235 /* MacAutomationDriver+ScrollGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAutomationDriver+ScrollGate.swift"; sourceTree = "<group>"; };
 		A8224858B67E15AD9E5625E4 /* IMESearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IMESearchField.swift; sourceTree = "<group>"; };
 		A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentacleSetupRunner.swift; sourceTree = "<group>"; };
+		A90D518B4154CCD103E51314 /* MacComposerTypingAttributesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerTypingAttributesTests.swift; sourceTree = "<group>"; };
 		AA3C5E810AB7C57BC68F5279 /* ChatUXRegressionTests+Group1.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatUXRegressionTests+Group1.swift"; sourceTree = "<group>"; };
 		AA48B106C647082D2095E935 /* ChatPerfListVC+Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPerfListVC+Diagnostics.swift"; sourceTree = "<group>"; };
 		AA8F39B83EB04DE6DBA8346B /* KrakiNotification.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.Diagnostics.entitlements; sourceTree = "<group>"; };
@@ -1826,6 +1828,7 @@
 				5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */,
 				D30CCC1BF274AA7918738FC9 /* MacComposerAnswerImageTests.swift */,
 				DB3CFEE45B1A4588845387F7 /* MacComposerKeyProbeTests.swift */,
+				A90D518B4154CCD103E51314 /* MacComposerTypingAttributesTests.swift */,
 				60DFE95FA77E42BFE63ADB6E /* MacComposerUndoTests.swift */,
 				DA12185341C110AEF45D05BD /* MacConnectPhoneStepTests.swift */,
 				FF864DCD55F230904C925921 /* MacControlHelpTests.swift */,
@@ -2327,6 +2330,7 @@
 				0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */,
 				267B0C0918F1A10CABFD299A /* MacComposerAnswerImageTests.swift in Sources */,
 				190635CDF338FC3701491EC7 /* MacComposerKeyProbeTests.swift in Sources */,
+				F70733B590FDA80BAC3C0FB0 /* MacComposerTypingAttributesTests.swift in Sources */,
 				46954A5DADF3F9B154A8ECBC /* MacComposerUndoTests.swift in Sources */,
 				C0D64ECB05D94DC40D4B52E9 /* MacConnectPhoneStepTests.swift in Sources */,
 				4996504C6982E0B6A3503A86 /* MacControlHelpTests.swift in Sources */,
