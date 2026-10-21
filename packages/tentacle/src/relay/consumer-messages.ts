@@ -1,6 +1,6 @@
 /** Messages from apps: validation and dispatch to the per-type handlers. */
 
-import { normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
+import { normalizeSessionMode, toWireSessionMode, type ClientLogEntry } from '@kraki/protocol';
 import { appendFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseConsumerMessage } from '@kraki/protocol/schemas';
@@ -102,10 +102,8 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   }
 
   // client_log — write web app debug logs to local file
-  const msgRecord = msg as unknown as Record<string, unknown>;
-  if (msgRecord.type === 'client_log') {
-    const payload = msgRecord.payload as Record<string, unknown> | undefined;
-    handleClientLog(client, msg.deviceId, payload?.entries as Array<{ ts: string; level: string; scope: string; message: string }> | undefined);
+  if (msg.type === 'client_log') {
+    handleClientLog(client, msg.deviceId, msg.payload?.entries);
     return;
   }
 
@@ -590,13 +588,21 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
 }
 
 /** A decrypted app message failed its field check. Unknown types are what
- *  a newer app may send (debug only); a malformed known message is a bug
- *  worth a warning. A dropped send_input gets an error in the chat, or the
- *  app would keep its bubble "sending" with no explanation. */
+ *  a newer app may send, but also what an app sends that this version forgot
+ *  to list (client_log was dropped silently for a week): warn once per
+ *  (type, app), debug after that. A malformed known message is a bug worth a
+ *  warning. A dropped send_input gets an error in the chat, or the app would
+ *  keep its bubble "sending" with no explanation. */
 export function rejectConsumerMessage(client: RelayClient, raw: unknown, { type, unknownType, problem }: { type?: string; unknownType: boolean; problem: string }): void {
   const r = (raw ?? {}) as { deviceId?: unknown; sessionId?: unknown };
   if (unknownType) {
-    logger.debug({ type, deviceId: r.deviceId }, 'Ignored app message of an unknown type');
+    const key = `${String(type).slice(0, 64)}|${String(r.deviceId).slice(0, 80)}`;
+    if (client.unknownAppMessageWarned.has(key) || client.unknownAppMessageWarned.size >= 256) {
+      logger.debug({ type, deviceId: r.deviceId }, 'Ignored app message of an unknown type');
+      return;
+    }
+    client.unknownAppMessageWarned.add(key);
+    logger.warn({ type, deviceId: r.deviceId }, 'Ignored app message of an unknown type (further ones from this app are logged at debug)');
     return;
   }
   logger.warn({ type, problem, deviceId: r.deviceId }, 'Dropped malformed app message');
@@ -617,7 +623,7 @@ export function noteAppAlive(client: RelayClient, deviceId: string | undefined):
   logger.warn({ deviceId }, 'App marked offline is sending; restored as online');
 }
 
-export function handleClientLog(client: RelayClient, deviceId: string, entries: Array<{ ts: string; level: string; scope: string; message: string }> | undefined): void {
+export function handleClientLog(_client: RelayClient, deviceId: string, entries: ReadonlyArray<Partial<Record<keyof ClientLogEntry, unknown>>> | undefined): void {
   if (!Array.isArray(entries) || entries.length === 0) return;
   try {
     const logPath = join(getKrakiHome(), 'logs', 'web-client.log');

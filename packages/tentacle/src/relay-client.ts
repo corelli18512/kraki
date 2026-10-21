@@ -155,6 +155,8 @@ export class RelayClient {
    *  notice or terminal status). Reset with the step counter per user turn. */
   turnHasOutcome = new Set<string>();
   legacyReplayWarned = new Set<string>();
+  /** `type|deviceId` of unknown app message types already warned about. */
+  unknownAppMessageWarned = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
   private reRegisteredKey = false;

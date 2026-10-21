@@ -119,6 +119,9 @@ export const consumerMessageSchema = z.discriminatedUnion('type', [
   message('request_usage_history', z.looseObject({ since: optNum }).optional()),
   message('refresh_account_usage', z.looseObject({ requestId: optStr }).optional()),
   message('update_device', z.looseObject({ requestId: optStr, when: optStr }).optional()),
+  // The handler stringifies and bounds every entry field itself, so only the
+  // array shape is checked; a batch with an odd entry still gets written.
+  message('client_log', z.looseObject({ entries: z.array(z.looseObject({})).optional() }).optional()),
 ]);
 
 /** Every app → tentacle message type this protocol version knows. */

@@ -259,6 +259,24 @@ export interface RequestUsageHistoryMessage extends BaseEnvelope {
   };
 }
 
+/** One web/desktop app debug log line (see web `lib/logger.ts`). */
+export interface ClientLogEntry {
+  ts: string;
+  level: string;
+  scope: string;
+  message: string;
+}
+
+/** App → tentacle: a batch of web/desktop app debug log lines, written to the
+ *  tentacle's `logs/web-client.log`. Sent only while internal debug logging
+ *  is on. */
+export interface ClientLogMessage extends BaseEnvelope {
+  type: 'client_log';
+  payload: {
+    entries: ClientLogEntry[];
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -291,4 +309,5 @@ export type ConsumerMessage =
   | ClientFeaturesMessage
   | RequestUsageHistoryMessage
   | RefreshAccountUsageMessage
-  | UpdateDeviceMessage;
+  | UpdateDeviceMessage
+  | ClientLogMessage;
