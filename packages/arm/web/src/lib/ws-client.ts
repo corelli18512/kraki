@@ -6,7 +6,7 @@ import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -484,7 +484,16 @@ export class KrakiWSClient {
       if (whole !== null) this.handlePulseDelivered(whole, route, { sender }, streamId);
       return;
     }
-    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
+    // Head-originated plaintext control. Only the Head's own control types are
+    // accepted from this wrapper, and only from a whole payload the Head
+    // delivered (a reassembled one is dropped above; the local link never
+    // carries it): auth frames and consumer messages arriving this way are forged.
+    if (parsed.from === HEAD_PULSE_TARGET) {
+      const type = (parsed.msg as { type?: unknown } | undefined)?.type;
+      if (route !== 'head' || !parsed.msg || typeof type !== 'string' || !HEAD_CONTROL_TYPES.has(type)) {
+        logger.warn('Dropped non-control message in head pulse wrapper', { type, route });
+        return;
+      }
       const inner = parsed.msg as unknown as Message;
       traceEvent({ comp: 'arm', evt: 'APP-HEAD-CONTROL', type: (inner as { type?: string }).type });
       this.handleMessage(inner);
@@ -1328,6 +1337,7 @@ export class KrakiWSClient {
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
           redirectToRelay: (url: string) => this.transport.redirectToRelay(url),
+          currentRelay: this.transport.url,
         });
         break;
 

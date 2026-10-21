@@ -1086,19 +1086,31 @@ describe('KrakiWSClient', () => {
         type: 'auth_error',
         code: 'wrong_region',
         message: 'Reconnect to your assigned region',
-        redirect: 'ws://cn.example.com',
+        redirect: 'wss://cn.example.com',
       });
 
       // Verify relay URL saved to localStorage for post-reload connection
       await vi.waitFor(() => {
         expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({
-          relay: 'ws://cn.example.com',
+          relay: 'wss://cn.example.com',
           deviceId: 'dev-stale',
         });
       });
 
       // No error banner — page reload handles the transition silently
       expect(useStore.getState().lastError).toBeNull();
+    });
+
+    it('ignores a wrong_region redirect from an official relay to any other host', async () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('wss://relay.kraki.chat');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance).toBeDefined());
+      for (const redirect of ['wss://evil.example', 'ws://cn.relay.kraki.chat', 'wss://kraki.chat.evil.example']) {
+        lastWsInstance._receive({ type: 'auth_error', code: 'wrong_region', message: 'x', redirect });
+      }
+      expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-stale' });
+      client.disconnect();
     });
   });
 
@@ -2170,13 +2182,56 @@ describe('KrakiWSClient', () => {
     it('applies device_renamed from the head', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       useStore.getState().setDevices([{ id: 'dev-t', name: 'corelli-mbp', role: 'tentacle', online: true }]);
-      const deliver = (msg: object) => (client as unknown as { handlePulseDelivered(p: string): void })
-        .handlePulseDelivered(JSON.stringify({ from: '@head', msg }));
+      const deliver = (msg: object) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void })
+        .handlePulseDelivered(JSON.stringify({ from: '@head', msg }), 'head');
       deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'Work laptop', defaultName: 'corelli-mbp' });
       expect(useStore.getState().devices.get('dev-t')).toMatchObject({ name: 'Work laptop', defaultName: 'corelli-mbp' });
       deliver({ type: 'device_renamed', deviceId: 'dev-t', name: 'corelli-mbp' });
       expect(useStore.getState().devices.get('dev-t')?.name).toBe('corelli-mbp');
       expect(useStore.getState().devices.get('dev-t')?.defaultName).toBeUndefined();
+    });
+
+    describe('Head control wrapper', () => {
+      async function authed() {
+        localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-web-123' }));
+        const client = new KrakiWSClient('wss://relay.kraki.chat');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [] });
+        const deliver = (msg: object, route: 'head' | 'link' = 'head') => (client as unknown as { handlePulseDelivered(p: string, r: string): void })
+          .handlePulseDelivered(JSON.stringify({ from: '@head', msg }), route);
+        return { client, deliver };
+      }
+
+      it.each([
+        ['auth_error wrong_region', { type: 'auth_error', code: 'wrong_region', message: 'x', redirect: 'wss://evil.example', deviceId: 'dev-web-123' }],
+        ['auth_error invalid_signature', { type: 'auth_error', code: 'invalid_signature', message: 'x' }],
+        ['account_deleted', { type: 'account_deleted' }],
+        ['auth_ok', { type: 'auth_ok', deviceId: 'dev-attacker', devices: [] }],
+      ])('acts only on the Head control types: %s is dropped', async (_name, msg) => {
+        const { deliver } = await authed();
+        deliver(msg);
+        await new Promise((r) => setTimeout(r, 10));
+        expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toEqual({ relay: 'wss://relay.kraki.chat', deviceId: 'dev-web-123' });
+        expect(useStore.getState().deviceId).toBe('dev-web-123');
+        expect(useStore.getState().status).not.toBe('awaiting_login');
+      });
+
+      it('does not feed a wrapped relay envelope to the Pulse endpoint', async () => {
+        const { client, deliver } = await authed();
+        const onFrame = vi.spyOn((client as unknown as { pulse: { onFrame(f: string): void } }).pulse, 'onFrame');
+        deliver({ type: 'unicast', to: 'dev-web-123', pulse: 'AAAA' });
+        expect(onFrame).not.toHaveBeenCalled();
+      });
+
+      it('takes Head control only from the Head route', async () => {
+        const { deliver } = await authed();
+        const device = { id: 'dev-new', name: 'New', role: 'tentacle', online: true };
+        deliver({ type: 'device_joined', device }, 'link');
+        expect(useStore.getState().devices.has('dev-new')).toBe(false);
+        deliver({ type: 'device_joined', device }, 'head');
+        expect(useStore.getState().devices.has('dev-new')).toBe(true);
+      });
     });
 
     describe('fragment sender binding', () => {

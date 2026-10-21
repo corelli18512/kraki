@@ -1,6 +1,6 @@
 import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
-import type { AuthOkMessage } from '@kraki/protocol';
+import { isAcceptableRegionRedirect, type AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
 import { createLogger, setDebugLogging } from './logger';
 import { getStore } from './store-adapter';
@@ -164,11 +164,19 @@ export function processAuthError(
     disconnect: () => void;
     connect: () => void;
     redirectToRelay: (url: string) => void;
+    /** The relay that sent this error. */
+    currentRelay: string;
   },
 ): void {
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
-  if (authError.code === 'wrong_region' && authError.redirect) {
+  // The redirect is saved and then signed into with this device's key, so it
+  // is followed only to a trusted relay (same rule as the Tentacle). An
+  // untrusted one is handled like any other non-fatal auth error.
+  if (authError.code === 'wrong_region' && authError.redirect
+    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect)) {
+    logger.warn('Ignoring region redirect to an untrusted relay', authError.redirect);
+  } else if (authError.code === 'wrong_region' && authError.redirect) {
     // Save new relay URL so the page reload connects to the correct region
     const deviceId = authError.deviceId ?? storedDeviceId;
     if (deviceId) {

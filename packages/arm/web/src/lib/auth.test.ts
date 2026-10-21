@@ -37,6 +37,7 @@ function deps() {
     disconnect: vi.fn(),
     connect: vi.fn(),
     redirectToRelay: vi.fn(),
+    currentRelay: 'wss://relay.kraki.chat',
   };
 }
 
@@ -102,6 +103,18 @@ describe('processAuthError: credential wipe policy', () => {
     const d = deps();
     processAuthError({ code: 'wrong_region', redirect: 'wss://relay.kraki.chat', deviceId: 'dev_x' }, 'dev_x', d);
     expect(window.location.reload).toHaveBeenCalled();
+  });
+
+  it('ignores a wrong_region redirect to an untrusted relay and keeps credentials', () => {
+    const stored = JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'dev_x' });
+    localStorageMock._seed('kraki_device', stored);
+    vi.mocked(window.location.reload).mockClear();
+    const d = deps();
+    processAuthError({ code: 'wrong_region', redirect: 'wss://evil.example', deviceId: 'dev_x' }, 'dev_x', d);
+    expect(window.location.reload).not.toHaveBeenCalled();
+    expect(localStorageMock.getItem('kraki_device')).toBe(stored);
+    expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
+    expect(d.connect).toHaveBeenCalled();
   });
 });
 

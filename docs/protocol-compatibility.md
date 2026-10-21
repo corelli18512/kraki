@@ -40,6 +40,14 @@ forwards and drops one that already has `from` or `src`; its own control is
   parts; fragment sets are kept per (sender, id). A reassembled payload with its
   own `from` or `src` is dropped (the Head never fragments its control).
   Tentacle, web/Windows and iOS/Mac since 2026-10.
+- `{from:'@head', msg}` is acted on only when it arrives whole through the Head
+  (never over the local link) and `msg.type` is in `HEAD_CONTROL_TYPES`;
+  anything else in it (auth frames, relay envelopes, consumer messages) is
+  dropped. Tentacle and iOS/Mac already did; web/Windows since 2026-10.
+- A `wrong_region` redirect is followed only to a trusted relay
+  (`isAcceptableRegionRedirect`: from an official relay only to another
+  `wss://*.kraki.chat`). Tentacle and web/Windows share that rule; iOS/Mac
+  follows official relays only.
 
 ## How to remove a legacy path
 
