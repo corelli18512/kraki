@@ -52,14 +52,6 @@ MemoryMax=128M
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl daemon-reload
-systemctl enable kraki-diag
-systemctl restart kraki-diag
-for attempt in $(seq 1 20); do
-  if curl -fsS http://127.0.0.1:4011/health > "$BACKUP/health.json"; then break; fi
-  sleep 1
-done
-grep -q "$REV" "$BACKUP/health.json"
 python3 - "$CONFIG" "$PROXY" <<'PY'
 import pathlib,sys
 path=pathlib.Path(sys.argv[1]); kind=sys.argv[2]; text=path.read_text()
@@ -71,6 +63,7 @@ if '/api/diag/v1/' not in text:
         proxy_pass http://127.0.0.1:4011;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
         client_max_body_size 64k;
         proxy_read_timeout 20s;
         proxy_send_timeout 20s;
@@ -85,7 +78,12 @@ if '/api/diag/v1/' not in text:
         replacement='relay.kraki.chat {\n\t@diagnostics path /api/diag/v1/*\n\treverse_proxy @diagnostics 127.0.0.1:4011\n\treverse_proxy localhost:4000'
         assert text.count(needle)==1, 'Unrecognized Caddy relay block; no edit'
         text=text.replace(needle,replacement)
-    path.write_text(text)
+elif kind=='nginx' and 'location ^~ /api/diag/v1/ {' in text and 'X-Forwarded-For' not in text.split('location ^~ /api/diag/v1/ {',1)[1].split('}',1)[0]:
+    # Blocks from before the collector rate limited by client address.
+    needle='    location ^~ /api/diag/v1/ {\n        proxy_pass http://127.0.0.1:4011;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n'
+    assert text.count(needle)==1, 'Unrecognized nginx diagnostics block; no edit'
+    text=text.replace(needle,needle+'        proxy_set_header X-Forwarded-For $remote_addr;\n')
+path.write_text(text)
 PY
 if [ "$PROXY" = nginx ]; then
   if ! nginx -t; then cp "$BACKUP/proxy.conf" "$CONFIG"; exit 1; fi
@@ -94,6 +92,16 @@ else
   if ! caddy validate --config "$CONFIG" --adapter caddyfile; then cp "$BACKUP/proxy.conf" "$CONFIG"; exit 1; fi
   systemctl reload caddy
 fi
+# Restart the collector only after the proxy sets X-Forwarded-For: the new collector trusts it
+# for its per-client limit, so it must never run behind a block that passes a client's header through.
+systemctl daemon-reload
+systemctl enable kraki-diag
+systemctl restart kraki-diag
+for attempt in $(seq 1 20); do
+  if curl -fsS http://127.0.0.1:4011/health > "$BACKUP/health.json"; then break; fi
+  sleep 1
+done
+grep -q "$REV" "$BACKUP/health.json"
 test "$(systemctl show kraki-relay -p MainPID --value)" = "$BEFORE_PID"
 systemctl is-active kraki-diag kraki-relay
 curl -fsS http://127.0.0.1:4011/health

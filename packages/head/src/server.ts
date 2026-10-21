@@ -368,7 +368,7 @@ export class HeadServer {
       }
       if (msg.type === 'auth') {
         if (!isValidAuth(msg)) {
-          this.sendError(ws, 'Invalid auth message: device.name and device.role required');
+          this.sendError(ws, 'Invalid auth message: device.name and device.role required, device fields within length limits');
           return;
         }
         await handleAuth(this, ws, state, msg as unknown as AuthMessage);
