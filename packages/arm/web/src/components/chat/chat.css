@@ -818,6 +818,14 @@
 .ktable-grid td.is-current { box-shadow: inset 0 0 0 2px rgba(250, 204, 21, 0.48); }
 .kmd-check { margin-right: 4px; }
 
+@media (max-width: 767px) {
+  .ktable-window-bar { flex-wrap: wrap; }
+  .ktable-window-bar .ktable-search { width: 100%; min-width: 0; flex: 1 1 100%; }
+  .ktable-window-bar .ktable-meta,
+  .ktable-window-bar .ktable-btn,
+  .ktable-window-bar .ktable-close { flex-shrink: 0; white-space: nowrap; }
+}
+
 /* ── Round controls (↑ / ↓) ─────────────────────────────────────── */
 
 .kjump {

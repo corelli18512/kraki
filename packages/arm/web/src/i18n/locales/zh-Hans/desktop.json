@@ -12,6 +12,7 @@
     "continue": "继续",
     "skip": "跳过——不在这台电脑上运行 Agent，仅控制其他电脑",
     "signInFailed": "登录未完成。请重试。",
+    "networkFailed": "无法连接 Kraki。请检查网络连接后重试。",
     "contacting": "正在联系 GitHub…",
     "configuring": "正在设置…",
     "stepTwo": "第 2 步，共 2 步",
@@ -45,7 +46,11 @@
     "cliDetail": "Kraki for Windows 使用你现有的安装。你仍需在终端中更新它。",
     "changeLater": "你可以稍后在“设置 → 这台电脑”中更改。",
     "signedInAs": "已以 {{username}} 的身份登录。正在设置…",
-    "existingCLI": "命令行版本的 Kraki{{version}} 已在后台运行你的 Agent。你只需要其中一个版本。"
+    "existingCLI": "命令行版本的 Kraki{{version}} 已在后台运行你的 Agent。你只需要其中一个版本。",
+    "signInExpired": "GitHub 验证码已过期，请重试。",
+    "signInCancelled": "已取消 GitHub 登录。",
+    "signInUnverified": "无法验证 GitHub 登录，请重试。",
+    "signInUnavailable": "暂不支持在浏览器中登录。"
   },
   "thisPC": {
     "agentsTitle": "这台电脑上的编程 Agent",
@@ -88,7 +93,10 @@
     "path": "路径",
     "explorer": "在文件资源管理器中显示",
     "logsWindow": "打开日志窗口",
-    "connecting": "正在连接 · {{state}}"
+    "connecting": "正在连接 · {{state}}",
+    "relayDisconnected": "已断开",
+    "relayConnecting": "正在连接",
+    "relayAuthenticating": "正在验证身份"
   },
   "owner": {
     "title": "使用哪个 Kraki 运行你的 Agent"
@@ -122,6 +130,10 @@
     "done": "完成",
     "models_other": "已就绪 · {{count}} 个模型",
     "login": "未登录。{{hint}}",
+    "loginClaude": "在终端中运行 `claude` 并登录。",
+    "loginCodex": "在终端中运行 `codex login`。",
+    "loginCopilot": "在终端中运行 `copilot` 并使用 /login。",
+    "loginPi": "在终端中运行 `pi` 并使用 /login，或添加 API 密钥。",
     "readyCount_other": "{{count}} 个 Agent 已就绪。",
     "installed": "已安装{{version}} — {{detail}}"
   },

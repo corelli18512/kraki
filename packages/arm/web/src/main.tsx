@@ -3,6 +3,7 @@
 import './i18n';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
+import { renderDesktopAuthCallback } from './lib/desktop-auth-callback';
 
 // Pairing QR opened in a browser: on iPhone offer the app first (don't spend
 // the single-use token), and confirm any non-Kraki relay before connecting.
@@ -10,7 +11,9 @@ import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link
 // token from the URL as soon as it is constructed. Keep this file's static
 // imports free of the app (boot.tsx is loaded dynamically).
 const rootElement = document.getElementById('root')!;
-const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints);
-if (!renderPairingInterstitial(pairingDecision, rootElement)) {
-  void import('./boot').then(({ boot }) => boot(rootElement));
+if (!renderDesktopAuthCallback(rootElement)) {
+  const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints);
+  if (!renderPairingInterstitial(pairingDecision, rootElement)) {
+    void import('./boot').then(({ boot }) => boot(rootElement));
+  }
 }

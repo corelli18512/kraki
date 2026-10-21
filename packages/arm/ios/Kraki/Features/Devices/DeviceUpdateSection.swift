@@ -95,7 +95,7 @@ struct DeviceUpdateSection: View {
         case .busy:
             StatusRow(symbol: "exclamationmark.circle.fill", tint: .orange, title: busyTitle,
                       detail: String(localized: "Updating restarts Kraki and stops them."))
-            ActionRow(title: String(localized: "Choose…")) { askBusy = true }
+            ActionRow(title: String(localized: "Choose…"), identifier: "device.update.choose") { askBusy = true }
         case .waiting_idle:
             StatusRow(spinner: true, title: String(localized: "Waiting for sessions to finish"),
                       detail: String(localized: "\(target) installs as soon as nothing is running on \(device.name)."))
@@ -107,8 +107,8 @@ struct DeviceUpdateSection: View {
                           title: String(localized: "The update didn’t finish"),
                           detail: p.from.map { String(localized: "\(device.name) is back online but still runs Kraki \($0).") }
                               ?? String(localized: "\(device.name) is back online, but \(target) wasn’t installed."))
-                ActionRow(title: String(localized: "Try Again")) { appState.commandSender?.updateDevice(device.id) }
-                ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+                ActionRow(title: String(localized: "Try Again"), identifier: "device.update.retry") { appState.commandSender?.updateDevice(device.id) }
+                ActionRow(title: String(localized: "Dismiss"), tint: .secondary, identifier: "device.update.dismiss") { store.setUpdateProgress(device.id, nil) }
             } else {
                 StatusRow(symbol: "exclamationmark.triangle.fill", tint: .orange,
                           title: String(localized: "\(device.name) isn’t back online yet"),
@@ -124,14 +124,14 @@ struct DeviceUpdateSection: View {
             StatusRow(symbol: "arrow.uturn.backward.circle.fill", tint: .orange,
                       title: String(localized: "Update didn’t work"),
                       detail: String(localized: "\(target) didn’t start, so \(device.name) went back to \(version(p.from)). Nothing changed."))
-            ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+            ActionRow(title: String(localized: "Dismiss"), tint: .secondary, identifier: "device.update.dismiss") { store.setUpdateProgress(device.id, nil) }
         case .failed:
             StatusRow(symbol: "xmark.circle.fill", tint: .red, title: String(localized: "Couldn’t update"),
                       detail: p.error ?? String(localized: "Something went wrong. Nothing was changed."))
             if store.availableUpdate(for: device.id)?.remote == true, device.online {
-                ActionRow(title: String(localized: "Try Again")) { appState.commandSender?.updateDevice(device.id) }
+                ActionRow(title: String(localized: "Try Again"), identifier: "device.update.retry") { appState.commandSender?.updateDevice(device.id) }
             }
-            ActionRow(title: String(localized: "Dismiss"), tint: .secondary) { store.setUpdateProgress(device.id, nil) }
+            ActionRow(title: String(localized: "Dismiss"), tint: .secondary, identifier: "device.update.dismiss") { store.setUpdateProgress(device.id, nil) }
         }
     }
 }
@@ -181,7 +181,8 @@ private struct StatusRow: View {
 private struct ActionRow: View {
     let title: String
     var tint: Color = .krakiPrimary
-    var identifier: String?
+    /// Stable, language-independent (never derived from the title).
+    let identifier: String
     let action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
 
@@ -192,7 +193,7 @@ private struct ActionRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
-        .accessibilityIdentifier(identifier ?? "device.update.\(title)")
+        .accessibilityIdentifier(identifier)
     }
 }
 #endif

@@ -84,11 +84,17 @@ const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 function loadBounds() {
   try {
     const b = JSON.parse(readFileSync(stateFile(), 'utf8'));
-    const visible = screen.getAllDisplays().some((d) => {
+    const display = screen.getAllDisplays().find((d) => {
       const a = d.workArea;
       return b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
     });
-    return visible ? b : null;
+    if (!display) return null;
+    const a = display.workArea;
+    const width = Math.min(b.width, a.width);
+    const height = Math.min(b.height, a.height);
+    return { ...b, width, height,
+      x: Math.max(a.x, Math.min(b.x, a.x + a.width - width)),
+      y: Math.max(a.y, Math.min(b.y, a.y + a.height - height)) };
   } catch { return null; }
 }
 function saveBounds() {
@@ -201,8 +207,14 @@ function createWindow() {
       for (const s of p.dictionarySuggestions.slice(0, 4)) items.push({ label: s, click: () => wc.replaceMisspelling(s) });
       if (items.length) items.push({ type: 'separator' });
     }
-    if (p.isEditable) items.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' });
-    else if (p.selectionText) items.push({ role: 'copy' });
+    if (p.isEditable) items.push(
+      { role: 'cut', label: i18n.t('menu.cut') },
+      { role: 'copy', label: i18n.t('menu.copy') },
+      { role: 'paste', label: i18n.t('menu.paste') },
+      { type: 'separator' },
+      { role: 'selectAll', label: i18n.t('menu.selectAll') },
+    );
+    else if (p.selectionText) items.push({ role: 'copy', label: i18n.t('menu.copy') });
     if (p.linkURL && /^https?:/i.test(p.linkURL)) items.push({ label: i18n.t('menu.openLink'), click: () => shell.openExternal(p.linkURL) });
     if (items.length) Menu.buildFromTemplate(items).popup();
   });
@@ -333,7 +345,7 @@ function stillOnlineHintOnce() {
 ipcMain.on('kraki:language', (event, code) => {
   if (!win || event.sender !== win.webContents) return;
   pref('language', String(code));
-  if (i18n.setLanguage(String(code))) { shownMenu = null; updateTray(); }
+  if (i18n.setLanguage(String(code))) { shownMenu = null; updateTray(); applyBadge(); }
 });
 
 ipcMain.on('kraki:needs-you', (_e, list) => {
@@ -367,7 +379,7 @@ function applyBadge() {
       badge = nativeImage.createFromPath(path.join(ASSETS, 'tray', `badge-${unread > 9 ? '9plus' : unread}.ico`));
       if (badge.isEmpty()) badge = nativeImage.createFromPath(path.join(ASSETS, 'badge.png'));
     }
-    win.setOverlayIcon(badge && !badge.isEmpty() ? badge : null, unread > 0 ? `${unread} unread` : '');
+    win.setOverlayIcon(badge && !badge.isEmpty() ? badge : null, unread > 0 ? i18n.t('tray.unread', { count: unread }) : '');
   }
 }
 ipcMain.on('kraki:badge', (_e, count) => {
@@ -409,6 +421,10 @@ function openSignInWindow(url) {
       event.preventDefault();
       finish(`kraki://auth/callback${parsed.search}`);
     };
+    child.on('page-title-updated', (event) => {
+      event.preventDefault();
+      child.setTitle(i18n.t('window.signIn'));
+    });
     child.webContents.on('will-redirect', intercept);
     child.webContents.on('will-navigate', intercept);
     child.webContents.setWindowOpenHandler(({ url: u }) => { void shell.openExternal(u); return { action: 'deny' }; });

@@ -51,7 +51,11 @@ import VoiceInputCore
     var lastAnswerTo = ""
     @ObservationIgnored private var latestEvent: ((VoiceInputEvent) -> Void)?
     private let automaticCorrections: Bool
-    init(automaticCorrections: Bool = true) { self.automaticCorrections = automaticCorrections }
+    private let automaticPartials: Bool
+    init(automaticCorrections: Bool = true, automaticPartials: Bool = true) {
+        self.automaticCorrections = automaticCorrections
+        self.automaticPartials = automaticPartials
+    }
     func emit(_ event: VoiceInputEvent) { latestEvent?(event) }
     func emitLevel(_ level: Float) { emit(.level(level)) }
     @ObservationIgnored lazy var voice = KrakiVoiceInputController(host: self, sessionFactory: self, audioPolicy: ScenarioAudio())
@@ -66,7 +70,7 @@ import VoiceInputCore
     }
     func makeSession(configuration: VoiceInputConfiguration, onEvent: @escaping (VoiceInputEvent) -> Void, onMetric: @escaping (VoiceInputMetric) -> Void) -> VoiceInputSessionProtocol {
         latestEvent = onEvent
-        let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 }, automaticCorrections: automaticCorrections)
+        let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 }, automaticCorrections: automaticCorrections, automaticPartials: automaticPartials)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(40))
             onEvent(.connectionAuthorized)
@@ -87,11 +91,15 @@ import VoiceInputCore
         let onStart: () -> Void
         var generation = UUID()
         let automaticCorrections: Bool
-        init(onEvent: @escaping (VoiceInputEvent) -> Void, onStart: @escaping () -> Void, automaticCorrections: Bool) {
+        let automaticPartials: Bool
+        init(onEvent: @escaping (VoiceInputEvent) -> Void, onStart: @escaping () -> Void,
+             automaticCorrections: Bool, automaticPartials: Bool) {
             self.onEvent = onEvent; self.onStart = onStart; self.automaticCorrections = automaticCorrections
+            self.automaticPartials = automaticPartials
         }
         func startCapture(context: [String: VoiceInputJSONValue], vocabulary: [String]) {
             onStart()
+            guard automaticPartials else { return }
             let id = UUID(); generation = id
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(100))

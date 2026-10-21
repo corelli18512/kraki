@@ -12,6 +12,7 @@
     "continue": "Continue",
     "skip": "Skip — don't run agents on this PC, only control other computers",
     "signInFailed": "Sign-in did not finish. Try again.",
+    "networkFailed": "Could not reach Kraki. Check your network connection, then try again.",
     "contacting": "Contacting GitHub…",
     "configuring": "Setting up…",
     "stepTwo": "Step 2 of 2",
@@ -45,7 +46,11 @@
     "cliDetail": "Kraki for Windows uses the install you already have. You keep updating it from a terminal.",
     "changeLater": "You can change this later in Settings → This PC.",
     "signedInAs": "Signed in as {{username}}. Setting up…",
-    "existingCLI": "The command-line version of Kraki{{version}} already runs your agents in the background. You only need one of them."
+    "existingCLI": "The command-line version of Kraki{{version}} already runs your agents in the background. You only need one of them.",
+    "signInExpired": "The GitHub code expired. Try again.",
+    "signInCancelled": "GitHub sign-in was cancelled.",
+    "signInUnverified": "GitHub sign-in could not be verified. Try again.",
+    "signInUnavailable": "Browser sign-in is not available yet."
   },
   "thisPC": {
     "agentsTitle": "Coding Agents on This PC",
@@ -88,7 +93,10 @@
     "path": "Path",
     "explorer": "Show in Explorer",
     "logsWindow": "Open Logs Window",
-    "connecting": "Connecting · {{state}}"
+    "connecting": "Connecting · {{state}}",
+    "relayDisconnected": "disconnected",
+    "relayConnecting": "connecting",
+    "relayAuthenticating": "authenticating"
   },
   "owner": {
     "title": "Which Kraki runs your agents"
@@ -123,6 +131,10 @@
     "models_one": "Ready · {{count}} model",
     "models_other": "Ready · {{count}} models",
     "login": "Not signed in. {{hint}}",
+    "loginClaude": "Run `claude` in a terminal and sign in.",
+    "loginCodex": "Run `codex login` in a terminal.",
+    "loginCopilot": "Run `copilot` in a terminal and use /login.",
+    "loginPi": "Run `pi` in a terminal and use /login, or add an API key.",
     "readyCount_other": "{{count}} agents ready.",
     "readyCount_one": "Ready to use.",
     "installed": "Installed{{version}} — {{detail}}"

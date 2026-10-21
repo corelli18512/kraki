@@ -89,6 +89,16 @@ enum ISO8601 {
 // `WindowSizeObserver.shared`; it republishes the size on
 // `UIWindowScene.didUpdateCoordinateSpaceNotification`.
 
+/// Display scale of the window the app is in (not `UIScreen.main`, which
+/// can differ from the active display, e.g. iPhone Duo's inner/outer screens).
+@MainActor
+func currentDisplayScale() -> CGFloat {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    if let scale = scene?.traitCollection.displayScale, scale > 0 { return scale }
+    return UITraitCollection.current.displayScale > 0 ? UITraitCollection.current.displayScale : 3
+}
+
 enum WindowSize {
     static var width: CGFloat { current().width }
     static var height: CGFloat { current().height }

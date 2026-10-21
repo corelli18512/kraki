@@ -33,7 +33,7 @@ import UIKit
         let host = UIHostingController(rootView: IOSImagePreviewGallery(selection: IOSImagePreviewSelection(items: items)))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.frame = scene.coordinateSpace.bounds
         window.windowLevel = .alert + 1
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -61,6 +61,32 @@ import UIKit
         XCTAssertGreaterThan(third.2, 0.8, "another swipe shows the blue image: \(third)")
     }
 
+    /// Opening on a later image starts on that page, centred, and a swipe
+    /// back lands exactly on the previous one (iPhone Duo: status bar on the
+    /// right edge must not shift the pages).
+    func testOpensOnTheTappedImageCentred() throws {
+        let items = [UIColor.red, .green, .blue].enumerated().map { index, color in
+            IOSImagePreviewItem(id: "img-\(index)", image: image(color), title: "image-\(index + 1).png")
+        }
+        let host = UIHostingController(rootView: IOSImagePreviewGallery(selection: IOSImagePreviewSelection(items: items, initialIndex: 2)))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        window.windowLevel = .alert + 1
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        let scroll = try XCTUnwrap(pager(host.view))
+        XCTAssertEqual(scroll.contentOffset.x, scroll.bounds.width * 2, accuracy: 1, "starts exactly on page 3")
+        XCTAssertGreaterThan(centerColor(snapshot(window, "kraki-preview-open3.png")).2, 0.8, "page 3 shows the blue image")
+        scroll.setContentOffset(CGPoint(x: scroll.bounds.width, y: 0), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let green = centerColor(snapshot(window, "kraki-preview-back2.png"))
+        XCTAssertGreaterThan(green.1, 0.6, "swiping back shows the green image: \(green)")
+        XCTAssertLessThan(green.2, 0.3)
+    }
+
     /// A message with two images, the second still downloading: the viewer
     /// opens on the first, swipes to the second (progress), and that page
     /// becomes the image as the chunks land — without reopening.
@@ -83,7 +109,7 @@ import UIKit
         let host = UIHostingController(rootView: IOSImagePreviewGallery(selection: selection))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.frame = scene.coordinateSpace.bounds
         window.windowLevel = .alert + 1
         window.rootViewController = host
         window.makeKeyAndVisible()

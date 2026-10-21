@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { setupStep } from './DesktopSetup';
 import type { BuiltInState } from '../../lib/desktop';
 
@@ -47,5 +47,20 @@ describe('CLI choice over the signed-in window', () => {
     expect(needsOwnerChoice(s({ configured: true, cliDaemon: true }), 'external')).toBe(false);
     expect(needsOwnerChoice(s({ configured: true, owned: true, running: true }), null)).toBe(false);
     expect(needsOwnerChoice(s({ configured: true }), null)).toBe(false);
+  });
+});
+
+import { signInErrorText } from './DesktopSetup';
+import { i18next } from '../../i18n';
+describe('sign-in errors use the CLI code, never its English message', () => {
+  afterEach(() => void i18next.changeLanguage('en'));
+  it('maps known codes and falls back for unknown ones', async () => {
+    expect(signInErrorText('relay_unreachable')).toBe('Could not reach Kraki. Check your network connection, then try again.');
+    expect(signInErrorText('expired')).toBe('The GitHub code expired. Try again.');
+    expect(signInErrorText('denied')).toBe('GitHub sign-in was cancelled.');
+    expect(signInErrorText('something_new')).toBe('Sign-in did not finish. Try again.');
+    expect(signInErrorText(undefined)).toBe('Sign-in did not finish. Try again.');
+    await i18next.changeLanguage('zh-Hans');
+    expect(signInErrorText('relay_unreachable')).toBe('无法连接 Kraki。请检查网络连接后重试。');
   });
 });
