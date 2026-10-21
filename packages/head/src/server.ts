@@ -12,7 +12,9 @@ import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
 import { handleControlMessage, firePushPreview } from './server/account-control.js';
-import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken } from './server/auth-flow.js';
+import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken, mirrorAuthResult, sendAuthError } from './server/auth-flow.js';
+import { RemoteAuthBackend, type EdgeRevocation } from './remote-auth-backend.js';
+import type { AuthErrorCode } from '@kraki/protocol';
 import { broadcastDeviceJoined, broadcastDeviceLeft, broadcastDevicePending } from './server/presence.js';
 import { handleRequestVoiceLease } from './server/voice-lease.js';
 import { type ClientState, type HeadServerOptions, DEFAULT_MAX_PAYLOAD, DEFAULT_AUTH_TIMEOUT_MS, DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS, MAX_MULTICAST_TARGETS, MAX_WS_BUFFERED_BYTES, LIVENESS_SWEEP_INTERVAL_MS, PONG_GRACE_MS, isValidMessage, isValidAuth } from './server/shared.js';
@@ -60,6 +62,14 @@ export class HeadServer {
       pushManager: options.pushManager,
       region: options.region,
     });
+    if (this.authBackend instanceof RemoteAuthBackend) {
+      // Edge-local challenge auth (EdgeAuthCache): act on the account
+      // service's background answers.
+      const remote = this.authBackend;
+      remote.revalidationContext = () => this.renameClock;
+      remote.onRefreshed = (result, clock) => mirrorAuthResult(this, result, typeof clock === 'number' ? clock : this.renameClock);
+      remote.onRevoked = (revocation) => this.revokeDevice(revocation);
+    }
     this.wss = new WebSocketServer({
       noServer: true,
       maxPayload: options.maxPayload ?? DEFAULT_MAX_PAYLOAD,
@@ -629,6 +639,53 @@ export class HeadServer {
       targets.push(device.id);
     }
     return targets;
+  }
+
+  /** The account service no longer accepts a device here (removed elsewhere,
+   *  account deleted, moved region, new key or account). Tell it the way a
+   *  fresh sign-in would have, and close; drop this edge's copy unless the
+   *  device itself is still valid (moved region: its mirror serves the
+   *  redirect; new key: the next sign-in refreshes it remotely). */
+  revokeDevice(revocation: EdgeRevocation): void {
+    const { deviceId } = revocation;
+    // A fresh challenge for a removed device answers `unknown_device`, which
+    // every client handles (a Tentacle re-signs in with its token).
+    const code = revocation.code === 'device_not_found' ? 'unknown_device' : revocation.code;
+    const keepsDevice = code === 'wrong_region' || code === 'key_changed' || revocation.supersededOnly === true;
+    getLogger().warn('Revoking locally trusted device', { deviceId, code });
+    if (!keepsDevice) {
+      try { this.storage.deleteDevice(deviceId); } catch { /* storage may be closed */ }
+      try { this.storage.deletePushTokensForDevice(deviceId); } catch { /* same */ }
+    }
+    const ws = this.connections.get(deviceId);
+    if (!ws) {
+      if (!keepsDevice) this.pulseHub.forgetDevice(deviceId);
+      return;
+    }
+    // Key or account changed: no error, just a reconnect, which signs in at
+    // the account service (that one rejects an outdated key itself).
+    if (code !== 'key_changed') sendAuthError(this, ws, code as AuthErrorCode, revocation.message, revocation.redirect);
+    if (!keepsDevice) {
+      // Retire the connection and its Pulse state NOW, not when the close
+      // completes: the same device id may sign in again (even under another
+      // account) before then and must not inherit the revoked state.
+      const userId = this.userByDevice.get(deviceId);
+      // Inert from now on: frames still in flight on this socket (a late
+      // Pulse ack) must not touch the state a replacement connection gets.
+      const state = this.clients.get(ws);
+      if (state) state.evicted = true;
+      this.connections.delete(deviceId);
+      this.userByDevice.delete(deviceId);
+      this.clients.delete(ws);
+      this.pulseHub.forgetDevice(deviceId);
+      if (userId) broadcastDeviceLeft(this, userId, deviceId);
+    }
+    // Graceful close so the auth_error is flushed first. Force it if the
+    // peer never completes the close.
+    try { ws.close(code === 'key_changed' ? 1012 : 1008, code === 'key_changed' ? 'reauthenticate' : 'revoked'); } catch { /* already closing */ }
+    const force = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } }, 2_000);
+    force.unref?.();
+    ws.once('close', () => clearTimeout(force));
   }
 
   private removeConnection(deviceId: string): void {

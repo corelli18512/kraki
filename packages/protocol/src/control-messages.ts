@@ -43,6 +43,18 @@ export interface AuthOkMessage {
    * pace large uploads by acknowledgements. Absent on older relays.
    */
   pulseAckBytes?: number;
+  /**
+   * Optional Head capabilities. `app_visibility`: the Head accepts
+   * `{ type: 'app_visibility', visible }` and notifies a hidden app through
+   * push even while its socket is still open. Absent on older relays.
+   */
+  features?: readonly string[];
+}
+
+/** App → Head: the app left (or returned to) the screen but keeps its socket. */
+export interface AppVisibilityMessage {
+  type: 'app_visibility';
+  visible: boolean;
 }
 
 export type AuthErrorCode =

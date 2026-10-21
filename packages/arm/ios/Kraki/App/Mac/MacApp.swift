@@ -69,6 +69,12 @@ final class MacLaunchCoordinator {
     ) async {
         guard !hasStarted else { return }
         hasStarted = true
+        // Until launch has picked its credential (stored device or CLI token),
+        // window activation must not open a socket of its own: it used to sign
+        // in with the stored device and get replaced ~300 ms later by the CLI
+        // token connection (diag: 4 of 6 cold starts connected twice).
+        appState.launchResolvingCredentials = true
+        defer { appState.launchResolvingCredentials = false }
         // The local Kraki belongs to the deleted account too: stop it (it
         // has already forgotten its sign-in, or AppState just removed it).
         appState.onAccountDeleted = { [weak tentacleCLI] in

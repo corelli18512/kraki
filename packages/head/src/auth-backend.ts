@@ -29,6 +29,9 @@ export interface AuthResult {
   devices: DeviceSummary[];
   githubClientId?: string;
   vapidPublicKey?: string;
+  /** Accepted by the edge from its own copy of the account service's last
+   *  answer (EdgeAuthCache), not by a round trip. */
+  local?: boolean;
 }
 
 export interface AuthChallengeResult {

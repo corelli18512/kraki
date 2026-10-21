@@ -25,11 +25,15 @@ export interface ClientState {
   /** At most one daily activity write per authenticated app socket/day. */
   foregroundDay?: string;
   pendingNonce?: string;
+  /** When the pending challenge was issued (ms epoch). */
+  pendingNonceAt?: number;
   /** An `auth` / `auth_response` is awaiting its backend. */
   authInFlight?: boolean;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+  /** Auth step timings (ms epoch / durations) for the authenticated log line. */
+  authTiming?: { startedAt: number; challengeMs?: number; challengeSentAt?: number; signMs?: number; verifyMs?: number; tokenMs?: number };
   /** Replaced by a newer socket of the same device: closing, inert. */
   evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
@@ -50,7 +54,14 @@ export interface ClientState {
   bufferedAtPing?: number;
   /** Declared at auth: this client's Pulse accepts progress heartbeats. */
   pulseProgressAck?: boolean;
+  /** An app reported it left the screen but kept its socket for a short
+   *  grace period (`app_visibility`). Still online for delivery, but
+   *  notifications go out as if it were offline. */
+  hidden?: boolean;
 }
+
+/** Capabilities advertised in `auth_ok.features`. */
+export const HEAD_FEATURES = ['app_visibility'] as const;
 
 export interface HeadServerOptions {
   authProviders?: Map<string, AuthProvider>;
@@ -101,6 +112,8 @@ export const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 export const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 export const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
+/** A challenge must be answered within this, whoever issued the nonce. */
+export const CHALLENGE_TTL_MS = 5 * 60_000;
 export const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 export const MAX_MULTICAST_TARGETS = 64;
 /** Send-buffer ceiling per socket before a stalled client is disconnected. */

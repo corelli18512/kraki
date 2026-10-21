@@ -103,6 +103,9 @@ export class AccountApi {
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
           break;
+        case '/api/devices/status':
+          if (req.method === 'POST') return await this.handleDeviceStatus(req, res, caller!);
+          break;
         case '/api/devices/remove':
           if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
           break;
@@ -238,6 +241,29 @@ export class AccountApi {
     } else {
       this.json(res, 200, result);
     }
+    return true;
+  }
+
+  /** Service-key route: an edge asks which of the devices it accepts locally
+   *  may still sign in there (EdgeAuthCache revocation poll). A region-scoped
+   *  edge is always checked against its own region. */
+  private async handleDeviceStatus(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    // `devices` (id + the account and key the edge trusts) is what current
+    // edges send; bare `deviceIds` only checks existence and region.
+    const rawDevices = Array.isArray(body?.devices)
+      ? body.devices
+      : Array.isArray(body?.deviceIds) ? (body.deviceIds as unknown[]).map((id) => ({ id })) : undefined;
+    const valid = rawDevices !== undefined && rawDevices.length <= 1000 && rawDevices.every((d) =>
+      typeof d === 'object' && d !== null && typeof (d as { id?: unknown }).id === 'string'
+      && ['userId', 'keyFingerprint'].every((k) => (d as Record<string, unknown>)[k] === undefined || typeof (d as Record<string, unknown>)[k] === 'string'));
+    if (!valid) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'devices ({id, userId?, keyFingerprint?}[] up to 1000) required' });
+      return true;
+    }
+    const region = caller.admin ? (typeof body?.headRegion === 'string' ? body.headRegion : undefined) : caller.region;
+    const { statuses, redirects } = this.backend.deviceStatuses(rawDevices as Array<{ id: string; userId?: string; keyFingerprint?: string }>, region);
+    this.json(res, 200, { ok: true, statuses, redirects });
     return true;
   }
 

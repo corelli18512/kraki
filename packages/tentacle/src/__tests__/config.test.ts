@@ -26,6 +26,9 @@ let config: typeof import('../config.js');
 
 beforeEach(async () => {
   tempHome = mkdtempSync(join(tmpdir(), 'kraki-config-test-'));
+  // An inherited KRAKI_HOME (isolated test runs set one) would win over the
+  // mocked homedir.
+  delete process.env.KRAKI_HOME;
   // Re-import the module so it picks up the new tempHome
   vi.resetModules();
   config = await import('../config.js');

@@ -91,7 +91,7 @@ export const consumerMessageSchema = z.discriminatedUnion('type', [
   message('mark_read', z.looseObject({ seq: num })),
   message('mark_unread', empty),
   message('request_session_replay', z.looseObject({ sessionId: str, afterSeq: seqBound, limit: optNum })),
-  message('request_session_messages', z.looseObject({ sessionId: str, beforeSeq: seqBound.optional() })),
+  message('request_session_messages', z.looseObject({ sessionId: str, beforeSeq: seqBound.optional(), afterSeq: seqBound.optional() })),
   message('request_session_messages_range', z.looseObject({ sessionId: str, fromSeq: seqBound, toSeq: seqBound })),
   message('request_turn_trace', z.looseObject({ sessionId: str, bubbleSeq: seqBound })),
   message('request_card', z.looseObject({ sessionId: str })),

@@ -49,6 +49,7 @@ import type { PushProvider as IPushProvider } from './push/index.js';
 import type { AuthBackend } from './auth-backend.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
 import { RemoteAuthBackend } from './remote-auth-backend.js';
+import { EdgeAuthCache } from './edge-auth-cache.js';
 import { AccountApi } from './account-api.js';
 import { resolveListenHost } from './listen-host.js';
 
@@ -489,6 +490,13 @@ if (IS_CONNECTED_MODE) {
 
   // Connected mode still needs local storage for devices, pending, push tokens
   if (!storage) storage = new Storage(DB_PATH);
+
+  // Known devices sign in against this edge's copy of the account service's
+  // last answer (EdgeAuthCache); only active once the account service answers
+  // device status polls. KRAKI_EDGE_LOCAL_AUTH=0 keeps every auth remote.
+  if (process.env.KRAKI_EDGE_LOCAL_AUTH !== '0') {
+    void remoteBackend.enableLocalChallenge(new EdgeAuthCache(storage.rawDb), REGION || undefined);
+  }
 } else {
   // Standalone mode: local auth + expose account API
   const authProviders = await createAuthProviders();

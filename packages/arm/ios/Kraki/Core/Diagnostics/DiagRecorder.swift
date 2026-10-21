@@ -12,6 +12,7 @@ enum DiagEventName: String, Codable {
     case busy = "ui.busy", marker = "user.marker", voice = "voice.action", list = "list.snapshot", navigation = "session.view"
     case ready = "ready.summary", outage = "outage.summary", open = "open.summary"
     case send = "send.summary", voiceSummary = "voice.summary", reply = "reply.summary"
+    case history = "history.batch"
 }
 enum DiagField: String {
     case clientId, questionId, answerTo, ix, origin, phase, state, source, stack
@@ -23,6 +24,7 @@ enum DiagField: String {
     case shown, shownMs, falseAlarm, manualRetries, autoResends, offline, background, confirmMs, correctionMs, cause
     case stage, confirmed, warm, startMs, recordMs, finalizeMs, correctionOn
     case firstActivityMs, firstTextMs, deltas, maxGapMs, stalls
+    case kept, reconnecting
 }
 enum DiagValue: Encodable {
     case id(String), tag(String), number(Double), bool(Bool)

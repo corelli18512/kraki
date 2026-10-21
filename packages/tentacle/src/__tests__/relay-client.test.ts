@@ -2864,6 +2864,64 @@ describe('RelayClient handleSessionMessagesRange', () => {
     expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 6, 7]);
   });
 
+  // ── request_session_messages with afterSeq (reconnect delta) ──
+
+  function sendHeadRequest(ws: { sent: string[]; emit: (e: string, b: Buffer) => void }, payload: Record<string, unknown>) {
+    ws.sent.length = 0;
+    const inner = JSON.stringify({
+      type: 'request_session_messages', deviceId: 'consumer-dev', seq: 1,
+      timestamp: new Date().toISOString(), payload,
+    });
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'unicast', to: 'tentacle-dev', blob: inner, keys: {} })));
+  }
+  function lastMessagesBatch(sent: string[]) {
+    return decodePulseSends(sent).find((m) => m.type === 'session_messages_batch') as
+      { payload: { messages: Array<{ seq: number }>; firstSeq: number; lastSeq: number; containsHead: boolean } } | undefined;
+  }
+  function sessionLog(sm: Record<string, unknown>, head: number, turnStart: number) {
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: head });
+    (sm as Record<string, unknown>).findTurnAlignedStart = vi.fn(() => turnStart);
+    smMock.getMessagesAfterSeq.mockImplementation((_sid: string, after: number) =>
+      Array.from({ length: Math.max(0, head - after) }, (_, i) => entry(after + 1 + i)));
+  }
+
+  it('a head request with afterSeq returns only the missing messages', () => {
+    const { sm, ws } = connectWithConsumer();
+    sessionLog(sm, 120, 20);
+    sendHeadRequest(ws, { sessionId: 's1', afterSeq: 118 });
+    const batch = lastMessagesBatch(ws.sent)!;
+    expect(batch.payload.messages.map((m) => m.seq)).toEqual([119, 120]);
+    expect(batch.payload.firstSeq).toBe(119);
+    expect(batch.payload.containsHead).toBe(true);
+  });
+
+  it('a requester already at head gets an empty batch that still reports the head', () => {
+    const { sm, ws } = connectWithConsumer();
+    sessionLog(sm, 120, 20);
+    sendHeadRequest(ws, { sessionId: 's1', afterSeq: 120 });
+    const batch = lastMessagesBatch(ws.sent)!;
+    expect(batch.payload.messages).toEqual([]);
+    expect(batch.payload.lastSeq).toBe(120);
+    expect(batch.payload.containsHead).toBe(true);
+  });
+
+  it('a requester further behind than the latest turn still gets the whole turn', () => {
+    const { sm, ws } = connectWithConsumer();
+    sessionLog(sm, 120, 100);
+    sendHeadRequest(ws, { sessionId: 's1', afterSeq: 40 });
+    const batch = lastMessagesBatch(ws.sent)!;
+    expect(batch.payload.firstSeq).toBe(100);
+    expect(batch.payload.messages).toHaveLength(21);
+  });
+
+  it('without afterSeq (older apps) the head batch is unchanged', () => {
+    const { sm, ws } = connectWithConsumer();
+    sessionLog(sm, 120, 20);
+    sendHeadRequest(ws, { sessionId: 's1' });
+    expect(lastMessagesBatch(ws.sent)!.payload.firstSeq).toBe(20);
+  });
+
   // ── request_turn_trace → turn_trace_batch ──────────────
 
   it('replies to request_turn_trace with the turn\'s trace entries and complete flag', () => {

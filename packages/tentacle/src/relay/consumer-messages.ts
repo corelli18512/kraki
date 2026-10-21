@@ -56,7 +56,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
 
   // request_session_messages — turn-aware paginated replay
   if (msg.type === 'request_session_messages') {
-    handleSessionMessages(client, msg.deviceId, msg.payload.sessionId, msg.payload.beforeSeq);
+    handleSessionMessages(client, msg.deviceId, msg.payload.sessionId, msg.payload.beforeSeq, msg.payload.afterSeq ?? undefined);
     return;
   }
 
