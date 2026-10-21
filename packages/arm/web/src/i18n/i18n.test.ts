@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resources } from './resources';
 import { LANGUAGES, matchLanguageTag, resolveSystemLanguage } from './languages';
 import { i18next, setLanguagePreference, getLanguagePreference, t } from '.';
@@ -69,6 +69,22 @@ describe('preference switching', () => {
     expect(document.documentElement.lang).toBe('zh-Hans');
     setLanguagePreference('system');
     expect(getLanguagePreference()).toBe('system');
+  });
+});
+
+describe('storage unavailable', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setLanguagePreference('system');
+    void i18next.changeLanguage('en');
+  });
+  it('keeps the explicit choice for the session and ignores browser language changes', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied'); });
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+    setLanguagePreference('zh-Hans');
+    expect(getLanguagePreference()).toBe('zh-Hans');
+    window.dispatchEvent(new Event('languagechange'));
+    expect(t('common:action.cancel')).toBe('取消');
   });
 });
 

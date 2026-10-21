@@ -70,6 +70,9 @@ jobs:
           ./actionlint -shellcheck= -color
       - name: Test change routing and release provenance
         run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs scripts/release/*.test.mjs
+      - name: Localization check (keys, placeholders, untranslated/hard-coded ratchet)
+        # Dependency-free and fast; runs for every change (incl. catalog-only).
+        run: node scripts/l10n/check.mjs
       - name: Select affected checks
         id: scope
         run: node scripts/ci/test-scope.mjs
@@ -107,9 +110,6 @@ jobs:
 
       - name: Run validation
         run: pnpm validate
-
-      - name: Localization check (keys, placeholders, hard-coded UI ratchet)
-        run: pnpm l10n:check
 
   test-ios:
     name: Test iOS (Kraki)

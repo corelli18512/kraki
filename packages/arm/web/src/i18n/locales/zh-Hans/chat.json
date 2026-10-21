@@ -55,10 +55,10 @@
   "bubble": {
     "showSteps": "显示步骤",
     "systemNotice": "系统提示",
-    "correctingOptions": "正在校正语音输入。点击查看选项",
+    "correctingOptions": "正在修正语音输入。点击查看选项",
     "unconfirmedOptions": "正在等待确认。点击重试或删除",
     "failedOptions": "未送达。点击重试或删除",
-    "correcting": "正在校正语音输入",
+    "correcting": "正在修正语音输入",
     "unconfirmed": "尚未确认送达。重试将使用相同的消息 ID。",
     "notDelivered": "未送达",
     "sendOriginal": "发送原文",
@@ -246,7 +246,7 @@
       "humanMessage": "上一条消息来自你"
     },
     "delivery": {
-      "correcting": "正在校正语音消息，随后发送",
+      "correcting": "正在修正语音消息，随后发送",
       "unconfirmed": "正在等待送达确认",
       "sending": "正在发送，等待确认",
       "failed": "发送失败",

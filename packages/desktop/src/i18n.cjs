@@ -116,6 +116,7 @@ function resolveLanguage(tags) {
   for (const tag of tags || []) { const m = matchLanguage(tag); if (m) return m; }
   return 'en';
 }
+const isLanguage = (code) => typeof code === 'string' && Object.hasOwn(DICTIONARIES, code);
 function setLanguage(code) {
   if (!Object.hasOwn(DICTIONARIES, code) || code === current) return false;
   current = code;
@@ -127,4 +128,4 @@ function t(key, vars) {
   return vars ? text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : text;
 }
 
-module.exports = { t, setLanguage, language, resolveLanguage, matchLanguage, DICTIONARIES };
+module.exports = { t, setLanguage, isLanguage, language, resolveLanguage, matchLanguage, DICTIONARIES };

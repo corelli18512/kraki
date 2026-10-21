@@ -72,7 +72,9 @@ pnpm l10n:check --strict   # release gate: zero untranslated / hard-coded
 pnpm l10n:extract:apple    # sync the String Catalogs with Swift code (xcodebuild)
 ```
 
-Hard errors: missing/extra keys, changed placeholders, empty translations.
+Hard errors: missing/extra keys, changed placeholders (Web, Windows shell and
+the Apple catalogs), empty translations. CI runs it in the always-on scope job,
+so catalog-only changes are checked too.
 The ratchet (`scripts/l10n/baseline.json`) lets the untranslated Apple keys
 and the heuristically detected hard-coded English in `.tsx`/`.swift` only go
 down. Hidden diagnostics/debug surfaces are excluded from the heuristic and
@@ -87,7 +89,8 @@ Building in Xcode updates the catalog automatically; on the command line run
    it in `resources.ts`; extend `matchLanguageTag` if the tag needs mapping.
 2. Windows shell: add a dictionary to `packages/desktop/src/i18n.cjs` and
    extend `matchLanguage`.
-3. Apple: add a case to `AppLanguage` and translate the catalogs (Xcode adds
+3. Apple: add a case to `AppLanguage`, add the code to `APPLE_LANGUAGES` in
+   `scripts/l10n/catalog.mjs`, and translate the catalogs (Xcode adds
    the region; `xcodegen` picks it up from the catalogs). Add SwiftUI's
    localized "File" menu title to `MacAppDelegate.removeUnwantedMenus`
    (from SwiftUI's `MainMenu.loctable`, e.g. zh_CN 文件).

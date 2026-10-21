@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appleCatalogStats } from './catalog.mjs';
+import { APPLE_LANGUAGES, appleCatalogStats, applePlaceholderErrors } from './catalog.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const baselineFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'baseline.json');
@@ -60,10 +60,15 @@ for (const [code, dict] of Object.entries(DICTIONARIES)) {
 }
 
 // ── Apple catalogs ──
-for (const s of appleCatalogStats(root)) {
-  counts[`apple:${s.file}:untranslated`] = s.untranslated.length;
-  details[`apple:${s.file}:untranslated`] = s.untranslated;
+for (const lang of APPLE_LANGUAGES) {
+  for (const s of appleCatalogStats(root, lang)) {
+    // Keep the original key for zh-Hans so the existing baseline still applies.
+    const k = lang === 'zh-Hans' ? `apple:${s.file}:untranslated` : `apple:${lang}:${s.file}:untranslated`;
+    counts[k] = s.untranslated.length;
+    details[k] = s.untranslated;
+  }
 }
+errors.push(...applePlaceholderErrors(root));
 
 // ── Hard-coded UI English (heuristic) ──
 function walk(dir, ext, skip) {

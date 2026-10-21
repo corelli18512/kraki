@@ -556,7 +556,8 @@ app.on('will-quit', () => globalShortcut.unregisterAll());
 
 app.whenReady().then(async () => {
   // Last language the Web client reported; before that, the OS languages.
-  if (!i18n.setLanguage(pref('language'))) i18n.setLanguage(i18n.resolveLanguage(app.getPreferredSystemLanguages()));
+  const saved = pref('language');
+  i18n.setLanguage(i18n.isLanguage(saved) ? saved : i18n.resolveLanguage(app.getPreferredSystemLanguages()));
   // The microphone (voice input) and clipboard writes (Copy buttons) for the
   // app itself only; nothing else (permissions.cjs).
   const { session } = require('electron');

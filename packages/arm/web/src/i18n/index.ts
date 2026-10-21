@@ -27,7 +27,11 @@ export * from './languages';
 
 const STORAGE_KEY = 'kraki-language';
 
+// In-memory copy: the choice holds for this session even if storage throws.
+let memoryPreference: LanguagePreference | undefined;
+
 export function getLanguagePreference(): LanguagePreference {
+  if (memoryPreference) return memoryPreference;
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored && isLanguageCode(stored)) return stored;
@@ -83,6 +87,7 @@ i18next.on('languageChanged', (lng) => {
 });
 
 export function setLanguagePreference(pref: LanguagePreference) {
+  memoryPreference = pref;
   try {
     if (pref === 'system') localStorage.removeItem(STORAGE_KEY);
     else localStorage.setItem(STORAGE_KEY, pref);

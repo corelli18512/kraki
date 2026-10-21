@@ -204,7 +204,7 @@
     "phone": "在手机上使用 Kraki",
     "phoneHint": "用手机扫码，即可在手机上查看和运行会话。",
     "showCode": "显示二维码…",
-    "removeBody": "它已退出你的账户。要再次使用，请重新登录或配对。",
+    "removeBody": "该设备将退出你的账户。要再次使用，请重新登录或配对。",
     "remove": "移除",
     "removeTitle": "移除 {{name}}？",
     "lastOnline": "上次在线：{{time}}"

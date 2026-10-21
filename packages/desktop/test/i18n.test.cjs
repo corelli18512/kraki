@@ -51,3 +51,10 @@ test('dialog and shell errors preserve English and translate at call time', asyn
     } finally { i18n.setLanguage('en'); }
   }
 });
+
+test('a saved English choice is valid even though it is the current language', () => {
+  i18n.setLanguage('en');
+  assert.equal(i18n.isLanguage('en'), true);
+  assert.equal(i18n.isLanguage('xx'), false);
+  assert.equal(i18n.isLanguage(undefined), false);
+});
