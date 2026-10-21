@@ -256,6 +256,13 @@ export class PiAdapter extends AgentAdapter {
     proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
     proc.start();
     this.sessions.set(sessionId, sess);
+    logger.info({
+      sessionId,
+      pid: proc.pid,
+      model,
+      resume: !!sessionFile && existsSync(sessionFile),
+      livePiProcesses: this.liveProcessCount(),
+    }, 'pi process started');
     // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
     // (kraki_get_mode reads it) before the first turn runs.
     this.persistMeta(sessionId, sess);
@@ -268,6 +275,7 @@ export class PiAdapter extends AgentAdapter {
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
+    logger.info({ sessionId, ...sess.turn.event(), code, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
     this.stopAwaitingSubagents(sess, 'process_exit');
     if (this.sessions.get(sessionId) !== sess) {
       // A replacement process already owns the session: this late exit must
@@ -690,7 +698,8 @@ export class PiAdapter extends AgentAdapter {
     // If the session was idle-evicted (proc killed but map entry retained) or
     // the daemon restarted, resume before sending — the proc's stdin is gone.
     const existing = this.sessions.get(sessionId);
-    const s = existing?.proc.alive
+    const resumed = !existing?.proc.alive;
+    const s = !resumed
       ? existing
       : (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
@@ -721,10 +730,12 @@ export class PiAdapter extends AgentAdapter {
           this.failSubmission(sessionId, s, err as Error);
           throw err;
         }
+        this.logPromptAccepted(sessionId, s, 'steer_as_prompt', resumed);
       } else {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
         await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        logger.info({ sessionId, turnId: s.turn.relayTurnId }, 'pi steer accepted');
         // The run settled while Pi was accepting the steer: Pi runs the steer
         // as a new run. Reopen the turn so that run's reply and idle are
         // reported (a stopped turn stays closed).
@@ -745,6 +756,7 @@ export class PiAdapter extends AgentAdapter {
         this.failSubmission(sessionId, s, err as Error);
         throw err;
       }
+      this.logPromptAccepted(sessionId, s, 'follow_up', resumed);
       return;
     }
 
@@ -756,8 +768,10 @@ export class PiAdapter extends AgentAdapter {
     // slow ACK into a false error/idle or duplicate prompt.
     try {
       await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
+      this.logPromptAccepted(sessionId, s, 'prompt', resumed);
     } catch (err) {
       let failure = err as Error;
+      let afterStuckAbort = false;
       const message = failure.message;
       // pi can get into a state where the adapter has emitted idle (agent_end
       // was received) but pi's internal RPC layer still thinks it's processing.
@@ -769,7 +783,16 @@ export class PiAdapter extends AgentAdapter {
         if (s.pendingQuestions.size > 0 || s.pendingPerms.size > 0) {
           throw new Error('Pi is waiting for a human response; the message was not sent as a new prompt.');
         }
-        logger.warn({ sessionId }, 'pi stuck in processing state — awaiting abort before retry');
+        // Record what the abort interrupts: a run pi started on its own (e.g.
+        // a background-subagent wake run) loses its in-flight progress.
+        logger.warn({
+          sessionId,
+          turnId: s.turn.relayTurnId,
+          previousTurnId: s.turn.eventTurnId,
+          awaitingSubagents: s.awaitingSubagents === true,
+          backgroundRuns: this.subagentTrackers.get(sessionId)?.activeAsyncRuns() ?? 0,
+        }, 'pi stuck in processing state — awaiting abort before retry');
+        afterStuckAbort = true;
         try {
           s.aborting = true;
           try {
@@ -784,12 +807,13 @@ export class PiAdapter extends AgentAdapter {
           // The explicit rejection proves the first prompt was NOT accepted. Only
           // this path may retry, after authoritative abort + idle reconciliation.
           await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
+          this.logPromptAccepted(sessionId, s, 'prompt_after_stuck_abort', resumed);
           return;
         } catch (retryErr) {
           failure = retryErr as Error;
         }
       }
-      logger.warn({ sessionId, err: failure.message }, 'pi prompt request failed');
+      logger.warn({ sessionId, turnId: s.turn.relayTurnId, err: failure.message, afterStuckAbort }, 'pi prompt request failed');
       this.failSubmission(sessionId, s, failure);
       if (failure instanceof PromptWatchdogError && s.proc.alive) {
         // The prompt is still pending inside pi and could run later, after the
@@ -803,6 +827,18 @@ export class PiAdapter extends AgentAdapter {
       // unacknowledged adapter request into a falsely delivered input.
       throw failure;
     }
+  }
+
+  /** Turn start, at info: the relay turn id correlates with relay-client logs. */
+  private logPromptAccepted(sessionId: string, s: PiSession, delivery: string, resumed: boolean): void {
+    logger.info({
+      sessionId,
+      turnId: s.turn.relayTurnId,
+      delivery,
+      resumed,
+      ackMs: s.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
+      model: s.model,
+    }, 'pi prompt accepted');
   }
 
   /** A submission that opened a new logical turn failed before pi started it:
@@ -875,6 +911,14 @@ export class PiAdapter extends AgentAdapter {
       // active tool process group and waitForIdle() has completed. Relay-client
       // must not announce `idle` before that acknowledgement arrives.
       await s.proc.request('abort');
+      logger.info({
+        sessionId,
+        ...s.turn.event(),
+        elapsedMs: s.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
+        turnWasOpen: !s.turn.isSettled,
+        backgroundRunsStopped: backgroundRuns.length,
+        preflightRetired: !!s.promptAcceptanceAbort,
+      }, 'pi turn aborted');
       // RelayClient owns the visible aborted idle boundary, but the adapter must
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.

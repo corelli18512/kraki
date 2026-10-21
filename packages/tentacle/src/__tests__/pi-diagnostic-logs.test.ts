@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
 import { handleEvent } from '../adapters/pi-events.js';
 import { TURN_STALL_WARN_MS } from '../adapters/pi-session.js';
+import { PiRpcProcess } from '../adapters/pi-rpc.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 
 const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -113,6 +114,70 @@ describe('pi retry and stall diagnostics', () => {
     expect(logged('info', 'pi compaction started')).toEqual([expect.objectContaining({ sessionId: 's', turnId: 'turn-1', reason: 'threshold' })]);
     expect(logged('warn', 'pi compaction ended')).toEqual([expect.objectContaining({
       sessionId: 's', reason: 'threshold', aborted: false, durationMs: 11_000, err: 'summary failed',
+    })]);
+  });
+});
+
+describe('pi turn and process lifecycle logs', () => {
+  it('logs prompt acceptance with the relay turn id (correlates with relay-client logs)', async () => {
+    const t = setup();
+    t.session.turn = turnFixture(t.adapter, t.sid, { relayTurnId: 'turn-2', eventTurnId: 'turn-1' });
+    await t.adapter.sendMessage(t.sid, 'secret user text');
+    expect(logged('info', 'pi prompt accepted')).toEqual([expect.objectContaining({
+      sessionId: 's', turnId: 'turn-2', delivery: 'prompt', resumed: false,
+    })]);
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain('secret user text');
+  });
+
+  it('records the stuck-processing abort, what it interrupted, and the retry outcome', async () => {
+    const t = setup();
+    t.session.turn = turnFixture(t.adapter, t.sid, { relayTurnId: 'turn-2', eventTurnId: 'turn-1' });
+    let prompts = 0;
+    t.proc.request.mockImplementation(async (type: string) => {
+      if (type === 'prompt' && ++prompts === 1) throw new Error('Agent is already processing');
+      return {};
+    });
+    await t.adapter.sendMessage(t.sid, 'hello');
+    expect(logged('warn', 'pi stuck in processing state — awaiting abort before retry')).toEqual([expect.objectContaining({
+      sessionId: 's', turnId: 'turn-2', previousTurnId: 'turn-1', awaitingSubagents: false, backgroundRuns: 0,
+    })]);
+    expect(logged('info', 'pi prompt accepted')).toEqual([expect.objectContaining({ turnId: 'turn-2', delivery: 'prompt_after_stuck_abort' })]);
+  });
+
+  it('a failed retry after the stuck abort says so', async () => {
+    const t = setup();
+    t.proc.request.mockImplementation(async (type: string) => {
+      if (type === 'prompt') throw new Error('Agent is already processing');
+      return {};
+    });
+    await expect(t.adapter.sendMessage(t.sid, 'hello')).rejects.toThrow('already processing');
+    expect(logged('warn', 'pi prompt request failed')).toEqual([expect.objectContaining({ afterStuckAbort: true })]);
+  });
+
+  it('logs a user Stop at info with how long the turn ran', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    vi.advanceTimersByTime(42_000);
+    await t.adapter.abortSession(t.sid);
+    expect(logged('info', 'pi turn aborted')).toEqual([expect.objectContaining({
+      sessionId: 's', turnId: 'turn-1', elapsedMs: 42_000, turnWasOpen: true, backgroundRunsStopped: 0,
+    })]);
+  });
+
+  it('logs each pi process start', () => {
+    const t = setup();
+    Object.assign(t.adapter, { persistMeta: () => {}, ensureToolsExtension: () => '/unused/tools.ts' });
+    vi.spyOn(PiRpcProcess.prototype, 'start').mockImplementation(() => {});
+    (t.adapter as unknown as { spawn(id: string, cwd: string, model: string, mode: 'auto'): unknown }).spawn('s2', '/unused', 'fake/model', 'auto');
+    expect(logged('info', 'pi process started')).toEqual([expect.objectContaining({ sessionId: 's2', model: 'fake/model', resume: false, livePiProcesses: 1 })]);
+  });
+
+  it('logs an unexpected pi process exit', () => {
+    const t = setup();
+    Object.assign(t.proc, { crashReason: () => undefined });
+    (t.adapter as unknown as { handleProcessExit(id: string, s: unknown, code: number): void }).handleProcessExit(t.sid, t.session, 137);
+    expect(logged('info', 'pi process exited unexpectedly')).toEqual([expect.objectContaining({
+      sessionId: 's', turnId: 'turn-1', code: 137, turnOpen: true, replaced: false,
     })]);
   });
 });

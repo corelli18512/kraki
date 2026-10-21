@@ -220,6 +220,11 @@ export class PiRpcProcess {
     this.child = null;
   }
 
+  /** OS pid of the running pi child (for logs), if any. */
+  get pid(): number | undefined {
+    return this.child?.pid;
+  }
+
   get alive(): boolean {
     return !!this.child
       && this.child.exitCode === null
