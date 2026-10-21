@@ -689,13 +689,23 @@ export class HeadServer {
     // Key or account changed: no error, just a reconnect, which signs in at
     // the account service (that one rejects an outdated key itself).
     if (code !== 'key_changed') sendAuthError(this, ws, code as AuthErrorCode, revocation.message, revocation.redirect);
-    // Graceful close so the auth_error is flushed first; the close handler
-    // does the usual cleanup. Force it if the peer never completes the close.
-    ws.once('close', () => {
-      // The device may have signed in again on a new socket meanwhile: its
-      // Pulse state belongs to that connection now.
-      if (!keepsDevice && !this.connections.has(deviceId)) this.pulseHub.forgetDevice(deviceId);
-    });
+    if (!keepsDevice) {
+      // Retire the connection and its Pulse state NOW, not when the close
+      // completes: the same device id may sign in again (even under another
+      // account) before then and must not inherit the revoked state.
+      const userId = this.userByDevice.get(deviceId);
+      // Inert from now on: frames still in flight on this socket (a late
+      // Pulse ack) must not touch the state a replacement connection gets.
+      const state = this.clients.get(ws);
+      if (state) state.evicted = true;
+      this.connections.delete(deviceId);
+      this.userByDevice.delete(deviceId);
+      this.clients.delete(ws);
+      this.pulseHub.forgetDevice(deviceId);
+      if (userId) broadcastDeviceLeft(this, userId, deviceId);
+    }
+    // Graceful close so the auth_error is flushed first. Force it if the
+    // peer never completes the close.
     try { ws.close(code === 'key_changed' ? 1012 : 1008, code === 'key_changed' ? 'reauthenticate' : 'revoked'); } catch { /* already closing */ }
     const force = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } }, 2_000);
     force.unref?.();

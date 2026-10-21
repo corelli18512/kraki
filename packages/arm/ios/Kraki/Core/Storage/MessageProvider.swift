@@ -711,6 +711,9 @@ final class MessageProvider {
         // meanwhile) may describe the old history: keep nothing above the
         // head the Tentacle reports now, before anything is stored.
         let messages = rowsWithinKnownHead(sessionId, messages, answeredHead: removedKind == .head)
+        // Only the replacement head reply ends the after-drop window, not an
+        // unrelated older page.
+        if removedKind == .head { headDropped.remove(sessionId) }
 
         // Detect a hole between this batch and what we already have
         // on disk. If batch starts at seq B and DB contains B-1 we're
@@ -1123,6 +1126,7 @@ final class MessageProvider {
     }
 
     func clear() {
+        headDropped.removeAll()
         for (_, slots) in outstanding {
             for s in slots { s.timeout.cancel() }
         }
@@ -1149,6 +1153,7 @@ extension MessageProvider {
     /// against until the next `session_list` envelope arrives.
     func resetSession(_ sessionId: String) {
         sessionGeneration[sessionId, default: 0] += 1
+        headDropped.remove(sessionId)
         if let slots = outstanding[sessionId] {
             for s in slots { s.timeout.cancel() }
         }
@@ -1231,7 +1236,6 @@ extension MessageProvider {
             KLog.d("🧹 [2/history obsolete head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
             return true
         }
-        headDropped.remove(sessionId)
         return false
     }
 

@@ -103,6 +103,13 @@ export class RemoteAuthBackend implements AuthBackend {
     this.edgeCache?.forget(deviceId);
   }
 
+  /** Drop local trust unless it is already the new owner's (whose fresh
+   *  answer may have been stored just before the old mirror is retired). */
+  forgetLocalTrustUnlessOwnedBy(deviceId: string, userId: string): void {
+    if (this.edgeCache?.identity(deviceId)?.userId === userId) return;
+    this.edgeCache?.forget(deviceId);
+  }
+
   /** Ask the account service about every cached device; forget and kick the
    *  ones it no longer accepts here. */
   async pollDeviceStatus(): Promise<void> {
@@ -172,16 +179,23 @@ export class RemoteAuthBackend implements AuthBackend {
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
     const epoch = device.deviceId && cache ? cache.epoch(device.deviceId) : undefined;
+    const clock = cache?.clock() ?? 0;
     // The account service throttles failed logins per client IP; forward the
     // end user's address, not this edge's.
     const result = await this.post<AuthOutcome>('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
     // A token / pairing sign-in is as authoritative as a verified challenge:
     // the next reconnect of this device can be local.
-    if (result.ok && cache && cache === this.edgeCache
-      && this.storeAuthoritative(cache, result, device.deviceId === result.deviceId ? epoch : undefined) === 'stale') {
+    // A request that did not name the device (first pairing: the account
+    // service assigns the id) is fenced by the trust clock instead.
+    const unnamedButStale = result.ok && cache && device.deviceId !== result.deviceId && cache.changedSince(result.deviceId, clock);
+    if (unnamedButStale || (result.ok && cache && cache === this.edgeCache
+      && this.storeAuthoritative(cache, result, device.deviceId === result.deviceId ? epoch : undefined) === 'stale')) {
       // The device was dropped here (removed, account deleted) while this
-      // sign-in was out: do not let it complete. Retryable: a retry gets
-      // the account service's current answer.
+      // sign-in was out: do not let it complete. Retryable (a retry gets the
+      // account service's current answer) unless the account is gone.
+      if (cache?.isTombstoned(result.ok ? result.deviceId : '')) {
+        return { ok: false, code: 'account_deleted', message: 'This Kraki account was deleted.' };
+      }
       return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
     }
     return result;

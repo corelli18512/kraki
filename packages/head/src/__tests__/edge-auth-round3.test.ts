@@ -230,3 +230,33 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     await until(() => client.messages.some((m) => m.type === 'auth_ok'));
   });
 });
+
+describe('release-gate round 4: hard revocation retires Pulse state at once', () => {
+  it('a device revoked while its old socket is still closing does not hand its state to a re-enrolment', async () => {
+    const { HeadServer } = await import('../server.js');
+    const { Storage } = await import('../storage.js');
+    const storage = new Storage(':memory:');
+    const server = new HeadServer(storage, {});
+    try {
+      storage.upsertUser('a', 'alice', 'open');
+      storage.upsertDevice('d', 'a', 'D', 'app', 'ios', 'pk');
+      const forgotten: string[] = [];
+      const realForget = server.pulseHub.forgetDevice.bind(server.pulseHub);
+      server.pulseHub.forgetDevice = (id: string) => { forgotten.push(id); realForget(id); };
+      // An old socket whose close never completes (held).
+      const sent: string[] = [];
+      const ws = { readyState: 1, send: (m: string) => sent.push(m), close: () => {}, terminate: () => {}, once: () => {} } as never;
+      server.connections.set('d', ws);
+      server.userByDevice.set('d', 'a');
+      const oldState = { deviceId: 'd', userId: 'a', authenticated: true, isAlive: true, pongOverdueAt: null, pendingLivenessBroadcast: false } as { evicted?: boolean };
+      server.clients.set(ws, oldState as never);
+      server.revokeDevice({ deviceId: 'd', code: 'device_not_found', message: 'gone' });
+      expect(oldState.evicted, 'late frames on the old socket are ignored').toBe(true);
+      expect(forgotten, 'Pulse state is retired before the close completes').toEqual(['d']);
+      expect(server.connections.has('d')).toBe(false);
+      expect(server.clients.has(ws)).toBe(false);
+      expect(storage.getDevice('d')).toBeFalsy();
+      expect(JSON.parse(sent[0])).toMatchObject({ type: 'auth_error', code: 'unknown_device' });
+    } finally { server.close(); storage.close(); }
+  });
+});

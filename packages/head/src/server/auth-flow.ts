@@ -242,7 +242,7 @@ export function retireForeignMirror(server: HeadServer, deviceId: string, userId
   server.storage.deletePushTokensForDevice(deviceId);
   server.pulseHub.forgetDevice(deviceId);
   server.deviceRenamedAt.delete(deviceId);
-  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(deviceId);
+  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrustUnlessOwnedBy(deviceId, userId);
 }
 
 /**
