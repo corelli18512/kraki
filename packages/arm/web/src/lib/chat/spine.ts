@@ -110,6 +110,11 @@ export interface SpineItem {
  *   status row itself is not rendered (`shouldRender`);
  * - nothing yet: open at the conversation head, otherwise undetermined.
  */
+/** Runtime signals that ride beside the spine. They say nothing about a
+ *  question: `active` with a broadcast seq can sort after a question the
+ *  agent asked later (range merges order by seq), and must not close it. */
+const RUNTIME_SIGNALS = new Set(['active', 'compacting', 'pending_input']);
+
 export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
   const items: SpineItem[] = raw.map((message) => ({ message }));
   if (!raw.some((m) => questionSpecOf(m))) return items;
@@ -120,7 +125,7 @@ export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], 
     for (let later = index + 1; later < raw.length; later++) {
       const next = raw[later];
       if (answerToOf(next) === spec.id) { presentation = { state: 'answered' }; break; }
-      if (questionSpecOf(next) || answerToOf(next) !== undefined || next.type === 'error') continue;
+      if (questionSpecOf(next) || answerToOf(next) !== undefined || next.type === 'error' || RUNTIME_SIGNALS.has(next.type)) continue;
       const draftless = draftOf(next).trim() === '';
       const outcome = draftless ? terminalOutcomeOf(next) : undefined;
       presentation = outcome ? { state: 'unanswered', outcome } : { state: 'unanswered' };
