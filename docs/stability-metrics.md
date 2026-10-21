@@ -73,6 +73,7 @@ Counts only outages while signed in, in the foreground, and not during an "open"
   - Service and network: `unavailable`, `offline`, `timeout`, `network`, `gateway`
   - Quota and lease: `quota`, `lease_timeout`, `lease_busy`, `lease_rejected`, `lease_denied_<reason>`
   - Other: `identity_changed`, `config`
+  - `empty_transcript`: with outcome `final` — the recording ended with no text (not a success)
 - Durations:
   - `startMs`: press → capture started, including permission, lease and connection waits
   - `recordMs`: recording length

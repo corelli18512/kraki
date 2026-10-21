@@ -3,7 +3,7 @@ import VoiceInputCore
 @testable import Kraki
 
 @MainActor
-private final class FakeVoiceHost: KrakiVoiceInputHost {
+final class FakeVoiceHost: KrakiVoiceInputHost {
     var voiceCapability: VoiceCapability? = VoiceCapability(
         brokerUrl: "wss://voice.example.test/voice",
         resource: "voice/doubao"
@@ -21,7 +21,7 @@ private final class FakeVoiceHost: KrakiVoiceInputHost {
     }
 }
 
-private final class FakeVoiceSession: VoiceInputSessionProtocol {
+final class FakeVoiceSession: VoiceInputSessionProtocol {
     let correctionEnabled: Bool
     let pcmDumpPath: String? = nil
     private let onEvent: (VoiceInputEvent) -> Void
@@ -52,7 +52,7 @@ private final class FakeVoiceSession: VoiceInputSessionProtocol {
     func emitMetric(_ metric: VoiceInputMetric) { onMetric(metric) }
 }
 
-private final class FakeVoiceFactory: VoiceInputSessionFactory {
+final class FakeVoiceFactory: VoiceInputSessionFactory {
     private(set) var configurations: [VoiceInputConfiguration] = []
     private(set) var sessions: [FakeVoiceSession] = []
 
@@ -73,7 +73,7 @@ private final class FakeVoiceFactory: VoiceInputSessionFactory {
 }
 
 @MainActor
-private final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
+final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission = .granted
     var hasInputDevice = true
     var permissionRequestSucceeds = true

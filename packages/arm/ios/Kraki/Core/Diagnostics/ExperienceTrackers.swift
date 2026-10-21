@@ -194,6 +194,9 @@ final class VoiceTracker {
         guard current != nil else { return }
         current?.textLength = textLength
         current?.correctionConfirmed = correctionConfirmed
+        // A final with no text is not a success (a 50 s recording ended
+        // like this and counted as one); flagged, outcome unchanged.
+        if textLength == 0, current?.cause == nil { current?.cause = "empty_transcript" }
         pendingOutcome = .final
     }
 
