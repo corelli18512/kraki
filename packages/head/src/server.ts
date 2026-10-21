@@ -119,7 +119,7 @@ export class HeadServer {
             msSinceLastPong: state.lastPongRecvAt ? now - state.lastPongRecvAt : null,
             wsReadyState: ws.readyState,
           });
-          this.removeConnection(deviceId);
+          this.removeConnection(deviceId, 'pong_timeout');
           continue;
         }
         if (state) state.isAlive = false;
@@ -144,7 +144,7 @@ export class HeadServer {
             deviceId,
             error: (err as Error)?.message,
           });
-          this.removeConnection(deviceId);
+          this.removeConnection(deviceId, 'ping_send_failed');
         }
       }
 
@@ -330,7 +330,7 @@ export class HeadServer {
           this.pulseHub.onDeviceDisconnected(disconnectedDeviceId);
           trace('DEV-DISCONNECT', { device: disconnectedDeviceId, code, reason: reasonStr });
           logger.info('Device disconnected', {
-            deviceId: disconnectedDeviceId,
+            ...this.deviceLogFields(disconnectedDeviceId, state),
             closeCode: code,
             closeReason: reasonStr,
           });
@@ -688,9 +688,19 @@ export class HeadServer {
     ws.once('close', () => clearTimeout(force));
   }
 
-  private removeConnection(deviceId: string): void {
+  private removeConnection(deviceId: string, cause: 'pong_timeout' | 'ping_send_failed'): void {
     const ws = this.connections.get(deviceId);
     const userId = this.userByDevice.get(deviceId);
+    const state = ws ? this.clients.get(ws) : undefined;
+    // The close handler skips its 'Device disconnected' line for this socket
+    // (it is no longer the device's connection): log it here.
+    if (ws) {
+      getLogger().info('Device disconnected', {
+        ...this.deviceLogFields(deviceId, state),
+        closeReason: cause,
+        terminated: true,
+      });
+    }
     this.connections.delete(deviceId);
     this.userByDevice.delete(deviceId);
     if (ws) {
@@ -715,6 +725,18 @@ export class HeadServer {
       try { this.storage.touchDeviceLastSeen(deviceId); } catch { /* storage may be closed */ }
       broadcastDeviceLeft(this, userId, deviceId);
     }
+  }
+
+  /** Who a connect / disconnect line is about: the device, what it is, and
+   *  how long this connection was signed in. */
+  deviceLogFields(deviceId: string, state?: ClientState): Record<string, unknown> {
+    let device: ReturnType<Storage['getDevice']>;
+    try { device = this.storage.getDevice(deviceId); } catch { /* storage may be closed */ }
+    return {
+      deviceId,
+      ...(device && { role: device.role, ...(device.kind && { kind: device.kind }) }),
+      ...(state?.authenticatedAt !== undefined && { onlineMs: Date.now() - state.authenticatedAt }),
+    };
   }
 
   // --- Auth ---
@@ -885,7 +907,7 @@ export class HeadServer {
       if (state && !state.isAlive && this.linkProgressing(ws, state)) state.isAlive = true;
       if (state && !state.isAlive) {
         getLogger().info('Terminating stale connection (no pong)', { deviceId });
-        this.removeConnection(deviceId);
+        this.removeConnection(deviceId, 'pong_timeout');
         continue;
       }
       if (state) state.isAlive = false;
@@ -901,7 +923,7 @@ export class HeadServer {
           }
         }
       } catch {
-        this.removeConnection(deviceId);
+        this.removeConnection(deviceId, 'ping_send_failed');
       }
     }
   }

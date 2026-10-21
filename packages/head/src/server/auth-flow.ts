@@ -172,8 +172,11 @@ export function handleBackendAuthResult(
   const timing = state.authTiming;
   const totalMs = timing ? Date.now() - timing.startedAt : undefined;
   if (totalMs !== undefined) metrics().authStages.total.observe(totalMs);
+  const summary = result.devices?.find((d) => d.id === result.deviceId);
+  const device = summary ?? server.storage.getDevice(result.deviceId);
   logger.info('Device authenticated (via backend)', {
     deviceId: result.deviceId,
+    ...(device && { role: device.role, ...(device.kind && { kind: device.kind }) }),
     user: result.user.login,
     method: result.authMethod,
     ip: state.ip,
