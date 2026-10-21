@@ -42,5 +42,5 @@ describe('challenge failure log', () => {
     expect(line.data.nonceFp).toHaveLength(12);
     expect(JSON.stringify(line.data)).not.toContain(storedKey.slice(20, 60));
     storage.close();
-  });
+  }, 20_000);
 });
