@@ -9,8 +9,11 @@ What the shell adds over a browser tab:
   (`lib/desktop.ts` in the Web client; browsers keep using Web Push).
 - Taskbar unread badge, single instance, remembered window size, links open
   in the default browser, spell-check menu, Ctrl +/−/0 zoom.
-- GitHub sign-in inside the window: the Web's registered callback
-  (`https://app.kraki.chat/auth/callback`) is intercepted and handed to the app.
+- GitHub sign-in in a sign-in window of its own (separate session, no
+  bridge): the Web's registered callback (`https://app.kraki.chat/auth/callback`)
+  is intercepted there and handed to the app. The main window shows only
+  `app://kraki` pages; only they get `window.krakiDesktop`, and every IPC
+  channel refuses any other frame (`src/ipc-guard.cjs`).
 
 Kept out of the pnpm workspace (Electron is a large download).
 

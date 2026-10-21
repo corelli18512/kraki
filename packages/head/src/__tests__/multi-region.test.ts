@@ -15,6 +15,7 @@ import { AccountApi } from '../account-api.js';
 import { OpenAuthProvider } from '../auth.js';
 import { Logger, setGlobalLogger } from '../logger.js';
 import { regionForCountry, isPrivateIp } from '../ip-geo.js';
+import { exportPublicKey, generateKeyPair, signChallenge } from '@kraki/crypto';
 
 // Suppress log output during tests
 setGlobalLogger(new Logger({ level: 'error', stdout: false }));
@@ -526,6 +527,57 @@ describe('RemoteAuthBackend', () => {
     expect(await remoteBackend.removeDevice(auth.userId, auth.deviceId)).toBe(true);
     expect(storage.getDevice(auth.deviceId)).toBeFalsy();
     expect(await remoteBackend.removeDevice(auth.userId, auth.deviceId)).toBe(false);
+  });
+
+  describe('challenge nonces through the account service', () => {
+    const keys = generateKeyPair();
+    beforeEach(() => {
+      storage.upsertUser('u1', 'one', 'open');
+      storage.upsertDevice('d1', 'u1', 'Laptop', 'tentacle', 'desktop', exportPublicKey(keys.publicKey));
+    });
+    const sign = (nonce: string) => signChallenge(nonce, keys.privateKey);
+
+    it('accepts the signed nonce the account service issued, once', async () => {
+      const challenge = await remoteBackend.startChallenge('d1');
+      expect(challenge.ok).toBe(true);
+      if (!challenge.ok) return;
+      expect((await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce))).ok).toBe(true);
+      // A replay of the same answer is refused, with a code clients retry on.
+      expect(await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce)))
+        .toMatchObject({ ok: false, code: 'service_unavailable' });
+    });
+
+    it('refuses a signed nonce it never issued', async () => {
+      expect(await remoteBackend.verifyChallenge('d1', 'a'.repeat(64), sign('a'.repeat(64))))
+        .toMatchObject({ ok: false, code: 'service_unavailable' });
+    });
+
+    it('refuses a nonce issued for another device', async () => {
+      storage.upsertDevice('d2', 'u1', 'Phone', 'app', 'ios', exportPublicKey(keys.publicKey));
+      const challenge = await remoteBackend.startChallenge('d2');
+      if (!challenge.ok) throw new Error('no challenge');
+      expect(await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce)))
+        .toMatchObject({ ok: false, code: 'service_unavailable' });
+    });
+
+    it('refuses a nonce answered after 60 s', async () => {
+      const challenge = await remoteBackend.startChallenge('d1');
+      if (!challenge.ok) throw new Error('no challenge');
+      const now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 61_000);
+      try {
+        expect(await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce)))
+          .toMatchObject({ ok: false, code: 'service_unavailable' });
+      } finally { clock.mockRestore(); }
+    });
+
+    it('keeps parallel challenges of one device valid', async () => {
+      const first = await remoteBackend.startChallenge('d1');
+      const second = await remoteBackend.startChallenge('d1');
+      if (!first.ok || !second.ok) throw new Error('no challenge');
+      expect((await remoteBackend.verifyChallenge('d1', second.nonce, sign(second.nonce))).ok).toBe(true);
+      expect((await remoteBackend.verifyChallenge('d1', first.nonce, sign(first.nonce))).ok).toBe(true);
+    });
   });
 
   it('should fail gracefully with wrong service key', async () => {

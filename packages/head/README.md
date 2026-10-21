@@ -39,7 +39,9 @@ Start a local relay:
 npx @kraki/head
 ```
 
-By default the relay listens on `ws://localhost:4000` and stores user/device data in `kraki-head.db`.
+By default the relay uses `open` auth, listens on `ws://127.0.0.1:4000` (this machine only) and stores user/device data in `kraki-head.db`.
+
+`open` auth without a shared key refuses to listen on a non-loopback `HOST` / `--host`, because anyone who reached it could drive your computers. To accept other machines, set `OPEN_SHARED_KEY` (computers send it from `~/.kraki/channel.key`) or use `--auth github` / `--auth apikey`. See the [self-hosting guide](../../docs/self-hosting.md#reaching-the-relay-from-other-machines).
 
 Enable GitHub login for the web app:
 
@@ -88,6 +90,7 @@ deployments do not require a Head restart. See Monitor's migration instructions.
 
 ```bash
 kraki-relay --port 8080
+OPEN_SHARED_KEY=<secret> kraki-relay --host 0.0.0.0
 kraki-relay --db /path/to/kraki-head.db
 kraki-relay --auth open
 kraki-relay --auth github

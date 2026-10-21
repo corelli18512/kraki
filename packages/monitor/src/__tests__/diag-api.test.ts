@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type ClientRequest, type Server } from 'node:http';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,8 +10,12 @@ import { DiagApi, diagSigningText } from '../diag-api.js';
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicKey = key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const device = { id: 'device-1', userId: 'account-1', role: 'app', publicKey };
+const otherDevice = { id: 'device-2', userId: 'account-2', role: 'app', publicKey };
+const devices: Record<string, typeof device> = { [device.id]: device, [otherDevice.id]: otherDevice };
 const resources: Array<{ dir: string; api: DiagApi; server: Server }> = [];
+const stalls: ClientRequest[] = [];
 afterEach(async () => {
+  for (const req of stalls.splice(0)) req.destroy();
   for (const { dir, api, server } of resources.splice(0)) {
     api.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
@@ -22,7 +26,7 @@ afterEach(async () => {
 async function fixture(options: { enabled?: boolean; dailyBytes?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'kraki-diag-test-'));
   const api = new DiagApi({ directory: options.enabled === false ? undefined : dir,
-    getDevice: id => id === device.id ? device : undefined, dailyBytes: options.dailyBytes });
+    getDevice: id => devices[id], dailyBytes: options.dailyBytes });
   const server = createServer(async (req, res) => {
     if (!await api.handleRequest(req, res)) { res.writeHead(404); res.end(); }
   });
@@ -41,7 +45,19 @@ async function fixture(options: { enabled?: boolean; dailyBytes?: number } = {})
       'x-kraki-device': device.id, 'x-kraki-time': timestamp, 'x-kraki-request': id, 'x-kraki-signature': signature, ...extra,
     }, body: method === 'POST' ? new Uint8Array(body) : undefined });
   }
-  return { api, dir, url, request, batch, id };
+  /** A POST that sends its headers and part of its body, then stalls. */
+  function stalled(headers: Record<string, string>): Promise<ClientRequest> {
+    const req = httpRequest(url + '/api/diag/v1/batch', { method: 'POST', headers: { 'content-length': '1000', ...headers } });
+    req.on('error', () => {});
+    req.write('x');
+    stalls.push(req);
+    // Let the collector reach its body read.
+    return new Promise(resolve => setTimeout(() => resolve(req), 50));
+  }
+  function signedHeaders(deviceId: string): Record<string, string> {
+    return { 'x-kraki-device': deviceId, 'x-kraki-time': String(Date.now()), 'x-kraki-request': randomUUID(), 'x-kraki-signature': 'c2ln' };
+  }
+  return { api, dir, url, request, batch, id, stalled, signedHeaders };
 }
 
 describe('off-band diagnostics', () => {
@@ -179,6 +195,30 @@ describe('off-band diagnostics', () => {
     expect((await f.request()).status).toBe(410);
     await rm(join(f.dir, 'DISABLED'));
     expect((await f.request()).status).toBe(204);
+  });
+  it('does not hold upload slots for requests whose headers do not authenticate', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 4; i++) await f.stalled({});
+    expect((await f.request()).status).toBe(204);
+  });
+  it('limits uploads in flight per device, not for the whole collector', async () => {
+    const f = await fixture();
+    // Headers that pass the pre-body checks (signature is checked after the body).
+    await f.stalled({ ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.7' });
+    await f.stalled({ ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.8' });
+    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.9' })).status).toBe(204);
+    // A third one for the busy device waits.
+    const busy = await f.request(undefined, { ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.10' });
+    expect(busy.status).toBe(429);
+  });
+  it('rate limits by the client address the proxy forwards', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 120; i++) {
+      expect((await f.request(Buffer.alloc(0), { 'x-kraki-signature': 'bad', 'x-forwarded-for': '203.0.113.1' })).status).toBe(401);
+    }
+    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.1' })).status).toBe(429);
+    // Only the rightmost entry is the proxy's; a client-supplied one is ignored.
+    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.1, 203.0.113.2' })).status).toBe(204);
   });
   it('rate limits a device including replayed requests', async () => {
     const f = await fixture();

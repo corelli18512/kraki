@@ -112,6 +112,7 @@ Its job is to:
 1. A device opens a WebSocket connection to `head`.
 2. It sends an auth message (`github_token`, `github_oauth`, `pairing`, `challenge`, `apikey`, or `open`).
 3. `head` validates identity, registers the device, and confirms the connection.
+   For `challenge`, the nonce is issued by whichever `head` holds the account (an edge asks the account service through `/api/auth/challenge`). That `head` accepts a signature only over a nonce it issued for that device in the last 60 s, once; any other nonce is answered with the retryable `service_unavailable`.
 4. `head` sends `device_joined` to the user's other connected devices.
 
 ### 2. Session activity (tentacle → arm)

@@ -53,6 +53,7 @@ test('preload capability is opt-in Windows only and exposes no caption command I
     const sent = [];
     vm.runInNewContext(readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), {
       process: { platform, argv: [`--kraki-titlebar-overlay=${enabled}`] },
+      location: { origin: 'app://kraki' },
       require: () => ({
         contextBridge: { exposeInMainWorld: (_name, value) => { exposed = value; } },
         ipcRenderer: { send: (...args) => sent.push(args), sendSync: () => ({}) },

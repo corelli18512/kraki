@@ -21,6 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
   loadConfig,
+  loadChannelKey,
 } from './config.js';
 import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
@@ -825,7 +826,9 @@ async function promptRelayUrl(defaultRelay: string): Promise<string> {
  * in once with a device code instead, otherwise fail with what to run.
  */
 export async function relayAuthToken(config: KrakiConfig, interactive: boolean): Promise<string | undefined> {
-  if (config.authMethod === 'open') return 'dev';
+  // A self-hosted open relay with OPEN_SHARED_KEY checks this token; one
+  // without a key accepts anything, so 'dev' stays the keyless fallback.
+  if (config.authMethod === 'open') return loadChannelKey() || 'dev';
   if (config.authMethod !== 'github_token') return undefined;
   const { loadGitHubToken } = await import('./config.js');
   const saved = loadGitHubToken();

@@ -33,7 +33,9 @@ enum PayloadFragments {
 
 /// Reassembles fragments; memory bounded (oldest incomplete dropped beyond
 /// `maxBytes`, untouched ones after `ttl`). A dropped payload never surfaces;
-/// higher layers (re-requests, confirmations) recover it.
+/// higher layers (re-requests, confirmations) recover it. Parts are grouped by
+/// the sender the Head stamped on them (`src`) and the fragment id, so parts
+/// from different senders never combine.
 final class PayloadAssembler {
     private struct Pending { var parts: [String?]; var got = 0; var bytes = 0; var touched: Date }
     private var sets: [String: Pending] = [:]
@@ -75,6 +77,9 @@ final class PayloadAssembler {
               let d = object["d"] as? String,
               n > 0, i >= 0, i < n else { return (false, nil) }
         guard n <= maxParts else { return (true, nil) }
+        // Length-prefixed so no (sender, id) pair can spell another's key.
+        let sender = object["src"] as? String ?? ""
+        let key = "\(sender.utf8.count):\(sender):\(id)"
         let t = now()
         // Expiry is a sweep over every set; run it at most every 30 s rather
         // than on each fragment of a large payload.
@@ -84,8 +89,8 @@ final class PayloadAssembler {
         }
         // A set that changed its part count was restarted by the sender: start
         // over instead of ignoring the new parts until the old set expires.
-        if let existing = sets[id], existing.parts.count != n { drop(id) }
-        var set = sets[id] ?? { order.append(id); return Pending(parts: Array(repeating: nil, count: n), touched: t) }()
+        if let existing = sets[key], existing.parts.count != n { drop(key) }
+        var set = sets[key] ?? { order.append(key); return Pending(parts: Array(repeating: nil, count: n), touched: t) }()
         set.touched = t
         if set.parts[i] == nil {
             set.parts[i] = d
@@ -93,23 +98,23 @@ final class PayloadAssembler {
             set.bytes += d.utf8.count
             bytes += d.utf8.count
         }
-        sets[id] = set
+        sets[key] = set
         if set.got == n {
-            drop(id)
+            drop(key)
             return (true, set.parts.map { $0 ?? "" }.joined())
         }
         var index = 0
         while bytes > maxBytes, index < order.count {
-            if order[index] == id { index += 1 } else { drop(order[index]) }
+            if order[index] == key { index += 1 } else { drop(order[index]) }
         }
         return (true, nil)
     }
 
     func clear() { sets.removeAll(); order.removeAll(); bytes = 0 }
 
-    private func drop(_ id: String) {
-        guard let set = sets.removeValue(forKey: id) else { return }
+    private func drop(_ key: String) {
+        guard let set = sets.removeValue(forKey: key) else { return }
         bytes -= set.bytes
-        order.removeAll { $0 == id }
+        order.removeAll { $0 == key }
     }
 }
