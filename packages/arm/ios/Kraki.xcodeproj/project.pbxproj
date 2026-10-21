@@ -120,6 +120,7 @@
 		23BFA47FF5F32E8B033C58A9 /* MacChatHeaderControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEADA84650AE3CD811E50BB /* MacChatHeaderControls.swift */; };
 		246B2E3CF227103C6D04076D /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
 		2490AC630BA16594047FCF41 /* CommandSender+DurableText.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED676C714352477F09920C60 /* CommandSender+DurableText.swift */; };
+		258C06186415189FEBD03001 /* PushRegistrationDedupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330157354AD6FC3F223C3272 /* PushRegistrationDedupTests.swift */; };
 		26409CB796F338EFEF4A5DD1 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
 		267B0C0918F1A10CABFD299A /* MacComposerAnswerImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30CCC1BF274AA7918738FC9 /* MacComposerAnswerImageTests.swift */; };
 		268D4ACD7937C23DB256EBCF /* SessionListHeaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CB7622112E2FF32556A3550 /* SessionListHeaderUITests.swift */; };
@@ -842,6 +843,7 @@
 		30D15E3583EE37FE55399FAF /* BubbleImageHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleImageHostView.swift; sourceTree = "<group>"; };
 		30DA7331C26D57B232814DB0 /* UsagePeekTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekTests.swift; sourceTree = "<group>"; };
 		32B6A816B6624FE9CCD472F5 /* MessageBodyParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBodyParser.swift; sourceTree = "<group>"; };
+		330157354AD6FC3F223C3272 /* PushRegistrationDedupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrationDedupTests.swift; sourceTree = "<group>"; };
 		33641605B16E960C6A553E38 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		341940FBEAD0F36C8E7F510C /* KrakiVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiVoiceInputController.swift; sourceTree = "<group>"; };
 		357C3C01A1397E91B62B358E /* ChatPerfListView+ComposerOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPerfListView+ComposerOverlay.swift"; sourceTree = "<group>"; };
@@ -1977,6 +1979,7 @@
 				A40BC47A729AF4430834E394 /* PhotoAttachmentLoadTests.swift */,
 				22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */,
 				FA29992D4E7A13A7E95328F1 /* PushPreviewFormatTests.swift */,
+				330157354AD6FC3F223C3272 /* PushRegistrationDedupTests.swift */,
 				C54B1A9006D80D714A5E23E8 /* QuestionAnswerStateTests.swift */,
 				57D3C80484D4B15CC55267C4 /* ReconnectAdversarialTests.swift */,
 				8944F3F2DB7D6FAE31454B1B /* ReconnectingIndicatorTests.swift */,
@@ -2468,6 +2471,7 @@
 				8B53380A7015D4E5B9ED9D78 /* PhotoAttachmentLoadTests.swift in Sources */,
 				5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */,
 				0DE3DA58CA45BF2504EC193D /* PushPreviewFormatTests.swift in Sources */,
+				258C06186415189FEBD03001 /* PushRegistrationDedupTests.swift in Sources */,
 				768B88E9B54ECCA5A934CB2C /* QuestionAnswerStateTests.swift in Sources */,
 				CBC1B9E57A38DEBAAD181738 /* ReconnectAdversarialTests.swift in Sources */,
 				46A3A1AA1A0318AD3709FD7E /* ReconnectingIndicatorTests.swift in Sources */,
