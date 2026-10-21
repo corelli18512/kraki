@@ -4,16 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const mockIsSea = vi.fn(() => false);
-vi.mock('node:sea', () => ({
-  isSea: (...args: unknown[]) => mockIsSea(...args),
-}));
-
-// Avoid actually writing to log files in production mode
-vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
-  return { ...actual, mkdirSync: vi.fn() };
-});
+// Production-mode loggers write under the isolated test KRAKI_HOME.
 
 let createLogger: typeof import('../logger.js')['createLogger'];
 
@@ -23,8 +14,6 @@ describe('createLogger()', () => {
   beforeEach(async () => {
     vi.resetModules();
     process.env.NODE_ENV = 'development'; // force dev mode (no file transport)
-    mockIsSea.mockReset();
-    mockIsSea.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -67,21 +56,14 @@ describe('createLogger()', () => {
     expect((logger as unknown as { bindings: () => { name: string } }).bindings().name).toBe('my-component');
   });
 
-  it('creates a logger with pino-roll transport in production mode', async () => {
+  it('writes <name>.log under the Kraki home in production mode on an npm install too (one naming scheme)', async () => {
     process.env.NODE_ENV = 'production';
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
     ({ createLogger } = await import('../logger.js'));
-    const logger = createLogger('prod-test');
-    expect(logger).toBeDefined();
-    expect(typeof logger.info).toBe('function');
-  });
-
-  it('creates a logger with a plain file destination in SEA production mode', async () => {
-    process.env.NODE_ENV = 'production';
-    mockIsSea.mockReturnValue(true);
-    ({ createLogger } = await import('../logger.js'));
-    const logger = createLogger('sea-test');
-    expect(logger).toBeDefined();
-    expect(typeof logger.info).toBe('function');
+    const logger = createLogger('prod-test', { sync: true });
+    logger.info('hello');
+    expect(existsSync(join(process.env.KRAKI_HOME!, 'logs', 'prod-test.log'))).toBe(true);
   });
 });
 
@@ -103,5 +85,24 @@ describe('rotateLogFile (release review F3)', () => {
     expect(readFileSync(`${file}.1`, 'utf8').startsWith('round-5')).toBe(true);
     expect(readFileSync(`${file}.3`, 'utf8').startsWith('round-3')).toBe(true);
     expect(existsSync(`${file}.4`)).toBe(false);
+  });
+
+  it('rotates a small log once its oldest entry is a week old (daemon.log kept six months, log audit 2026-10-22)', async () => {
+    const { mkdtempSync, writeFileSync, existsSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { rotateLogFile, LOG_ROTATE_MAX_AGE_MS } = await import('../logger.js');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-logage-'));
+    const file = join(dir, 'daemon.log');
+    const now = Date.parse('2026-10-21T00:00:00Z');
+    const line = (time: number) => `${JSON.stringify({ level: 30, time, msg: 'x' })}\n`;
+
+    writeFileSync(file, line(now - LOG_ROTATE_MAX_AGE_MS + 60_000) + line(now));
+    expect(rotateLogFile(file, 10 * 1024 * 1024, 5, LOG_ROTATE_MAX_AGE_MS, now)).toBe(false);
+
+    writeFileSync(file, line(Date.parse('2026-04-18T00:00:00Z')) + line(now));
+    expect(rotateLogFile(file, 10 * 1024 * 1024, 5, LOG_ROTATE_MAX_AGE_MS, now)).toBe(true);
+    expect(existsSync(file)).toBe(false);
+    expect(readFileSync(`${file}.1`, 'utf8')).toContain('"msg":"x"');
   });
 });

@@ -57,7 +57,9 @@ import { beginRun, endRun, noteRunFda, RUN_HEARTBEAT_MS, touchRun } from './run-
 import type { AgentAdapter } from './adapters/base.js';
 import type { AgentId } from '@kraki/protocol';
 
-const logger = createLogger('daemon');
+// Lifecycle lines (start, shutdown, fatal) are few and must survive a hard
+// exit: written synchronously.
+const logger = createLogger('daemon', { sync: true });
 
 // Note: SIGTERM/SIGINT/`uncaughtException` are installed at the top of
 // `startWorker` so they can run a best-effort cleanup (kill the Copilot SDK
