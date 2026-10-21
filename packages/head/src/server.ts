@@ -610,12 +610,19 @@ export class HeadServer {
    *  serialized SQLite writes and starves the head event loop (observed:
    *  ~200ms per FORWARD × 65 devices ⇒ 13s per frame, causing the "every
    *  streaming delta arrives 16s later than the previous" bug). Reconnecting
-   *  devices resync via session_messages_range instead. */
+   *  devices resync via session_messages_range instead.
+   *
+   *  Only a tentacle's broadcast reaches anyone. An app's broadcast still rides
+   *  its own Pulse stream (control frames, and data is consumed and acked) but
+   *  is forwarded nowhere: no feature sends app→app (see `unicast`), and app
+   *  data broadcasts are encrypted to tentacles only, which this never targets. */
   private pulseBroadcastTargets(fromDevice: string): string[] {
     const userId = this.userByDevice.get(fromDevice);
     if (!userId) return [];
+    const devices = this.storage.getDevicesByUser(userId);
+    if (devices.find((device) => device.id === fromDevice)?.role !== 'tentacle') return [];
     const targets: string[] = [];
-    for (const device of this.storage.getDevicesByUser(userId)) {
+    for (const device of devices) {
       if (device.id === fromDevice || device.role !== 'app') continue;
       // Only include devices currently connected — see comment above.
       if (!this.connections.has(device.id)) continue;

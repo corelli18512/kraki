@@ -48,6 +48,12 @@ forwards and drops one that already has `from` or `src`; its own control is
   (`isAcceptableRegionRedirect`: from an official relay only to another
   `wss://*.kraki.chat`). Tentacle and web/Windows share that rule; iOS/Mac
   follows official relays only.
+- A decrypted message whose `deviceId` is not its stamped `src` is dropped
+  (Tentacle and iOS/Mac already did; web/Windows since 2026-10).
+- The Head forwards a Pulse `broadcast` only from a tentacle (to the account's
+  online apps). An app's broadcast still rides its own stream (control frames,
+  data acked) but goes nowhere: apps encrypt broadcasts to tentacles only, and
+  no feature sends app→app. Head since 2026-10.
 
 ## How to remove a legacy path
 

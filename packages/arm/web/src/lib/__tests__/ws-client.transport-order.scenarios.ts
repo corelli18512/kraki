@@ -244,7 +244,8 @@ export async function streamProgress(local: boolean, fragmented = false) {
   const first = await encrypt(message(1, 'agent_message_delta', { content: 'bulk1' }));
   const second = await encrypt(message(2, 'agent_message_delta', { content: 'bulk2' }));
   const live = await encrypt(message(3, 'agent_message_delta', { content: 'live' }));
-  const other = await encrypt(message(4, 'agent_message_delta', { content: 'other' }));
+  // From another device: its deviceId is its own (it must match the stamped src).
+  const other = await encrypt({ ...message(4, 'agent_message_delta', { content: 'other' }), deviceId: 'transport-other-peer' });
   const gate = deferred(), started = deferred(), secondDone = deferred(), firstDone = deferred();
   const original = keys.decryptFromBlob.bind(keys);
   keys.decryptFromBlob = async (...args) => {

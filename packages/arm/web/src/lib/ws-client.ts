@@ -511,6 +511,14 @@ export class KrakiWSClient {
       const domain = `${route}:${JSON.stringify(sender ?? null)}:${streamId}:${routeEpoch ?? 0}`;
       this.inboundCrypto.run(domain, () => this.encryption.decryptBlob(parsed.blob!, parsed.keys!), (inner) => {
         if (!inner || !valid(inner.deviceId)) return;
+        // The Head stamps the authenticated sender (`src`); the deviceId inside
+        // the ciphertext is the sender's own claim, so it must agree (as on the
+        // Tentacle and iOS/Mac).
+        const claimed: unknown = inner.deviceId;
+        if (sender !== undefined && typeof claimed === 'string' && claimed !== '' && claimed !== sender) {
+          logger.warn('Dropped message whose deviceId does not match its sender', { src: sender, claimed, type: inner.type });
+          return;
+        }
         const changedRoute = routeEpoch !== (sender ? this.routeEpochs.get(sender) : this.routeChanges);
         const staleRoute = changedRoute || (route === 'head' && this.localLink?.isLinked(sender ?? inner.deviceId) === true);
         if (staleRoute && STALE_ROUTE_DROPPED.has(inner.type)) {

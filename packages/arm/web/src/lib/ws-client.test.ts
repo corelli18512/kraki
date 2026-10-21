@@ -2234,6 +2234,30 @@ describe('KrakiWSClient', () => {
       });
     });
 
+    it('drops a payload whose deviceId is not the Head-stamped sender', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' },
+          { id: 'app-other', name: 'Phone', role: 'app', online: true, encryptionKey: 'k3' },
+        ],
+      });
+      const deliver = (deviceId: string, id: string, src: string) => (client as unknown as { handlePulseDelivered(p: string, r: 'head'): void })
+        .handlePulseDelivered(JSON.stringify({
+          src, keys: {},
+          blob: JSON.stringify({ type: 'session_list', deviceId, seq: 1, timestamp: '', payload: { sessions: [{ id, agent: 'copilot', state: 'idle', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] } }),
+        }), 'head');
+      // Another device on the account claims to be the computer.
+      deliver('dev-t', 'sess-forged', 'app-other');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(useStore.getState().sessions.has('sess-forged')).toBe(false);
+      deliver('dev-t', 'sess-real', 'dev-t');
+      await vi.waitFor(() => expect(useStore.getState().sessions.has('sess-real')).toBe(true));
+    });
+
     describe('fragment sender binding', () => {
       async function authed() {
         const client = new KrakiWSClient('ws://localhost:9999');
