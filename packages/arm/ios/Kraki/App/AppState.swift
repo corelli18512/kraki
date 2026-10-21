@@ -291,7 +291,7 @@ final class AppState {
             stability.conversationOpened(
                 sessionId: sessionId,
                 lastSeq: sessionStore.sessions[sessionId]?.lastSeq ?? 0,
-                localSeq: messageStore.dbLastSeq(sessionId),
+                localSeq: messageStore.persistedHead(sessionId),
                 online: connectionStatus == .connected
             )
         }
@@ -543,7 +543,7 @@ final class AppState {
     /// The session list was applied: is the open conversation up to date?
     func noteSessionListApplied() {
         let viewed = sessionStore.activeSessionId.flatMap { sid in
-            sessionStore.sessions[sid].map { (sessionId: sid, lastSeq: $0.lastSeq, localSeq: messageStore.dbLastSeq(sid)) }
+            sessionStore.sessions[sid].map { (sessionId: sid, lastSeq: $0.lastSeq, localSeq: messageStore.persistedHead(sid)) }
         }
         stability.sessionListApplied(viewed: viewed)
     }
@@ -553,7 +553,7 @@ final class AppState {
         guard stability.wantsConversationUpdates, let session = sessionStore.sessions[sessionId] else { return }
         stability.conversationRendered(
             sessionId: sessionId,
-            localSeq: messageStore.dbLastSeq(sessionId),
+            localSeq: messageStore.persistedHead(sessionId),
             lastSeq: session.lastSeq,
             hasContent: hasContent
         )
@@ -817,6 +817,18 @@ struct UserInfo: Codable, Equatable {
 // MARK: - Opening record and background socket grace (same file: private state)
 
 extension AppState {
+    /// The Tentacle answered a head request: this device has everything
+    /// through `seq`. The stability records compare against that, not the
+    /// last stored row: the newest seqs can be rows clients never store, and
+    /// then the catch-up changes nothing on screen, so no view refresh would
+    /// tell the tracker (Mac diag 10-15/10-16: outages re-authenticated in
+    /// 3 s but read "caught up" only at the next new message, 216 s / never).
+    func noteCaughtUp(_ sessionId: String, through seq: Int) {
+        messageStore.markCaughtUp(sessionId, through: seq)
+        guard sessionStore.activeSessionId == sessionId else { return }
+        noteConversationRendered(sessionId, hasContent: false)
+    }
+
     /// Starts the opening record: the first call per process is a cold start,
     /// later ones only after the app was hidden or the Mac slept.
     func noteVisible(keptSocket: Bool = false) {

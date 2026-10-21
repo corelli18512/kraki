@@ -162,6 +162,30 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertTrue(sender.hasSendsAwaitingEcho)
     }
 
+    // MARK: - (e) catch-up that adds nothing renderable ends the outage
+
+    /// Mac diag 10-15 18:31 / 10-16 02:04: re-authenticated in ~3 s, yet the
+    /// outage read "caught up" only at the next new message (216 s) or never.
+    /// The newest seqs were rows clients never store; the tracker compared
+    /// the last *stored* row and nothing re-rendered.
+    func testHeadReplyWithoutNewRowsEndsTheOutage() throws {
+        let app = try makeApp()
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        app.sessionStore.activeSessionId = sid
+        app.connectionStatus = .connected
+        let stability = app.stability
+        stability.authenticated()
+        stability.transportLost(reason: "receive_failed", code: nil, quietFor: 0)
+        stability.authenticated()
+        app.noteSessionListApplied()
+        XCTAssertTrue(stability.outages.isEmpty, "local 0 < head 12: catching up")
+
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.handleBatch(sessionId: sid, messages: [], lastSeq: 12, totalLastSeq: 12, containsHead: true)
+        XCTAssertEqual(stability.outages.last?.outcome, .recovered)
+        XCTAssertNotNil(stability.outages.last?.catchupMs)
+    }
+
     // MARK: - (d) connect timeout
 
     /// Mac diag 10-20 01:26: the first connect after a reboot hung the whole

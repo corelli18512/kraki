@@ -737,9 +737,7 @@ final class MessageProvider {
         // drives the iOS card's authoritative unread boolean; without this a
         // replay can populate SQLite while the card still shows old cursors.
         let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
-        if containsHead == true {
-            appState.messageStore.markCaughtUp(sessionId, through: batchHead)
-        }
+        if containsHead == true { appState.noteCaughtUp(sessionId, through: batchHead) }
         if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
             tentacleLastSeq[sessionId] = batchHead
         }
