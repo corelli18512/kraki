@@ -72,6 +72,14 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         let drain = r.drain()
         check(drain.events.count == 3 && drain.dropped == 2, "bounded queue drops")
         check(drain.events.map(\.seq) == [1, 2, 3], "monotonic sequence")
+        // Lock contention drops a record without waiting, but now counts it.
+        let contended = DiagRecorder(capacity: 10, perSecond: 100)
+        contended.record(.launch)
+        contended.testWhileLocked { check(!contended.record(.launch) && !contended.record(.launch), "contention never waits") }
+        contended.record(.launch)
+        let contendedDrain = contended.drain()
+        check(contendedDrain.events.count == 2 && contendedDrain.dropped == 2, "contention drops are counted (diag.health)")
+        check(contended.drain().dropped == 0, "counted once")
         r.setEnabled(false); r.record(.launch)
         check(r.drain().events.isEmpty, "off means no event")
         let limited = DiagRecorder(capacity: 10, perSecond: 1)

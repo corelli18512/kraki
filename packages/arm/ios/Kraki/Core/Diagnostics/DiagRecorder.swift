@@ -1,6 +1,7 @@
 #if KRAKI_DIAG
 import Foundation
 import MachO
+import Synchronization
 import zlib
 
 /// These types deliberately have no arbitrary log message / text / error field.
@@ -102,6 +103,12 @@ final class DiagRecorder: @unchecked Sendable {
     private var enabled = true
     private var sequence: UInt64 = 0
     private var dropped: UInt64 = 0
+    /// Records lost to lock contention. Counted without the lock (one relaxed
+    /// atomic add, never waits) and folded into `dropped` by `drain`, so the
+    /// loss shows up in `diag.health` instead of vanishing: contention takes
+    /// no sequence number, so it leaves no seq gap (2026-10 audit: a
+    /// `send.summary` and several `ws.state` after `background` went missing).
+    private let contended = Atomic<UInt64>(0)
     private var second = 0
     private var admitted = 0
     let capacity: Int
@@ -114,7 +121,10 @@ final class DiagRecorder: @unchecked Sendable {
     }
     @discardableResult
     func record(_ name: DiagEventName, session: String? = nil, _ fields: [DiagField: DiagValue] = [:]) -> Bool {
-        guard lock.try() else { return false } // contention intentionally not counted: no second lock
+        guard lock.try() else {
+            contended.wrappingAdd(1, ordering: .relaxed)
+            return false
+        }
         defer { lock.unlock() }
         guard enabled else { return false }
         sequence &+= 1 // gaps identify admitted-queue/rate drops within this process
@@ -135,14 +145,20 @@ final class DiagRecorder: @unchecked Sendable {
     func setEnabled(_ value: Bool) {
         lock.lock(); defer { lock.unlock() }
         enabled = value
-        if !value { pending.removeAll(keepingCapacity: true); dropped = 0 }
+        if !value { pending.removeAll(keepingCapacity: true); dropped = 0; contended.store(0, ordering: .relaxed) }
     }
     func drain() -> (events: [DiagEvent], dropped: UInt64) {
         lock.lock(); defer { lock.unlock() }
-        let result = (pending, dropped)
+        // Only while enabled: records refused because collection is off are not losses.
+        let lost = contended.exchange(0, ordering: .relaxed)
+        let result = (pending, dropped &+ (enabled ? lost : 0))
         pending = []; pending.reserveCapacity(capacity); dropped = 0
         return result
     }
+    #if KRAKI_DIAG_TESTING
+    /// Runs `body` while the recorder lock is held (deterministic contention).
+    func testWhileLocked(_ body: () -> Void) { lock.lock(); defer { lock.unlock() }; body() }
+    #endif
 }
 
 /// Private bounded spool. Called exclusively from the diagnostics utility queue.
