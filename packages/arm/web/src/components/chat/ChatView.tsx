@@ -37,9 +37,14 @@ function lowestSeq(messages: ChatMessage[]): number {
   return low;
 }
 
-function highestSeq(messages: ChatMessage[]): number {
+/** Highest conversation (spine) seq held. Runtime signals such as `active`
+ *  carry the relay's broadcast seq, a different counter: counting them could
+ *  declare the window at the head while spine rows are still missing (and so
+ *  present a stale question as open). */
+export function highestSeq(messages: ChatMessage[]): number {
   let high = 0;
   for (const m of messages) {
+    if (!isSpineMessage(m)) continue;
     const s = seqOf(m);
     if (Number.isInteger(s) && s > high) high = s;
   }

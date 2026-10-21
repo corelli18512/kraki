@@ -52,7 +52,7 @@ test.describe.serial('real-stack pulse: offline delta-burst coalescing preserves
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
     sid = await pairBrowser(page);
-    await expect(page.getByRole('button', { name: /Mock-agent/ }).first())
+    await expect(page.locator('button.ksr').first())
       .toBeVisible({ timeout: 15_000 });
     await page.goto(`${WEB_URL}/session/${sid}`);
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });

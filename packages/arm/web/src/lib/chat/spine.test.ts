@@ -19,6 +19,18 @@ describe('questions on the spine', () => {
     expect(openQuestions(raw, [], true).map((q) => q.id)).toEqual(['q1']);
   });
 
+  it('runtime signals after a question do not close it', () => {
+    // A range merge orders by seq; the turn's `active` carries a broadcast seq
+    // and can land after a question asked later. It must not hide the choices
+    // (found by the real-stack preview-lifecycle spec).
+    const raw = [m('idle', 2), ask(3, 'q1'), m('active', 529), m('compacting', 530, { phase: 'start' })];
+    expect(presentQuestions(raw, [], true)[1].question?.state).toBe('open');
+    expect(openQuestions(raw, [], true).map((q) => q.id)).toEqual(['q1']);
+    // Real progress still concludes it.
+    const moved = [ask(3, 'q1'), m('active', 529), m('agent_message', 4, { content: 'went ahead' })];
+    expect(presentQuestions(moved, [], true)[0].question?.state).toBe('unanswered');
+  });
+
   it('an optimistic answer closes the question at once', () => {
     const raw = [ask(1, 'q1')];
     expect(presentQuestions(raw, ['q1'], true)[0].question?.state).toBe('answered');
