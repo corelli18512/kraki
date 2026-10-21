@@ -7,7 +7,7 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { PulseHub } from './pulse-hub.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
-import { getLogger } from './logger.js';
+import { getLogger, LogThrottle } from './logger.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
@@ -38,6 +38,10 @@ export class HeadServer {
   renameClock = 0;
   deviceRenamedAt = new Map<string, number>();
   clients = new Map<WebSocket, ClientState>();
+  /** Auth failures and sockets that never sign in log at info (a scan must
+   *  be visible), capped per IP. */
+  readonly authFailureLog = new LogThrottle();
+  private readonly preAuthCloseLog = new LogThrottle();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
@@ -262,6 +266,7 @@ export class HeadServer {
     state.authTimer = setTimeout(() => {
       state.authTimer = undefined;
       if (state.authenticated) return;
+      // The close handler logs it ('WebSocket closed before auth', code 4008).
       getLogger().debug('Closing unauthenticated socket', { ip: state.ip, afterMs: ms });
       ws.close(4008, 'Authentication timeout');
     }, ms);
@@ -274,6 +279,7 @@ export class HeadServer {
       authenticated: false,
       isAlive: true,
       ip,
+      connectedAt: Date.now(),
       pongOverdueAt: null,
       pendingLivenessBroadcast: false,
     };
@@ -340,7 +346,18 @@ export class HeadServer {
           });
         }
       } else {
-        logger.debug('WebSocket closed before auth', { ip: state.ip, closeCode: code, closeReason: reasonStr });
+        const throttle = this.preAuthCloseLog.take(state.ip ?? 'unknown');
+        if (throttle) {
+          logger.info('WebSocket closed before auth', {
+            ip: state.ip,
+            closeCode: code,
+            closeReason: reasonStr,
+            afterMs: state.connectedAt !== undefined ? Date.now() - state.connectedAt : undefined,
+            method: state.authMethod,
+            ...(state.authInFlight && { authInFlight: true }),
+            ...throttle,
+          });
+        }
       }
       this.clients.delete(ws);
     });

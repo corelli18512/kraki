@@ -14,6 +14,18 @@ import { HEAD_FEATURES, publicPreferences, type ClientState } from './shared.js'
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
   metrics().authFailed(code);
+  const state = server.clients.get(ws);
+  const throttle = server.authFailureLog.take(state?.ip ?? 'unknown');
+  if (throttle) {
+    getLogger().info('Auth failed', {
+      code,
+      ip: state?.ip,
+      method: state?.authMethod,
+      deviceId: deviceId ?? state?.deviceId ?? state?.authDeviceId,
+      reason: message,
+      ...throttle,
+    });
+  }
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
   }
@@ -33,6 +45,8 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
   }
   state.authInFlight = true;
   state.authTiming = { startedAt: Date.now() };
+  state.authMethod = auth.method;
+  state.authDeviceId = auth.method === 'challenge' ? auth.deviceId : msg.device.deviceId;
   try {
     if (auth.method === 'challenge') {
       // Challenge is multi-step — start here, verify in handleChallengeResponse
