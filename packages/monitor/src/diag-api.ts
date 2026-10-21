@@ -64,7 +64,7 @@ export const schemas: Record<string, string[]> = {
   'app.phase': ['phase', 'pending'],
   'ws.state': ['state', 'attempt', 'source', 'count'],
   'ui.answer': ['questionId', 'origin', 'ix', 'clickCount', 'eventNumber', 'attempt'],
-  'ui.mouse': ['questionId', 'phase', 'eventNumber', 'clickCount'],
+  'ui.mouse': ['questionId', 'phase', 'eventNumber', 'clickCount', 'cause'], // cause: why a click was dropped
   'cmd.answer': ['questionId', 'textLength', 'pending', 'duplicate', 'source', 'stack', 'ix'],
   'cmd.input': ['clientId', 'answerTo', 'textLength', 'attachments', 'ix', 'source'],
   'cmd.handoff': ['clientId', 'answerTo', 'accepted', 'stack'],
