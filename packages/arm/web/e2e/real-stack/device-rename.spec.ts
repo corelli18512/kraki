@@ -74,11 +74,6 @@ async function heardByTentacles(type = 'device_renamed') {
 test.describe.serial('real-stack: renaming a device syncs to every device', () => {
   let a: Page;
   let b: Page;
-  // Kept open to the end: a head restart while an app device is offline stops
-  // head control reaching the computers (an existing Pulse issue, reproduced
-  // on main without renaming; tracked separately), which is not what this
-  // spec is about.
-  const extra: Page[] = [];
 
   test.beforeAll(async ({ browser }) => {
     await control('/tentacle2/connect');
@@ -95,7 +90,8 @@ test.describe.serial('real-stack: renaming a device syncs to every device', () =
     for (const [current, page] of [['Work laptop', a], ['Build box', a]] as const) {
       try { if (await deviceCard(page, current).count()) await rename(page, current, ''); } catch { /* best effort */ }
     }
-    for (const p of [a, b, ...extra]) await p?.close();
+    await a?.close();
+    await b?.close();
   });
 
   test('1. renaming an online computer shows on the other browser and reaches both computers', async () => {
@@ -147,9 +143,12 @@ test.describe.serial('real-stack: renaming a device syncs to every device', () =
     await expect(deviceCard(b, 'Build box').first()).toBeVisible({ timeout: 20_000 });
 
     const c = await pair(browser, 'Work laptop');
-    extra.push(c);
-    await openDevices(c);
-    await expect(deviceCard(c, 'Build box').first()).toBeVisible({ timeout: 20_000 });
+    try {
+      await openDevices(c);
+      await expect(deviceCard(c, 'Build box').first()).toBeVisible({ timeout: 20_000 });
+    } finally {
+      await c.close();
+    }
   });
 
   test('4. the names survive a head restart on the same database', async ({ browser }) => {
@@ -168,9 +167,12 @@ test.describe.serial('real-stack: renaming a device syncs to every device', () =
       ]));
     }
     const c = await pair(browser, 'Work laptop');
-    extra.push(c);
-    await openDevices(c);
-    await expect(deviceCard(c, 'Build box').first()).toBeVisible({ timeout: 20_000 });
+    try {
+      await openDevices(c);
+      await expect(deviceCard(c, 'Build box').first()).toBeVisible({ timeout: 20_000 });
+    } finally {
+      await c.close();
+    }
     // The already-open browsers reconnected by themselves and still show them.
     await expect(deviceCard(a, 'Work laptop').first()).toBeVisible({ timeout: 30_000 });
     await expect(deviceCard(b, 'Build box').first()).toBeVisible({ timeout: 30_000 });
@@ -178,8 +180,7 @@ test.describe.serial('real-stack: renaming a device syncs to every device', () =
 
   test('5. after the restart, a rename still reaches everyone; clearing it goes back to the own name', async () => {
     await rename(b, 'Work laptop', '');
-    // Every browser, including the one that joined after the restart.
-    for (const p of [a, b, ...extra]) await expect(deviceCard(p, T1).first()).toBeVisible({ timeout: 20_000 });
+    for (const p of [a, b]) await expect(deviceCard(p, T1).first()).toBeVisible({ timeout: 20_000 });
     await expect(deviceCard(a, 'Work laptop')).toHaveCount(0);
     await expect.poll(async () => (await heardByTentacles()).t2.at(-1), { timeout: 15_000 })
       .toEqual(expect.objectContaining({ type: 'device_renamed', name: T1 }));
