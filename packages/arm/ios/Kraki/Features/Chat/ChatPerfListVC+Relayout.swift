@@ -93,8 +93,23 @@ extension ChatPerfListVC {
         guard collectionView != nil, laidOutWidth > 0, collectionView.bounds.width == laidOutWidth,
               !widthRelayoutScheduled else { return }
         if followingBottom { lastReadingAnchor = .newest; return }
-        if !force, case .message(let id, _)? = lastReadingAnchor, items.contains(id) { return }
+        // Same message, current distance: late height corrections can move
+        // what is on screen without a user scroll, and a fold must keep what
+        // the reader sees now. Re-pick only on a user scroll or if it's gone.
+        if !force, case .message(let id, _)? = lastReadingAnchor, let delta = visibleOffsetFromTop(of: id) {
+            lastReadingAnchor = .message(id: id, offsetFromTop: delta)
+            return
+        }
         lastReadingAnchor = currentReadingAnchor()
+    }
+
+    /// A loaded, on-screen message's top relative to the viewport top.
+    func visibleOffsetFromTop(of id: String) -> CGFloat? {
+        guard let index = items.firstIndex(of: id), index < collectionView.numberOfItems(inSection: 0) else { return nil }
+        let path = IndexPath(item: index, section: 0)
+        guard collectionView.indexPathsForVisibleItems.contains(path),
+              let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return nil }
+        return frame.minY - (collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
     }
 
     /// The message nearest the top of the viewport and its distance from it.
@@ -125,12 +140,14 @@ extension ChatPerfListVC {
         collectionView.reloadData()
         collectionView.layoutIfNeeded()
         if case .message? = anchor, let anchor {
+            widthAnchorGeneration += 1
+            let generation = widthAnchorGeneration
             restore(anchor)
             // Background height measurement settles rows above the anchor
             // just after a full re-layout; follow it until the user scrolls.
             for delay in [0.1, 0.35, 0.8] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    guard let self, self.collectionView != nil, self.lastReadingAnchor == anchor,
+                    guard let self, self.collectionView != nil, self.widthAnchorGeneration == generation,
                           !self.collectionView.isTracking, !self.collectionView.isDragging,
                           !self.collectionView.isDecelerating, !self.followingBottom else { return }
                     self.restore(anchor)

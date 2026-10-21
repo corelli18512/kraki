@@ -313,6 +313,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// noticed, UIKit has already resized the list, so it can't be read then.
     var lastReadingAnchor: ReadingAnchor?
     var widthRelayoutScheduled = false
+    /// Bumped on a re-layout and on every user scroll: late anchor
+    /// corrections stop as soon as the user takes over.
+    var widthAnchorGeneration = 0
     var codeHighlightSettleWork: DispatchWorkItem?
     var pendingCodeHighlightRefresh = false
     override func viewDidLoad() {
@@ -780,6 +783,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         #endif
         if userDriven, !applyingProgrammaticShift {
             noteUserScrollOffset(scrollView.contentOffset.y)
+            widthAnchorGeneration += 1
             rememberReadingAnchor(force: true)
         } else {
             rememberReadingAnchor(force: false)
