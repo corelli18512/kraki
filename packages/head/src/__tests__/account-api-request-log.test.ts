@@ -12,6 +12,7 @@ import { LocalAuthBackend } from '../local-auth-backend.js';
 import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { AccountApi } from '../account-api.js';
 import { metrics, resetMetricsForTests } from '../metrics.js';
+import { LogThrottle } from '../logger.js';
 import { captureLogs, silenceLogs, type CapturingLogger } from './log-capture.js';
 
 const SERVICE_KEY = 'request-log-key';
@@ -80,6 +81,40 @@ describe('account API request log', () => {
     await settle();
     const [line] = logs.find('Account API request');
     expect(line).toMatchObject({ level: 'info', data: { status: 401, code: 'unauthorized', reqId: echoed } });
+  });
+
+  it('rejected (401 / 429) request lines are capped per IP and in total, with suppression counts', async () => {
+    let now = 0;
+    const api = new AccountApi({
+      authBackend: new LocalAuthBackend({ storage: account, authProviders: new Map() }),
+      serviceKey: SERVICE_KEY,
+      publicRateLimit: 2,
+      rejectedRequestLog: new LogThrottle(5, 60, 60_000, () => now),
+    });
+    const limited = createServer(async (req, res) => {
+      if (!(await api.handleRequest(req, res))) { res.writeHead(404); res.end(); }
+    });
+    await new Promise<void>((resolve) => limited.listen(0, resolve));
+    const base = `http://localhost:${(limited.address() as AddressInfo).port}`;
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        statuses.push((await fetch(`${base}/api/auth/challenge`, { method: 'POST', headers: { Authorization: 'Bearer wrong' }, body: '{}' })).status);
+      }
+      for (let i = 0; i < 6; i++) statuses.push((await fetch(`${base}/api/config`)).status);
+      expect(statuses.filter((s) => s === 401)).toHaveLength(6);
+      expect(statuses.filter((s) => s === 429)).toHaveLength(4);
+      await settle();
+      const rejected = logs.find('Account API request').filter((l) => l.data.status === 401 || l.data.status === 429);
+      expect(rejected).toHaveLength(5);
+      now = 60_000;
+      await fetch(`${base}/api/auth/challenge`, { method: 'POST', headers: { Authorization: 'Bearer wrong' }, body: '{}' });
+      await settle();
+      const last = logs.find('Account API request').at(-1)!;
+      expect(last.data).toMatchObject({ status: 401, suppressed: 5 });
+    } finally {
+      await new Promise<void>((resolve) => limited.close(() => resolve()));
+    }
   });
 
   it('routine status polls log at debug', async () => {

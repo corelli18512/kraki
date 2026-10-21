@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { LocalAuthBackend } from './local-auth-backend.js';
 import { normalizeDeviceName } from '@kraki/protocol';
 import { safeEqual } from './auth.js';
-import { getLogger } from './logger.js';
+import { getLogger, LogThrottle } from './logger.js';
 import { clientIp } from './client-ip.js';
 import { metrics } from './metrics.js';
 import { REQUEST_ID_HEADER, requestIdFrom } from './request-id.js';
@@ -36,6 +36,9 @@ export interface AccountApiOptions {
   serviceKey?: string;
   /** Requests per minute per IP on the public routes. Default 60. */
   publicRateLimit?: number;
+  /** Caps the info lines of unauthorized / rate-limited requests (an outsider
+   *  can send them at will). Default: 5 per IP and 60 in total per minute. */
+  rejectedRequestLog?: LogThrottle;
 }
 
 type ServiceCaller = { admin: true } | { admin: false; region: string };
@@ -44,8 +47,10 @@ export class AccountApi {
   private backend: LocalAuthBackend;
   private serviceKey?: string;
   private publicLimiter: IpRateLimiter;
+  private rejectedRequestLog: LogThrottle;
 
   constructor(options: AccountApiOptions) {
+    this.rejectedRequestLog = options.rejectedRequestLog ?? new LogThrottle();
     this.backend = options.authBackend;
     this.serviceKey = options.serviceKey;
     this.publicLimiter = new IpRateLimiter(options.publicRateLimit ?? 60);
@@ -487,13 +492,20 @@ export class AccountApi {
       metrics().inc('api.requests');
       if (status >= 500 || aborted) metrics().inc('api.errors');
       metrics().accountApi.observe(ms);
+      const ip = clientIp(req);
+      let throttle: { suppressed?: number } | null = {};
+      if (status === 401 || status === 429) {
+        throttle = this.rejectedRequestLog.take(ip ?? 'unknown');
+        if (!throttle) return;
+      }
       const fields = {
         reqId, method: req.method, path, status, ms,
         ...(context.code && { code: context.code }),
         ...(context.caller && { caller: context.caller }),
         ...(context.deviceId && { deviceId: context.deviceId }),
-        ip: clientIp(req),
+        ip,
         ...(aborted && { aborted: true }),
+        ...throttle,
       };
       const logger = getLogger();
       if (status >= 500 || aborted) logger.warn('Account API request', fields);
