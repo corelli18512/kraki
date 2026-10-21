@@ -59,4 +59,20 @@ final class ReconnectRound3Tests: XCTestCase {
         provider.ensureLoaded(sessionId: sid, reason: "current-answer")
         XCTAssertFalse(provider.isLoadingHead(sid))
     }
+
+    /// Round 4: an unrelated older-page reply must not end the after-drop window.
+    func testOlderPageReplyDoesNotEndTheAfterDropWindow() throws {
+        let sid = "r4-older-page-first"
+        let (app, provider) = try fixture(sid)
+        defer { app.disconnect() }
+        provider.ensureLoaded(sessionId: sid, reason: "replacement")
+        XCTAssertTrue(provider.isLoadingHead(sid))
+        // An older page (below the known head) lands first...
+        provider.handleBatch(sessionId: sid, messages: [row(sid, 3)], lastSeq: 3, totalLastSeq: 3, containsHead: false)
+        // ...then the obsolete head-12 reply: still rejected, slot kept.
+        provider.handleBatch(sessionId: sid, messages: [row(sid, 9), row(sid, 12)], lastSeq: 12, totalLastSeq: 12, containsHead: true)
+        XCTAssertTrue(provider.isLoadingHead(sid), "the replacement head request is still outstanding")
+        XCTAssertLessThanOrEqual(app.messageStore.dbLastSeq(sid), 8)
+        XCTAssertEqual(provider.tentacleLastKnownSeq(sid), 8)
+    }
 }

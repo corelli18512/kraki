@@ -77,6 +77,10 @@ export class EdgeAuthCache {
   /** Bumped whenever a device's trust is dropped: an account-service answer
    *  requested before the drop must not bring it back. */
   private readonly epochs = new Map<string, number>();
+  /** Monotonic clock of trust changes, and when each device last changed:
+   *  fences answers for requests that did not know the device id yet. */
+  private changeClock = 0;
+  private readonly changedAt = new Map<string, number>();
 
   constructor(private readonly db: Database.Database, options: EdgeAuthCacheOptions = {}) {
     this.maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
@@ -102,6 +106,22 @@ export class EdgeAuthCache {
   /** Current trust epoch of a device (see `remember`). */
   epoch(deviceId: string): number { return this.epochs.get(deviceId) ?? 0; }
 
+  /** The id belongs to an account deleted through this edge. */
+  isTombstoned(deviceId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined;
+  }
+
+  /** Now, on the trust-change clock. */
+  clock(): number { return this.changeClock; }
+
+  /** Whether the device's trust changed after `clock` (from `clock()`). */
+  changedSince(deviceId: string, clock: number): boolean { return (this.changedAt.get(deviceId) ?? 0) > clock; }
+
+  private bump(deviceId: string): void {
+    this.epochs.set(deviceId, this.epoch(deviceId) + 1);
+    this.changedAt.set(deviceId, ++this.changeClock);
+  }
+
   /**
    * The account service accepted this device (challenge or token auth).
    * `epochAtRequest` (from `epoch()` before the request was sent) fences the
@@ -113,7 +133,7 @@ export class EdgeAuthCache {
     if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return 'stale';
     const self = result.devices.find((d) => d.id === result.deviceId);
     if (!self?.publicKey) return 'skipped'; // no signing key: cannot do challenge auth anyway
-    this.epochs.set(result.deviceId, this.epoch(result.deviceId) + 1);
+    this.bump(result.deviceId);
     this.db.prepare(`INSERT OR REPLACE INTO edge_auth_cache
       (device_id, user_id, public_key, encryption_key, result_json, verified_at) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(result.deviceId, result.userId, self.publicKey, self.encryptionKey ?? null,
@@ -147,7 +167,7 @@ export class EdgeAuthCache {
   forget(deviceId: string): void {
     this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?').run(deviceId);
     this.lastRevalidation.delete(deviceId);
-    this.epochs.set(deviceId, this.epoch(deviceId) + 1);
+    this.bump(deviceId);
   }
 
   deviceIds(): string[] {
