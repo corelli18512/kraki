@@ -1,5 +1,6 @@
 import { safeEqual } from './auth.js';
 import type { Storage } from './storage.js';
+import { getLogger } from './logger.js';
 
 export interface VoiceSettlementRequest {
   authorization?: string;
@@ -107,4 +108,54 @@ export function handleVoiceSettlement(
       ...(result.quotaSeconds !== undefined ? { quotaSeconds: result.quotaSeconds } : {}),
     },
   };
+}
+
+/**
+ * One line per settlement request: which lease (jti / activation prefixes,
+ * device) and what happened. Routine no-change reports are debug; every
+ * rejection is a warning (log audit 2026-10-22: they were not logged at all).
+ */
+export function logVoiceSettlement(storage: Storage, rawBody: string, response: VoiceSettlementResponse): void {
+  const logger = getLogger();
+  const request = settlementRequestForLog(rawBody);
+  let deviceId: string | undefined;
+  if (request) {
+    try { deviceId = storage.getVoiceLease(request.jti)?.deviceId; } catch { /* storage may be closed */ }
+  }
+  const lease = request && {
+    action: request.action,
+    jti: request.jti.slice(0, 8),
+    activation: request.activationId.slice(0, 8),
+    ...(deviceId && { deviceId }),
+    ...(request.reason && { reason: request.reason }),
+  };
+  if (response.status !== 200) {
+    logger.warn('Voice settlement rejected', { httpStatus: response.status, error: response.body.error, ...lease });
+    return;
+  }
+  const body = response.body;
+  const status = (body.activationStatus ?? body.settlementStatus) as string | undefined;
+  const fields = {
+    ...lease,
+    status,
+    ...(body.usedSeconds !== undefined && { usedSeconds: body.usedSeconds }),
+    ...(body.quotaSeconds !== undefined && { quotaSeconds: body.quotaSeconds }),
+  };
+  if (request?.action === 'settle' && status !== 'updated') logger.debug('Voice lease accounting updated', fields);
+  else logger.info('Voice lease accounting updated', fields);
+}
+
+function settlementRequestForLog(rawBody: string): { action: string; jti: string; activationId: string; reason?: string } | undefined {
+  try {
+    const input = JSON.parse(rawBody) as Record<string, unknown>;
+    if (typeof input?.action !== 'string' || typeof input.jti !== 'string' || typeof input.activationId !== 'string') return undefined;
+    return {
+      action: input.action.slice(0, 16),
+      jti: input.jti,
+      activationId: input.activationId,
+      ...(typeof input.reason === 'string' && { reason: input.reason.slice(0, 64) }),
+    };
+  } catch {
+    return undefined;
+  }
 }

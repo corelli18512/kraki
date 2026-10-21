@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import { Storage } from '../storage.js';
 import { PushManager } from '../push/index.js';
 import type { PushProvider, PushPayload, PushResult } from '../push/index.js';
+import { captureLogs, silenceLogs } from './log-capture.js';
 
 class MockPushProvider implements PushProvider {
   readonly name: string;
@@ -36,6 +37,21 @@ describe('PushManager', () => {
 
   afterEach(() => {
     storage.close();
+  });
+
+  it('logs every push outcome (log audit 2026-10-22 d)', async () => {
+    const logs = captureLogs();
+    try {
+      storage.upsertPushToken('dev-phone', 'apns', 'tok-phone');
+      provider.nextResult = { success: true, id: 'apns-1' };
+      await manager.sendToOfflineDevices('u1', [], { blob: 'b', keys: { 'dev-phone': 'k' } });
+      expect(logs.find('Push sent')[0].data).toMatchObject({ deviceId: 'dev-phone', provider: 'apns', id: 'apns-1' });
+      provider.nextResult = { success: false, error: 'TooManyRequests' };
+      await manager.sendToOfflineDevices('u1', [], { blob: 'b', keys: { 'dev-phone': 'k' } });
+      expect(logs.find('Push failed')[0]).toMatchObject({ level: 'warn', data: { deviceId: 'dev-phone', error: 'TooManyRequests' } });
+    } finally {
+      silenceLogs();
+    }
   });
 
   it('sends push to offline devices with tokens', async () => {

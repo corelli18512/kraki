@@ -27,7 +27,8 @@ import { fileURLToPath } from 'url';
 
 // Load .env from the head package directory (works regardless of cwd)
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenvConfig({ path: resolve(__dirname, '..', '.env') });
+// quiet: dotenv 17 otherwise prints an "injected env" line with an ad.
+dotenvConfig({ path: resolve(__dirname, '..', '.env'), quiet: true });
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
 const VERSION: string = pkg.version;
@@ -39,7 +40,7 @@ import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuth
 import type { AuthProvider } from './auth.js';
 import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 import { validateVoiceConfig } from './voice-config.js';
-import { handleVoiceSettlement } from './voice-settlement.js';
+import { handleVoiceSettlement, logVoiceSettlement } from './voice-settlement.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
@@ -48,6 +49,10 @@ import { LocalAuthBackend } from './local-auth-backend.js';
 import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { EdgeAuthCache } from './edge-auth-cache.js';
 import { AccountApi } from './account-api.js';
+import { InflightRequests } from './http-drain.js';
+
+/** Shutdown waits this long for HTTP requests still being answered. */
+const SHUTDOWN_DRAIN_MS = 2_000;
 
 // --- CLI flags / subcommands ---
 const rawArgs = process.argv.slice(2);
@@ -346,9 +351,7 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
     switch (mode) {
       case 'github': {
         if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
-          console.warn('  ⚠ GitHub OAuth: GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set.');
-          console.warn('    Web "Sign in with GitHub" will be disabled. Add them to .env or environment.');
-          console.warn('    Token auth (gh auth token) and QR pairing still work.');
+          logger.warn('GitHub OAuth: GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set; web "Sign in with GitHub" disabled (token auth and QR pairing still work)');
         }
         const ghProvider = new GitHubAuthProvider({
           clientId: GITHUB_CLIENT_ID,
@@ -356,7 +359,7 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
         });
         providers.set('github', new ThrottledAuthProvider(ghProvider));
         if (GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) {
-          console.log('  GitHub OAuth configured (web login enabled)');
+          logger.info('GitHub OAuth configured (web login enabled)');
         }
         break;
       }
@@ -385,7 +388,13 @@ const logger = new Logger({
 });
 setGlobalLogger(logger);
 
-logger.info('Kraki Head starting...', { mode: IS_CONNECTED_MODE ? 'connected' : 'standalone', region: REGION || '(none)' });
+logger.info('Kraki Head starting...', {
+  version: VERSION,
+  node: process.version,
+  pid: process.pid,
+  mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
+  region: REGION || '(none)',
+});
 
 // --- Auth backend setup ---
 let authBackend: AuthBackend | undefined;
@@ -556,7 +565,10 @@ const readinessContext: ReadinessContext = {
   gauges: () => head.getGauges(),
 };
 
+const inflightRequests = new InflightRequests();
+
 const httpServer = createServer(async (req, res) => {
+  inflightRequests.track(res);
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (handleObservability(req, res, readinessContext)) return;
@@ -591,11 +603,13 @@ const httpServer = createServer(async (req, res) => {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token || !safeEqual(token, VOICE_SETTLEMENT_KEY)) {
+      logger.warn('Voice settlement rejected', { httpStatus: 401, error: 'unauthorized' });
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
     if (req.method !== 'POST') {
+      logger.warn('Voice settlement rejected', { httpStatus: 405, error: 'method_not_allowed' });
       res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'method_not_allowed' }));
       return;
@@ -611,21 +625,17 @@ const httpServer = createServer(async (req, res) => {
     });
     req.on('end', () => {
       if (tooLarge) {
+        logger.warn('Voice settlement rejected', { httpStatus: 413, error: 'payload_too_large' });
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'payload_too_large' }));
         return;
       }
+      const body = Buffer.concat(chunks).toString('utf8');
       const result = handleVoiceSettlement(storage!, VOICE_SETTLEMENT_KEY, {
         authorization: req.headers.authorization,
-        body: Buffer.concat(chunks).toString('utf8'),
+        body,
       }, { dailyCapSec: VOICE_DAILY_QUOTA_SEC });
-      if (result.status === 200) {
-        logger.info('Voice lease accounting updated', {
-          action: result.body.activationStatus ? 'activate' : 'settle',
-          usedSeconds: result.body.usedSeconds,
-          status: result.body.activationStatus ?? result.body.settlementStatus,
-        });
-      }
+      logVoiceSettlement(storage!, body, result);
       res.writeHead(result.status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result.body));
     });
@@ -675,6 +685,7 @@ head.attach(httpServer);
 
 httpServer.listen(PORT, () => {
   logger.info(`Kraki Head listening on port ${PORT}`, {
+    version: VERSION,
     ws: `ws://localhost:${PORT}`,
     mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
     auth: IS_CONNECTED_MODE ? '(delegated)' : AUTH_MODES.join(', '),
@@ -686,17 +697,31 @@ httpServer.listen(PORT, () => {
   });
 });
 
-async function shutdown() {
-  logger.info('Shutting down...');
+let shuttingDown = false;
+/** Stop accepting, close sockets, let HTTP requests in flight (account API,
+ *  voice settlement) finish, then close the database. */
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('Shutting down...', {
+    signal,
+    version: VERSION,
+    upSec: Math.floor((Date.now() - startedAt) / 1000),
+    conns: head.connections.size,
+    inflightHttp: inflightRequests.size,
+  });
+  httpServer.close();
+  httpServer.closeIdleConnections();
   head.close();
+  const dropped = await inflightRequests.drain(SHUTDOWN_DRAIN_MS);
+  if (dropped > 0) logger.warn('Shutdown cut off HTTP requests still in flight', { dropped, waitedMs: SHUTDOWN_DRAIN_MS });
   storage?.close();
   logger.close();
-  httpServer.close();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', (signal) => { void shutdown(signal); });
+process.on('SIGTERM', (signal) => { void shutdown(signal); });
 
 // A stray rejection is logged and survives; an uncaught exception leaves the
 // process in an unknown state, so it is logged and the relay exits for the

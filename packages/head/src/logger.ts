@@ -115,6 +115,49 @@ export class Logger {
   }
 }
 
+/**
+ * Caps how many lines one kind of event may log per window, so events an
+ * outsider can trigger at will (auth failures, sockets that never sign in)
+ * are visible at info without letting a scanner flood the log. A per-key cap
+ * (usually per IP) and a cap across all keys. When a key may log again, the
+ * line carries how many were dropped meanwhile (`suppressed`).
+ */
+export class LogThrottle {
+  private windowStart = 0;
+  private total = 0;
+  private perKey = new Map<string, number>();
+  private dropped = new Map<string, number>();
+
+  constructor(
+    private readonly perKeyLimit = 5,
+    private readonly totalLimit = 60,
+    private readonly windowMs = 60_000,
+    private readonly now = () => Date.now(),
+  ) {}
+
+  /** null: drop this line. Otherwise the fields to add to it. */
+  take(key: string): { suppressed?: number } | null {
+    const now = this.now();
+    if (now - this.windowStart >= this.windowMs) {
+      this.windowStart = now;
+      this.total = 0;
+      this.perKey.clear();
+      if (this.dropped.size > 10_000) this.dropped.clear();
+    }
+    const count = this.perKey.get(key) ?? 0;
+    if (count >= this.perKeyLimit || this.total >= this.totalLimit) {
+      this.dropped.set(key, (this.dropped.get(key) ?? 0) + 1);
+      return null;
+    }
+    this.perKey.set(key, count + 1);
+    this.total++;
+    const suppressed = this.dropped.get(key);
+    if (suppressed === undefined) return {};
+    this.dropped.delete(key);
+    return { suppressed };
+  }
+}
+
 /** Global logger instance — set via createLogger() in index.ts */
 let globalLogger: Logger = new Logger();
 
