@@ -58,6 +58,7 @@ export const COUNTERS = [
   'pulse.frames.in', 'pulse.bytes.in', 'pulse.frames.out', 'pulse.bytes.out',
   'pulse.forwarded', 'pulse.deliveredToHead',
   'push.attempted', 'push.sent', 'push.failed', 'push.gone', 'push.threw', 'push.authError',
+  'api.requests', 'api.errors',
 ] as const;
 export type CounterName = typeof COUNTERS[number];
 
@@ -75,6 +76,8 @@ export class RelayMetrics {
     /** First `auth` frame → `auth_ok` sent (includes the client's signing). */
     total: new LatencyHistogram(),
   };
+  /** Account API requests served here (account service only), start to response end. */
+  readonly accountApi = new LatencyHistogram();
   /** Auth failures by error code (`invalid_token`, `wrong_region`, …). */
   readonly authFailures = new Map<string, number>();
   private loopDelay: IntervalHistogram | null = null;
@@ -122,6 +125,7 @@ export class RelayMetrics {
       authFailures: Object.fromEntries(this.authFailures),
       frameHandling: this.frameHandling.snapshot(),
       authStages: Object.fromEntries(Object.entries(this.authStages).map(([k, h]) => [k, h.snapshot()])),
+      accountApi: this.accountApi.snapshot(),
       lastHealthAgoSec: this.lastHealthAt === null ? null : Math.floor((Date.now() - this.lastHealthAt) / 1000),
     };
   }
