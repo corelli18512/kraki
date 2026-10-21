@@ -32,7 +32,7 @@ export const fields: Record<string, Validator> = {
   stack: v => typeof v === 'string' && /^(0x[\da-f]+)(,0x[\da-f]+){0,15}$/i.test(v),
   textLength: number, attachments: number, pending: number, messageSeq: number,
   matched: bool, accepted: bool, duplicate: bool, restored: number, count: number,
-  dropped: number, durationMs: number, clickCount: number, eventNumber: number,
+  dropped: number, durationMs: number, cpuMs: number, clickCount: number, eventNumber: number,
   attempt: number, status: number, bytes: number, events: number, firstSeq: number, lastSeq: number,
   // Stability summaries (StabilityTracker): durations, counts and tags only.
   kind: choice('cold', 'warm', 'wake', 'typed', 'voice', 'answer', 'steer', 'head'),
@@ -72,7 +72,7 @@ export const schemas: Record<string, string[]> = {
   'echo.input': ['clientId', 'answerTo', 'messageSeq', 'matched'],
   'diag.health': ['dropped', 'count', 'bytes'],
   'diag.upload': ['status', 'bytes', 'durationMs'],
-  'work.slow': ['source', 'durationMs', 'messageSeq'],
+  'work.slow': ['source', 'durationMs', 'cpuMs', 'messageSeq'],
   'ui.busy': ['durationMs'],
   'user.marker': [],
   'voice.action': ['source', 'textLength', 'accepted'],
