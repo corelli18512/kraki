@@ -162,6 +162,19 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertTrue(sender.hasSendsAwaitingEcho)
     }
 
+    // MARK: - (d) connect timeout
+
+    /// Mac diag 10-20 01:26: the first connect after a reboot hung the whole
+    /// 30 s; the retry opened in 1.1 s.
+    func testConnectTimeoutStartsShortAndDoublesToItsCap() {
+        let client = WebSocketClient(relayURL: "ws://127.0.0.1:9")
+        XCTAssertEqual(client.currentConnectTimeout, 10)
+        client.debugSetConsecutiveConnectTimeouts(1)
+        XCTAssertEqual(client.currentConnectTimeout, 20)
+        client.debugSetConsecutiveConnectTimeouts(4)
+        XCTAssertEqual(client.currentConnectTimeout, 30)
+    }
+
     // MARK: - (i) attachment send stages
 
     func testAttachmentSendReportsHandoffAndUpload() {
