@@ -50,7 +50,8 @@ import UIKit
 
     private func runScenario(readingHistory: Bool) throws {
         try requireForegroundUITests()
-        let app = IOSVoiceHoldScenarioFixture.makeAppState()
+        let driver = IOSVoiceHoldScenarioDriver(automaticPartials: false)
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
         let sid = "voice-a", dev = "voice-test-device"
         app.testOutboundMessageHandler = { _, _, _ in true }
         let messages = (1...40).map { seq in
