@@ -95,20 +95,37 @@ final class MacComposerTextView: NSTextView {
     var onPasteCompleted: (() -> Void)?
     var onTakeOver: (() -> Void)?
     var voicePendingRange: NSRange?
+    /// The text currently carries voice correction colours.
+    private(set) var hasVoiceStyling = false
 
+    /// Tints the uncorrected part of a voice draft. Ordinary typing is left
+    /// alone: rewriting the text's attributes on every keystroke makes AppKit
+    /// refresh the input session, which re-shows the system input-source /
+    /// Caps Lock indicator under the caret every character or two.
     func refreshVoiceStyling() {
         guard !hasMarkedText(), let storage = textStorage else { return }
+        let pending = voicePendingRange.flatMap { $0.length > 0 ? $0 : nil }
+        if pending == nil {
+            guard hasVoiceStyling else { return }
+            // Back to the plain dynamic label colour (follows appearance).
+            hasVoiceStyling = false
+            storage.beginEditing()
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: NSRange(location: 0, length: storage.length))
+            storage.endEditing()
+            return
+        }
+        hasVoiceStyling = true
         effectiveAppearance.performAsCurrentDrawingAppearance {
             // NSColor.withAlphaComponent resolves dynamic colors. Resolve in
             // THIS window, not the app's possibly opposite system appearance.
             let primary = NSColor.labelColor.usingColorSpace(.deviceRGB) ?? .labelColor
-            VoiceDraftStyling.apply(to: storage, pending: voicePendingRange, primaryColor: primary)
+            VoiceDraftStyling.apply(to: storage, pending: pending, primaryColor: primary)
         }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        refreshVoiceStyling()
+        if hasVoiceStyling { refreshVoiceStyling() }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -402,7 +419,9 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         context.coordinator.isApplying = true
         textView.voicePendingRange = uncorrectedRange
         textView.refreshVoiceStyling()
-        if !textView.hasMarkedText() { textView.typingAttributes[.foregroundColor] = NSColor.labelColor }
+        if !textView.hasMarkedText(), textView.typingAttributes[.foregroundColor] as? NSColor != NSColor.labelColor {
+            textView.typingAttributes[.foregroundColor] = NSColor.labelColor
+        }
         context.coordinator.isApplying = false
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         let layoutText = textView.hasMarkedText() ? textView.string : text
