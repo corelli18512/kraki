@@ -410,15 +410,50 @@ final class DeviceStore {
         // The new version greeting us is the update having landed, even if
         // its own "updated" announcement didn't reach this app.
         if let p = updateProgress[id], p.isActive, let to = p.to, update.current == to {
-            updateProgress[id] = DeviceUpdateProgress(phase: .updated, requestId: p.requestId, from: p.from, to: to)
+            setUpdateProgress(id, DeviceUpdateProgress(phase: .updated, requestId: p.requestId, from: p.from, to: to))
         }
         guard deviceUpdates[id] != update else { return }
         deviceUpdates[id] = update
         scheduleSave()
     }
 
+    /// How long a finished update's outcome stays on screen. Success is
+    /// brief; problems stay until dismissed or for ten minutes.
+    nonisolated(unsafe) static var updatedOutcomeLifetime: Duration = .seconds(60)
+    nonisolated(unsafe) static var problemOutcomeLifetime: Duration = .seconds(600)
+
     func setUpdateProgress(_ id: String, _ progress: DeviceUpdateProgress?) {
         updateProgress[id] = progress
+        guard let progress else { return }
+        if progress.phase == .updated, let to = progress.to { recordInstalledVersion(id, to) }
+        let lifetime: Duration? = switch progress.phase {
+        case .updated: Self.updatedOutcomeLifetime
+        case .failed, .rolled_back: Self.problemOutcomeLifetime
+        default: nil
+        }
+        guard let lifetime else { return }
+        // Clear the finished outcome later, unless a newer status replaced it.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: lifetime)
+            if self?.updateProgress[id] == progress { self?.updateProgress[id] = nil }
+        }
+    }
+
+    /// An update that reports success is the installed version from now on:
+    /// the Version row and "update available" must not wait for the next
+    /// greeting (which may never come if this app reconnects first).
+    private func recordInstalledVersion(_ id: String, _ version: String) {
+        if var info = deviceUpdates[id], KrakiVersion.isNewer(version, than: info.current) {
+            info.current = version
+            if let latest = info.latest, !KrakiVersion.isNewer(latest, than: version) { info.latest = nil }
+            deviceUpdates[id] = info
+        }
+        // Kraki for Mac reports its app version; `deviceVersions` is the CLI's.
+        if deviceUpdates[id]?.installedVia != "mac-app",
+           deviceVersions[id].map({ KrakiVersion.isNewer(version, than: $0) }) ?? true {
+            deviceVersions[id] = version
+        }
+        scheduleSave()
     }
 
     /// The version a user recognises: Kraki for Mac's own version for its
