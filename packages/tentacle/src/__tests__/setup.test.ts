@@ -92,12 +92,13 @@ vi.mock("../config.js", () => ({
   getOrCreateDeviceId: () => "dev_test123",
   getConfigPath: () => "/tmp/fake-kraki/config.json",
   getConfigDir: () => "/tmp/fake-kraki",
-  loadChannelKey: () => null,
+  loadChannelKey: () => mockChannelKey(),
   loadConfig: () => mockExistingConfig,
   saveGitHubToken: vi.fn(),
   loadGitHubToken: () => mockSavedToken(),
 }));
 const mockSavedToken = vi.fn<() => string | null>().mockReturnValue('fake-token');
+const mockChannelKey = vi.fn<() => string | null>().mockReturnValue(null);
 
 let mockExistingConfig: unknown = null;
 
@@ -135,7 +136,7 @@ vi.mock("../pair.js", () => ({
   renderQrToTerminal: vi.fn().mockResolvedValue("[QR CODE]"),
 }));
 
-import { runSetup } from "../setup.js";
+import { runSetup, relayAuthToken } from "../setup.js";
 
 let originalFetch: typeof globalThis.fetch;
 
@@ -352,6 +353,22 @@ describe("runSetup — self-hosted relay", () => {
     mockAgentsCheck.mockImplementationOnce(async () => { order.push('agents'); return [agent('pi', 'ready')]; });
     await runSetup();
     expect(order).toEqual(['relay', 'agents']);
+  });
+});
+
+describe("relayAuthToken — open (self-hosted) relay", () => {
+  const openConfig = { relay: "ws://localhost:4000", authMethod: "open" } as Parameters<typeof relayAuthToken>[0];
+
+  it("sends the channel key so a relay with OPEN_SHARED_KEY accepts pairing", async () => {
+    mockChannelKey.mockReturnValueOnce("shared-secret");
+    await expect(relayAuthToken(openConfig, false)).resolves.toBe("shared-secret");
+  });
+
+  it("falls back to 'dev' without a channel key (keyless relays accept any token)", async () => {
+    mockChannelKey.mockReturnValueOnce(null);
+    await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
+    mockChannelKey.mockReturnValueOnce("");
+    await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
   });
 });
 

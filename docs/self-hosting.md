@@ -17,9 +17,24 @@ npm i -g @kraki/head
 kraki-relay
 ```
 
-By default the relay listens on `ws://localhost:4000`. It stores user, device and delivery data, but never readable messages or sessions (see [security.md](./security.md#what-the-relay-stores)).
+By default the relay uses `open` auth and listens on `ws://127.0.0.1:4000`, reachable from this machine only. It stores user, device and delivery data, but never readable messages or sessions (see [security.md](./security.md#what-the-relay-stores)).
 
 Then run kraki on the coding machine and point it at your relay URL instead of the hosted default.
+
+## Reaching the relay from other machines
+
+With `open` auth and no shared key, anyone who can reach the relay joins your account and can drive your computers. So in that mode the relay only listens on loopback, and it refuses to start with a non-loopback `HOST` / `--host` (for example `0.0.0.0`). To serve other machines, pick one:
+
+- **Shared key (open auth).** Set a long random secret on the relay and put the same secret in `~/.kraki/channel.key` (`chmod 600`) on each computer before running `kraki`:
+
+  ```bash
+  OPEN_SHARED_KEY=$(openssl rand -hex 32) HOST=0.0.0.0 kraki-relay
+  ```
+
+  Every `open` sign-in and every pairing (QR) request must then carry the key. Computers send it from `channel.key`. Apps join by scanning the computer's QR code. Older `kraki` versions connect with the key, but they can't make QR codes on a keyed relay; update `kraki` for that.
+- **GitHub or API-key auth** (`--auth github`, `--auth apikey`). These modes keep listening on all interfaces unless you set `HOST`.
+
+Behind a reverse proxy on the same host (as in the systemd setup below), the default loopback bind already fits: point the proxy at `127.0.0.1:4000`.
 
 ## Enable GitHub Login for the web app
 
