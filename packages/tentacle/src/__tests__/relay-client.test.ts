@@ -864,6 +864,9 @@ describe('RelayClient title generation', () => {
       model: 'deepseek/deepseek-flash',
       reasoningEffort: 'high',
     }));
+    // Log audit 2026-10-22: user message text never reaches the log.
+    expect(vi.mocked(relayLogger.debug).mock.calls.some((c) => c[1] === 'Title generation starting')).toBe(true);
+    expect(JSON.stringify(vi.mocked(relayLogger.debug).mock.calls)).not.toContain('fix the login');
   });
 
   it('persists current-turn artifacts on a normal adapter idle', () => {

@@ -462,7 +462,8 @@ export function maybeGenerateTitle(client: RelayClient, sessionId: string): void
   // Include current auto-title so the LLM can refine rather than regenerate
   const currentTitle = meta.autoTitle;
 
-  logger.debug({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
+  // Message content never goes to the log (it ships in diagnostics bundles).
+  logger.debug({ sessionId, turns, lastUserMessageChars: lastUserMessage.length, totalUserMsgs: userMessages.length }, 'Title generation starting');
 
   if (!lastUserMessage) {
     client.titleGenerationInFlight.delete(sessionId);
