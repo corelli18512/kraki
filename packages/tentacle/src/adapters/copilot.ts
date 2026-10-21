@@ -699,12 +699,12 @@ export class CopilotAdapter extends AgentAdapter {
   ): Promise<PermissionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
-      logger.warn(`respondToPermission: session not found: ${sessionId}`);
+      logger.warn({ sessionId }, 'respondToPermission: session not found');
       return 'session_gone';
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
-      logger.warn(`respondToPermission: no pending permission: ${permissionId} (already resolved or timed out)`);
+      logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission (already resolved or timed out)');
       return 'not_found';
     }
 
@@ -726,12 +726,12 @@ export class CopilotAdapter extends AgentAdapter {
   ): Promise<QuestionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
-      logger.warn(`respondToQuestion: session not found: ${sessionId}`);
+      logger.warn({ sessionId }, 'respondToQuestion: session not found');
       return 'session_gone';
     }
     const pending = entry.pendingQuestions.get(questionId);
     if (!pending) {
-      logger.warn(`respondToQuestion: no pending question: ${questionId}`);
+      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
       return 'not_found';
     }
 

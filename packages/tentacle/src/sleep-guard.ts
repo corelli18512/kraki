@@ -56,6 +56,8 @@ export class SleepGuard {
   private child: ChildProcess | null = null;
   private readonly deps: SleepGuardDeps;
   private disabled = false;
+  /** When the current assertion was taken (for the Released line). */
+  private heldSince = 0;
 
   constructor(deps: Partial<SleepGuardDeps> = {}) {
     this.deps = { platform: process.platform, pid: process.pid, spawn, now: Date.now, ...deps };
@@ -80,7 +82,9 @@ export class SleepGuard {
     const cutoff = this.deps.now() - SLEEP_HOLD_IDLE_LIMIT_MS;
     for (const [sessionId, last] of this.active) {
       if (last < cutoff) {
-        logger.warn({ sessionId }, 'Session silent for hours; no longer keeping the computer awake for it');
+        // The session's turn may still look "running" in the apps: only the
+        // sleep assertion is dropped here.
+        logger.warn({ sessionId, silentMs: this.deps.now() - last, stillActive: this.active.size - 1 }, 'Session silent for hours; no longer keeping the computer awake for it');
         this.active.delete(sessionId);
       }
     }
@@ -127,7 +131,8 @@ export class SleepGuard {
       child.on('exit', () => { if (this.child === child) this.child = null; });
       child.unref?.();
       this.child = child;
-      logger.info('Holding idle-sleep assertion while an agent turn runs');
+      this.heldSince = this.deps.now();
+      logger.info({ sessionIds: [...this.active.keys()] }, 'Holding idle-sleep assertion while an agent turn runs');
     } catch (err) {
       logger.debug({ err: (err as Error).message }, 'could not start sleep inhibitor');
     }
@@ -137,6 +142,6 @@ export class SleepGuard {
     const child = this.child;
     this.child = null;
     try { child?.kill(); } catch { /* already gone */ }
-    logger.info('Released idle-sleep assertion');
+    logger.info({ heldMs: this.deps.now() - this.heldSince }, 'Released idle-sleep assertion');
   }
 }

@@ -50,9 +50,10 @@ function setup() {
     } });
   };
   const settle = async () => { await emit({ type: 'agent_end', willRetry: false }); await emit({ type: 'agent_settled' }); };
-  const snapshot = (runs: Array<{ id: string; state: string }>) => emit({
+  // pi-subagents stamps every repaint with a fresh generatedAt.
+  const snapshot = (runs: Array<{ id: string; state: string; activity?: Record<string, unknown> }>) => emit({
     type: 'extension_ui_request', id: `w${Math.random()}`, method: 'setWidget', widgetKey: 'subagent-async',
-    widgetLines: [`PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({ kind: 'pi-subagents.async-status-snapshot', version: 1, runs })}`],
+    widgetLines: [`PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({ kind: 'pi-subagents.async-status-snapshot', version: 1, generatedAt: Date.now(), runs })}`],
   });
   const notify = (text: string) => emit({ type: 'message_end', message: { role: 'custom', customType: 'subagent-notify', content: text } });
   const of = (k: string) => calls.filter(([c]) => c === k).map(([, e]) => e);
@@ -160,7 +161,7 @@ describe('pi background subagents', () => {
         expect(t.of('onToolComplete')).toEqual(completions);
       } finally {
         await stopping;
-        t.adapter.stopAwaitingSubagents(original);
+        t.adapter.stopAwaitingSubagents(original, 'adapter_stop');
       }
     });
   });
@@ -254,8 +255,8 @@ describe('pi background subagents', () => {
     await t.settle();
     await t.snapshot([{ id: 'run-1', state: 'running' }]);
     vi.advanceTimersByTime(PiAdapter.SUBAGENT_HOLD_IDLE_MS - 1);
-    // Activity restarts the bound.
-    await t.snapshot([{ id: 'run-1', state: 'running' }]);
+    // Progress (the run's activity changed) restarts the bound.
+    await t.snapshot([{ id: 'run-1', state: 'running', activity: { toolCount: 1, lastActivityAt: 1 } }]);
     vi.advanceTimersByTime(PiAdapter.SUBAGENT_HOLD_IDLE_MS - 1);
     expect(t.of('onIdle')).toHaveLength(0);
     vi.advanceTimersByTime(2);
@@ -263,6 +264,26 @@ describe('pi background subagents', () => {
     expect(t.of('onToolComplete')).toEqual([expect.objectContaining({ toolCallId: 'D', success: false, subagent: expect.objectContaining({ status: 'stopped' }) })]);
     await nextTurn(t, 'turn-2');
     expect(t.of('onIdle')).toHaveLength(2);
+  });
+
+  it('the per-second widget repaint of an unchanged run does not postpone the hold bound', async () => {
+    // Log audit 2026-10-22: a held turn stayed "running" for 11 h because every
+    // identical repaint re-armed the bound.
+    vi.useFakeTimers();
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await t.launch('D', 'run-1');
+    await t.settle();
+    const run = { id: 'run-1', state: 'running', activity: { toolCount: 3, lastActivityAt: 1 } };
+    await t.snapshot([run]);
+    for (let elapsed = 0; elapsed < PiAdapter.SUBAGENT_HOLD_IDLE_MS - 1_000; elapsed += 1_000) {
+      vi.advanceTimersByTime(1_000);
+      await t.snapshot([run]);
+    }
+    expect(t.of('onIdle')).toHaveLength(0);
+    vi.advanceTimersByTime(1_000);
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }]);
+    expect(t.session.awaitingSubagents).toBe(false);
   });
 
   it('after Stop, the stopped runs do not hold the next turn', async () => {

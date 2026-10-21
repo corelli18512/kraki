@@ -131,6 +131,7 @@ export function getDefaultModel(adapter: PiAdapter): string {
  *  restart. */
 export async function fetchEfforts(adapter: PiAdapter): Promise<Map<string, ReasoningEffort[]>> {
   if (adapter.cachedEfforts) return adapter.cachedEfforts;
+  const started = Date.now();
   try {
     const efforts = new Map<string, ReasoningEffort[]>();
     const models = await queryPiCatalog(adapter.cliPath);
@@ -138,11 +139,11 @@ export async function fetchEfforts(adapter: PiAdapter): Promise<Map<string, Reas
       if (!m?.id || !m?.provider) continue;
       efforts.set(`${m.provider}/${m.id}`, piThinkingLevelsFor(m));
     }
-    logger.info({ count: efforts.size }, 'Fetched pi thinking levels');
+    logger.info({ count: efforts.size, elapsedMs: Date.now() - started }, 'Fetched pi thinking levels');
     adapter.cachedEfforts = efforts;
     return efforts;
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Could not fetch pi thinking levels, using default ladder');
+    logger.warn({ err: (err as Error).message, elapsedMs: Date.now() - started }, 'Could not fetch pi thinking levels, using default ladder');
     return new Map();
   }
 }
