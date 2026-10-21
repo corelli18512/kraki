@@ -40,7 +40,7 @@ import {
   readSync,
   closeSync,
 } from 'node:fs';
-import { readdir, readFile, stat, unlink } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ContentRef } from '@kraki/protocol';
@@ -166,6 +166,12 @@ export class AttachmentStore {
    *  source session meanwhile (SessionManager.attachmentsFallback). */
   private fallback: ((sessionId: string) => string | undefined) | null = null;
 
+  /** `<sessionId>/<id>` of every put() while a prune is running: the prune
+   *  awaits the filesystem between reading a sidecar and deleting, and must
+   *  not delete what put() (re)wrote or handed out meanwhile. */
+  private putDuringPrune: Set<string> | null = null;
+  private pruneRuns = 0;
+
   constructor(sessionsDir: string) {
     this.sessionsDir = sessionsDir;
   }
@@ -216,6 +222,7 @@ export class AttachmentStore {
 
     const dataPath = this.filePath(sessionId, id, ext);
     const metaPath = this.metaPath(sessionId, id);
+    this.putDuringPrune?.add(`${sessionId}/${id}`);
 
     let meta: AttachmentMetaSidecar | null = null;
     if (existsSync(metaPath)) {
@@ -339,6 +346,16 @@ export class AttachmentStore {
    */
   async pruneToolPayloads(maxAgeMs: number, now = Date.now()): Promise<number> {
     const startedAt = Date.now();
+    this.pruneRuns++;
+    this.putDuringPrune ??= new Set();
+    try {
+      return await this.prunePayloadsScan(maxAgeMs, now, startedAt);
+    } finally {
+      if (--this.pruneRuns === 0) this.putDuringPrune = null;
+    }
+  }
+
+  private async prunePayloadsScan(maxAgeMs: number, now: number, startedAt: number): Promise<number> {
     let removed = 0;
     let scanned = 0;
     let bytesFreed = 0;
@@ -360,8 +377,12 @@ export class AttachmentStore {
         } catch { continue; }
         if (!meta.name || !/\.(?:args\.json|result\.txt)$/.test(meta.name)) continue;
         const id = name.slice(0, -'.json'.length);
-        try { await unlink(join(dir, `${id}.${extForMime(meta.mimeType)}`)); bytesFreed += meta.size ?? 0; } catch { /* already gone */ }
-        try { await unlink(sidecar); removed++; } catch { /* ignore */ }
+        // The data file and sidecar go together, synchronously: put() is
+        // synchronous, so it can no longer run between the two deletions,
+        // and one it ran during this scan keeps its attachment.
+        if (this.putDuringPrune?.has(`${sessionId}/${id}`)) continue;
+        try { unlinkSync(join(dir, `${id}.${extForMime(meta.mimeType)}`)); bytesFreed += meta.size ?? 0; } catch { /* already gone */ }
+        try { unlinkSync(sidecar); removed++; } catch { /* ignore */ }
       }
     }
     logger[removed > 0 ? 'info' : 'debug']({
