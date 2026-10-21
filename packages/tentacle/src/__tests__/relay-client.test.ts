@@ -52,12 +52,13 @@ vi.mock('ws', () => ({
   WebSocket: MockSocket,
 }));
 
+const loggedLines = vi.hoisted(() => [] as unknown[][]);
 vi.mock('../logger.js', () => ({
   createLogger: vi.fn(() => ({
-    error: vi.fn(),
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
+    error: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    warn: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    info: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
+    debug: vi.fn((...a: unknown[]) => { loggedLines.push(a); }),
   })),
 }));
 
@@ -863,6 +864,12 @@ describe('RelayClient title generation', () => {
       model: 'deepseek/deepseek-flash',
       reasoningEffort: 'high',
     }));
+    // Titles and prompts are conversation content: never in the logs, at
+    // any level (log audit 2026-10-22).
+    expect(loggedLines.some((a) => a[1] === 'Auto-title generated')).toBe(true);
+    const logs = JSON.stringify(loggedLines);
+    expect(logs).not.toContain('Fix login authentication bug');
+    expect(logs).not.toContain('fix the login bug');
   });
 
   it('persists current-turn artifacts on a normal adapter idle', () => {
