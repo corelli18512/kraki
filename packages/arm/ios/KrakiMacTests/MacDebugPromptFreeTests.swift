@@ -118,4 +118,25 @@ final class MacDebugPromptFreeTests: XCTestCase {
         XCTAssertFalse(TentacleCLIManager.isLegacyHelperProgram(
             "/Applications/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki"))
     }
+
+    /// Same-version Sparkle update: the daemon keeps running a deleted helper,
+    /// and TCC then denies protected folders. The app must notice and restart.
+    func testStaleDaemonBinaryDetection() {
+        let helper = "/Applications/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki"
+        let alive: (Int) -> Bool = { _ in true }
+        XCTAssertNil(TentacleCLIManager.staleDaemonBinary(
+            pids: [10, 11], expectedPath: helper, isAlive: alive, pathOf: { _ in helper }))
+        XCTAssertEqual(TentacleCLIManager.staleDaemonBinary(
+            pids: [10, 11], expectedPath: helper, isAlive: alive, pathOf: { $0 == 10 ? nil : helper }),
+            "pid 10: executable deleted")
+        let moved = "/Users/x/Library/Caches/chat.kraki.mac/org.sparkle-project.Sparkle/Installation/a/b/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki"
+        XCTAssertEqual(TentacleCLIManager.staleDaemonBinary(
+            pids: [10], expectedPath: helper, isAlive: alive, pathOf: { _ in moved }),
+            "pid 10: \(moved)")
+        // An exited process is not stale.
+        XCTAssertNil(TentacleCLIManager.staleDaemonBinary(
+            pids: [10], expectedPath: helper, isAlive: { _ in false }, pathOf: { _ in nil }))
+        // The live lookup resolves this test process itself.
+        XCTAssertNotNil(TentacleCLIManager.executablePath(ofPid: Int(getpid())))
+    }
 }

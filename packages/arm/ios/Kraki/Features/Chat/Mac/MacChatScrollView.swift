@@ -125,8 +125,9 @@ final class MacChatScrollView: MacSmoothScrollView {
     var olderEdgeArmed: Bool { scrollPolicy.olderPageArmed }
     var hasUserScrolled = false
     private var initialTailTrimRequested = false
+    var underfilledHistory = MacUnderfilledHistoryState()
     private(set) var representedSessionId: String?
-    private var presentationEpoch = 0
+    private(set) var presentationEpoch = 0
     var diagnosticWindowTop = 0
     var diagnosticWindowBottom = 0
     private var diagnosticRawCount = 0
@@ -134,7 +135,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     var diagnosticAtOldest = false
     var diagnosticAtNewest = false
     private var lastPresentationLogSignature = ""
-    private var presentationHealthWorkItem: DispatchWorkItem?
+    var presentationHealthWorkItem: DispatchWorkItem?
     var geometryAnchorLock: (key: String, delta: CGFloat)?
     var latestStartJumpPending = false
     private var bubbleActionMouseMonitor: Any?
@@ -262,7 +263,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         didSet { requestInitialTailTrimIfReady() }
     }
 
-    private func requestInitialTailTrimIfReady() {
+    func requestInitialTailTrimIfReady() {
         guard canTrimTailWindow,
               !hasUserScrolled,
               !initialTailTrimRequested,
@@ -339,7 +340,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             self?.applyAnimatedLiveHeightStep(delta)
         }
         chatDocumentView.onFullWindowGeometryReady = { [weak self] in
-            self?.requestInitialTailTrimIfReady()
+            self?.fullWindowGeometryDidBecomeReady()
         }
         composerSubmitObserver = NotificationCenter.default.addObserver(
             forName: .krakiComposerSubmitted,
@@ -476,6 +477,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
+        underfilledHistory = MacUnderfilledHistoryState()
         loadingOlder = false
         loadingNewer = false
         hasUnloadedNewer = false
@@ -643,6 +645,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             ring = NSColor.windowBackgroundColor.cgColor
         }
         unseenDot.layer?.borderColor = ring
+        scheduleUnderfilledHistoryCheck()
     }
     var navigationLoadInFlight = false
     var navigationLoadGeneration = 0
@@ -705,38 +708,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         diagnosticBubbleCount = bubbleCount
         diagnosticAtOldest = atOldest
         diagnosticAtNewest = atNewest
+        scheduleUnderfilledHistoryCheck()
         emitPresentationLog(reason: "apply", force: false)
         if !chatDocumentView.presentationHealth(in: contentView.bounds).unresolvedSeqs.isEmpty {
             schedulePresentationHealthCheck()
         }
-    }
-
-    func schedulePresentationHealthCheck() {
-        // Streaming snapshots may arrive 10–20 times per second. Keep the first
-        // deadline for this epoch instead of perpetually postponing diagnosis;
-        // the work item reads the latest window metadata when it fires.
-        guard presentationHealthWorkItem == nil else { return }
-        let epoch = presentationEpoch
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, epoch == self.presentationEpoch else { return }
-            self.presentationHealthWorkItem = nil
-            let health = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
-            if !self.isScrollInteractionActive, !health.unresolvedSeqs.isEmpty {
-                _ = self.chatDocumentView.updateVisibleCells(
-                    in: self.contentView.bounds,
-                    runwayOverride: 0
-                )
-            }
-            let refreshed = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
-            self.emitPresentationLog(
-                reason: refreshed.unresolvedSeqs.isEmpty
-                    ? "viewport-resolved"
-                    : "viewport-stuck",
-                force: true
-            )
-        }
-        presentationHealthWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
     }
 
     func emitPresentationLog(reason: String, force: Bool) {

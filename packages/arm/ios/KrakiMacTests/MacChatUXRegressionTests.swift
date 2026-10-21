@@ -468,10 +468,12 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
         let frames = fx.sv.automationControlFrames
         XCTAssertEqual(frames.up, frames.down, "↑ rests in ↓'s slot")
-        if let last = fx.doc.latestItemFrame() {
-            let bubble = fx.doc.convert(last, to: fx.sv)
-            XCTAssertLessThanOrEqual(bubble.maxY, frames.up.minY, "↑ at rest sits below the last bubble")
-        }
+        // Since the last bubble rests 12 pt above the composer (8c73fda8), the
+        // newest row shares ↑'s band; what matters is that ↑ does not cover
+        // the reply's actual bubble (its row is full-width padding).
+        let latest = try XCTUnwrap(fx.doc.automationVisibleCells.first { $0.key.hasSuffix(":62") }?.cell)
+        let bubble = latest.convert(latest.bubbleFrameForRegression, to: fx.sv)
+        XCTAssertFalse(bubble.intersects(frames.up), "↑ at rest must not cover the latest reply (\(bubble) vs \(frames.up))")
     }
 
     // MARK: New bubble entrance

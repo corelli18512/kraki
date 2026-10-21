@@ -102,5 +102,26 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
   const store = root.querySelector<HTMLAnchorElement>('#kraki-store');
   if (store && appStore) store.href = appStore;
   root.querySelector('#kraki-web')!.addEventListener('click', () => window.location.replace(withParam('web', '1')));
+  // Kraki is not installed (iOS would have opened it). Go straight to the App
+  // Store once per code; coming back shows this page, so the user can still
+  // continue in the browser. The token stays unused either way.
+  if (appStore && shouldAutoOpenStore(window.sessionStorage, window.location.search)) {
+    window.location.assign(appStore);
+  }
+  return true;
+}
+
+/** True the first time this pairing code reaches the "open in app" page in
+ *  this tab. Records the visit, so returning from the App Store doesn't loop. */
+export function shouldAutoOpenStore(storage: Pick<Storage, 'getItem' | 'setItem'>, search: string): boolean {
+  const token = new URLSearchParams(search).get('token');
+  if (!token) return false;
+  const key = `kraki.storeOffered.${token.slice(0, 16)}`;
+  try {
+    if (storage.getItem(key)) return false;
+    storage.setItem(key, '1');
+  } catch {
+    return false; // storage blocked: don't risk a redirect loop
+  }
   return true;
 }

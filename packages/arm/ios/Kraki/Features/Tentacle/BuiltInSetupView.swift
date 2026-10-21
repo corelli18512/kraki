@@ -11,6 +11,8 @@
 ///                   skippable until a local-only mode exists.
 ///   3. Background — register the daemon with SMAppService (Login Items),
 ///                   unless step 1 was skipped
+///   4. Phone      — optional, shown over the main window after sign-in
+///                   (MacConnectPhoneStep), since it needs the account.
 ///
 /// Every step is derived from live state (install location, stored choice,
 /// config, daemon status), so relaunching the app — which System Settings
@@ -140,6 +142,11 @@ struct BuiltInSetupView: View {
         .onChange(of: runner.phase) { _, phase in
             guard case .done = phase else { return }
             let signingInAgain = signedOutByUser
+            // First sign-in on this Mac: offer the phone once the main window
+            // is up (MacConnectPhoneStep; skipped if the account has a phone).
+            if !signingInAgain {
+                UserDefaults.standard.set(true, forKey: MacConnectPhoneStep.pendingKey)
+            }
             Task {
                 await tentacleCLI.refreshDaemonState()
                 if signingInAgain {

@@ -85,4 +85,47 @@ final class DeviceUpdateTests: XCTestCase {
         XCTAssertEqual(info?.remoteBlock, "not_writable")
         XCTAssertEqual(info?.remote, false)
     }
+
+    /// A success report is the new installed version right away: the Version
+    /// row and "available" don't wait for a greeting that may not come.
+    func testUpdatedStatusRecordsTheInstalledVersion() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["a"] = tentacle("a")
+        store.setDeviceVersion("a", version: "0.38.9")
+        store.setDeviceUpdate("a", update: DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true))
+        store.setUpdateProgress("a", DeviceUpdateProgress(phase: .updated, from: "0.38.9", to: "0.38.10"))
+        XCTAssertEqual(store.deviceVersions["a"], "0.38.10")
+        XCTAssertEqual(store.deviceUpdates["a"]?.current, "0.38.10")
+        XCTAssertNil(store.availableUpdate(for: "a"))
+    }
+
+    /// Kraki for Mac reports its app version; the CLI version stays as is.
+    func testUpdatedMacAppKeepsTheCLIVersion() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["m"] = tentacle("m")
+        store.setDeviceVersion("m", version: "0.38.9")
+        store.setDeviceUpdate("m", update: DeviceUpdateInfo(installedVia: "mac-app", current: "0.2.88", latest: "0.2.89", remote: true))
+        store.setUpdateProgress("m", DeviceUpdateProgress(phase: .updated, from: "0.2.88", to: "0.2.89"))
+        XCTAssertEqual(store.deviceUpdates["m"]?.current, "0.2.89")
+        XCTAssertEqual(store.deviceVersions["m"], "0.38.9")
+    }
+
+    /// Finished outcomes clear themselves, so nothing lingers in an empty
+    /// section; a newer status is never cleared by an older timer.
+    func testFinishedOutcomesExpire() async throws {
+        let saved = (DeviceStore.updatedOutcomeLifetime, DeviceStore.problemOutcomeLifetime)
+        DeviceStore.updatedOutcomeLifetime = .milliseconds(50)
+        DeviceStore.problemOutcomeLifetime = .milliseconds(50)
+        defer { (DeviceStore.updatedOutcomeLifetime, DeviceStore.problemOutcomeLifetime) = saved }
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["a"] = tentacle("a")
+        store.setUpdateProgress("a", DeviceUpdateProgress(phase: .updated, to: "0.38.10"))
+        store.setUpdateProgress("b", DeviceUpdateProgress(phase: .failed, error: "x"))
+        store.setUpdateProgress("c", DeviceUpdateProgress(phase: .failed, error: "x"))
+        store.setUpdateProgress("c", DeviceUpdateProgress(phase: .requested))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(store.updateProgress["a"])
+        XCTAssertNil(store.updateProgress["b"])
+        XCTAssertEqual(store.updateProgress["c"]?.phase, .requested, "an active update is not cleared")
+    }
 }

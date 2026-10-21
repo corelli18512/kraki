@@ -186,6 +186,8 @@ extension MacChatScrollView {
     /// re-evaluated once it settles.
     func updateJumpButtonVisibility(animated: Bool) {
         guard !isDeallocating else { return }
+        // A navigation/scroll can settle without another document layout.
+        scheduleUnderfilledHistoryCheck()
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
         let moving = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
             || isScrollInteractionActive || isResizingControls
