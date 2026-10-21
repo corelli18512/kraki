@@ -72,6 +72,7 @@
 		1392B71F4BA89CD3DE1C9E93 /* NewSessionSheet+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */; };
 		13FB3A5224988D3C72001202 /* SessionTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF830792579504E8F32DFC4F /* SessionTable.swift */; };
 		14332B50BFB917B1AC5D3AB8 /* IOSUnreadEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04931FBD16BAD83A75C006F3 /* IOSUnreadEntryTests.swift */; };
+		14D6604705379A4D29B60F68 /* ResendCoalescer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC60A42563CD88131E19378 /* ResendCoalescer.swift */; };
 		152401CC641E67A85E399F50 /* NewSessionDeferredSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7E699E9213077CF7B64449 /* NewSessionDeferredSendTests.swift */; };
 		15312135EA00DA125A8AF740 /* MacTables.swift in Sources */ = {isa = PBXBuildFile; fileRef = D546816336FD2098D82DEB04 /* MacTables.swift */; };
 		1610D07455BDC8A6F0786E40 /* PushPreviewFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4416EAA4CBF1F9F596E268 /* PushPreviewFormat.swift */; };
@@ -283,6 +284,7 @@
 		613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
 		617005785EDB83753DF51AE8 /* BuildInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB7A51954B5ECF760DF289F /* BuildInfoTests.swift */; };
 		61DE330DBE66144398A6F8D4 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
+		62C19B66A5FBF37D233EA1A4 /* ResendCoalescer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC60A42563CD88131E19378 /* ResendCoalescer.swift */; };
 		62D2B4F534C13F83CF2512DB /* SessionPreviewStatusGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D1AE5100B28D8BB99611C5 /* SessionPreviewStatusGlyph.swift */; };
 		6310305F2F3A95D6D92254CC /* AccountUsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653D042B0A60468230A5F1F3 /* AccountUsageViews.swift */; };
 		633DCAA5AB83F3DE244B008E /* DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 063CF9F10027975D232E4285 /* DeviceTrust.swift */; };
@@ -341,6 +343,7 @@
 		78109BB33B9871FA7E0E7091 /* MacUnderfilledHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96811B83F01971C85020C2C6 /* MacUnderfilledHistoryTests.swift */; };
 		794DCC0243592D20F9BF3A19 /* OfflineComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF14A9E5DA898E98DE1461DA /* OfflineComposerTests.swift */; };
 		7999D41402AD34E2D934AA0E /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
+		79B9DA621E8AAB6FF4B18F30 /* CommandSender+Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EB0A93C62E7B789F0C3FB9 /* CommandSender+Background.swift */; };
 		79BE59A449668068E8B00D6B /* MacStartingVoiceChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBBDEBF428C4E7A629F6AA8 /* MacStartingVoiceChat.swift */; };
 		7A7983AE00BE327C4008314C /* MacChatHeaderControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEADA84650AE3CD811E50BB /* MacChatHeaderControls.swift */; };
 		7A7EEBE855E6DBDCDBCB3EBD /* ChatTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C53C8A022BE56BE5CC38B95 /* ChatTable.swift */; };
@@ -395,6 +398,7 @@
 		8BC84DF82479BC8F8EA43240 /* AccountUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30796AF51B916DF00057AAC1 /* AccountUsage.swift */; };
 		8C3224438F4F50CB8C0C8917 /* TKBubbleContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29AB015ED1500FFB4FD8A04 /* TKBubbleContent.swift */; };
 		8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
+		8D906B478BC7234265D24DC4 /* CommandSender+Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EB0A93C62E7B789F0C3FB9 /* CommandSender+Background.swift */; };
 		8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
 		8DEE4167B88B9381B2B3AFDC /* ScaledFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59CB6CFDB3B2D32D4522BCD /* ScaledFont.swift */; };
 		8E8A15038E4896B18E96E62B /* ChatUXRegressionTests+QueuedPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD971364DF3118676437C396 /* ChatUXRegressionTests+QueuedPrompt.swift */; };
@@ -951,6 +955,7 @@
 		6EDC494E5B0CBA712CCA550C /* ChatPerfListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPerfListView.swift; sourceTree = "<group>"; };
 		6F3F63751768A02292B9A069 /* VoiceInputCompletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputCompletion.swift; sourceTree = "<group>"; };
 		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
+		70EB0A93C62E7B789F0C3FB9 /* CommandSender+Background.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommandSender+Background.swift"; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		7155B0057D71BDD112CB0B8E /* AttachmentSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentSchedulerTests.swift; sourceTree = "<group>"; };
 		716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleImageGrid.swift; sourceTree = "<group>"; };
@@ -1195,6 +1200,7 @@
 		FA29992D4E7A13A7E95328F1 /* PushPreviewFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushPreviewFormatTests.swift; sourceTree = "<group>"; };
 		FBA22FAE6D105FE3CF3734F1 /* KrakiVoiceUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiVoiceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBB8ED0D8A220DC4E658371C /* MacAppDelegate+Benchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAppDelegate+Benchmarks.swift"; sourceTree = "<group>"; };
+		FCC60A42563CD88131E19378 /* ResendCoalescer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResendCoalescer.swift; sourceTree = "<group>"; };
 		FD87000DEF19B722B35DD012 /* DeviceTrustE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTrustE2ETests.swift; sourceTree = "<group>"; };
 		FDCB4B5308B56C1588901815 /* SessionCardEffortTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardEffortTests.swift; sourceTree = "<group>"; };
 		FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MessageRouter+DeviceTrust.swift"; sourceTree = "<group>"; };
@@ -1326,6 +1332,7 @@
 				59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */,
 				77E056700BA106FD1E130382 /* AttachmentStore.swift */,
 				2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */,
+				70EB0A93C62E7B789F0C3FB9 /* CommandSender+Background.swift */,
 				A1DAF876E96DDCBAC9E1A874 /* CommandSender+DeviceRequests.swift */,
 				ED676C714352477F09920C60 /* CommandSender+DurableText.swift */,
 				E7635B3827574C0F3685DEC6 /* CommandSender+QueuedPrompt.swift */,
@@ -1339,6 +1346,7 @@
 				3C21991B382385639B9398E8 /* MessageStore+CardTurn.swift */,
 				4767AFB1F09506A6DAC643F4 /* MessageStore+SteerPlacement.swift */,
 				ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */,
+				FCC60A42563CD88131E19378 /* ResendCoalescer.swift */,
 				00A9A346933E404A3656AD63 /* SessionStore.swift */,
 				DDF50E98A7C41DAD29C45A09 /* SessionStore+Devices.swift */,
 				95030EEA335D794E8356DBFD /* SessionStore+Search.swift */,
@@ -2536,6 +2544,7 @@
 				7A7EEBE855E6DBDCDBCB3EBD /* ChatTable.swift in Sources */,
 				2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */,
 				E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */,
+				8D906B478BC7234265D24DC4 /* CommandSender+Background.swift in Sources */,
 				CD03E1325888186ACB97A8B9 /* CommandSender+DeviceRequests.swift in Sources */,
 				A75D9AFED81BD7B02653DDE9 /* CommandSender+DurableText.swift in Sources */,
 				1009FC86DFBF9B08ADB39B4B /* CommandSender+QueuedPrompt.swift in Sources */,
@@ -2704,6 +2713,7 @@
 				2EC40327706787FAA97C3224 /* PulseManager.swift in Sources */,
 				F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */,
 				1610D07455BDC8A6F0786E40 /* PushPreviewFormat.swift in Sources */,
+				14D6604705379A4D29B60F68 /* ResendCoalescer.swift in Sources */,
 				20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */,
 				9FEE18D2282B3849739AF617 /* ScaledFont.swift in Sources */,
 				9C72DEC16861973F97419481 /* SessionCardMetadataRow.swift in Sources */,
@@ -2820,6 +2830,7 @@
 				1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */,
 				E258FB9E7CCA508B1EE30AB2 /* ChatTable.swift in Sources */,
 				D3DB9479B022E80246E32AD4 /* ChatViewModel.swift in Sources */,
+				79B9DA621E8AAB6FF4B18F30 /* CommandSender+Background.swift in Sources */,
 				2F476221B7E810C4A0FE4602 /* CommandSender+DeviceRequests.swift in Sources */,
 				2490AC630BA16594047FCF41 /* CommandSender+DurableText.swift in Sources */,
 				3251E949F9D67D6469CBB46C /* CommandSender+QueuedPrompt.swift in Sources */,
@@ -2962,6 +2973,7 @@
 				26409CB796F338EFEF4A5DD1 /* PulseManager.swift in Sources */,
 				CFF4A3E2771A576F90878094 /* PushManager.swift in Sources */,
 				F94E3A952061354D9FF232CD /* PushPreviewFormat.swift in Sources */,
+				62C19B66A5FBF37D233EA1A4 /* ResendCoalescer.swift in Sources */,
 				8DEE4167B88B9381B2B3AFDC /* ScaledFont.swift in Sources */,
 				26AFEE17709536D3947D11B7 /* SessionCardMetadataRow.swift in Sources */,
 				7470C4449140388181A10F09 /* SessionCardPresentation.swift in Sources */,

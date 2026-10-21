@@ -58,6 +58,110 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertTrue(summary.restored)
     }
 
+    // MARK: - (b) one resend per return, not two
+
+    /// iPhone diag 10-18 10:32: back from the background, one input was
+    /// re-sent on `reconnected` and again 77 ms later on `greeting`.
+    func testReconnectAndGreetingResendAnInputOnce() throws {
+        let app = try makeApp()
+        var sent: [String] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "send_input",
+               let clientId = (message["payload"] as? [String: Any])?["clientId"] as? String { sent.append(clientId) }
+            return true
+        }
+        app.connectionStatus = .connected
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "before background"))
+        XCTAssertEqual(sent.count, 1)
+
+        // Background closed the socket before the echo; back on screen.
+        app.handleConnectionStateChange(.disconnected)
+        XCTAssertEqual(app.connectionStatus, .disconnected)
+        app.connectionStatus = .connected
+        XCTAssertEqual(sent.count, 2, "the new connection carries it again")
+        sender.resendPendingInputs(deviceId: dev, reason: "greeting")
+        XCTAssertEqual(sent.count, 2, "the greeting right after must not send a third copy")
+
+        // A Tentacle that itself reconnected may have lost the copy.
+        sender.resendPendingInputs(deviceId: dev, reason: "tentacle_online")
+        XCTAssertEqual(sent.count, 3)
+    }
+
+    func testResendCoalescingExpiresAndForgetsClosedConnections() {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        var coalescer = ResendCoalescer()
+        coalescer.now = { clock }
+        coalescer.handedOff("c")
+        XCTAssertTrue(coalescer.isRedundant("c", reason: "greeting"))
+        XCTAssertFalse(coalescer.isRedundant("c", reason: "local_link_up"))
+        clock = clock.addingTimeInterval(ResendCoalescer.window + 0.1)
+        XCTAssertFalse(coalescer.isRedundant("c", reason: "greeting"))
+        coalescer.handedOff("c")
+        coalescer.transportClosed()
+        XCTAssertFalse(coalescer.isRedundant("c", reason: "reconnected"))
+    }
+
+    // MARK: - (b) keep the socket while an input waits for its echo
+
+    private final class GraceWorld {
+        var canKeep = false
+        var awaitingEcho = true
+        var log: [String] = []
+        lazy var grace = BackgroundSocketGrace(hooks: .init(
+            canKeep: { [unowned self] in canKeep },
+            hasSendsAwaitingEcho: { [unowned self] in awaitingEcho },
+            setVisible: { [unowned self] in log.append($0 ? "visible" : "hidden") },
+            teardown: { [unowned self] in log.append("teardown") },
+            beginTask: { [unowned self] _ in log.append("beginTask"); return 3 },
+            endTask: { [unowned self] token in log.append("endTask\(token)") }
+        ))
+    }
+
+    private func settle(_ seconds: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// iPhone diag 10-18/10-20: inputs handed off 0.1–1.8 s before leaving
+    /// waited 35 s and 82 s, because the socket closed at once (an older Head
+    /// without `app_visibility` cannot take the full grace).
+    func testUnconfirmedInputKeepsTheSocketUntilItsEcho() {
+        let world = GraceWorld()
+        XCTAssertTrue(world.grace.begin(grace: .seconds(5), flushGrace: .seconds(5)))
+        XCTAssertEqual(world.log, ["beginTask"], "the Head is not told hidden: it would stop pushing")
+        settle(0.4)
+        XCTAssertFalse(world.log.contains("teardown"))
+        world.awaitingEcho = false
+        settle(0.6)
+        XCTAssertEqual(world.log, ["beginTask", "teardown", "endTask3"])
+    }
+
+    func testFlushOnlyGraceIsBoundedAndResumable() {
+        let bounded = GraceWorld()
+        XCTAssertTrue(bounded.grace.begin(grace: .seconds(5), flushGrace: .milliseconds(300)))
+        settle(0.9)
+        XCTAssertEqual(bounded.log, ["beginTask", "teardown", "endTask3"], "never waits for an echo forever")
+
+        let back = GraceWorld()
+        XCTAssertTrue(back.grace.begin(grace: .seconds(5), flushGrace: .seconds(5)))
+        XCTAssertTrue(back.grace.resume())
+        XCTAssertEqual(back.log, ["beginTask", "endTask3"], "nothing was hidden, nothing to unhide")
+
+        let nothing = GraceWorld(); nothing.awaitingEcho = false
+        XCTAssertFalse(nothing.grace.begin())
+        XCTAssertEqual(nothing.log, [])
+    }
+
+    func testOnlySendingInputsToAReachableTentacleHoldTheSocket() throws {
+        let app = try makeApp()
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        app.connectionStatus = .connected
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertFalse(sender.hasSendsAwaitingEcho)
+        XCTAssertNotNil(sender.stageInput(sessionId: sid, text: "still correcting"))
+        XCTAssertFalse(sender.hasSendsAwaitingEcho, "a correcting voice input has its own background finisher")
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "typed"))
+        XCTAssertTrue(sender.hasSendsAwaitingEcho)
+    }
+
     // MARK: - (i) attachment send stages
 
     func testAttachmentSendReportsHandoffAndUpload() {

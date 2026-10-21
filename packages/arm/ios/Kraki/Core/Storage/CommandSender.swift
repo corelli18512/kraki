@@ -75,6 +75,7 @@ final class CommandSender {
     /// a reconnect happened after they were sent). Re-sent once, as soon as
     /// the session's Tentacle is known, online and deduplicates retries.
     @ObservationIgnored private var needsResend = Set<String>()
+    @ObservationIgnored var resendCoalescer = ResendCoalescer()
     /// Payload deliveries this recent mean the link is busy, not broken: an
     /// echo queued behind a backlog legitimately takes longer. Heartbeats do
     /// not count, so a quiet healthy link still surfaces a lost input.
@@ -112,6 +113,8 @@ final class CommandSender {
         msg["seq"] = 0
         msg["timestamp"] = ISO8601.now()
         let accepted = appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
+        if accepted, payload["type"] as? String == "send_input",
+           let clientId = (payload["payload"] as? [String: Any])?["clientId"] as? String { resendCoalescer.handedOff(clientId) }
         #if KRAKI_DIAG
         if payload["type"] as? String == "send_input", let wire = payload["payload"] as? [String: Any],
            let clientId = wire["clientId"] as? String {
@@ -499,7 +502,7 @@ final class CommandSender {
                     }
                 } else if isDeliveryPathUp(sessionId), canResendAutomatically(sessionId) {
                     needsResend.remove(clientId)
-                    if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
+                    if resendCoalescer.isRedundant(clientId, reason: reason) { KLog.d("[Outbox] \(reason) resend coalesced") } else if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
                         setPendingState(sessionId, clientId: clientId, .sending)
                     }
                 } else {
@@ -512,7 +515,7 @@ final class CommandSender {
         }
     }
 
-    private func isDeliveryPathUp(_ sessionId: String) -> Bool {
+    func isDeliveryPathUp(_ sessionId: String) -> Bool {
         guard let appState else { return false }
         #if DEBUG
         if appState.testOutboundMessageHandler != nil { return true }
@@ -606,6 +609,7 @@ final class CommandSender {
         outboundPayloads.removeValue(forKey: clientId)
         undispatched.remove(clientId)
         needsResend.remove(clientId)
+        resendCoalescer.forget(clientId)
         // No-op when already finished as deleted; otherwise its echo landed.
         appState?.sendMetrics.finished(clientId, .delivered)
         persistOutbox()

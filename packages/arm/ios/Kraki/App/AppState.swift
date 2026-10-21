@@ -837,6 +837,9 @@ extension AppState {
                     && self.wsClient?.isAuthenticated == true
                     && self.relayFeatures.contains("app_visibility")
             },
+            hasSendsAwaitingEcho: { [weak self] in
+                self?.wsClient?.isAuthenticated == true && self?.commandSender?.hasSendsAwaitingEcho == true
+            },
             setVisible: { [weak self] visible in self?.sendAppVisibility(visible) },
             teardown: { [weak self] in
                 guard self?.isInBackground == true else { return }
