@@ -186,6 +186,53 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertNotNil(stability.outages.last?.catchupMs)
     }
 
+    // MARK: - (f) live Steps asks once
+
+    /// Tentacle log 10-17 18:42:24: live Steps opened → the same incomplete
+    /// trace (1 034 entries) requested and shipped twice, 38 ms apart.
+    func testOpeningLiveStepsRequestsTheTraceOnce() throws {
+        let app = try makeApp()
+        var requests = 0
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "request_turn_trace" { requests += 1 }
+            return true
+        }
+        app.connectionStatus = .connected
+        let provider = try XCTUnwrap(app.messageProvider)
+        // presentLiveSteps, then the sheet's onAppear (invalidate + request).
+        provider.requestTurnTrace(sessionId: sid, bubbleSeq: 9)
+        provider.invalidateTurnTrace(sessionId: sid, bubbleSeq: 9)
+        provider.requestTurnTrace(sessionId: sid, bubbleSeq: 9)
+        XCTAssertEqual(requests, 1)
+        provider.handleTurnTraceBatch(sessionId: sid, bubbleSeq: 9, entries: [], complete: false)
+        XCTAssertEqual(requests, 1, "same intent: no pull after the reply")
+        // The turn moved on: still re-pullable.
+        provider.invalidateTurnTrace(sessionId: sid, bubbleSeq: 9)
+        provider.requestTurnTrace(sessionId: sid, bubbleSeq: 9)
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testARequestWhileOneIsInFlightPullsOnceMoreAfterTheReply() {
+        var clock = Date(timeIntervalSince1970: 5_000)
+        var ledger = TurnTraceRequestLedger()
+        ledger.now = { clock }
+        XCTAssertTrue(ledger.shouldRequest("s:9", cached: false))
+        clock = clock.addingTimeInterval(2) // a new tool step, reply still in transit
+        ledger.invalidate("s:9")
+        XCTAssertFalse(ledger.shouldRequest("s:9", cached: true))
+        XCTAssertTrue(ledger.replied("s:9", complete: false), "pull the step that arrived meanwhile")
+        XCTAssertTrue(ledger.shouldRequest("s:9", cached: true))
+        // Turn ended right after a request: always follow up unless complete.
+        ledger.invalidate("s:9")
+        XCTAssertFalse(ledger.shouldRequest("s:9", cached: true, repullIfInFlight: true))
+        XCTAssertFalse(ledger.replied("s:9", complete: true))
+        XCTAssertFalse(ledger.shouldRequest("s:9", cached: true), "complete and cached")
+        // A lost reply does not block forever.
+        clock = clock.addingTimeInterval(TurnTraceRequestLedger.inFlightTimeout + 1)
+        ledger.invalidate("s:9")
+        XCTAssertTrue(ledger.shouldRequest("s:9", cached: true))
+    }
+
     // MARK: - (d) connect timeout
 
     /// Mac diag 10-20 01:26: the first connect after a reboot hung the whole
