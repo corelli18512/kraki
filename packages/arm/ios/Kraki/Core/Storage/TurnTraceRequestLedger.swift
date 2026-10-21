@@ -23,6 +23,10 @@ struct TurnTraceRequestLedger {
     private var pulled: [String: Date] = [:]
     private var inFlight: [String: Date] = [:]
     private var repullAfterReply = Set<String>()
+    /// Requested and not yet answered `complete` (a live Steps sheet's turn):
+    /// at turn end each gets a final pull, since idle's own pull is keyed by
+    /// the concluding bubble, not the prompt a live sheet reads.
+    private var unfinished: [String: Date] = [:]
 
     /// Whether to send a request now (and record it as sent).
     /// `repullIfInFlight`: the caller knows the turn changed (it ended), so a
@@ -43,8 +47,13 @@ struct TurnTraceRequestLedger {
             pulled = pulled.filter { $0.value > cutoff }
             inFlight = inFlight.filter { $0.value > cutoff }
         }
+        if unfinished.count > 100 {
+            let cutoff = t.addingTimeInterval(-3_600)
+            unfinished = unfinished.filter { $0.value > cutoff }
+        }
         pulled[key] = t
         inFlight[key] = t
+        unfinished[key] = t
         return true
     }
 
@@ -57,11 +66,18 @@ struct TurnTraceRequestLedger {
         inFlight.removeValue(forKey: key)
         let repull = repullAfterReply.remove(key) != nil
         if complete {
+            unfinished.removeValue(forKey: key)
             if pulled[key] == nil { pulled[key] = now() }
         } else {
             pulled.removeValue(forKey: key)
         }
         return repull && !complete
+    }
+
+    /// Bubble seqs of this session requested but not yet answered complete.
+    func unfinishedSeqs(_ sessionId: String) -> [Int] {
+        let prefix = "\(sessionId):"
+        return unfinished.keys.compactMap { $0.hasPrefix(prefix) ? Int($0.dropFirst(prefix.count)) : nil }.sorted()
     }
 
     /// The session was wiped and reloads from scratch.
@@ -70,11 +86,13 @@ struct TurnTraceRequestLedger {
         pulled = pulled.filter { !$0.key.hasPrefix(prefix) }
         inFlight = inFlight.filter { !$0.key.hasPrefix(prefix) }
         repullAfterReply = repullAfterReply.filter { !$0.hasPrefix(prefix) }
+        unfinished = unfinished.filter { !$0.key.hasPrefix(prefix) }
     }
 
     mutating func clear() {
         pulled.removeAll()
         inFlight.removeAll()
         repullAfterReply.removeAll()
+        unfinished.removeAll()
     }
 }

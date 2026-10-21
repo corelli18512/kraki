@@ -1064,13 +1064,19 @@ final class MessageProvider {
     }
 
     /// On idle: find the just-concluded bubble (agent_message / system_message)
-    /// and pull its authoritative trace once.
+    /// and pull its authoritative trace once. A trace still unfinished under
+    /// another key (a live Steps sheet reads the prompt's seq) is pulled once
+    /// more as well, or its final steps would be missing until reopened.
     func pullLatestTurnTrace(_ sessionId: String) {
         guard let appState else { return }
         for m in appState.messageStore.recentFromDB(sessionId, limit: 30).reversed() {
             if m.type == "agent_message" || m.type == "system_message" {
                 invalidateTurnTrace(sessionId: sessionId, bubbleSeq: m.seq)
                 requestTurnTrace(sessionId: sessionId, bubbleSeq: m.seq, turnEnded: true)
+                for seq in traceRequests.unfinishedSeqs(sessionId) where seq != m.seq {
+                    invalidateTurnTrace(sessionId: sessionId, bubbleSeq: seq)
+                    requestTurnTrace(sessionId: sessionId, bubbleSeq: seq, turnEnded: true)
+                }
                 return
             }
             if m.type == "user_message" { return }

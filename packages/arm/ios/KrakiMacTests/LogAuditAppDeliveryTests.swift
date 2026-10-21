@@ -213,6 +213,45 @@ final class LogAuditAppDeliveryTests: XCTestCase {
         XCTAssertEqual(requests, 2)
     }
 
+    /// Release review: a step absorbed within the duplicate window, then the
+    /// turn ends before the reply. Idle pulls the conclusion's key (12), but the
+    /// open live sheet reads the prompt's key (9): that one is pulled once more
+    /// too, so the final steps reach the sheet.
+    func testTurnEndRefreshesTheLivePromptTraceToo() throws {
+        let app = try makeApp()
+        var requested: [Int] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "request_turn_trace" {
+                requested.append((message["payload"] as? [String: Any])?["bubbleSeq"] as? Int ?? -1)
+            }
+            return true
+        }
+        app.connectionStatus = .connected
+        let message = { (type: String, seq: Int) in
+            ChatMessage(type: type, seq: seq, sessionId: self.sid, deviceId: self.dev,
+                        timestamp: "2026-10-15T00:00:00Z", payload: ["content": AnyCodable("x")])
+        }
+        app.messageStore.persist(sid, [message("user_message", 9), message("agent_message", 12)])
+        let provider = try XCTUnwrap(app.messageProvider)
+        // Live sheet open on the prompt; a new step within the duplicate window.
+        provider.requestTurnTrace(sessionId: sid, bubbleSeq: 9)
+        provider.invalidateTurnTrace(sessionId: sid, bubbleSeq: 9)
+        provider.requestTurnTrace(sessionId: sid, bubbleSeq: 9)
+        XCTAssertEqual(requested, [9])
+        // The turn ends before the prompt's reply.
+        provider.pullLatestTurnTrace(sid)
+        XCTAssertEqual(requested, [9, 12])
+        provider.handleTurnTraceBatch(sessionId: sid, bubbleSeq: 9, entries: [], complete: false)
+        XCTAssertEqual(requested, [9, 12, 9], "the live prompt key gets a final refresh")
+        provider.handleTurnTraceBatch(sessionId: sid, bubbleSeq: 9, entries: [], complete: true)
+        provider.handleTurnTraceBatch(sessionId: sid, bubbleSeq: 12, entries: [], complete: true)
+        // No live sheet on the next turn's prompt: idle pulls its conclusion only.
+        requested = []
+        app.messageStore.persist(sid, [message("user_message", 13), message("agent_message", 14)])
+        provider.pullLatestTurnTrace(sid)
+        XCTAssertEqual(requested, [14])
+    }
+
     func testARequestWhileOneIsInFlightPullsOnceMoreAfterTheReply() {
         var clock = Date(timeIntervalSince1970: 5_000)
         var ledger = TurnTraceRequestLedger()
