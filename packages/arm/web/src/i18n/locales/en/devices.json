@@ -133,5 +133,11 @@
   "lastOnline": {
     "today": "today",
     "yesterday": "yesterday"
+  },
+  "rename": {
+    "field": "Device name",
+    "title": "Rename",
+    "titleWithOwn": "Rename (its own name: {{name}})",
+    "label": "Rename {{name}}"
   }
 }

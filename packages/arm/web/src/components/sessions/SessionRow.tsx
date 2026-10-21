@@ -69,7 +69,8 @@ export const SessionRow = memo(function SessionRow({
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
   const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
-  const machine = session.deviceName || device?.name;
+  // The live device name first: it follows renames.
+  const machine = device?.name || session.deviceName;
   const time = sessionTimeLabel(sessionTimestamp(pending?.timestamp || preview?.timestamp, session.createdAt));
 
   const togglePin = () => wsClient.pinSession(session.id, !pinned);

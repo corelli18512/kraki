@@ -45,7 +45,7 @@ import { test, expect, type Page, request } from '@playwright/test';
  * The tentacle is a MockAdapter, but the transport, head hub, SQLite durable
  * outbox, pulse framing, E2E crypto and browser render are all REAL. The tentacle
  * side is driven via the orchestrator's HTTP control plane
- * (scripts/pulse-realstack-server.ts).
+ * (scripts/pulse-realstack-server.mts).
  */
 
 const CONTROL = process.env.REALSTACK_CONTROL_URL ?? 'http://localhost:4710';

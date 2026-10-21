@@ -163,6 +163,9 @@ export interface AppActions {
   setDevices: (devices: DeviceSummary[]) => void;
   upsertDevice: (device: DeviceSummary) => void;
   removeDevice: (deviceId: string) => void;
+  /** `device_renamed`: new name to show (+ the device's own name while a
+   *  custom one is set). Also relabels that device's sessions. */
+  renameDevice: (deviceId: string, name: string, defaultName?: string) => void;
   setDeviceOnline: (deviceId: string, online: boolean) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
   applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;

@@ -103,6 +103,17 @@ describe('account deletion', () => {
     expect(storage.isDeletedDevice(tentacle.deviceId)).toBe(true);
   });
 
+  it('forgets the rename clock of every deleted device', async () => {
+    const app = await connectDevice(head.port, 'Phone', 'app');
+    const tentacle = await connectDevice(head.port, 'Laptop', 'tentacle', { kind: 'desktop' });
+    app.send({ type: 'rename_device', deviceId: tentacle.deviceId, name: 'Work laptop' });
+    await app.waitFor('device_renamed');
+    expect(head.server.deviceRenamedAt.has(tentacle.deviceId)).toBe(true);
+    app.send({ type: 'delete_account' });
+    await app.waitFor('account_deleted');
+    expect(head.server.deviceRenamedAt.size).toBe(0);
+  });
+
   it('an offline device of the deleted account gets account_deleted instead of a new account', async () => {
     const app = await connectDevice(head.port, 'Phone', 'app');
     const tentacle = await connectDevice(head.port, 'Laptop', 'tentacle', { kind: 'desktop' });

@@ -29,6 +29,12 @@ export class HeadServer {
   connections = new Map<string, WebSocket>();
   authBackend: AuthBackend;
   userByDevice = new Map<string, string>();
+  /** Bumped on every device rename applied here; `deviceRenamedAt` holds the
+   *  value at each device's last rename. An auth started before a rename may
+   *  return the account service's older device list: auth compares these so
+   *  it never reverts a newer name (see handleBackendAuthResult). */
+  renameClock = 0;
+  deviceRenamedAt = new Map<string, number>();
   clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;

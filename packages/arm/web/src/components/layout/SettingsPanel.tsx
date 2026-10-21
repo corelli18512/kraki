@@ -25,6 +25,7 @@ import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
+import { DeviceNameEditor } from '../devices/DeviceNameEditor';
 import { signOut } from './ProfileBar';
 import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
 import './settings.css';
@@ -461,8 +462,8 @@ export function SettingsPanel({
                   className={`h-2 w-2 shrink-0 rounded-full${d.online ? '' : ' kp-offline-dot'}`}
                   style={d.online ? { background: '#34D399' } : undefined}
                 />
-                <div className="flex-1">
-                  <p className="kp-device-name font-medium">{d.name}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="kp-device-name flex font-medium"><DeviceNameEditor device={d} /></div>
                   <div className="kp-device-meta">
                     <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? t('devices.computer') : t('devices.app')}</span>
                     {d.role === 'tentacle' && <span>{state.deviceVersions.get(d.id)}</span>}

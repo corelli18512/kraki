@@ -8,6 +8,7 @@ import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
 import { displayVersion } from '../../lib/device-update';
 import { desktop } from '../../lib/desktop';
 import { DeviceUpdateBox } from './DeviceUpdateBox';
+import { DeviceNameEditor } from './DeviceNameEditor';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -83,7 +84,7 @@ export function DevicePanel({
           </svg>
         </button>
         <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
-        <h2 className="truncate text-sm font-semibold text-text-primary">{device.name}</h2>
+        <h2 className="flex min-w-0 text-sm font-semibold text-text-primary"><DeviceNameEditor device={device} /></h2>
         <span className="text-[11px] text-text-muted">{statusLabel}</span>
         {isCurrentDevice && (
           <span className="rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">

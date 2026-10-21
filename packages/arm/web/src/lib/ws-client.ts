@@ -4,7 +4,7 @@ import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
 import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
-import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
+import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
@@ -898,6 +898,10 @@ export class KrakiWSClient {
   removeDevice(deviceId: string): void {
     this.sendToHead({ type: 'remove_device', deviceId });
   }
+  /** Give a device of this account a custom name; '' goes back to its own. */
+  renameDevice(deviceId: string, name: string): void {
+    this.sendToHead({ type: 'rename_device', deviceId, name });
+  }
   registerPushToken(payload: { provider: string; token: string }): void {
     this.sendToHead({ type: 'register_push_token', payload });
   }
@@ -1389,6 +1393,14 @@ export class KrakiWSClient {
           this.invalidatePeerCrypto(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
+        }
+        break;
+      }
+
+      case 'device_renamed': {
+        const renamed = msg as DeviceRenamedMessage;
+        if (renamed.deviceId && typeof renamed.name === 'string') {
+          getStore().renameDevice(renamed.deviceId, renamed.name, renamed.defaultName);
         }
         break;
       }

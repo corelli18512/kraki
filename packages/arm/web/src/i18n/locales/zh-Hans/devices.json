@@ -131,5 +131,11 @@
   "lastOnline": {
     "today": "今天",
     "yesterday": "昨天"
+  },
+  "rename": {
+    "field": "设备名称",
+    "title": "重命名",
+    "titleWithOwn": "重命名（原名：{{name}}）",
+    "label": "重命名 {{name}}"
   }
 }

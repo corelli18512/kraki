@@ -1,5 +1,6 @@
-/// DevicesPane — the account's devices: online state, version, updates, and
-/// removing an old device (like iPhone's Remove Device and the web's Remove).
+/// DevicesPane — the account's devices: online state, version, updates,
+/// renaming any of them, and removing an old device (like iPhone's Remove
+/// Device and the web's Remove).
 
 #if os(macOS)
 import SwiftUI
@@ -9,6 +10,8 @@ struct DevicesPane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var showingPairing = false
     @State private var removing: DeviceSummary?
+    @State private var renaming: DeviceSummary?
+    @State private var nameDraft = ""
 
     private var devices: [DeviceSummary] {
         appState.deviceStore.devices.values
@@ -30,7 +33,8 @@ struct DevicesPane: View {
                                   isThisMac: device.id == tentacleCLI.configInfo?.deviceId,
                                   canRemove: Self.canRemove(device, appDeviceId: appState.deviceId,
                                                             thisMacDeviceId: tentacleCLI.configInfo?.deviceId),
-                                  onRemove: { removing = device })
+                                  onRemove: { removing = device },
+                                  onRename: { nameDraft = device.name; renaming = device })
                     }
                 }
             }
@@ -56,6 +60,22 @@ struct DevicesPane: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingPairing) { PairingSheet() }
+        .alert(
+            "Rename \(renaming?.name ?? String(localized: "device"))",
+            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+        ) {
+            TextField(renaming?.ownName ?? "", text: $nameDraft)
+                .accessibilityIdentifier("prefs.devices.renameField")
+            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Save") {
+                if let device = renaming, let name = DeviceName.renameValue(draft: nameDraft, for: device) {
+                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                }
+                renaming = nil
+            }
+        } message: {
+            Text("Shown on all your devices. Leave it empty to use \"\(renaming?.ownName ?? "")\".")
+        }
         .alert(
             "Remove \(removing?.name ?? String(localized: "device"))?",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
@@ -105,6 +125,7 @@ private struct DeviceRow: View {
     var isThisMac = false
     var canRemove = false
     var onRemove: () -> Void = {}
+    var onRename: () -> Void = {}
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
@@ -130,6 +151,9 @@ private struct DeviceRow: View {
                 .foregroundStyle(Color.textMuted)
             }
             Spacer()
+            Button("Rename…", action: onRename)
+                .controlSize(.small)
+                .accessibilityIdentifier("prefs.devices.rename.\(device.id)")
             if canRemove {
                 Button("Remove…", action: onRemove)
                     .controlSize(.small)
