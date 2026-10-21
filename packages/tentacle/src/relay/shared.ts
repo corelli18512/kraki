@@ -119,3 +119,13 @@ export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefine
 
 /** Shared with the web app (protocol `control-messages.ts`). */
 export { isAcceptableRegionRedirect } from '@kraki/protocol';
+
+/**
+ * Every Head issues `randomBytes(32).toString('hex')` as its challenge nonce
+ * (head local-auth-backend.ts; edges get it from the account service). The
+ * same RSA key signs local-link proofs, so any other string is refused rather
+ * than signed for whoever sent it.
+ */
+export function isHeadAuthNonce(nonce: unknown): nonce is string {
+  return typeof nonce === 'string' && /^[0-9a-f]{64}$/.test(nonce);
+}

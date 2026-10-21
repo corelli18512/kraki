@@ -163,8 +163,11 @@ final class MessageRouter {
             appState?.authManager?.handleAuthError(message: json)
 
         case "auth_challenge":
-            if let nonce = json["nonce"] as? String {
+            if let nonce = json["nonce"] as? String, AuthManager.isHeadAuthNonce(nonce) {
                 appState?.authManager?.handleAuthChallenge(nonce: nonce)
+            } else {
+                // No reply: the Head's auth deadline closes the socket and we reconnect.
+                KLog.d("⛔️ Refusing to sign an auth_challenge that is not a Head nonce")
             }
 
         case "auth_info_response":

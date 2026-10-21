@@ -28,6 +28,23 @@ account device independently of the server.
   the existing v2 connection, without being required for account access.
 - History remains on the user's computer. This is not cloud history storage.
 
+## App-side replay check (computer → app)
+
+iOS/Mac drop an exact repeat of a signed computer message: same signer and
+nonce as one this identity already accepted (`DeviceTrustReplayGuard` in
+`DeviceTrust.swift`, one per `EncryptionHandler`, the last 20,000 messages,
+in memory). There is deliberately **no age limit**, unlike the tentacle's
+15-minute `ReplayGuard`: Pulse may hand a suspended or offline app a message
+long after it was signed, and a pending permission or question must still
+show. Stale state is handled where it is applied: `session_list` snapshots
+older than the last one are ignored, and an approval for a permission that is no
+longer pending is refused by the computer. After a relaunch the set is empty,
+so messages Pulse redelivers then are processed again, which is how the app
+rebuilds its state. Push previews keep their own 24-hour limit.
+
+The web app has no equivalent: it cannot pair, so computers send it unsigned
+RSA traffic with no signer or nonce to check.
+
 ## Upgrade migration
 
 A shipping `RelayClient` always uses account-access (`compatible`) mode. At

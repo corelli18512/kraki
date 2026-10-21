@@ -37,7 +37,7 @@ import { dispatchPushPreview } from './relay/push-preview.js';
 import { latestOpenAttention, restorePendingHumanActions } from './relay/questions.js';
 import { initEventsWatcher, maybeAutoArchive } from './relay/session-commands.js';
 import { resumeDisconnectedSessions } from './relay/session-resume.js';
-import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
+import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect, isHeadAuthNonce } from './relay/shared.js';
 export { SessionResumeError, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
 
 export class RelayClient {
@@ -607,9 +607,14 @@ export class RelayClient {
     }
 
     if (msg.type === 'auth_challenge') {
+      if (!isHeadAuthNonce(msg.nonce)) {
+        // No reply: the Head's auth deadline closes the socket and we reconnect.
+        logger.warn('Refusing to sign an auth challenge that is not a Head nonce');
+        return;
+      }
       if (this.keyManager && this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
-          const signature = signChallenge(msg.nonce as string, this.keyManager.getKeyPair().privateKey);
+          const signature = signChallenge(msg.nonce, this.keyManager.getKeyPair().privateKey);
           this.ws.send(JSON.stringify({ type: 'auth_response', signature }));
         } catch (err) {
           logger.error({ err }, 'Failed to sign auth challenge');

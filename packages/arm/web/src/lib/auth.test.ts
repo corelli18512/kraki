@@ -118,6 +118,40 @@ describe('processAuthError: credential wipe policy', () => {
   });
 });
 
+describe('handleAuthChallenge: only Head nonces are signed', () => {
+  function keyStore() {
+    return { isReady: () => true, init: vi.fn(), signChallenge: vi.fn(async (m: string) => `sig:${m}`) };
+  }
+
+  it('signs the nonce every Head issues (32 random bytes, lowercase hex)', async () => {
+    const { handleAuthChallenge } = await import('./auth');
+    const ks = keyStore();
+    const send = vi.fn();
+    const nonce = 'a1'.repeat(32);
+    await handleAuthChallenge(nonce, ks as never, 'dev_x', send);
+    expect(ks.signChallenge).toHaveBeenCalledWith(nonce);
+    expect(send).toHaveBeenCalledWith({ type: 'auth_response', deviceId: 'dev_x', signature: `sig:${nonce}` });
+  });
+
+  it('refuses local-link, diagnostics and other non-Head strings', async () => {
+    const { handleAuthChallenge } = await import('./auth');
+    for (const nonce of [
+      'kraki-local-link/v1/app\nabc\ndev_t\ndev_x',
+      'kraki-diag-v1\nPOST\n/api/diag/v1/batch\ndev_x\n1760000000000\nreq\n' + 'ab'.repeat(32),
+      'A1'.repeat(32),
+      'a1'.repeat(31),
+      `${'a1'.repeat(32)}\n`,
+      '',
+    ]) {
+      const ks = keyStore();
+      const send = vi.fn();
+      await handleAuthChallenge(nonce, ks as never, 'dev_x', send);
+      expect(ks.signChallenge, nonce).not.toHaveBeenCalled();
+      expect(send, nonce).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('browserDeviceName', () => {
   it('names the browser and the system', async () => {
     const { browserDeviceName } = await import('./auth');
