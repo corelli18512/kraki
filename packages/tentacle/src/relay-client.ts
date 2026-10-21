@@ -11,7 +11,7 @@ import { WebSocket } from 'ws';
 import { ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
 import type { AgentCapabilities, ProducerMessage, DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod, BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
-import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
@@ -1309,7 +1309,9 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string, fragmentSender: string | undefined, route: 'head' | 'link'): void {
+  /** `reassembled` is set for a payload rebuilt from fragments: its sender is
+   *  the one stamped on its parts, never a field of its own. */
+  private handlePulseDelivered(payloadJson: string, reassembled: { sender: string | undefined } | undefined, route: 'head' | 'link'): void {
     if (!this.keyManager || !this.authInfo) return;
     let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
@@ -1318,11 +1320,17 @@ export class RelayClient {
       logger.error({ err }, 'Pulse delivered payload parse failed');
       return;
     }
+    if (reassembled && (reassembledPayloadNamesSender(parsed) || isPayloadFragment(parsed))) {
+      logger.warn({ src: reassembled.sender }, 'Dropped reassembled payload that names its own sender');
+      return;
+    }
     if (isPayloadFragment(parsed)) {
-      const whole = this.payloadAssembler.accept(parsed);
-      // Every part of a set is stamped by the head with the same sender; carry
-      // it to the reassembled payload, which itself has no `src`.
-      if (whole !== null) this.handlePulseDelivered(whole, parsed.src, route);
+      // Each part carries the sender the Head (or the local link) stamped on
+      // it; parts are grouped by that sender and the whole is credited to it.
+      const stamp = (parsed as { src?: unknown }).src;
+      const sender = typeof stamp === 'string' ? stamp : undefined;
+      const whole = this.payloadAssembler.accept(parsed, sender);
+      if (whole !== null) this.handlePulseDelivered(whole, { sender }, route);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
@@ -1332,7 +1340,7 @@ export class RelayClient {
     // frames and consumer messages arriving this way are forged and dropped.
     // Head control never arrives over the local link, whole or reassembled.
     if (route === 'link' && parsed.from !== undefined) {
-      logger.warn({ src: fragmentSender }, 'Dropped Head-control wrapper received on the local link');
+      logger.warn({ src: parsed.src }, 'Dropped Head-control wrapper received on the local link');
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET) {
@@ -1344,7 +1352,7 @@ export class RelayClient {
       }
       return;
     }
-    const sender = parsed.src ?? fragmentSender;
+    const sender = reassembled ? reassembled.sender : parsed.src;
     try {
       const decryptStart = process.hrtime.bigint();
       // Decrypt and authenticate. With device trust the signature (checked

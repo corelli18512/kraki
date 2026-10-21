@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PayloadAssembler, fragmentPayload, isPayloadFragment, PAYLOAD_FRAGMENT_THRESHOLD } from '@kraki/protocol';
+import { PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender, PAYLOAD_FRAGMENT_THRESHOLD } from '@kraki/protocol';
 
 const big = (n: number) => JSON.stringify({ blob: 'b'.repeat(n), keys: { d: 'k' } });
 
@@ -58,5 +58,37 @@ describe('payload fragments', () => {
     expect(asm.pendingPayloads).toBe(0);
     expect(asm.accept({ kfrag: 1, id: 'y', i: 0, n: 1000, d: 'a' })).toBeNull();
     expect(asm.pendingPayloads).toBe(0);
+  });
+
+  it('keeps the parts of each sender apart, even with the same id', () => {
+    const mine = big(100_000), theirs = big(120_000);
+    const a = fragmentPayload(mine, 'same')!.map((p) => JSON.parse(p));
+    const b = fragmentPayload(theirs, 'same')!.map((p) => JSON.parse(p));
+    expect(a.length).toBe(b.length);
+    const asm = new PayloadAssembler();
+    // Another sender's parts with the victim's id must not fill its set.
+    for (const p of b.slice(1)) expect(asm.accept(p, 'dev_attacker')).toBeNull();
+    expect(asm.accept(a[0], 'dev_victim')).toBeNull();
+    let whole: string | null = null;
+    for (const p of a.slice(1)) whole = asm.accept(p, 'dev_victim');
+    expect(whole).toBe(mine);
+    expect(asm.accept(b[0], 'dev_attacker')).toBe(theirs);
+    expect(asm.pendingPayloads).toBe(0);
+  });
+
+  it('a sender and id never spell another pair\'s key', () => {
+    const parts = fragmentPayload(big(100_000), 'c')!.map((p) => JSON.parse(p));
+    const asm = new PayloadAssembler();
+    for (const p of parts.slice(1)) asm.accept({ ...p, id: 'b:c' }, 'a');
+    expect(asm.accept(parts[0], 'a:b')).toBeNull();
+  });
+
+  it('flags a reassembled payload that names its own sender', () => {
+    expect(reassembledPayloadNamesSender({ from: '@head', msg: { type: 'device_removed' } })).toBe(true);
+    expect(reassembledPayloadNamesSender({ src: 'dev_other', blob: 'b', keys: {} })).toBe(true);
+    expect(reassembledPayloadNamesSender({ blob: 'b', keys: {} })).toBe(false);
+    expect(reassembledPayloadNamesSender({ v: 2, blob: 'b' })).toBe(false);
+    expect(reassembledPayloadNamesSender(null)).toBe(false);
+    expect(reassembledPayloadNamesSender('{"from":"@head"}')).toBe(false);
   });
 });
