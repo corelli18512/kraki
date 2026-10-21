@@ -2,7 +2,7 @@ import { diag } from '../lib/diag';
 import { desktopCredentials } from '../lib/desktop';
 import { create } from 'zustand';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, type PersistStorage, type StorageValue } from 'zustand/middleware';
 import type { Store, ChatMessage, ConnectionStatus, SessionCard, WebSessionSummary } from '../types/store';
 import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
 import { isActivePhase } from '../lib/device-update';
@@ -12,6 +12,19 @@ import { aboveSteer, followSteer } from '../lib/chat/card-steer';
 import { payloadOf, seqOf } from '../lib/chat/spine';
 import { messageProvider } from '../lib/message-provider';
 import { beginSessionDeletion, captureMessageGeneration } from '../lib/message-persistence-generation';
+
+/** Same own values (undefined counts as absent): digests are rebuilt on every
+ *  session_list, so identity alone would always differ. */
+function sameFields(a: object | undefined, b: object | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
+}
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -87,6 +100,52 @@ const initialState = {
   archivedSessions: new Map<string, import('@kraki/protocol').SessionDigest[]>(),
 };
 
+// --- Persistence ---
+
+type PersistedStore = Pick<Store, 'sessions' | 'devices' | 'unreadCount' | 'pinnedSessions' | 'sessionModes' | 'sessionPreviews' | 'drafts'>;
+
+let persistedSessionsSource: Store['sessions'] | undefined;
+let persistedSessionsValue: Store['sessions'] = new Map();
+/** Compacting is runtime-only. Persist the underlying working fallback so a
+ *  cold launch cannot resurrect a stale compacting state before session_list
+ *  delivers the authoritative live snapshot. Memoized by identity so an
+ *  unchanged sessions map stays the same persisted value. */
+function persistedSessions(sessions: Store['sessions']): Store['sessions'] {
+  if (sessions !== persistedSessionsSource) {
+    persistedSessionsSource = sessions;
+    persistedSessionsValue = new Map([...sessions].map(([id, session]) => [
+      id,
+      session.state === 'compacting' ? { ...session, state: 'active' as const } : session,
+    ]));
+  }
+  return persistedSessionsValue;
+}
+
+/** zustand's persist serializes the whole snapshot to localStorage after every
+ *  set, even one that changed nothing persisted (a session_list ran ~450 of
+ *  them). Store slices are immutable, so identical slice references mean the
+ *  stored JSON is already current. */
+function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
+  if (!storage) return storage;
+  let written: StorageValue<PersistedStore> | null = null;
+  const unchanged = (value: StorageValue<PersistedStore>) => written !== null
+    && written.version === value.version
+    && (Object.keys(value.state) as Array<keyof PersistedStore>).every((key) => written!.state[key] === value.state[key])
+    && Object.keys(written.state).length === Object.keys(value.state).length;
+  return {
+    getItem: (name) => storage.getItem(name),
+    setItem: (name, value) => {
+      if (unchanged(value)) return;
+      storage.setItem(name, value);
+      written = value;
+    },
+    removeItem: (name) => {
+      written = null;
+      return storage.removeItem(name);
+    },
+  };
+}
+
 export const useStore = create<Store>()(persist((set) => ({
   ...initialState,
 
@@ -122,6 +181,13 @@ export const useStore = create<Store>()(persist((set) => ({
 
   upsertSession: (session) =>
     set((state) => {
+      // The Tentacle re-broadcasts the whole list after every reply; an
+      // unchanged digest must not notify every subscriber.
+      if (sameFields(state.sessions.get(session.id), session)) {
+        const unread = state.unreadCount.get(session.id);
+        if (session.lastSeq === undefined || session.readSeq === undefined) return state;
+        if (session.readSeq < session.lastSeq ? unread === 1 : unread === undefined) return state;
+      }
       const sessions = new Map(state.sessions);
       sessions.set(session.id, session);
       const unreadCount = new Map(state.unreadCount);
@@ -363,6 +429,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setRuntimeStatus: (sessionId, status) =>
     set((state) => {
+      if (sameFields(state.runtimeStatuses.get(sessionId), status ?? undefined)) return state;
       const next = new Map(state.runtimeStatuses);
       if (status) next.set(sessionId, status);
       else next.delete(sessionId);
@@ -402,7 +469,9 @@ export const useStore = create<Store>()(persist((set) => ({
       return { pinnedSessions: next };
     }),
 
-  setPinnedSessions: (pinned) => set({ pinnedSessions: pinned }),
+  setPinnedSessions: (pinned) => set((state) => (
+    pinned.size === state.pinnedSessions.size && [...pinned].every((id) => state.pinnedSessions.has(id))
+      ? state : { pinnedSessions: pinned })),
 
   incrementUnread: (sessionId) =>
     set((state) => {
@@ -421,6 +490,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setSessionPreview: (sessionId, preview, doIncrementUnread) =>
     set((state) => {
+      if (!doIncrementUnread && sameFields(state.sessionPreviews.get(sessionId), preview)) return state;
       const previews = new Map(state.sessionPreviews);
       previews.set(sessionId, preview);
       if (doIncrementUnread) {
@@ -458,8 +528,9 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setSessionMode: (sessionId, mode) =>
     set((state) => {
-      const next = new Map(state.sessionModes);
       const normalized = normalizeSessionMode(mode);
+      if ((state.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE) === normalized) return state;
+      const next = new Map(state.sessionModes);
       if (normalized === DEFAULT_SESSION_MODE) {
         next.delete(sessionId); // the default is implied, no need to store
       } else {
@@ -517,6 +588,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setSessionUsage: (sessionId, usage) =>
     set((state) => {
+      if (sameFields(state.sessionUsage.get(sessionId), usage)) return state;
       const next = new Map(state.sessionUsage);
       next.set(sessionId, usage);
       return { sessionUsage: next };
@@ -552,7 +624,7 @@ export const useStore = create<Store>()(persist((set) => ({
   setLocalSessionsLoading: (loading) => set({ localSessionsLoading: loading }),
   setArchiveInfo: (deviceId, info) => set((state) => {
     const prev = state.archiveInfo.get(deviceId);
-    if (prev && prev.count === info.count && prev.days === info.days) return {};
+    if (prev && prev.count === info.count && prev.days === info.days) return state;
     const next = new Map(state.archiveInfo);
     next.set(deviceId, info);
     return { archiveInfo: next };
@@ -792,18 +864,12 @@ export const useStore = create<Store>()(persist((set) => ({
   })),
 }), {
   name: 'kraki-store',
-  storage: createJSONStorage(() => localStorage, {
+  storage: unchangedSkippingStorage(createJSONStorage<PersistedStore>(() => localStorage, {
     replacer,
     reviver,
-  }),
+  })),
   partialize: (state) => ({
-    // Compacting is runtime-only. Persist the underlying working fallback so a
-    // cold launch cannot resurrect a stale compacting state before session_list
-    // delivers the authoritative live snapshot.
-    sessions: new Map([...state.sessions].map(([id, session]) => [
-      id,
-      session.state === 'compacting' ? { ...session, state: 'active' as const } : session,
-    ])),
+    sessions: persistedSessions(state.sessions),
     devices: state.devices,
     unreadCount: state.unreadCount,
     pinnedSessions: state.pinnedSessions,

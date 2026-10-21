@@ -16,6 +16,10 @@ const logger = createLogger('msg-provider');
 
 const BATCH_TIMEOUT_MS = 10_000;
 
+/** One lazy import shared by every range load (a warm-up starts dozens at once). */
+let messageDb: Promise<typeof import('./message-db')> | undefined;
+const loadMessageDb = () => (messageDb ??= import('./message-db'));
+
 // Rows written by older web clients before runtime/TRACE state was separated
 // from the persistent conversation spine. They must never count toward cache
 // range coverage, or a stale `active` row can hide a missing agent reply at the
@@ -232,6 +236,41 @@ class MessageProvider {
   }
 
   /**
+   * Background warm-up (every session_list, which the Tentacle re-broadcasts
+   * after each reply). A window already held in memory gains nothing from an
+   * IDB re-read and re-delivery, so it is skipped without loading flicker;
+   * only sessions whose tail is not in memory are fetched.
+   */
+  warmRange(sessionId: string, fromSeq: number, toSeq: number): void {
+    if (this.loadingSessions.has(sessionId)) return;
+    const from = Math.max(1, fromSeq);
+    if (from <= toSeq && !this.tailFailures.has(sessionId) && this.memoryCovers(sessionId, from, toSeq)) {
+      if (toSeq >= (this.tentacleLastSeq.get(sessionId) ?? Infinity)) this.finishTailCatchUp(sessionId, toSeq, true);
+      return;
+    }
+    void this.fetchRange(sessionId, fromSeq, toSeq, { initial: true });
+  }
+
+  /** Every spine seq in [from, to] is in memory or a confirmed legacy hole. */
+  private memoryCovers(sessionId: string, from: number, to: number): boolean {
+    return this.memoryWindow(sessionId, from, to) !== null;
+  }
+
+  /** The held spine rows of [from, to] when the window is fully covered. */
+  private memoryWindow(sessionId: string, from: number, to: number): ChatMessage[] | null {
+    const memory = getStore().messages.get(sessionId);
+    if (!memory?.length) return null;
+    const spine = memory.filter((message) => isSpineCacheMessage(message)
+      && 'sessionId' in message && message.sessionId === sessionId
+      && (message as { seq: number }).seq >= from && (message as { seq: number }).seq <= to);
+    const gaps = (this.rangeTombstones.get(sessionId) ?? []).reduce(
+      (remaining, [lo, hi]) => excludeInterval(remaining, lo, hi),
+      missingIntervals(spine, from, to),
+    );
+    return gaps.length === 0 ? spine : null;
+  }
+
+  /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
    * Delivers cached rows and authoritative pages as coverage advances.
    * True means the requested range completed (including authoritative holes);
@@ -331,7 +370,7 @@ class MessageProvider {
   private async loadRange(sessionId: string, from: number, to: number, operation: RangeOperation): Promise<boolean> {
     let cached: ChatMessage[] = [];
     try {
-      const db = await import('./message-db');
+      const db = await loadMessageDb();
       if (!this.owns(sessionId, operation)) return false;
       cached = await db.getMessagesInRange(sessionId, from, to);
     } catch { /* An unavailable cache may still be recovered from Tentacle. */ }
