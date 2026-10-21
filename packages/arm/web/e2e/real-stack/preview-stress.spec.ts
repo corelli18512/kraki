@@ -35,6 +35,15 @@ async function enrichedPreview(sid: string): Promise<{ type: string; text: strin
   const d = await debug();
   return d.enrichedSessions.find((s) => s.id === sid)?.preview as { type: string; text: string } | undefined;
 }
+/** Since questions land on the session's spine (6180ce03, 8789a89f), a
+ *  resolved question leaves a normal line as the preview: the question as
+ *  an agent line, or the user's answer. What must be gone is the attention. */
+async function expectSettled(sid: string, line?: { type: 'agent' | 'user'; text: string }): Promise<void> {
+  const preview = await enrichedPreview(sid);
+  expect(preview?.type).not.toBe('question');
+  expect(preview?.type).not.toBe('permission');
+  if (line) expect(preview).toMatchObject(line);
+}
 async function openQ(sid: string): Promise<string[]> { return (await debug()).openQuestions[sid] ?? []; }
 async function openP(sid: string): Promise<string[]> { return (await debug()).openPermissions[sid] ?? []; }
 
@@ -55,9 +64,17 @@ async function settle(ms = 600): Promise<void> { await new Promise((r) => setTim
 
 /** Read the sidebar session-card text for a session id, normalized. */
 async function cardText(page: Page, marker: string): Promise<string | null> {
-  const btn = page.getByRole('button').filter({ hasText: marker }).first();
-  if (await btn.count() === 0) return null;
-  return (await btn.innerText()).replace(/\s+/g, ' ').trim();
+  // The session card (sidebar row) whose text has the marker. Its status is
+  // a glyph now, so append it as a word ("waiting", "approval", …) from the
+  // row's data-status. Read in one step: the row re-renders while the
+  // preview changes, and a second lookup could wait for a row that is gone.
+  return page.evaluate((m) => {
+    const row = [...document.querySelectorAll('button.ksr')].find((b) => (b.textContent ?? '').includes(m));
+    if (!row) return null;
+    const text = ((row as HTMLElement).innerText ?? row.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const status = row.querySelector('.ksr-status-slot')?.getAttribute('data-status');
+    return status ? `${text} [${status}]` : text;
+  }, marker);
 }
 
 test.describe('preview high-intensity stress', () => {
@@ -84,18 +101,18 @@ test.describe('preview high-intensity stress', () => {
     try {
       await other.page.goto(`${WEB}/session/${sid}`);
       await expect.poll(async () => (await debug()).subscriptions[other.deviceId], { timeout: 15_000 }).toBe(sid);
-      await expect(other.page.getByRole('button', { name: 'alpha' })).toBeVisible({ timeout: 15_000 });
-      await other.page.getByRole('button', { name: 'alpha' }).click();
+      await expect(other.page.getByRole('button', { name: 'Answer: alpha', exact: true })).toBeVisible({ timeout: 15_000 });
+      await other.page.getByRole('button', { name: 'Answer: alpha', exact: true }).click();
       await expect.poll(async () => {
         const x = await control('/answers');
-        return (x.answers as Array<{ answer: string }>).some((a) => a.answer === 'alpha');
+        return (x.answers as Array<{ sid: string; answer: string }>).some((a) => a.sid === sid && a.answer === 'alpha');
       }).toBe(true);
       await settle();
 
       // The first (non-subscribed) Arm's sidebar must drop the question badge.
       expect(await openQ(sid)).toEqual([]);
-      expect(await enrichedPreview(sid)).toBeUndefined();
-      expect((await cardText(arm.page, q)) ?? '').not.toContain('waiting');
+      await expectSettled(sid, { type: 'user', text: 'alpha' });
+      expect((await cardText(arm.page, 'alpha')) ?? '').not.toContain('waiting');
     } finally {
       await other.context.close();
     }
@@ -149,7 +166,7 @@ test.describe('preview high-intensity stress', () => {
     await control('/questionAutoResolved', { sid, id: 'q-inter-1' });
     await settle();
     expect(await openQ(sid)).toEqual([]);
-    expect(await enrichedPreview(sid)).toBeUndefined();
+    await expectSettled(sid, { type: 'agent', text: q1 });
     expect((await cardText(arm.page, q1)) ?? '').not.toContain('waiting');
 
     // New turn, new question: sidebar must reflect ONLY q2, not resurrect q1.
@@ -187,7 +204,7 @@ test.describe('preview high-intensity stress', () => {
     await control('/questionAutoResolved', { sid, id: 'q-rc' });
     await settle();
     expect(await openQ(sid)).toEqual([]);
-    expect(await enrichedPreview(sid)).toBeUndefined();
+    await expectSettled(sid, { type: 'agent', text: q });
     expect((await cardText(arm.page, q)) ?? '').not.toContain('waiting');
   });
 
@@ -246,13 +263,13 @@ test.describe('preview high-intensity stress', () => {
     // Resolve B first, then A. A must still be intact after B clears.
     await control('/permissionAutoResolved', { sid: sidB, id: 'p-indep-b' });
     await settle();
-    expect(await enrichedPreview(sidB)).toBeUndefined();
+    await expectSettled(sidB);
     expect(await enrichedPreview(sidA)).toMatchObject({ type: 'question', text: qA });
 
     await control('/questionAutoResolved', { sid: sidA, id: 'q-indep-a' });
     await settle();
-    expect(await enrichedPreview(sidA)).toBeUndefined();
-    expect(await enrichedPreview(sidB)).toBeUndefined();
+    await expectSettled(sidA, { type: 'agent', text: qA });
+    await expectSettled(sidB);
   });
 
   // ── 8. Rapid open/autoresolve churn: many question cycles collapse to a
@@ -267,12 +284,12 @@ test.describe('preview high-intensity stress', () => {
     }
     await settle(1000);
     expect(await openQ(sid)).toEqual([]);
-    expect(await enrichedPreview(sid)).toBeUndefined();
+    await expectSettled(sid, { type: 'agent', text: 'CHURN-7' });
   });
 
-  // ── 9. Non-attention (agent_message) preview survives a digest that has
-  // no attention: the fix must only clear question/permission previews,
-  // never strand a normal agent reply.
+  // ── 9. A plain (agent) preview remains after a digest that has no
+  // attention: clearing question/permission previews must never leave the
+  // session without its spine preview.
   test('agent_message preview survives a no-attention digest', async () => {
     const sid = `spine-${Date.now().toString(36)}`;
     const agentText = `SPINE-${Date.now().toString(36)}`;
@@ -286,10 +303,12 @@ test.describe('preview high-intensity stress', () => {
     expect(await enrichedPreview(sid)).toMatchObject({ type: 'question' });
     await control('/questionAutoResolved', { sid, id: 'q-spine' });
     await settle();
-    // Question resolved -> the digest reverts to the spine agent_message
-    // preview (NOT undefined - the agent reply is the durable sidebar text).
-    expect(await enrichedPreview(sid)).toMatchObject({ type: 'agent', text: agentText });
-    // The agent_message preview should be back on the sidebar card.
-    expect((await cardText(arm.page, agentText)) ?? '').toContain(agentText);
+    // Question resolved -> the digest is a plain spine line again (NOT
+    // undefined, never stranded). Questions land on the spine (6180ce03), so
+    // that line is now the question itself, previewed as an agent line.
+    await expectSettled(sid, { type: 'agent', text: 'QTEMP' });
+    const card = (await cardText(arm.page, 'QTEMP')) ?? '';
+    expect(card).toContain('QTEMP');
+    expect(card).not.toMatch(/\[(waiting|approval)\]/);
   });
 });

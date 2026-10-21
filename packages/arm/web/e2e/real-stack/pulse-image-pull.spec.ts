@@ -5,10 +5,10 @@ import { test, expect, type Browser, type Page, request } from '@playwright/test
  *
  * Proves a REAL PNG image produced by show_image (image ContentRef) still
  * renders after the broadcast was removed — the browser pulls the bytes on
- * demand via paced request_attachment (one 256 KiB chunk at a time) and
+ * demand via paced request_attachment (one 128 KiB chunk at a time) and
  * reassembles them into a displayable blob.
  *
- * The image is > 256 KiB (noise pixels) so it spans multiple chunks, exercising
+ * The image is > 128 KiB (noise pixels) so it spans multiple chunks, exercising
  * the full paced reassembly path.
  */
 
@@ -86,12 +86,15 @@ test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
     // 3. The durable idle ref is live too. Let the producer's initial pull
     //    settle, then open a completely fresh Arm identity with no attachment
     //    cache or Pulse repair state.
-    const liveImg = page.locator('[data-chat-scroll] img[alt="gen.png"]');
+    const liveImg = page.locator('[data-chat-scroll] img[alt="gen.png"]').last();
     await expect(liveImg).toBeVisible({ timeout: 30_000 });
     await expect.poll(async () => liveImg.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
       timeout: 30_000,
     }).toBeGreaterThan(0);
-    const readsBeforeRecovery = ((await control('/attachmentReads')).reads as unknown[]).length;
+    // Only this image's reads: the shared session may hold earlier images,
+    // which a fresh browser pulls too.
+    const readsOf = (reads: unknown) => (reads as Array<{ id: string }>).filter((r) => r.id === img.id).length;
+    const readsBeforeRecovery = readsOf((await control('/attachmentReads')).reads);
 
     // 4. A fresh browser learns the ContentRef only from durable spine replay,
     //    then pulls the bytes. TRACE must not be used for artifact discovery.
@@ -104,7 +107,7 @@ test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
 
     // 5. The PNG <img> loads successfully — naturalWidth > 0 proves the
     //    browser reassembled all chunks into a valid, displayable PNG blob.
-    const imgEl = recoveryPage.locator('[data-chat-scroll] img[alt="gen.png"]');
+    const imgEl = recoveryPage.locator('[data-chat-scroll] img[alt="gen.png"]').last();
     await expect(imgEl).toBeVisible({ timeout: 30_000 });
     await expect.poll(async () => imgEl.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
       timeout: 30_000,
@@ -123,7 +126,7 @@ test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
     //    pull baseline.
     await expect.poll(async () => {
       const { reads } = await control('/attachmentReads');
-      return (reads as unknown[]).length - readsBeforeRecovery;
+      return readsOf(reads) - readsBeforeRecovery;
     }, { timeout: 30_000, message: 'paced image recovery did not serve all chunks' }).toBe(chunkCount);
 
     await recovery.close();

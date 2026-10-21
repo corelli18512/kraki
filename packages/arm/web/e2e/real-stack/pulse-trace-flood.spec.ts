@@ -77,8 +77,8 @@ test('live echo stays responsive while a large turn trace is pulled on bulk', as
   // The bulk response also completes: the concluded bubble's Steps affordance
   // remains usable after the live message arrived.
   const replyBubble = page.locator('[data-chat-scroll]').getByText(reply, { exact: false }).first()
-    .locator('xpath=ancestor::*[.//button[@aria-label="Open steps"]][1]');
-  const steps = replyBubble.getByRole('button', { name: /Open steps/i });
+    .locator('xpath=ancestor::*[.//button[@aria-label="Show steps"]][1]');
+  const steps = replyBubble.getByRole('button', { name: /Show steps/i });
   await expect(steps).toBeVisible({ timeout: 20_000 });
   await steps.click();
   await expect(page.getByRole('dialog').getByText(/echo trace-/i).first())

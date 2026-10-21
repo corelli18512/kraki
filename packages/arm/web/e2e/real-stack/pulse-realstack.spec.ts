@@ -83,7 +83,7 @@ async function pairBrowser(page: Page): Promise<string> {
  *  rather than a "Mock-agent" title match, since several seeded sessions share
  *  that title. */
 async function openSessionChat(page: Page, sessionId: string): Promise<void> {
-  await expect(page.getByRole('button', { name: /Mock-agent/ }).first())
+  await expect(page.locator('button.ksr').first())
     .toBeVisible({ timeout: 15_000 });
   await page.goto(`${WEB_URL}/session/${sessionId}`);
   await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
@@ -161,7 +161,7 @@ test.describe.serial('real-stack pulse: a complete dev conversation', () => {
     await control('/idle', { sid: sessionId });
     // Completed tool activity moves under the concluding bubble's TRACE-axis
     // Steps affordance. Open it and verify the command survives there.
-    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Open steps' }).last();
+    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Show steps' }).last();
     await expect(steps).toBeVisible({ timeout: 10_000 });
     await steps.click();
     const stepsDialog = page.getByRole('dialog');
@@ -243,10 +243,10 @@ test.describe.serial('real-stack pulse: a complete dev conversation', () => {
     // id), which orphans the outbox — a harness-identity limitation, not a pulse
     // defect. The durable-resume property itself is already proven by step 6
     // (browser-side) and the Node pulse-e2e suite.
-    const card = page.getByRole('button', { name: /Mock-agent/ }).first();
+    const card = page.locator('button.ksr').first();
     await card.click({ button: 'right' });
-    await page.getByRole('button', { name: /Delete session/i }).click();
-    await page.getByRole('button', { name: /^Delete$/ }).click();
+    await page.getByRole('menuitem', { name: /^Delete/ }).click();
+    await page.getByRole('button', { name: 'Delete Session', exact: true }).click();
 
     // The delete reaches the tentacle over pulse and kills the session.
     await expect.poll(async () => {
@@ -289,42 +289,39 @@ test.describe.serial('real-stack pulse: live presence + preferences (head→arm 
   test('8. a second device joining appears live (device_joined over pulse)', async () => {
     // The first tentacle is already visible (via auth_ok on pair). tentacle2
     // connects AFTER the browser is up → the head broadcasts device_joined over
-    // pulse. The arm must reflect it live in the Devices strip.
-    await expect(tentacle2Name(page)).toHaveCount(0);
+    // pulse. The arm must reflect it live (its device list marks it online).
+    expect(await tentacle2Online(page)).not.toBe(true);
     await control('/tentacle2/connect');
-    // Appears (the DeviceList strip may render the name more than once; assert ≥1).
-    await expect.poll(async () => tentacle2Name(page).count(), { timeout: 20_000 })
-      .toBeGreaterThan(0);
+    await expect.poll(() => tentacle2Online(page), { timeout: 20_000 }).toBe(true);
   });
 
   test('9. that device leaving disappears live (device_left over pulse)', async () => {
-    // Sanity: it's currently visible from step 8.
-    expect(await tentacle2Name(page).count()).toBeGreaterThan(0);
+    // Sanity: it's currently online from step 8.
+    expect(await tentacle2Online(page)).toBe(true);
     await control('/tentacle2/disconnect');
-    // DeviceList shows only ONLINE tentacles → device_left removes it from the strip.
-    await expect(tentacle2Name(page)).toHaveCount(0, { timeout: 20_000 });
+    await expect.poll(() => tentacle2Online(page), { timeout: 20_000 }).toBe(false);
   });
 
   test('10. removing an offline device removes it live (remove_device → device_removed)', async () => {
     // Bring tentacle2 back, then drop it so it's offline-but-known (removable).
     await control('/tentacle2/connect');
-    await expect.poll(async () => tentacle2Name(page).count(), { timeout: 20_000 })
-      .toBeGreaterThan(0);
+    await expect.poll(() => tentacle2Online(page), { timeout: 20_000 }).toBe(true);
     await control('/tentacle2/disconnect');
 
     // The DeviceGrid (/devices) shows offline devices too. Select tentacle2 and
     // remove it — remove_device rides pulse to the head (@head deliver-to-self),
     // the head deletes it and broadcasts device_removed back over pulse.
     await page.goto(`${WEB_URL}/devices`);
-    const deviceBtn = page.getByRole('button', { name: /RealStack Tentacle 2/ });
+    const deviceBtn = page.getByRole('button', { name: /^RealStack Tentacle 2/ });
     await expect(deviceBtn.first()).toBeVisible({ timeout: 15_000 });
     await deviceBtn.first().click();
+    await page.getByRole('button', { name: 'Remove…', exact: true }).click();
     await page.getByRole('button', { name: 'Remove', exact: true }).click();
-    await page.getByRole('button', { name: /Remove permanently/i }).click();
 
     // device_removed over pulse deletes it from the store → gone from the grid.
     await expect(page.getByRole('button', { name: /RealStack Tentacle 2/ }))
       .toHaveCount(0, { timeout: 20_000 });
+    expect(await tentacle2Online(page)).toBeUndefined();
   });
 
   test('11. a preference change fans out to another browser live (preferences_updated over pulse)', async ({ browser }) => {
@@ -391,14 +388,14 @@ test.describe.serial('real-stack pulse: session metadata round-trips', () => {
     // reading the tentacle's own session list back — pinned flips to true there
     // only if the outbound pulse send arrived.
     await openCardMenu(page, metaCard(page));
-    await page.getByRole('button', { name: /Pin to top/i }).click();
+    await page.getByRole('menuitem', { name: 'Pin', exact: true }).click();
     await expect.poll(() => sessionField(sessionId, 'pinned'), {
       timeout: 15_000, message: 'pin_session never reached the tentacle over pulse',
     }).toBe(true);
 
     // Reverse: unpin → the tentacle clears it.
     await openCardMenu(page, metaCard(page));
-    await page.getByRole('button', { name: /Unpin/i }).click();
+    await page.getByRole('menuitem', { name: 'Unpin', exact: true }).click();
     await expect.poll(() => sessionField(sessionId, 'pinned'), { timeout: 15_000 })
       .toBeFalsy();
   });
@@ -425,7 +422,7 @@ test.describe.serial('real-stack pulse: session metadata round-trips', () => {
     // an already-open context menu closed and can make the later click hit an
     // unrelated control at the same screen position.
     await openCardMenu(page, metaCard(page));
-    const markUnread = page.getByRole('button', { name: 'Mark unread', exact: true });
+    const markUnread = page.getByRole('menuitem', { name: 'Mark Unread', exact: true });
     await expect(markUnread).toBeVisible({ timeout: 20_000 });
 
     // Mark it UNREAD → mark_unread rides pulse to the tentacle, which rolls readSeq
@@ -442,21 +439,13 @@ test.describe.serial('real-stack pulse: session metadata round-trips', () => {
   });
 
   test('14. rename round-trips (rename_session over pulse → title updates)', async () => {
-    // Rename lives in the SessionInfoPanel. On desktop the session's "Session
-    // settings" button navigates to /devices?device=&session=, which mounts the
-    // panel for THIS session. Open the chat first so that button is present.
+    // Rename lives in Session Info, opened over the chat (?info=1), as the
+    // card menu's "Rename…" does. Its title is a button revealing the input.
     const newTitle = `Renamed ${Date.now().toString(36)}`;
-    await page.goto(`${WEB_URL}/session/${sessionId}`);
-    const settingsButton = page.getByRole('button', { name: 'Session settings' });
-    await expect(settingsButton).toBeVisible({ timeout: 10_000 });
-    await settingsButton.evaluate((button: HTMLButtonElement) => button.click());
-    await expect(page).toHaveURL(new RegExp(`/devices\\?.*session=${sessionId}`), { timeout: 10_000 });
-
-    // The panel's title is a button; click it to reveal the edit input.
-    const panel = page.locator('main');
-    const input = panel.getByPlaceholder('Session title…');
+    await page.goto(`${WEB_URL}/session/${sessionId}?info=1`);
+    const input = page.getByRole('textbox', { name: 'Session title' });
     if (!(await input.isVisible().catch(() => false))) {
-      await panel.getByRole('button', { name: /mock-agent · mock-v1/i }).last().click();
+      await page.locator('.ksi-body button:has(svg.lucide-pencil)').first().click();
     }
     await expect(input).toBeVisible({ timeout: 10_000 });
     await input.fill(newTitle);
@@ -534,7 +523,7 @@ test.describe.serial('real-stack pulse: request/reply payloads', () => {
     // Reload so the resultRef renders from replay with no cached bytes → pull.
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
-    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Open steps' }).last();
+    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Show steps' }).last();
     await expect(steps).toBeVisible({ timeout: 20_000 });
     await steps.click();
     const chip = page.getByRole('dialog').getByRole('button', { name: /cat big\.txt/i }).first();
@@ -577,18 +566,11 @@ async function openCardMenu(page: Page, card: ReturnType<Page['getByRole']>): Pr
   await expect(card).toBeVisible({ timeout: 15_000 });
   await expect(async () => {
     await card.click({ button: 'right' });
-    // "Delete session" is the menu's last item — a reliable open signal.
-    await expect(page.getByRole('button', { name: /Delete session/i })).toBeVisible({ timeout: 2_000 });
+    // "Delete…" is the menu's last item — a reliable open signal.
+    await expect(page.getByRole('menuitem', { name: /^Delete/ })).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 15_000 });
 }
 
-/** The tentacle-2 name as rendered in the Devices strip. `exact: true` matches
- *  only the leaf element whose text content is exactly this string (the name
- *  <span>), not the ancestor button/spans that merely contain it — avoids a
- *  strict-mode multi-match. */
-function tentacle2Name(page: Page) {
-  return page.getByText('RealStack Tentacle 2', { exact: true });
-}
 
 /** Open the desktop Settings slide-over (gear in the sidebar header). Waits for
  *  the app to be interactive first, and retries the open until the panel's
@@ -599,27 +581,30 @@ async function openSettings(page: Page): Promise<void> {
   await page.goto(WEB_URL);
   // App is interactive once the sidebar renders the paired tentacle.
   await expect(page.getByText('RealStack Tentacle').first()).toBeVisible({ timeout: 20_000 });
-  const gear = page.getByRole('button', { name: 'Settings' });
-  await expect(gear).toBeVisible({ timeout: 15_000 });
-  const darkRow = page.getByText('Dark mode').filter({ visible: true });
+  const themes = page.getByRole('radiogroup', { name: 'Theme' });
   await expect(async () => {
-    if (!(await darkRow.isVisible().catch(() => false))) {
-      await gear.click();
+    if (!(await themes.isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: 'App menu' }).click();
+      await page.getByRole('menuitem', { name: /Settings/ }).click();
     }
-    await expect(darkRow).toBeVisible({ timeout: 3_000 });
+    await expect(themes).toBeVisible({ timeout: 3_000 });
   }).toPass({ timeout: 20_000 });
 }
 
-/** Toggle dark mode to a target state via the Settings panel switch (role="switch"
- *  + aria-label). The slide-over positions the switch such that a real mouse click
- *  can land outside the viewport, so we dispatch the click event directly — it fires
- *  the same React onClick that a user's tap would, without the viewport/actionability
- *  gate. Two panels exist in the DOM; scope to the visible one. */
+/** Pick Light or Dark in Settings › Theme (a relay preference, so it fans
+ *  out to the user's other browsers). */
 async function setDarkMode(page: Page, wantDark: boolean): Promise<void> {
   const isDark = async () => (await page.locator('html').getAttribute('class'))?.includes('dark') ?? false;
   if ((await isDark()) === wantDark) return;
-  const toggle = page.getByRole('switch', { name: 'Toggle dark mode' }).filter({ visible: true });
-  await expect(toggle).toBeVisible({ timeout: 10_000 });
-  await toggle.dispatchEvent('click');
+  await page.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: wantDark ? /dark/i : /light/i }).click();
   await expect.poll(isDark, { timeout: 10_000 }).toBe(wantDark);
+}
+
+/** Whether the arm's device list has tentacle 2 online (undefined: unknown).
+ *  The home screen no longer lists devices, so read the store the live
+ *  device_joined / device_left handlers update. */
+async function tentacle2Online(page: Page): Promise<boolean | undefined> {
+  return page.evaluate(() => (window as unknown as {
+    __krakiStore: { getState(): { devices: Map<string, { online: boolean }> } };
+  }).__krakiStore.getState().devices.get('realstack-tentacle-2')?.online);
 }
