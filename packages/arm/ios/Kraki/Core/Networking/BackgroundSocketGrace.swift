@@ -43,7 +43,9 @@ final class BackgroundSocketGrace {
         cancelTimer()
         guard hooks.canKeep() else { return false }
         guard let token = hooks.beginTask({ [weak self] in
-            DispatchQueue.main.async { self?.expire() }
+            // UIKit calls this on the main thread right before suspending:
+            // close now, a hop to the next runloop turn might never run.
+            if Thread.isMainThread { self?.expire() } else { DispatchQueue.main.async { self?.expire() } }
         }) else { return false }
         self.token = token
         isActive = true
