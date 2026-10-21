@@ -52,10 +52,10 @@ describe('pi retry and stall diagnostics', () => {
     await t.emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: '429 Too Many Requests' });
 
     expect(logged('info', 'pi agent lifecycle')[0]).toMatchObject({
-      sessionId: 's', turnId: 'turn-1', phase: 'agent_end', willRetry: true, stopReason: 'error', err: '429 Too Many Requests',
+      sessionId: 's', turnId: 'turn-1', phase: 'agent_end', willRetry: true, stopReason: 'error', errCategory: 'rate_limit', errStatus: 429,
     });
     expect(logged('info', 'pi retrying a failed model request')).toEqual([expect.objectContaining({
-      sessionId: 's', turnId: 'turn-1', attempt: 1, maxAttempts: 3, delayMs: 2000, err: '429 Too Many Requests',
+      sessionId: 's', turnId: 'turn-1', attempt: 1, maxAttempts: 3, delayMs: 2000, errCategory: 'rate_limit', errStatus: 429,
     })]);
 
     // The next agent_end carries the attempt the adapter learned from pi.
@@ -63,15 +63,15 @@ describe('pi retry and stall diagnostics', () => {
     expect(logged('info', 'pi agent lifecycle')[1]).toMatchObject({ retryAttempt: 1 });
 
     await t.emit({ type: 'auto_retry_end', attempt: 1, success: false, finalError: 'overloaded' });
-    expect(logged('warn', 'pi model request retries ended')).toEqual([expect.objectContaining({ attempt: 1, success: false, err: 'overloaded' })]);
+    expect(logged('warn', 'pi model request retries ended')).toEqual([expect.objectContaining({ attempt: 1, success: false, errCategory: 'overloaded' })]);
   });
 
-  it('a long retry series becomes a warning, and error text is bounded', async () => {
+  it('a long retry series becomes a warning; unrecognized error text is logged as a category only', async () => {
     const t = setup();
     await t.emit({ type: 'auto_retry_start', attempt: 4, maxAttempts: 50, delayMs: 60_000, errorMessage: 'x'.repeat(1000) });
     await t.emit({ type: 'auto_retry_start', attempt: 5, maxAttempts: 50, delayMs: 60_000, errorMessage: 'x' });
-    expect(logged('info', 'pi retrying a failed model request')).toHaveLength(1);
-    expect((logged('info', 'pi retrying a failed model request')[0].err as string).length).toBe(300);
+    expect(logged('info', 'pi retrying a failed model request')).toEqual([expect.objectContaining({ errCategory: 'other' })]);
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain('xxx');
     expect(logged('warn', 'pi retrying a failed model request')).toEqual([expect.objectContaining({ attempt: 5 })]);
   });
 
@@ -113,8 +113,47 @@ describe('pi retry and stall diagnostics', () => {
     await t.emit({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false, errorMessage: 'summary failed' });
     expect(logged('info', 'pi compaction started')).toEqual([expect.objectContaining({ sessionId: 's', turnId: 'turn-1', reason: 'threshold' })]);
     expect(logged('warn', 'pi compaction ended')).toEqual([expect.objectContaining({
-      sessionId: 's', reason: 'threshold', aborted: false, durationMs: 11_000, err: 'summary failed',
+      sessionId: 's', reason: 'threshold', aborted: false, durationMs: 11_000, errCategory: 'other',
     })]);
+  });
+});
+
+describe('pi provider error text never reaches the log', () => {
+  const SECRET = 'sk-SENTINEL-7f3a9c';
+  const providerError = (status: number, what: string) =>
+    `${status} {"error":{"message":"${what} for key ${SECRET} on https://x.test/v1?sig=${SECRET}","prompt":"user said ${SECRET}"}}`;
+  const allLogged = () => JSON.stringify(Object.values(log).flatMap((fn) => fn.mock.calls));
+
+  it('retry start / end and agent_end log only an allowlisted category and HTTP status', async () => {
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await t.emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: providerError(503, 'Service Unavailable') } });
+    await t.emit({ type: 'agent_end', willRetry: true });
+    await t.emit({ type: 'auto_retry_start', attempt: 5, maxAttempts: 9, delayMs: 1, errorMessage: providerError(429, 'Rate limit exceeded') });
+    await t.emit({ type: 'auto_retry_end', attempt: 5, success: false, finalError: providerError(401, 'Invalid API key') });
+    expect(logged('info', 'pi agent lifecycle')[0]).toMatchObject({ errCategory: 'server_error', errStatus: 503 });
+    expect(logged('warn', 'pi retrying a failed model request')[0]).toMatchObject({ errCategory: 'rate_limit', errStatus: 429 });
+    expect(logged('warn', 'pi model request retries ended')[0]).toMatchObject({ errCategory: 'auth', errStatus: 401 });
+    expect(allLogged()).not.toContain(SECRET);
+    expect(allLogged()).not.toContain('"err"');
+  });
+
+  it('compaction failure logs a category only', async () => {
+    const t = setup();
+    await t.emit({ type: 'compaction_start', reason: 'overflow' });
+    await t.emit({ type: 'compaction_end', reason: 'overflow', aborted: false, willRetry: false, errorMessage: `Summarization failed: ${SECRET}` });
+    expect(logged('warn', 'pi compaction ended')[0]).toMatchObject({ errCategory: 'other' });
+    expect(allLogged()).not.toContain(SECRET);
+  });
+
+  it('the stalled-turn warning logs a category only', () => {
+    vi.useFakeTimers();
+    const t = setup();
+    t.session.turn.setError(providerError(500, 'Internal server error'));
+    vi.advanceTimersByTime(TURN_STALL_WARN_MS);
+    (t.adapter as unknown as { sweepIdle(): void }).sweepIdle();
+    expect(logged('warn', 'pi turn has had no events for a long time')[0]).toMatchObject({ errCategory: 'server_error', errStatus: 500 });
+    expect(allLogged()).not.toContain(SECRET);
   });
 });
 

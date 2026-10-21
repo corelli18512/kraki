@@ -14,9 +14,28 @@ import { LEGACY_SHOW_HTML_MAX_BYTES, logger, type AssistantStreamEvent } from '.
 /** From this pi auto-retry attempt on, each retry is logged as a warning. */
 export const PI_RETRY_WARN_ATTEMPT = 5;
 
-/** Provider/pi error text for a log line: bounded, never the whole payload. */
-export function logText(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value.slice(0, 300) : undefined;
+/** Allowlisted categories of a provider/pi error, first match wins. */
+const PI_ERROR_CATEGORIES: ReadonlyArray<readonly [string, RegExp]> = [
+  ['rate_limit', /rate.?limit|too many requests|\b429\b/i],
+  ['overloaded', /overload|\b529\b/i],
+  ['quota', /quota|insufficient.?(credit|balance|funds)|billing/i],
+  ['auth', /unauthori[sz]ed|forbidden|api.?key|authenticat|\b40[13]\b/i],
+  ['context_length', /context.{0,20}(length|window)|too many tokens|prompt is too long/i],
+  ['timeout', /timed? ?out|deadline|\b408\b|\b504\b/i],
+  ['network', /network|connection|socket|ECONN|ENOTFOUND|EAI_AGAIN|fetch failed|terminated/i],
+  ['aborted', /abort|cancel/i],
+  ['server_error', /\b5\d\d\b|internal server error|bad gateway|service unavailable/i],
+  ['bad_request', /\b4\d\d\b|bad request/i],
+];
+
+/** A provider/pi error for a log line: an allowlisted category and the HTTP
+ *  status it names, never its text. Provider errors carry raw response
+ *  bodies (keys, prompt excerpts, signed URLs). */
+export function logErrorFields(value: unknown): { errCategory: string; errStatus?: number } | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  const errCategory = PI_ERROR_CATEGORIES.find(([, pattern]) => pattern.test(value))?.[0] ?? 'other';
+  const status = /\b([45]\d\d)\b/.exec(value)?.[1];
+  return { errCategory, ...(status && { errStatus: Number(status) }) };
 }
 
 /** Choices of a question card shown for another extension's confirm dialog. */
@@ -55,7 +74,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         reason: e.reason,
         aborted: e.aborted === true,
         willRetry: e.willRetry === true,
-        ...(errorMessage && { err: logText(errorMessage) }),
+        ...logErrorFields(errorMessage),
         durationMs: s?.compactionStartedAt === undefined ? undefined : Date.now() - s.compactionStartedAt,
       }, 'pi compaction ended');
       if (s) s.compactionStartedAt = undefined;
@@ -79,7 +98,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         attempt,
         maxAttempts: e.maxAttempts,
         delayMs: e.delayMs,
-        err: logText(e.errorMessage),
+        ...logErrorFields(e.errorMessage),
       }, 'pi retrying a failed model request');
       break;
     }
@@ -91,7 +110,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         ...adapter.lifecycleEvent(s),
         attempt: e.attempt,
         success: e.success === true,
-        ...(e.success !== true && { err: logText(e.finalError) }),
+        ...(e.success !== true && logErrorFields(e.finalError)),
       }, 'pi model request retries ended');
       break;
     }
@@ -291,7 +310,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         willRetry: e.willRetry === true,
         stopReason: s?.lastStopReason,
         ...(s?.retryAttempt !== undefined && { retryAttempt: s.retryAttempt }),
-        ...(s?.turn.pendingError && { err: logText(s.turn.pendingError) }),
+        ...logErrorFields(s?.turn.pendingError),
         elapsedMs: s?.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
       }, 'pi agent lifecycle');
       // Pi emits willRetry=false before non-retry threshold/overflow

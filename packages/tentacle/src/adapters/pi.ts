@@ -31,7 +31,7 @@ import { DELEGATE_ANSWER, modeChangeSignal, type SessionMode } from './permissio
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 import { cloneFile } from '../fs-clone.js';
-import { handleEvent, krakiAnswerEnvelope, PI_CONFIRM_CHOICES } from './pi-events.js';
+import { handleEvent, krakiAnswerEnvelope, logErrorFields, PI_CONFIRM_CHOICES } from './pi-events.js';
 import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEfforts } from './pi-models.js';
 import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
 import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
@@ -1248,7 +1248,7 @@ export class PiAdapter extends AgentAdapter {
       compacting: this.compactingSessions.has(sessionId),
       stopReason: s.lastStopReason,
       ...(s.retryAttempt !== undefined && { retryAttempt: s.retryAttempt }),
-      ...(s.turn.pendingError && { err: s.turn.pendingError.slice(0, 300) }),
+      ...logErrorFields(s.turn.pendingError),
     }, 'pi turn has had no events for a long time');
   }
 }
