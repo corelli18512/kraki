@@ -149,7 +149,7 @@ export class RemoteAuthBackend implements AuthBackend {
     for (const [deviceId, { status, redirect, epoch }] of statuses) {
       // Re-authenticated or dropped while later chunks were out: newer facts win.
       if (epoch !== cache.epoch(deviceId)) continue;
-      if (status === 'ok') { cache.confirm(deviceId); continue; }
+      if (status === 'ok') continue;
       cache.forget(deviceId);
       if (status === 'unanswered') continue;
       metrics().inc('auth.localRevoked');

@@ -97,9 +97,10 @@ describe('edge-local challenge auth', () => {
     expect(calls, 'nothing before auth_ok').toEqual([]);
     await settle();
     // The account service only verifies nonces it issued: the background
-    // re-check asks for this device's status, and an 'ok' refreshes trust.
+    // re-check asks for this device's status. An 'ok' does not extend the
+    // full answer's age (that bounds how stale the mirrored data can get).
     expect(calls, 'one background status check').toEqual(['/api/devices/status']);
-    expect(cache.lookup('phone')?.verifiedAt).toBe(clock);
+    expect(cache.lookup('phone')?.verifiedAt).toBe(clock - 1_000);
 
     calls = [];
     await signIn();
@@ -182,10 +183,10 @@ describe('edge-local challenge auth', () => {
     expect(calls).toEqual(['/api/auth/challenge', '/api/auth/verify']);
   });
 
-  it('trust expires when the account service has not confirmed a device for a week', async () => {
+  it('a full account-service answer older than a day is not trusted locally', async () => {
     await remote.enableLocalChallenge(cache, undefined, 60_000);
     await signIn();
-    clock += 8 * 24 * 3600_000;
+    clock += 24 * 3600_000 + 1;
     calls = [];
     const result = await signIn();
     expect(result.ok && result.local).toBeFalsy();

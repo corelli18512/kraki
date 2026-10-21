@@ -15,7 +15,7 @@ no connection reuse) were most of it.
 
 `EdgeAuthCache` (packages/head/src/edge-auth-cache.ts) keeps, per device, the
 last successful answer the account service gave this edge, plus the time it
-was given. For a device with such an answer from the last 7 days whose public
+was given. For a device with such an answer from the last 24 hours whose public
 key still matches this edge's device mirror:
 
 1. `startChallenge` issues the nonce locally (no network).
@@ -38,7 +38,7 @@ key still matches this edge's device mirror:
 Everything else uses the old remote path unchanged:
 
 - a device this edge has no fresh answer for (first sign-in here, or none
-  from the account service within 7 days);
+  from the account service within 24 hours);
 - a changed encryption key (the account service must store it before others
   encrypt to it; the challenge then comes from the account service too) or a
   signature that does not verify with the cached key (answered with the
@@ -54,7 +54,7 @@ next poll. `KRAKI_EDGE_LOCAL_AUTH=0` disables it on an edge.
 ## Guarantees and trade-offs
 
 - The account service remains the only authority. The edge never creates a
-  device, never assigns a region and never extends trust beyond 7 days
+  device, never assigns a region and never extends trust beyond 24 hours
   without a fresh answer.
 - Revocation latency: immediate for removals made on the same edge (the
   device mirror is deleted, which ends local trust), at most one background

@@ -48,7 +48,11 @@ export interface CachedDevice {
   verifiedAt: number;
 }
 
-export const DEFAULT_MAX_STALE_MS = 7 * 24 * 3600_000;
+/** Age limit of the account service's last full answer. Status polls only
+ *  revoke; they do not refresh the device list / user data mirrored from
+ *  that answer, so a device signs in through the account service at least
+ *  once a day (which refreshes it). */
+export const DEFAULT_MAX_STALE_MS = 24 * 3600_000;
 export const DEFAULT_REVALIDATE_MS = 60_000;
 /** A challenge must be answered within this (the Head also enforces it per
  *  socket, for account-service nonces too). */
@@ -163,12 +167,6 @@ export class EdgeAuthCache {
       deviceId: row.device_id, userId: row.user_id, publicKey: row.public_key,
       encryptionKey: row.encryption_key ?? undefined, result, verifiedAt: row.verified_at,
     };
-  }
-
-  /** The account service confirmed the device as cached (status poll):
-   *  trust is fresh again. No epoch change: nothing about it changed. */
-  confirm(deviceId: string): void {
-    this.db.prepare('UPDATE edge_auth_cache SET verified_at = ? WHERE device_id = ?').run(this.now(), deviceId);
   }
 
   forget(deviceId: string): void {
