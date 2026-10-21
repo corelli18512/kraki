@@ -135,7 +135,8 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
     expect((await remote.verifyChallenge('phone', fresh, signChallenge(fresh, keys.privateKey), 'enc-1', 'us')).ok).toBe(true);
     const replay = await remote.verifyChallenge('phone', fresh, signChallenge(fresh, keys.privateKey), 'enc-1', 'us');
     expect(replay.ok).toBe(false);
-    expect(calls.filter((c) => c === '/api/auth/verify').length, 'only the one background re-verify').toBeLessThanOrEqual(1);
+    // The background re-check is a status check: no local nonce reaches /api/auth/verify.
+    expect(calls.filter((c) => c === '/api/auth/verify')).toEqual([]);
   });
 
   it('does not use cached trust after local signing-key rotation', async () => {
@@ -155,11 +156,14 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
     expect(revoked).toEqual([]);
   });
 
-  it('transient background verification failure retains trust and does not kick', async () => {
-    await warm(); verifyMode = 'offline';
+  // The background re-check after a local accept is a status check of that
+  // device (the account service only verifies nonces it issued).
+  it.each(['offline', 'internal-error'] as const)('transient background status failure (%s) retains trust and does not kick', async (mode) => {
+    await warm(); statusMode = mode;
     expect((await signIn()).ok).toBe(true);
-    await until(() => calls.includes('/api/auth/verify'));
+    await until(() => calls.includes('/api/devices/status'));
     await tick();
+    expect(remote.localChallengeActive).toBe(true);
     expect(cache.lookup('phone')).toBeDefined();
     expect(revoked).toEqual([]);
   });
@@ -223,26 +227,29 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
     expect(remote.localChallengeActive, 'stop is a lifecycle boundary even with a poll in flight').toBe(false);
   });
 
-  it('late successful revalidation cannot resurrect a device revoked by a newer poll', async () => {
+  it('a late background status ok cannot resurrect a device revoked by a newer poll', async () => {
     await warm();
-    // Use the actual Head callbacks, including the device mirroring refresh.
+    // Use the actual Head callbacks (revocation drops the device mirror).
     head = new HeadServer(edge, { authBackend: remote });
-    verifyMode = 'hold';
-    expect((await signIn()).ok).toBe(true);
-    await until(() => heldVerify !== undefined);
-    expect(heldVerify!.answer.ok).toBe(true);
+    const revokeDevice = remote.onRevoked!;
+    remote.onRevoked = (r) => { revoked.push(r); revokeDevice(r); };
+    holdStatus = true;
+    expect((await signIn()).ok).toBe(true); // local; background status check held
+    await until(() => heldStatus !== undefined);
+    const late = heldStatus!;
+    holdStatus = false;
     account.deleteDevice('phone');
     await remote.pollDeviceStatus();
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
     expect(edge.getDevice('phone')).toBeFalsy();
     expect(cache.lookup('phone')).toBeUndefined();
-    let refreshed = false;
-    const mirrorRefreshed = remote.onRefreshed!;
-    remote.onRefreshed = (result, context) => { mirrorRefreshed(result, context); refreshed = true; };
-    heldVerify!.res.end(JSON.stringify(heldVerify!.answer));
+    // The answer the account service gave before the removal.
+    late.end(JSON.stringify({ ok: true, statuses: { phone: 'ok' } }));
     for (let i = 0; i < 20; i++) await tick();
-    expect(refreshed, 'a late answer is dropped, not mirrored').toBe(false);
     expect(edge.getDevice('phone'), 'a revoked mirror must stay deleted').toBeFalsy();
-    expect(cache.lookup('phone'), 'an older verify must not recreate local trust').toBeUndefined();
+    expect(cache.lookup('phone'), 'an older status must not recreate local trust').toBeUndefined();
+    expect(cache.deviceIds()).not.toContain('phone');
+    expect(revoked).toHaveLength(1);
   });
 
   it('poll revokes a cached device whose id is __proto__', async () => {
@@ -272,10 +279,11 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
   it('revalidation is rate limited independently for each device', async () => {
     await warm();
     await signIn();
-    await until(() => calls.includes('/api/auth/verify'));
+    await until(() => calls.includes('/api/devices/status'));
     for (let i = 0; i < 4; i++) await signIn();
     await tick();
-    expect(calls.filter((p) => p === '/api/auth/verify')).toHaveLength(1);
+    expect(calls.filter((p) => p === '/api/devices/status')).toHaveLength(1);
+    expect(calls.filter((p) => p.startsWith('/api/auth/')), 'local sign-ins send nothing else').toEqual([]);
     expect(cache.claimRevalidation('unrelated-phone')).toBe(true);
   });
 
@@ -317,25 +325,33 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
 
   it('a bad signature from another socket does not drop a live device from revocation polls', async () => {
     await warm();
-    const c = await remote.startChallenge('phone', 'enc-1', 'us');
+    // A new encryption key forces an account-service challenge: a forged
+    // signature for it is judged there.
+    const c = await remote.startChallenge('phone', 'enc-2', 'us');
     if (!c.ok) throw new Error('challenge');
-    // Not a local nonce (forced remote): a forged signature at the account service.
-    const forged = await remote.verifyChallenge('phone', 'remote-nonce', signChallenge('remote-nonce', generateKeyPair().privateKey), 'enc-1', 'us');
-    expect(forged.ok).toBe(false);
+    expect(calls).toEqual(['/api/auth/challenge']);
+    const forged = await remote.verifyChallenge('phone', c.nonce, signChallenge(c.nonce, generateKeyPair().privateKey), 'enc-2', 'us');
+    expect(forged).toMatchObject({ ok: false, code: 'invalid_signature' });
     expect(cache.lookup('phone'), 'still trusted and still polled').toBeDefined();
     account.deleteDevice('phone');
     await remote.pollDeviceStatus();
     expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
   });
 
-  it('a delayed older background success cannot overwrite a newer key', async () => {
+  // Was: "a delayed older background success cannot overwrite a newer key".
+  // The background re-check is now a status check that stores no answer;
+  // the equivalent guarantee: its delayed verdict on the old key, ok or a
+  // rejection, must not refresh or revoke the newer key's trust.
+  it.each(['ok', 'key_changed'])('a delayed background status %s for an older key cannot act on a newer key', async (status) => {
     await warm();
     head = new HeadServer(edge, { authBackend: remote });
-    verifyMode = 'hold';
-    expect((await signIn()).ok).toBe(true); // local; background re-verify held
-    await until(() => heldVerify !== undefined);
+    const revokeDevice = remote.onRevoked!;
+    remote.onRevoked = (r) => { revoked.push(r); revokeDevice(r); };
+    holdStatus = true;
+    expect((await signIn()).ok).toBe(true); // local; background status check held
+    await until(() => heldStatus !== undefined);
+    holdStatus = false;
     // Newer authoritative sign-in with a rotated key completes first.
-    verifyMode = 'normal';
     const k2 = generateKeyPair();
     account.upsertDevice('phone', 'u', 'Phone', 'app', 'ios', exportPublicKey(k2.publicKey), 'enc-1');
     const fresh = { ok: true as const, userId: 'u', deviceId: 'phone', authMethod: 'challenge' as const,
@@ -343,13 +359,14 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
       devices: [{ id: 'phone', name: 'Phone', role: 'app' as const, publicKey: exportPublicKey(k2.publicKey), encryptionKey: 'enc-1', online: false }] };
     mirror(fresh);
     expect(cache.remember(fresh, cache.epoch('phone'))).toBe('stored');
-    let refreshed = false;
-    const inner = remote.onRefreshed!;
-    remote.onRefreshed = (r, c2) => { inner(r, c2); refreshed = true; };
-    heldVerify!.res.end(JSON.stringify(heldVerify!.answer));
+    const storedAt = cache.lookup('phone')!.verifiedAt;
+    clock += 1_000;
+    heldStatus!.end(JSON.stringify({ ok: true, statuses: { phone: status } }));
     for (let i = 0; i < 20; i++) await tick();
-    expect(refreshed).toBe(false);
     expect(cache.lookup('phone')?.publicKey).toBe(exportPublicKey(k2.publicKey));
+    expect(cache.lookup('phone')?.verifiedAt, 'an old-key ok must not refresh the newer trust').toBe(storedAt);
+    expect(revoked, 'an old-key rejection must not revoke the newer trust').toEqual([]);
+    expect(edge.getDevice('phone')).toBeTruthy();
   });
 
   it('a foreground sign-in that crosses a removal on this edge does not complete', async () => {

@@ -80,8 +80,16 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
       edge.upsertDevice(d.id, result.userId, d.name, d.role, d.kind, d.publicKey, d.encryptionKey);
     }
   }
+  /** A challenge nonce issued by the account service itself (it only
+   *  verifies answers to nonces it issued). */
+  async function accountNonce() {
+    const c = await local.startChallenge('phone');
+    if (!c.ok) throw new Error('account challenge failed');
+    return c.nonce;
+  }
   async function seed() {
-    const result = await local.verifyChallenge('phone', 'seed', signChallenge('seed', keys.privateKey), 'enc');
+    const nonce = await accountNonce();
+    const result = await local.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
     if (!result.ok) throw new Error('seed failed');
     mirror(result); cache.remember(result); return result;
   }
@@ -102,11 +110,14 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
 
   it.each(['verify', 'token'])('a newer token remember fences an older successful %s even with unchanged identity', async (kind) => {
     await seed(); const epoch = cache.epoch('phone');
+    // An account-service nonce: the held verify really succeeds, so only the epoch fence can veto it.
+    const nonce = await accountNonce();
     hold = kind === 'verify' ? '/api/auth/verify' : '/api/auth';
     const pending = kind === 'verify'
-      ? remote.verifyChallenge('phone', 'remote-nonce', signChallenge('remote-nonce', keys.privateKey), 'enc')
+      ? remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc')
       : remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     await until(() => held.length === 1); hold = undefined;
+    expect(held[0].result).toMatchObject({ ok: true });
     const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     expect(fresh.ok).toBe(true); expect(cache.epoch('phone')).toBeGreaterThan(epoch);
     const updated = cache.epoch('phone'); release();
@@ -114,22 +125,34 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     expect(cache.epoch('phone')).toBe(updated); expect(cache.lookup('phone')).toBeDefined();
   });
 
-  it('a delayed old background key success cannot overwrite a newer authoritative key', async () => {
-    await seed(); hold = '/api/auth/verify'; const refreshed = vi.fn(); remote.onRefreshed = refreshed;
+  // Was: "a delayed old background key success cannot overwrite a newer
+  // authoritative key". The background re-check is now a status check for
+  // the cached identity and stores no answer, so the equivalent guarantee is
+  // that its delayed verdict about the OLD key is fenced by the epoch: an
+  // 'ok' must not refresh the newer key's trust age, and a rejection must not
+  // revoke the re-authenticated device.
+  it.each(['ok', 'key_changed'])('a delayed background status %s for the old key cannot act on a newer authoritative key', async (status) => {
+    await seed(); hold = '/api/devices/status';
     const n = cache.issueNonce('phone');
     expect((await remote.verifyChallenge('phone', n, signChallenge(n, keys.privateKey), 'enc')).ok).toBe(true);
-    await until(() => held.length === 1);
+    await until(() => held.length === 1); hold = undefined;
+    expect(held[0].result).toMatchObject({ statuses: { phone: 'ok' } });
+    if (status !== 'ok') held[0].result = { ok: true, statuses: { phone: status } };
     const rotated = exportPublicKey(generateKeyPair().publicKey);
     const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, { ...device, publicKey: rotated });
     if (!fresh.ok) throw new Error('pairing failed'); mirror(fresh);
+    const storedAt = cache.lookup('phone')!.verifiedAt;
+    now += 1_000;
     release(); await sleep(); await sleep();
     expect(cache.lookup('phone')?.publicKey).toBe(rotated); expect(edge.getDevice('phone')?.publicKey).toBe(rotated);
-    expect(refreshed).not.toHaveBeenCalled();
+    expect(cache.lookup('phone')?.verifiedAt, 'an old-identity ok must not refresh newer trust').toBe(storedAt);
+    expect(revocations.filter((r) => !r.supersededOnly), 'an old-identity rejection must not revoke').toEqual([]);
   });
 
   it('a stale foreground device rejection cannot remove a newer live sign-in from polling', async () => {
-    await seed(); account.deleteDevice('phone'); hold = '/api/auth/verify';
-    const old = remote.verifyChallenge('phone', 'remote-nonce', signChallenge('remote-nonce', keys.privateKey), 'enc');
+    await seed(); const nonce = await accountNonce();
+    account.deleteDevice('phone'); hold = '/api/auth/verify';
+    const old = remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
     await until(() => held.length === 1);
     expect(held[0].result).toMatchObject({ ok: false, code: 'device_not_found' });
     const current = await connect({ method: 'pairing', token: local.createPairingToken('u').token });
@@ -146,7 +169,9 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     await seed(); cache.claimRevalidation('phone');
     const current = await connect({ method: 'challenge', deviceId: 'phone' });
     await until(() => current.messages.some((m) => m.type === 'auth_ok'));
-    const nonce = cache.issueNonce('phone');
+    // The other socket's challenge came from the account service, which
+    // judges the signature (it only verifies nonces it issued).
+    const nonce = await accountNonce();
     const invalid = await remote.verifyChallenge('phone', nonce, 'not-a-signature', 'enc');
     expect(invalid).toMatchObject({ ok: false, code: 'invalid_signature' });
     expect(cache.lookup('phone')).toBeDefined();

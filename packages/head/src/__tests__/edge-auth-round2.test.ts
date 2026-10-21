@@ -79,8 +79,16 @@ describe('PR577 round2 trust epochs and nonce provenance', () => {
       edge.upsertDevice(d.id, result.userId, d.name, d.role, d.kind, d.publicKey, d.encryptionKey);
     }
   }
+  /** A challenge nonce issued by the account service itself (it only
+   *  verifies answers to nonces it issued). */
+  async function accountNonce() {
+    const c = await local.startChallenge('phone');
+    if (!c.ok) throw new Error('account challenge failed');
+    return c.nonce;
+  }
   async function seed() {
-    const result = await local.verifyChallenge('phone', 'seed', signChallenge('seed', keys.privateKey), 'enc');
+    const nonce = await accountNonce();
+    const result = await local.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
     if (!result.ok) throw new Error('seed failed');
     mirror(result); cache.remember(result); return result;
   }
@@ -130,11 +138,15 @@ describe('PR577 round2 trust epochs and nonce provenance', () => {
     expect(client.messages.some((m) => m.type === 'auth_ok')).toBe(false);
   });
 
-  it('background success is fenced across forget and same-cache stop/enable', async () => {
-    await seed(); hold = '/api/auth/verify';
+  // The background re-check after a local accept is a status check of that
+  // device (/api/devices/status); its late verdict, ok or not, belongs to the
+  // old epoch and lifecycle.
+  it.each(['ok', 'unknown_device'])('background status %s is fenced across forget and same-cache stop/enable', async (status) => {
+    await seed(); hold = '/api/devices/status';
     const nonce = cache.issueNonce('phone');
     expect((await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc')).ok).toBe(true);
-    await until(() => held.length === 1);
+    await until(() => held.length === 1); hold = undefined;
+    if (status !== 'ok') held[0].result = { ok: true, statuses: { phone: status } };
     remote.forgetLocalTrust('phone');
     remote.stopLocalChallenge(); await remote.enableLocalChallenge(cache, undefined, 600_000);
     release(); await sleep(); await sleep();

@@ -15,17 +15,19 @@ no connection reuse) were most of it.
 
 `EdgeAuthCache` (packages/head/src/edge-auth-cache.ts) keeps, per device, the
 last successful answer the account service gave this edge, plus the time it
-was given. For a device with such an answer from the last 7 days whose public
+was given. For a device with such an answer from the last 24 hours whose public
 key still matches this edge's device mirror:
 
 1. `startChallenge` issues the nonce locally (no network).
 2. `verifyChallenge` verifies the signature locally against that public key
    and answers `auth_ok` immediately (`local: true` in the log line).
-3. In the background (at most once a minute per device) the same signature
-   is re-verified at the account service. A definitive rejection
-   (`device_not_found`, `account_deleted`, `wrong_region`, …) forgets the
-   device and closes its socket with that `auth_error`, exactly what a fresh
-   sign-in would have answered. Transient errors change nothing.
+3. In the background (at most once a minute per device) the edge asks
+   `/api/devices/status` about that one device (the account service only
+   verifies answers to nonces it issued itself, so the edge's nonce cannot
+   be re-verified there). `ok` does not extend the answer's age; a rejection
+   (`unknown_device`, `account_deleted`, `wrong_region`, `key_changed`)
+   forgets the device and closes its socket, as the 5-minute poll below
+   does. Transient errors change nothing.
 4. Every 5 minutes the edge posts every cached device (id, the account it
    trusts it for, its signing-key fingerprint) to `/api/devices/status` on
    the account service. Answers: `ok`; `unknown_device` (removed, or the id
@@ -36,9 +38,12 @@ key still matches this edge's device mirror:
 Everything else uses the old remote path unchanged:
 
 - a device this edge has no fresh answer for (first sign-in here, or none
-  from the account service within 7 days);
+  from the account service within 24 hours);
 - a changed encryption key (the account service must store it before others
-  encrypt to it) or a signature that does not verify with the cached key;
+  encrypt to it; the challenge then comes from the account service too) or a
+  signature that does not verify with the cached key (answered with the
+  account service's verdict on the device, else retryably: it did not issue
+  that nonce);
 - a single-use or token credential (pairing, OAuth code, `github_token`).
 
 Local trust only switches on after the account service has answered a
@@ -49,11 +54,11 @@ next poll. `KRAKI_EDGE_LOCAL_AUTH=0` disables it on an edge.
 ## Guarantees and trade-offs
 
 - The account service remains the only authority. The edge never creates a
-  device, never assigns a region and never extends trust beyond 7 days
+  device, never assigns a region and never extends trust beyond 24 hours
   without a fresh answer.
 - Revocation latency: immediate for removals made on the same edge (the
   device mirror is deleted, which ends local trust), at most one background
-  re-verification after the next sign-in, or one 5-minute poll otherwise.
+  status check after the next sign-in, or one 5-minute poll otherwise.
 - Nonces issued locally are single-use, bound to their device, and expire
   after 5 minutes; the Head also rejects any challenge answer (local or
   account-service nonce) older than 5 minutes on that socket.

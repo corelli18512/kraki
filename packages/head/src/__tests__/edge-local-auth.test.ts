@@ -1,7 +1,8 @@
 /**
  * Edge-local challenge auth (EdgeAuthCache): a device the account service
  * already verified signs in at the edge without a round trip; the account
- * service stays the authority (background re-verify + device status poll).
+ * service stays the authority (background status check of the device that
+ * signed in + periodic device status poll).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
@@ -31,7 +32,6 @@ describe('edge-local challenge auth', () => {
   let cache: EdgeAuthCache;
   let clock: number;
   let revoked: EdgeRevocation[];
-  let refreshed: AuthResult[];
   const keys = generateKeyPair();
 
   beforeEach(async () => {
@@ -53,9 +53,7 @@ describe('edge-local challenge auth', () => {
     clock = 1_000_000;
     cache = new EdgeAuthCache(edge.rawDb, { now: () => clock });
     revoked = [];
-    refreshed = [];
     remote.onRevoked = (r) => revoked.push(r);
-    remote.onRefreshed = (r) => refreshed.push(r);
   });
 
   afterEach(() => {
@@ -91,14 +89,18 @@ describe('edge-local challenge auth', () => {
     expect(calls.filter((c) => c.startsWith('/api/auth/'))).toEqual(['/api/auth/challenge', '/api/auth/verify']);
 
     calls = [];
+    clock += 1_000;
     const second = await signIn();
     expect(second.ok).toBe(true);
     expect(second.ok && second.local).toBe(true);
     expect(second.ok && second.deviceId).toBe('phone');
     expect(calls, 'nothing before auth_ok').toEqual([]);
     await settle();
-    expect(calls, 'one background re-verify').toEqual(['/api/auth/verify']);
-    expect(refreshed).toHaveLength(1);
+    // The account service only verifies nonces it issued: the background
+    // re-check asks for this device's status. An 'ok' does not extend the
+    // full answer's age (that bounds how stale the mirrored data can get).
+    expect(calls, 'one background status check').toEqual(['/api/devices/status']);
+    expect(cache.lookup('phone')?.verifiedAt).toBe(clock - 1_000);
 
     calls = [];
     await signIn();
@@ -114,7 +116,11 @@ describe('edge-local challenge auth', () => {
     const other = generateKeyPair();
     const result = await remote.verifyChallenge('phone', challenge.nonce, signChallenge(challenge.nonce, other.privateKey), 'enc-1');
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.code).toBe('invalid_signature');
+    // The edge nonce falls through to the account service, which did not
+    // issue it: a retryable refusal (never invalid_signature, which would
+    // make a real client drop its pairing).
+    expect(!result.ok && result.code).toBe('service_unavailable');
+    expect(cache.lookup('phone'), 'one bad attempt does not drop trust').toBeDefined();
   });
 
   it('a nonce is single-use and bound to its device', async () => {
@@ -136,7 +142,8 @@ describe('edge-local challenge auth', () => {
     calls = [];
     const result = await signIn('enc-2');
     expect(result.ok && result.local).toBeFalsy();
-    expect(calls).toEqual(['/api/auth/verify']);
+    // Challenge too: the account service only verifies nonces it issued.
+    expect(calls).toEqual(['/api/auth/challenge', '/api/auth/verify']);
     expect(account.getDevice('phone')?.encryptionKey).toBe('enc-2');
   });
 
@@ -153,15 +160,15 @@ describe('edge-local challenge auth', () => {
     expect(calls).toEqual(['/api/auth/challenge']);
   });
 
-  it('a revocation the poll has not seen yet is caught by the background re-verify', async () => {
+  it('a revocation the poll has not seen yet is caught by the background status check', async () => {
     await remote.enableLocalChallenge(cache, undefined, 60_000);
     await signIn();
     account.deleteDevice('phone');
-    clock += 120_000; // past the re-verify interval
+    clock += 120_000; // past the re-check interval
     const local = await signIn();
     expect(local.ok && local.local).toBe(true);
     await settle();
-    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'device_not_found' })]);
+    expect(revoked).toEqual([expect.objectContaining({ deviceId: 'phone', code: 'unknown_device' })]);
     expect(cache.lookup('phone')).toBeUndefined();
   });
 
@@ -176,10 +183,10 @@ describe('edge-local challenge auth', () => {
     expect(calls).toEqual(['/api/auth/challenge', '/api/auth/verify']);
   });
 
-  it('trust expires when the account service has not confirmed a device for a week', async () => {
+  it('a full account-service answer older than a day is not trusted locally', async () => {
     await remote.enableLocalChallenge(cache, undefined, 60_000);
     await signIn();
-    clock += 8 * 24 * 3600_000;
+    clock += 24 * 3600_000 + 1;
     calls = [];
     const result = await signIn();
     expect(result.ok && result.local).toBeFalsy();
@@ -284,6 +291,43 @@ describe('edge HeadServer with local challenge auth', () => {
       await new Promise<void>((r) => accountHttp.close(() => r()));
       edgeStorage.close();
       account.close();
+    }
+  });
+});
+
+describe('signing key changed on a warm edge (fix/main-after-577 review)', () => {
+  it('a device announcing another signing key gets an account-service challenge and a real verdict', async () => {
+    const keys = generateKeyPair();
+    const account = new Storage(':memory:');
+    const edge = new Storage(':memory:');
+    account.upsertUser('u1', 'alice', 'open');
+    account.upsertDevice('t1', 'u1', 'Mac', 'tentacle', 'desktop', exportPublicKey(keys.publicKey));
+    const calls: string[] = [];
+    const api = new AccountApi({ authBackend: new LocalAuthBackend({ storage: account, authProviders: new Map() }), serviceKey: SERVICE_KEY });
+    const http = createServer(async (req, res) => { calls.push(req.url ?? ''); if (!(await api.handleRequest(req, res))) { res.writeHead(404); res.end(); } });
+    await new Promise<void>((r) => http.listen(0, r));
+    const remote = new RemoteAuthBackend({ accountUrl: `http://localhost:${(http.address() as AddressInfo).port}`, serviceKey: SERVICE_KEY });
+    try {
+      await remote.enableLocalChallenge(new EdgeAuthCache(edge.rawDb), undefined, 600_000);
+      const c1 = await remote.startChallenge('t1', undefined, undefined, exportPublicKey(keys.publicKey));
+      if (!c1.ok) throw new Error('challenge');
+      const first = await remote.verifyChallenge('t1', c1.nonce, signChallenge(c1.nonce, keys.privateKey));
+      expect(first.ok).toBe(true);
+      if (first.ok) { edge.upsertUser('u1', 'alice', 'open'); for (const d of first.devices) edge.upsertDevice(d.id, 'u1', d.name, d.role, d.kind, d.publicKey, d.encryptionKey); }
+      // Same key: local.
+      calls.length = 0;
+      expect((await remote.startChallenge('t1', undefined, undefined, exportPublicKey(keys.publicKey))).ok).toBe(true);
+      expect(calls).toEqual([]);
+      // New signing key: the account service issues the challenge and gives
+      // the verdict the Tentacle needs (invalid_signature → token sign-in).
+      const other = generateKeyPair();
+      const c2 = await remote.startChallenge('t1', undefined, undefined, exportPublicKey(other.publicKey));
+      expect(calls).toEqual(['/api/auth/challenge']);
+      if (!c2.ok) throw new Error('challenge');
+      const r = await remote.verifyChallenge('t1', c2.nonce, signChallenge(c2.nonce, other.privateKey));
+      expect(!r.ok && r.code).toBe('invalid_signature');
+    } finally {
+      remote.stopLocalChallenge(); http.close(); account.close(); edge.close();
     }
   });
 });

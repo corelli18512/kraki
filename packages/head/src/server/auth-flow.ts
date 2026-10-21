@@ -42,6 +42,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
         auth.deviceId,
         msg.device.encryptionKey,
         server.options.region,
+        msg.device.publicKey,
       );
       state.authTiming.challengeMs = Math.round(performance.now() - challengeStart);
       metrics().authStages.challenge.observe(state.authTiming.challengeMs);
@@ -193,7 +194,7 @@ export function handleBackendAuthResult(
   state.authTiming = undefined;
 
   // Accepted from this edge's own copy: the local mirror is already what the
-  // account service last said (refreshed in the background); re-mirroring the
+  // account service said at the last remote sign-in; re-mirroring the
   // cached list could revert a rename made here since.
   if (!result.local) mirrorAuthResult(server, result, renameClockAtStart);
 
