@@ -5,7 +5,7 @@ import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { DiagApi, diagSigningText } from '../diag-api.js';
+import { DiagApi, diagSigningText, sanitizeDiagBatch } from '../diag-api.js';
 
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicKey = key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
@@ -112,6 +112,14 @@ describe('off-band diagnostics', () => {
     f = await fixture();
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [{ ev: 'raw.log', seq: 1, m: 0, t: 0, d: {} }] })))).status).toBe(204);
     expect(await stored(f)).toBeNull();
+  });
+  it('keeps work.slow thread CPU time next to its wall time (inactive-Mac stalls: work vs waiting)', () => {
+    const batchId = randomUUID();
+    const event = { ev: 'work.slow', seq: 1, t: Date.now(), m: 10, d: { source: 'mac.list_update', durationMs: 2986, cpuMs: 41.5 } };
+    const result = sanitizeDiagBatch({ schema: 1, batchId, processId: randomUUID(), platform: 'mac', version: '0.2.91', build: '93', events: [event] }, batchId);
+    expect(result?.batch.events).toEqual([event]);
+    expect(sanitizeDiagBatch({ schema: 1, batchId, processId: randomUUID(), platform: 'mac', version: '0.2.91', build: '93',
+      events: [{ ...event, d: { ...event.d, cpuMs: 'slow' } }] }, batchId)).toBeNull();
   });
   it('accepts metadata-only transport recovery reason and generation', async () => {
     const f = await fixture();

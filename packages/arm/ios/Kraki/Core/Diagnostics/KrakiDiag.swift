@@ -44,14 +44,26 @@ enum KrakiDiag {
         }
         if phase == "logout" { client.logout() }
     }
-    static func beginWork() -> TimeInterval? {
-        recorder.isEnabled ? ProcessInfo.processInfo.systemUptime : nil
+    /// Wall time and this thread's CPU time. A long wall time with little CPU
+    /// means the thread was waiting or descheduled (e.g. an inactive app on a
+    /// loaded machine), not doing expensive work.
+    struct WorkStart {
+        let uptime: TimeInterval
+        let threadCPUNanoseconds: UInt64
     }
-    static func endWork(_ start: TimeInterval?, source: String, session: String? = nil, seq: Int? = nil) {
+    static func beginWork() -> WorkStart? {
+        guard recorder.isEnabled else { return nil }
+        return WorkStart(uptime: ProcessInfo.processInfo.systemUptime,
+                         threadCPUNanoseconds: clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))
+    }
+    static func endWork(_ start: WorkStart?, source: String, session: String? = nil, seq: Int? = nil) {
         guard let start else { return }
-        let ms = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        let ms = (ProcessInfo.processInfo.systemUptime - start.uptime) * 1000
         guard ms >= 8 else { return }
-        var fields: [DiagField: DiagValue] = [.source: .tag(source), .durationMs: .number(ms)]
+        let cpuNanoseconds = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start.threadCPUNanoseconds
+        var fields: [DiagField: DiagValue] = [
+            .source: .tag(source), .durationMs: .number(ms), .cpuMs: .number(Double(cpuNanoseconds) / 1_000_000),
+        ]
         if let seq { fields[.messageSeq] = .int(seq) }
         record(.slowWork, session: session, fields)
     }

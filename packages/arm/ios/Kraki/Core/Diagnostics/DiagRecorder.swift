@@ -17,7 +17,7 @@ enum DiagEventName: String, Codable {
 enum DiagField: String {
     case clientId, questionId, answerTo, ix, origin, phase, state, source, stack
     case textLength, attachments, pending, messageSeq, matched, accepted, duplicate
-    case restored, count, dropped, durationMs, clickCount, eventNumber, attempt, status, bytes, events, firstSeq, lastSeq
+    case restored, count, dropped, durationMs, cpuMs, clickCount, eventNumber, attempt, status, bytes, events, firstSeq, lastSeq
     // Stability summaries (StabilityTracker)
     case kind, outcome, path, gap, viewing, backgroundMs, firstContentMs, wsOpenMs, authedMs, listFreshMs, viewCurrentMs
     case code, detectMs, reconnectMs, catchupMs, impactMs, visibleMs, pathChanged, afterWake, previousExit
