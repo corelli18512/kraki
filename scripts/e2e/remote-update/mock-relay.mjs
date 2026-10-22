@@ -36,7 +36,8 @@ wss.on('connection', (ws) => {
       // registered (challenge); an unknown one signs in fully and registers.
       if (m.auth?.method === 'challenge') {
         if (!keys.has(id)) { ws.send(JSON.stringify({ type: 'auth_error', code: 'unknown_device', message: 'Unknown device' })); return; }
-        const nonce = randomBytes(16).toString('hex');
+        // Same format as every Head (clients refuse to sign anything else, fbfa4ba8).
+        const nonce = randomBytes(32).toString('hex');
         pending.set(ws, { id, nonce });
         ws.send(JSON.stringify({ type: 'auth_challenge', nonce }));
         return;
