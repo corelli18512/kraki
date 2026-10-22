@@ -327,10 +327,12 @@ extension AppState {
         case .disconnected:
             sessionSubscriptionController?.onDisconnected()
             messageProvider?.onDisconnected()
+            commandSender?.resendCoalescer.transportClosed()
             if connectionStatus == .connected {
                 connectionStatus = .disconnected
             }
             pulseManager?.onDisconnected()
+            sendMetrics.pulseDisconnected()
         case .connecting:
             connectionStatus = .connecting
         }

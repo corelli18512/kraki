@@ -5,9 +5,21 @@
 
 import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
 import type { AuthBackend, AuthOutcome, AuthResult, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger } from './logger.js';
 import { EdgeAuthCache, isDeviceRejection } from './edge-auth-cache.js';
 import { metrics } from './metrics.js';
+import { REQUEST_ID_HEADER, newRequestId } from './request-id.js';
+
+/** An account service call slower than this logs at info (with its request id). */
+export const SLOW_ACCOUNT_REQUEST_MS = 2_000;
+
+/** The device an account service request is about, for its log lines. */
+function requestDeviceId(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const { deviceId, device } = body as { deviceId?: unknown; device?: { deviceId?: unknown } };
+  if (typeof deviceId === 'string') return deviceId;
+  return typeof device?.deviceId === 'string' ? device.deviceId : undefined;
+}
 
 /** A device the account service no longer accepts here. */
 export interface EdgeRevocation {
@@ -373,6 +385,11 @@ export class RemoteAuthBackend implements AuthBackend {
   private async post<T = AuthOutcome>(path: string, body: unknown): Promise<T> {
     const logger = getLogger();
     const url = `${this.accountUrl}${path}`;
+    const reqId = newRequestId();
+    const startedAt = performance.now();
+    const deviceId = requestDeviceId(body);
+    // Where a failure happened: before the response headers, or reading the body.
+    let phase: 'headers' | 'body' = 'headers';
 
     try {
       const response = await fetch(url, {
@@ -380,23 +397,35 @@ export class RemoteAuthBackend implements AuthBackend {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.serviceKey}`,
+          [REQUEST_ID_HEADER]: reqId,
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeout),
       });
 
+      phase = 'body';
       const text = await response.text();
+      const ms = Math.round(performance.now() - startedAt);
+      const fields = { path, reqId, status: response.status, ms, ...(deviceId && { deviceId: authLogField(deviceId) }) };
+      if (ms >= SLOW_ACCOUNT_REQUEST_MS) logger.info('Account service request slow', fields);
+      else logger.debug('Account service request', fields);
       try {
         return JSON.parse(text) as T;
       } catch {
         // Not JSON: an endpoint this account service does not have (404/405)
         // is different from a transient failure.
         const unsupported = response.status === 404 || response.status === 405;
-        if (!unsupported) logger.error('Account service returned non-JSON', { path, status: response.status });
+        if (!unsupported) logger.error('Account service returned non-JSON', fields);
         return { ok: false, code: unsupported ? 'not_supported' : 'service_unavailable', message: `HTTP ${response.status}` } as T;
       }
     } catch (err) {
-      logger.error('Account service request failed', { path, error: (err as Error).message });
+      const cause = (err as { cause?: { code?: unknown } }).cause?.code;
+      logger.error('Account service request failed', {
+        path, reqId, ms: Math.round(performance.now() - startedAt), phase,
+        ...(deviceId && { deviceId: authLogField(deviceId) }),
+        error: (err as Error).message,
+        ...(typeof cause === 'string' && { cause }),
+      });
       return { ok: false, code: 'service_unavailable', message: 'Account service unavailable' } as T;
     }
   }
@@ -404,7 +433,7 @@ export class RemoteAuthBackend implements AuthBackend {
   private async get<T>(path: string): Promise<T> {
     const url = `${this.accountUrl}${path}`;
     const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${this.serviceKey}` },
+      headers: { 'Authorization': `Bearer ${this.serviceKey}`, [REQUEST_ID_HEADER]: newRequestId() },
       signal: AbortSignal.timeout(this.timeout),
     });
     return response.json() as Promise<T>;

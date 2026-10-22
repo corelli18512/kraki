@@ -7,7 +7,8 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { PulseHub } from './pulse-hub.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger, LogThrottle } from './logger.js';
+import { HealthLog } from './health-log.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
@@ -38,6 +39,11 @@ export class HeadServer {
   renameClock = 0;
   deviceRenamedAt = new Map<string, number>();
   clients = new Map<WebSocket, ClientState>();
+  /** Auth failures and sockets that never sign in log at info (a scan must
+   *  be visible), capped per IP. */
+  readonly authFailureLog = new LogThrottle();
+  private readonly preAuthCloseLog = new LogThrottle();
+  private readonly healthLog = new HealthLog();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
@@ -113,7 +119,7 @@ export class HeadServer {
             msSinceLastPong: state.lastPongRecvAt ? now - state.lastPongRecvAt : null,
             wsReadyState: ws.readyState,
           });
-          this.removeConnection(deviceId);
+          this.removeConnection(deviceId, 'pong_timeout');
           continue;
         }
         if (state) state.isAlive = false;
@@ -138,7 +144,7 @@ export class HeadServer {
             deviceId,
             error: (err as Error)?.message,
           });
-          this.removeConnection(deviceId);
+          this.removeConnection(deviceId, 'ping_send_failed');
         }
       }
 
@@ -147,8 +153,8 @@ export class HeadServer {
       try { this.storage.pruneForegroundActivity(); }
       catch { getLogger().warn('Failed to prune foreground usage counters'); }
 
-      // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
-      // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
+      // Periodic health snapshot — ALWAYS on (not trace-gated). Sampled every
+      // 30s, logged on change / stall or every 5 min (HealthLog); the canary for the OOM / event-loop-stall class of bugs
       // that recurred across the pulse PRs. rss/heap from process.memoryUsage;
       // endpointCount + durable-row total reflect the pulse-hub memory state.
       const mem = process.memoryUsage();
@@ -159,7 +165,7 @@ export class HeadServer {
       const metricsNow = metrics();
       metricsNow.lastHealthAt = Date.now();
       const loop = metricsNow.takeLoopDelay();
-      getLogger().info('health', {
+      const health = this.healthLog.next({
         conns: this.connections.size,
         endpoints: this.pulseHub.endpointCount(),
         durableRows,
@@ -168,7 +174,9 @@ export class HeadServer {
         heapTotalMb: Math.round(mem.heapTotal / 1048576),
         evlLagMs: loop?.p99Ms,
         evlMaxMs: loop?.maxMs,
-      });
+      }, { requests: metricsNow.get('api.requests'), errors: metricsNow.get('api.errors') },
+      Math.floor((Date.now() - metricsNow.startedAt) / 1000));
+      if (health) getLogger().info('health', health);
     }, HeadServer.PING_INTERVAL);
   }
 
@@ -260,6 +268,17 @@ export class HeadServer {
     state.authTimer = setTimeout(() => {
       state.authTimer = undefined;
       if (state.authenticated) return;
+      // Our own account service call is still out (a challenge and a verify
+      // may each take up to RemoteAuthBackend's 15 s): one more period, so a
+      // slow sign-in ends with its answer (or service_unavailable) instead of
+      // 4008 after the account service already accepted it.
+      if (state.authInFlight && !state.authDeadlineExtended) {
+        state.authDeadlineExtended = true;
+        getLogger().debug('Auth deadline extended while the auth backend answers', { ip: state.ip, afterMs: ms });
+        this.armAuthTimer(ws, state, ms);
+        return;
+      }
+      // The close handler logs it ('WebSocket closed before auth', code 4008).
       getLogger().debug('Closing unauthenticated socket', { ip: state.ip, afterMs: ms });
       ws.close(4008, 'Authentication timeout');
     }, ms);
@@ -272,6 +291,7 @@ export class HeadServer {
       authenticated: false,
       isAlive: true,
       ip,
+      connectedAt: Date.now(),
       pongOverdueAt: null,
       pendingLivenessBroadcast: false,
     };
@@ -322,7 +342,7 @@ export class HeadServer {
           this.pulseHub.onDeviceDisconnected(disconnectedDeviceId);
           trace('DEV-DISCONNECT', { device: disconnectedDeviceId, code, reason: reasonStr });
           logger.info('Device disconnected', {
-            deviceId: disconnectedDeviceId,
+            ...this.deviceLogFields(disconnectedDeviceId, state),
             closeCode: code,
             closeReason: reasonStr,
           });
@@ -338,7 +358,18 @@ export class HeadServer {
           });
         }
       } else {
-        logger.debug('WebSocket closed before auth', { ip: state.ip, closeCode: code, closeReason: reasonStr });
+        const throttle = this.preAuthCloseLog.take(state.ip ?? 'unknown');
+        if (throttle) {
+          logger.info('WebSocket closed before auth', {
+            ip: authLogField(state.ip),
+            closeCode: code,
+            closeReason: authLogField(reasonStr),
+            afterMs: state.connectedAt !== undefined ? Date.now() - state.connectedAt : undefined,
+            method: authLogField(state.authMethod),
+            ...(state.authInFlight && { authInFlight: true }),
+            ...throttle,
+          });
+        }
       }
       this.clients.delete(ws);
     });
@@ -686,9 +717,19 @@ export class HeadServer {
     ws.once('close', () => clearTimeout(force));
   }
 
-  private removeConnection(deviceId: string): void {
+  private removeConnection(deviceId: string, cause: 'pong_timeout' | 'ping_send_failed'): void {
     const ws = this.connections.get(deviceId);
     const userId = this.userByDevice.get(deviceId);
+    const state = ws ? this.clients.get(ws) : undefined;
+    // The close handler skips its 'Device disconnected' line for this socket
+    // (it is no longer the device's connection): log it here.
+    if (ws) {
+      getLogger().info('Device disconnected', {
+        ...this.deviceLogFields(deviceId, state),
+        closeReason: cause,
+        terminated: true,
+      });
+    }
     this.connections.delete(deviceId);
     this.userByDevice.delete(deviceId);
     if (ws) {
@@ -713,6 +754,18 @@ export class HeadServer {
       try { this.storage.touchDeviceLastSeen(deviceId); } catch { /* storage may be closed */ }
       broadcastDeviceLeft(this, userId, deviceId);
     }
+  }
+
+  /** Who a connect / disconnect line is about: the device, what it is, and
+   *  how long this connection was signed in. */
+  deviceLogFields(deviceId: string, state?: ClientState): Record<string, unknown> {
+    let device: ReturnType<Storage['getDevice']>;
+    try { device = this.storage.getDevice(deviceId); } catch { /* storage may be closed */ }
+    return {
+      deviceId,
+      ...(device && { role: device.role, ...(device.kind && { kind: device.kind }) }),
+      ...(state?.authenticatedAt !== undefined && { onlineMs: Date.now() - state.authenticatedAt }),
+    };
   }
 
   // --- Auth ---
@@ -883,7 +936,7 @@ export class HeadServer {
       if (state && !state.isAlive && this.linkProgressing(ws, state)) state.isAlive = true;
       if (state && !state.isAlive) {
         getLogger().info('Terminating stale connection (no pong)', { deviceId });
-        this.removeConnection(deviceId);
+        this.removeConnection(deviceId, 'pong_timeout');
         continue;
       }
       if (state) state.isAlive = false;
@@ -899,7 +952,7 @@ export class HeadServer {
           }
         }
       } catch {
-        this.removeConnection(deviceId);
+        this.removeConnection(deviceId, 'ping_send_failed');
       }
     }
   }

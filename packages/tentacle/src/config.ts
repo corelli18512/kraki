@@ -7,7 +7,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { isSea } from 'node:sea';
 import type { AuthMethod, AgentId } from '@kraki/protocol';
@@ -90,7 +90,23 @@ export function getVersion(): string {
 
 export function getKrakiHome(): string {
   const override = process.env.KRAKI_HOME?.trim();
-  return override ? resolve(override) : join(homedir(), '.kraki');
+  if (override) return resolve(override);
+  const home = join(homedir(), '.kraki');
+  if (process.env.VITEST && isRealUserHome(homedir())) {
+    // A test without its own home would read and replace the live daemon's
+    // state (local-link.json, logs, copilot-config). The shared vitest setup
+    // isolates every package; fail loudly if something bypasses it.
+    throw new Error(`Tests must not use the real Kraki home (${home}); set KRAKI_HOME`);
+  }
+  return home;
+}
+
+function isRealUserHome(dir: string): boolean {
+  try {
+    return resolve(userInfo().homedir) === resolve(dir);
+  } catch {
+    return false;
+  }
 }
 
 let krakiHomeSecured = false;

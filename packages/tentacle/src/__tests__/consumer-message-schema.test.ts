@@ -47,6 +47,7 @@ const SENT_BY_APPS: Array<[string, Record<string, unknown>]> = [
   ['web request_usage_history', { ...env, type: 'request_usage_history', payload: { since: 0 } }],
   ['ios refresh_account_usage', { ...env, type: 'refresh_account_usage', targetDeviceId: 't1', payload: { requestId: 'u1' } }],
   ['ios update_device', { ...env, type: 'update_device', targetDeviceId: 't1', payload: { requestId: 'u2', when: 'idle' } }],
+  ['web client_log', { deviceId: 'app_1', type: 'client_log', payload: { entries: [{ ts: '2026-10-14T06:23:07.059Z', level: 'info', scope: 'ws-client', message: 'm' }], targetDeviceId: 't1' } }],
 ];
 
 describe('parseConsumerMessage', () => {

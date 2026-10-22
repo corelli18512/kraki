@@ -91,6 +91,16 @@ export async function deliverQuestionAnswer(
   await ensureSessionResumed(client, sessionId);
   const result = await client.adapter.respondToQuestion(sessionId, pending.questionId, answer, wasFreeform);
   if (result !== 'accepted') {
+    // Expected after a daemon restart or pi process loss: the live dialog is
+    // gone, so the answer continues the task as a new (recovery) turn.
+    const createdAt = Date.parse(pending.createdAt);
+    logger.info({
+      sessionId,
+      questionId: pending.questionId,
+      turnId,
+      adapterResult: result,
+      ageMs: Number.isNaN(createdAt) ? undefined : Date.now() - createdAt,
+    }, 'Question answered after its live request was lost; sending it as a recovery prompt');
     const answerText = answer.text || (answer.attachments?.length ? '[image attachment]' : '(no text)');
     const recoveryPrompt = [
       'A previous turn was interrupted while waiting for the user to answer this question:',
@@ -118,12 +128,15 @@ export async function deliverQuestionAnswer(
  * stop showing it; a duplicate of an earlier decision (Pulse resend) is
  * ignored and never overrides the announced outcome.
  */
-export function resolvePermission(client: RelayClient, sessionId: string, permissionId: string, decision: 'approve' | 'deny', reason: string): void {
+export function resolvePermission(client: RelayClient, sessionId: string, permissionId: string, decision: 'approve' | 'deny', reason: string, fromDeviceId?: string): void {
   const verb = decision;
   (reason
     ? client.adapter.respondToPermission(sessionId, permissionId, decision, reason)
     : client.adapter.respondToPermission(sessionId, permissionId, decision))
     .then((result) => {
+      // Audit trail: who decided which request, and whether it reached the
+      // agent. Never the tool arguments or the deny reason text.
+      logger.info({ sessionId, permissionId, decision, fromDeviceId, adapterResult: result, withReason: !!reason }, 'Permission decision');
       const wasOpen = client.openPermissions.get(sessionId)?.delete(permissionId) === true;
       if (result === 'not_found' || result === 'session_gone') {
         if (!wasOpen) return;

@@ -220,6 +220,30 @@ describe('pi --list-models recovery', () => {
     await adapter.stop();
   });
 
+  it('fetches the model list and the thinking-level catalog concurrently (log audit: slow startup)', async () => {
+    // --list-models only answers once the catalog query process is running:
+    // fetched one after the other, the list would time out.
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-parallel-'));
+    tempDirs.push(dir);
+    const marker = join(dir, 'rpc-started');
+    const cli = join(dir, 'pi');
+    writeFileSync(cli, `#!/usr/bin/env node
+      const fs = require('node:fs');
+      const marker = ${JSON.stringify(marker)};
+      if (process.argv.includes('--list-models')) {
+        const poll = setInterval(() => {
+          if (!fs.existsSync(marker)) return;
+          clearInterval(poll);
+          ${header} ${row}
+        }, 10);
+      } else { fs.writeFileSync(marker, '1'); ${rpc} }
+    `, 'utf8');
+    chmodSync(cli, 0o755);
+    const adapter = new PiAdapter({ cliPath: cli, modelListTimeoutMs: 3000, modelListRetryDelaysMs: [60_000] });
+    expect((await adapter.listModelDetails()).map(m => m.id)).toEqual(['anthropic/opus']);
+    await adapter.stop();
+  });
+
   it('shares one pi process between concurrent capability requests', async () => {
     const { cli, count } = countingPi(`setTimeout(() => { ${header} ${row} }, 150);`);
     const adapter = new PiAdapter({ cliPath: cli });

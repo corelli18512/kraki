@@ -1,6 +1,7 @@
 #if KRAKI_DIAG
 import Foundation
 import MachO
+import Synchronization
 import zlib
 
 /// These types deliberately have no arbitrary log message / text / error field.
@@ -17,11 +18,12 @@ enum DiagEventName: String, Codable {
 enum DiagField: String {
     case clientId, questionId, answerTo, ix, origin, phase, state, source, stack
     case textLength, attachments, pending, messageSeq, matched, accepted, duplicate
-    case restored, count, dropped, durationMs, clickCount, eventNumber, attempt, status, bytes, events, firstSeq, lastSeq
+    case restored, count, dropped, durationMs, cpuMs, clickCount, eventNumber, attempt, status, bytes, events, firstSeq, lastSeq
     // Stability summaries (StabilityTracker)
     case kind, outcome, path, gap, viewing, backgroundMs, firstContentMs, wsOpenMs, authedMs, listFreshMs, viewCurrentMs
     case code, detectMs, reconnectMs, catchupMs, impactMs, visibleMs, pathChanged, afterWake, previousExit
     case shown, shownMs, falseAlarm, manualRetries, autoResends, offline, background, confirmMs, correctionMs, cause
+    case handoffMs, uploadMs
     case stage, confirmed, warm, startMs, recordMs, finalizeMs, correctionOn
     case firstActivityMs, firstTextMs, deltas, maxGapMs, stalls
     case kept, reconnecting
@@ -102,6 +104,12 @@ final class DiagRecorder: @unchecked Sendable {
     private var enabled = true
     private var sequence: UInt64 = 0
     private var dropped: UInt64 = 0
+    /// Records lost to lock contention. Counted without the lock (one relaxed
+    /// atomic add, never waits) and folded into `dropped` by `drain`, so the
+    /// loss shows up in `diag.health` instead of vanishing: contention takes
+    /// no sequence number, so it leaves no seq gap (2026-10 audit: a
+    /// `send.summary` and several `ws.state` after `background` went missing).
+    private let contended = Atomic<UInt64>(0)
     private var second = 0
     private var admitted = 0
     let capacity: Int
@@ -112,9 +120,23 @@ final class DiagRecorder: @unchecked Sendable {
         self.capacity = capacity; self.perSecond = perSecond
         pending.reserveCapacity(capacity)
     }
+    /// The collector's `sid` format (`[A-Za-z0-9_-]{1,128}`). Anything else —
+    /// e.g. the new-session voice draft id `kraki.new-session-draft`, which
+    /// is not a session — is sent without a session (it cost whole batches
+    /// before the collector stopped rejecting them).
+    static func sessionTag(_ session: String?) -> String? {
+        guard let session, !session.isEmpty, session.utf8.count <= 128,
+              session.utf8.allSatisfy({ $0 == 0x2D || $0 == 0x5F || (0x30...0x39).contains($0)
+                  || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) }) else { return nil }
+        return session
+    }
     @discardableResult
     func record(_ name: DiagEventName, session: String? = nil, _ fields: [DiagField: DiagValue] = [:]) -> Bool {
-        guard lock.try() else { return false } // contention intentionally not counted: no second lock
+        let session = Self.sessionTag(session)
+        guard lock.try() else {
+            contended.wrappingAdd(1, ordering: .relaxed)
+            return false
+        }
         defer { lock.unlock() }
         guard enabled else { return false }
         sequence &+= 1 // gaps identify admitted-queue/rate drops within this process
@@ -123,7 +145,7 @@ final class DiagRecorder: @unchecked Sendable {
         guard pending.count < capacity, admitted < perSecond else { dropped &+= 1; return false }
         admitted += 1
         pending.append(DiagEvent(t: Date().timeIntervalSince1970 * 1000, m: mono * 1000,
-            seq: sequence, ev: name, sid: session.map { String($0.prefix(128)) },
+            seq: sequence, ev: name, sid: session,
             d: Dictionary(uniqueKeysWithValues: fields.map { ($0.key.rawValue, $0.value) })))
         return true
     }
@@ -135,14 +157,20 @@ final class DiagRecorder: @unchecked Sendable {
     func setEnabled(_ value: Bool) {
         lock.lock(); defer { lock.unlock() }
         enabled = value
-        if !value { pending.removeAll(keepingCapacity: true); dropped = 0 }
+        if !value { pending.removeAll(keepingCapacity: true); dropped = 0; contended.store(0, ordering: .relaxed) }
     }
     func drain() -> (events: [DiagEvent], dropped: UInt64) {
         lock.lock(); defer { lock.unlock() }
-        let result = (pending, dropped)
+        // Only while enabled: records refused because collection is off are not losses.
+        let lost = contended.exchange(0, ordering: .relaxed)
+        let result = (pending, dropped &+ (enabled ? lost : 0))
         pending = []; pending.reserveCapacity(capacity); dropped = 0
         return result
     }
+    #if KRAKI_DIAG_TESTING
+    /// Runs `body` while the recorder lock is held (deterministic contention).
+    func testWhileLocked(_ body: () -> Void) { lock.lock(); defer { lock.unlock() }; body() }
+    #endif
 }
 
 /// Private bounded spool. Called exclusively from the diagnostics utility queue.

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { SleepGuard, sleepInhibitCommand } from '../sleep-guard.js';
 
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../logger.js', () => ({ createLogger: () => log }));
+
 function fakeSpawn() {
   const children: Array<EventEmitter & { kill: ReturnType<typeof vi.fn>; unref: () => void }> = [];
   const spawn = vi.fn(() => {
@@ -62,5 +65,20 @@ describe('SleepGuard idle limit', () => {
     guard.sweep();
     expect(children[0].kill).toHaveBeenCalled();
     expect(guard.holding).toBe(false);
+  });
+});
+
+describe('SleepGuard logs (log audit 2026-10-22)', () => {
+  it('names the sessions it holds for, how long it held, and how long a swept session was silent', async () => {
+    const { SLEEP_HOLD_IDLE_LIMIT_MS } = await import('../sleep-guard.js');
+    const { spawn } = fakeSpawn();
+    let now = 1_000;
+    const guard = new SleepGuard({ platform: 'darwin', pid: 1, spawn: spawn as never, now: () => now });
+    guard.hold('s1');
+    expect(log.info).toHaveBeenCalledWith({ sessionIds: ['s1'] }, 'Holding idle-sleep assertion while an agent turn runs');
+    now += SLEEP_HOLD_IDLE_LIMIT_MS + 5;
+    guard.sweep();
+    expect(log.warn).toHaveBeenCalledWith({ sessionId: 's1', silentMs: SLEEP_HOLD_IDLE_LIMIT_MS + 5, stillActive: 0 }, expect.any(String));
+    expect(log.info).toHaveBeenCalledWith({ heldMs: SLEEP_HOLD_IDLE_LIMIT_MS + 5 }, 'Released idle-sleep assertion');
   });
 });

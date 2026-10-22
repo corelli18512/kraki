@@ -21,6 +21,11 @@ export interface ClientState {
   authenticated: boolean;
   ip?: string;
   isAlive: boolean;
+  /** When the socket opened (ms epoch). */
+  connectedAt?: number;
+  /** The last `auth` attempt's method and device, for failure logs. */
+  authMethod?: string;
+  authDeviceId?: string;
   authenticatedAt?: number;
   /** At most one daily activity write per authenticated app socket/day. */
   foregroundDay?: string;
@@ -38,6 +43,8 @@ export interface ClientState {
   evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
   authTimer?: ReturnType<typeof setTimeout>;
+  /** The auth deadline was already extended once for a backend call. */
+  authDeadlineExtended?: boolean;
 
   // ── Liveness uncertainty (device_pending broadcast) ──
   /** Timestamp when pong grace period expires (null = no pending ping). */

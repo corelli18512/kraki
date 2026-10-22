@@ -25,6 +25,11 @@ export const PROMPT_IDLE_STALL_MS = 120_000;
 
 export type ForeignDialogMethod = 'select' | 'input' | 'editor' | 'confirm';
 
+/** How a background-subagent hold ended (logged with its duration). */
+export type PiSubagentHoldEnd =
+  | 'wake_run' | 'finished_without_wake' | 'no_progress_timeout'
+  | 'new_turn' | 'abort' | 'process_exit' | 'respawn' | 'killed' | 'adapter_stop';
+
 export interface PiSession {
   proc: PiRpcProcess;
   cwd: string;
@@ -75,9 +80,22 @@ export interface PiSession {
   awaitingSubagents?: boolean;
   /** Fallback settle when background runs finished but no wake run came. */
   subagentGrace?: ReturnType<typeof setTimeout>;
-  /** Upper bound on the hold: settles when background runs show no activity
-   *  (status snapshot or notification) for SUBAGENT_HOLD_IDLE_MS. */
+  /** Upper bound on the hold: settles when background runs show no progress
+   *  (a changed status snapshot or a notification) for SUBAGENT_HOLD_IDLE_MS. */
   subagentHoldTimer?: ReturnType<typeof setTimeout>;
+  /** When the current logical turn began (resetTurnTracking), for elapsedMs. */
+  turnStartedAt?: number;
+  /** Pi's current auto-retry attempt (auto_retry_start), until auto_retry_end. */
+  retryAttempt?: number;
+  /** When the running compaction began, for its end log. */
+  compactionStartedAt?: number;
+  /** The stall warning was logged for the current silence (reset by activity). */
+  stallWarned?: boolean;
+  /** When the current background-subagent hold began (for its end log). */
+  subagentHoldSince?: number;
+  /** The last pi-subagents status snapshot's runs, serialized: an identical
+   *  repaint is not progress. */
+  subagentSnapshotKey?: string;
 }
 
 /** A subagent's saved output file (pi-subagents notifications point at it),
@@ -96,6 +114,9 @@ export function readSubagentOutput(path: string): string | undefined {
 
 export const EVICTION_INTERVAL_MS = 5 * 60_000;
 export const IDLE_TTL_MS = 30 * 60_000;
+/** An open turn with no pi event for this long is logged as stalled (once
+ *  per silence). Background-subagent holds have their own bound. */
+export const TURN_STALL_WARN_MS = 15 * 60_000;
 
 /** Describes the Kraki UI to the model so it narrates naturally instead of
  *  tagging its own messages. Appended to pi's system prompt on every spawn. */

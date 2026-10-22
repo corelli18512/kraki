@@ -26,7 +26,7 @@ The phase-one progress/performance numbers below are a historical snapshot; they
   Normal releases run `verify-production.sh` (metrics present, normal identity, no test-build identity or UI). See `docs/stability-metrics.md`.
 - Target versions this round: iOS 0.1.8 (build number assigned by the TestFlight workflow), Mac 0.2.40 (42).
 - Settings has a "Record and Send Diagnostics" toggle (on by default in diagnostics builds), the last upload time, the pending amount and a manual problem-marker button.
-- Added `ui.busy` (busy intervals ≥50 ms completed by the foreground run loop, excluding sleeping; not a watchdog stack),
+- Added `ui.busy` (busy intervals ≥50 ms completed by the main run loop while the app is on screen, excluding sleeping; tagged `phase=inactive` when not frontmost; not a watchdog stack),
   `list.snapshot` (counts/seq bounds/pending changes), `session.view`, and cross-platform `voice.action` metadata.
 - REST is deployed as a **standalone service** (current entry point `packages/monitor/src/cli.ts`), with a read-only Node 24 built-in SQLite connection to Head's devices table;
   `/api/diag/v1/*` on the existing domain is reverse-proxied to loopback:4011, without upgrading/restarting Head/Pulse.
@@ -160,7 +160,7 @@ A public deployment must have TLS, ingress rate limiting and a dedicated data di
 ### Input constraints and storage
 
 - ≤64 KiB compressed, ≤256 KiB decompressed, ≤1000 events/batch, schema 1.
-- Event name/field name allowlist; format checks for numbers/booleans/IDs/fixed tags; unknown fields reject the whole batch.
+- Event name/field name allowlist; format checks for numbers/booleans/IDs/fixed tags; unknown names and out-of-format values are dropped (never stored, logged by name only); a malformed batch envelope is rejected.
 - No generic string logs, message text, selected text, drafts, transcripts, URLs, attachments or raw NSError.
 - Headers (device, time, request id, signature format, registered app device) are checked before the body is read; only the signature over the body is checked after it.
 - Bodies read at once: at most 2 per device, 4 per client IP, 32 in total; 120/min per client IP (the rightmost `X-Forwarded-For` entry from the loopback proxy; the nginx block sets it to `$remote_addr`), 30/min per device; at most 10 seconds to read a request body.
@@ -210,11 +210,12 @@ Batch (gzip JSON, **not the NDJSON of the early draft**):
 | `echo.input` | seq, clientId, answerTo of the authoritative user_message, and whether it matched the local outbox before cleanup |
 | `app.launch/phase` | launch, authentication, active/inactive/background/logout; outbox count when backgrounded |
 | `ws.state` | existing connection state callbacks, reconnect count |
-| `work.slow` | ≥8 ms iOS list sync/cell configure, Mac list update/cell configure, MessageProvider ingest |
+| `work.slow` | ≥8 ms iOS list sync/cell configure, Mac list update/cell configure, MessageProvider ingest; wall `durationMs` plus the thread's `cpuMs` (Apple) |
 | `diag.health/upload` | bounded queue/rate drop counts, status/bytes of failed uploads; successful uploads do not generate a permanent self-logging loop |
 
 `work.slow` is a **local inclusive span**; nested durations must not be added up. Mac cells currently only have seq, no sessionId,
 so they cannot be correlated by cross-session seq alone. It is not a frame hitch, nor a p95 of all functions.
+`cpuMs` far below `durationMs` means the main thread was waiting or descheduled (an inactive app on a loaded machine), not doing that much work.
 iOS does not observe raw UITouch yet; "no gesture log" does not prove the device saw no second touch.
 Lock-contention drops are not counted separately yet; queue/rate drops have counts and seq gaps. Missing logs do not prove an event did not happen.
 

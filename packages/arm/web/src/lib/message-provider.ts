@@ -16,6 +16,10 @@ const logger = createLogger('msg-provider');
 
 const BATCH_TIMEOUT_MS = 10_000;
 
+/** One lazy import shared by every range load (a warm-up starts dozens at once). */
+let messageDb: Promise<typeof import('./message-db')> | undefined;
+const loadMessageDb = () => (messageDb ??= import('./message-db'));
+
 // Rows written by older web clients before runtime/TRACE state was separated
 // from the persistent conversation spine. They must never count toward cache
 // range coverage, or a stale `active` row can hide a missing agent reply at the
@@ -232,6 +236,41 @@ class MessageProvider {
   }
 
   /**
+   * Background warm-up (every session_list, which the Tentacle re-broadcasts
+   * after each reply). A window already held in memory gains nothing from an
+   * IDB re-read and re-delivery, so it is skipped without loading flicker;
+   * only sessions whose tail is not in memory are fetched.
+   */
+  warmRange(sessionId: string, fromSeq: number, toSeq: number): void {
+    if (this.loadingSessions.has(sessionId)) return;
+    const from = Math.max(1, fromSeq);
+    if (from <= toSeq && !this.tailFailures.has(sessionId) && this.memoryCovers(sessionId, from, toSeq)) {
+      if (toSeq >= (this.tentacleLastSeq.get(sessionId) ?? Infinity)) this.finishTailCatchUp(sessionId, toSeq, true);
+      return;
+    }
+    void this.fetchRange(sessionId, fromSeq, toSeq, { initial: true });
+  }
+
+  /** Every spine seq in [from, to] is in memory or a confirmed legacy hole. */
+  private memoryCovers(sessionId: string, from: number, to: number): boolean {
+    return this.memoryWindow(sessionId, from, to) !== null;
+  }
+
+  /** The held spine rows of [from, to] when the window is fully covered. */
+  private memoryWindow(sessionId: string, from: number, to: number): ChatMessage[] | null {
+    const memory = getStore().messages.get(sessionId);
+    if (!memory?.length) return null;
+    const spine = memory.filter((message) => isSpineCacheMessage(message)
+      && 'sessionId' in message && message.sessionId === sessionId
+      && (message as { seq: number }).seq >= from && (message as { seq: number }).seq <= to);
+    const gaps = (this.rangeTombstones.get(sessionId) ?? []).reduce(
+      (remaining, [lo, hi]) => excludeInterval(remaining, lo, hi),
+      missingIntervals(spine, from, to),
+    );
+    return gaps.length === 0 ? spine : null;
+  }
+
+  /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
    * Delivers cached rows and authoritative pages as coverage advances.
    * True means the requested range completed (including authoritative holes);
@@ -329,9 +368,18 @@ class MessageProvider {
   }
 
   private async loadRange(sessionId: string, from: number, to: number, operation: RangeOperation): Promise<boolean> {
+    // Memory wins over cached rows below and a covered window sends no Tentacle
+    // request, so an IDB read could only re-deliver what is already shown (a
+    // chat open's route reconcile followed by its subscription snapshot at the
+    // same seq; a closing idle followed by the session_list digest).
+    const held = this.memoryWindow(sessionId, from, to);
+    if (held) {
+      this.confirmEchoedOutbox(sessionId, held);
+      return true;
+    }
     let cached: ChatMessage[] = [];
     try {
-      const db = await import('./message-db');
+      const db = await loadMessageDb();
       if (!this.owns(sessionId, operation)) return false;
       cached = await db.getMessagesInRange(sessionId, from, to);
     } catch { /* An unavailable cache may still be recovered from Tentacle. */ }
@@ -679,17 +727,21 @@ class MessageProvider {
       && 'sessionId' in message && message.sessionId === sessionId);
     if (valid.length > 0) {
       getStore().prependMessages(sessionId, valid);
-      for (const message of valid) {
-        if (message.type !== 'user_message') continue;
-        const clientId = message.payload.clientId;
-        // confirm's clientId lookup is global: validate session first and never
-        // infer replay acceptance from text (which could confirm another retry).
-        if (clientId && outbox.forSession(sessionId).some(entry => entry.clientId === clientId)) {
-          outbox.confirm(sessionId, clientId, undefined);
-        }
-      }
+      this.confirmEchoedOutbox(sessionId, valid);
     }
     logger.info('delivered', { sessionId, count: valid.length });
+  }
+
+  private confirmEchoedOutbox(sessionId: string, messages: ChatMessage[]): void {
+    for (const message of messages) {
+      if (message.type !== 'user_message') continue;
+      const clientId = message.payload.clientId;
+      // confirm's clientId lookup is global: validate session first and never
+      // infer replay acceptance from text (which could confirm another retry).
+      if (clientId && outbox.forSession(sessionId).some(entry => entry.clientId === clientId)) {
+        outbox.confirm(sessionId, clientId, undefined);
+      }
+    }
   }
 }
 

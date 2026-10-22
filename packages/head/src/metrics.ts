@@ -51,6 +51,23 @@ export class LatencyHistogram {
   }
 }
 
+/** Sampling interval of the event-loop delay monitor. */
+export const LOOP_MONITOR_RESOLUTION_MS = 20;
+
+/**
+ * Node records the time between two ticks of its sampling timer, so every
+ * value includes the sampling interval itself (an idle loop reads ~21 ms).
+ * The delay is what exceeds the interval: an idle loop reads ~1 ms.
+ */
+export function loopDelayFromHistogram(
+  h: Pick<IntervalHistogram, 'percentile' | 'max'>,
+  resolutionMs = LOOP_MONITOR_RESOLUTION_MS,
+): { p50Ms: number; p99Ms: number; maxMs: number } {
+  const ms = (ns: number) => Math.max(0, Math.round(ns / 1e4) / 100 - resolutionMs);
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return { p50Ms: round(ms(h.percentile(50))), p99Ms: round(ms(h.percentile(99))), maxMs: round(ms(h.max)) };
+}
+
 /** Every counter the relay keeps. A fixed list: a typo fails to compile. */
 export const COUNTERS = [
   'auth.ok', 'auth.fail', 'auth.localChallenge', 'auth.localVerify', 'auth.localRevoked',
@@ -58,6 +75,7 @@ export const COUNTERS = [
   'pulse.frames.in', 'pulse.bytes.in', 'pulse.frames.out', 'pulse.bytes.out',
   'pulse.forwarded', 'pulse.deliveredToHead',
   'push.attempted', 'push.sent', 'push.failed', 'push.gone', 'push.threw', 'push.authError',
+  'api.requests', 'api.errors',
 ] as const;
 export type CounterName = typeof COUNTERS[number];
 
@@ -75,6 +93,8 @@ export class RelayMetrics {
     /** First `auth` frame → `auth_ok` sent (includes the client's signing). */
     total: new LatencyHistogram(),
   };
+  /** Account API requests served here (account service only), start to response end. */
+  readonly accountApi = new LatencyHistogram();
   /** Auth failures by error code (`invalid_token`, `wrong_region`, …). */
   readonly authFailures = new Map<string, number>();
   private loopDelay: IntervalHistogram | null = null;
@@ -96,7 +116,7 @@ export class RelayMetrics {
   /** Start sampling event-loop delay (call once; cheap, 20 ms resolution). */
   startLoopMonitor(): void {
     if (this.loopDelay) return;
-    this.loopDelay = monitorEventLoopDelay({ resolution: 20 });
+    this.loopDelay = monitorEventLoopDelay({ resolution: LOOP_MONITOR_RESOLUTION_MS });
     this.loopDelay.enable();
   }
 
@@ -109,8 +129,7 @@ export class RelayMetrics {
   takeLoopDelay(): { p50Ms: number; p99Ms: number; maxMs: number } | null {
     const h = this.loopDelay;
     if (!h || h.count === 0) return null;
-    const ms = (ns: number) => Math.round(ns / 1e4) / 100;
-    const out = { p50Ms: ms(h.percentile(50)), p99Ms: ms(h.percentile(99)), maxMs: ms(h.max) };
+    const out = loopDelayFromHistogram(h);
     h.reset();
     return out;
   }
@@ -122,6 +141,7 @@ export class RelayMetrics {
       authFailures: Object.fromEntries(this.authFailures),
       frameHandling: this.frameHandling.snapshot(),
       authStages: Object.fromEntries(Object.entries(this.authStages).map(([k, h]) => [k, h.snapshot()])),
+      accountApi: this.accountApi.snapshot(),
       lastHealthAgoSec: this.lastHealthAt === null ? null : Math.floor((Date.now() - this.lastHealthAt) / 1000),
     };
   }

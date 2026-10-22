@@ -5,7 +5,7 @@ import { metrics } from '../metrics.js';
 import type { AuthMessage, AuthErrorCode, DeviceSummary } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
-import { getLogger } from '../logger.js';
+import { authLogField, getLogger } from '../logger.js';
 import { trace } from '../trace.js';
 import type { AuthBackend, AuthOutcome, AuthResult } from '../auth-backend.js';
 import type { HeadServer } from '../server.js';
@@ -15,6 +15,18 @@ import { CHALLENGE_TTL_MS, HEAD_FEATURES, publicPreferences, type ClientState } 
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
   metrics().authFailed(code);
+  const state = server.clients.get(ws);
+  const throttle = server.authFailureLog.take(state?.ip ?? 'unknown');
+  if (throttle) {
+    getLogger().info('Auth failed', {
+      code,
+      ip: authLogField(state?.ip),
+      method: authLogField(state?.authMethod),
+      deviceId: authLogField(deviceId ?? state?.deviceId ?? state?.authDeviceId),
+      reason: authLogField(message),
+      ...throttle,
+    });
+  }
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
   }
@@ -29,11 +41,13 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
   if (state.authInFlight || state.pendingNonce) {
     // Ignored rather than answered with auth_error: clients treat auth
     // errors as credential failures, and this one is just a duplicate.
-    logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
+    logger.warn('Ignoring duplicate auth while one is in progress', { ip: authLogField(state.ip) });
     return;
   }
   state.authInFlight = true;
   state.authTiming = { startedAt: Date.now() };
+  state.authMethod = auth.method;
+  state.authDeviceId = auth.method === 'challenge' ? auth.deviceId : msg.device.deviceId;
   try {
     if (auth.method === 'challenge') {
       // Challenge is multi-step — start here, verify in handleChallengeResponse
@@ -57,7 +71,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
       state.pendingDeviceId = result.deviceId;
       state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
       state.pendingAuthMethod = 'challenge';
-      logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
+      logger.debug('Issuing auth challenge', { deviceId: authLogField(auth.deviceId) });
       ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
       state.authTiming.challengeSentAt = Date.now();
       return;
@@ -182,8 +196,11 @@ export function handleBackendAuthResult(
   const timing = state.authTiming;
   const totalMs = timing ? Date.now() - timing.startedAt : undefined;
   if (totalMs !== undefined) metrics().authStages.total.observe(totalMs);
+  const summary = result.devices?.find((d) => d.id === result.deviceId);
+  const device = summary ?? server.storage.getDevice(result.deviceId);
   logger.info('Device authenticated (via backend)', {
     deviceId: result.deviceId,
+    ...(device && { role: device.role, ...(device.kind && { kind: device.kind }) }),
     user: result.user.login,
     method: result.authMethod,
     ip: state.ip,

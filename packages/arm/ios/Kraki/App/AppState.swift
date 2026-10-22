@@ -291,7 +291,7 @@ final class AppState {
             stability.conversationOpened(
                 sessionId: sessionId,
                 lastSeq: sessionStore.sessions[sessionId]?.lastSeq ?? 0,
-                localSeq: messageStore.dbLastSeq(sessionId),
+                localSeq: messageStore.persistedHead(sessionId),
                 online: connectionStatus == .connected
             )
         }
@@ -543,7 +543,7 @@ final class AppState {
     /// The session list was applied: is the open conversation up to date?
     func noteSessionListApplied() {
         let viewed = sessionStore.activeSessionId.flatMap { sid in
-            sessionStore.sessions[sid].map { (sessionId: sid, lastSeq: $0.lastSeq, localSeq: messageStore.dbLastSeq(sid)) }
+            sessionStore.sessions[sid].map { (sessionId: sid, lastSeq: $0.lastSeq, localSeq: messageStore.persistedHead(sid)) }
         }
         stability.sessionListApplied(viewed: viewed)
     }
@@ -553,7 +553,7 @@ final class AppState {
         guard stability.wantsConversationUpdates, let session = sessionStore.sessions[sessionId] else { return }
         stability.conversationRendered(
             sessionId: sessionId,
-            localSeq: messageStore.dbLastSeq(sessionId),
+            localSeq: messageStore.persistedHead(sessionId),
             lastSeq: session.lastSeq,
             hasContent: hasContent
         )
@@ -600,8 +600,7 @@ final class AppState {
                 .offline: .bool(send.offlineAtSend), .attachments: .int(send.attachments),
                 .textLength: .int(send.textLength), .background: .bool(send.failedInBackground),
             ]
-            if let v = send.confirmMs { f[.confirmMs] = .number(v) }
-            if let v = send.correctionMs { f[.correctionMs] = .number(v) }
+            f.merge(send.diagTimings) { $1 }
             if let v = send.cause { f[.cause] = .tag(v) }
             KrakiDiag.record(.send, f)
         }
@@ -618,22 +617,7 @@ final class AppState {
             if let v = voice.finalizeMs { f[.finalizeMs] = .number(v) }
             KrakiDiag.record(.voiceSummary, f)
         }
-        stability.onReady = { ready in
-            var f: [DiagField: DiagValue] = [
-                .kind: .tag(ready.kind.rawValue), .outcome: .tag(ready.outcome.rawValue),
-                .path: .tag(ready.path), .attempt: .int(ready.attempts), .gap: .int(ready.gap),
-                .viewing: .bool(ready.viewing),
-            ]
-            if let v = ready.backgroundMs { f[.backgroundMs] = .number(v) }
-            if let v = ready.firstContentMs { f[.firstContentMs] = .number(v) }
-            if let v = ready.wsOpenMs { f[.wsOpenMs] = .number(v) }
-            if let v = ready.authedMs { f[.authedMs] = .number(v) }
-            if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
-            if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
-            if let v = ready.previousExit { f[.previousExit] = .tag(v) }
-            f[.kept] = .bool(ready.kept)
-            KrakiDiag.record(.ready, f)
-        }
+        stability.onReady = { ready in KrakiDiag.record(.ready, Self.readyFields(ready)) }
         stability.onOutage = { outage in
             var f: [DiagField: DiagValue] = [
                 .source: .tag(outage.reason), .outcome: .tag(outage.outcome.rawValue),
@@ -707,6 +691,8 @@ final class AppState {
         // the endpoint before E2E encryption, and unwraps inbound frames
         // after decryption.
         self.pulseManager = PulseManager(host: self)
+        // A new Pulse restarts its generations: nothing pending is measurable.
+        sendMetrics.pulseDisconnected()
         #if os(macOS)
         self.localLink = LocalLinkClient(appState: self)
         #endif
@@ -818,9 +804,24 @@ struct UserInfo: Codable, Equatable {
 // MARK: - Opening record and background socket grace (same file: private state)
 
 extension AppState {
+    /// A head reply was applied (MessageProvider.handleBatch). The stability
+    /// records compare against the persisted head, not the last stored row:
+    /// the newest seqs can be rows clients never store, and then the catch-up
+    /// changes nothing on screen, so no view refresh would tell the tracker
+    /// (Mac diag 10-15/10-16: outages re-authenticated in 3 s but read
+    /// "caught up" only at the next new message, 216 s / never).
+    func noteHeadReplyApplied(_ sessionId: String) {
+        guard sessionStore.activeSessionId == sessionId else { return }
+        noteConversationRendered(sessionId, hasContent: false)
+    }
+
     /// Starts the opening record: the first call per process is a cold start,
     /// later ones only after the app was hidden or the Mac slept.
     func noteVisible(keptSocket: Bool = false) {
+        // Before the opening starts: the Mac becomes active before it first
+        // connects, and its cold record had no `previousExit` (it was set
+        // only on the first `.connecting`).
+        startStabilityTracking()
         stability.appVisible(
             hasCachedContent: !sessionStore.sessions.isEmpty,
             viewing: sessionStore.activeSessionId != nil,
@@ -837,6 +838,9 @@ extension AppState {
                 return self.connectionStatus == .connected
                     && self.wsClient?.isAuthenticated == true
                     && self.relayFeatures.contains("app_visibility")
+            },
+            hasSendsAwaitingEcho: { [weak self] in
+                self?.wsClient?.isAuthenticated == true && self?.commandSender?.hasSendsAwaitingEcho == true
             },
             setVisible: { [weak self] visible in self?.sendAppVisibility(visible) },
             teardown: { [weak self] in
@@ -860,3 +864,25 @@ extension AppState {
         relayFeatures = Set(authOk["features"] as? [String] ?? [])
     }
 }
+
+#if KRAKI_DIAG
+extension AppState {
+    /// `ready.summary` fields (metadata only).
+    static func readyFields(_ ready: StabilityTracker.Ready) -> [DiagField: DiagValue] {
+        var f: [DiagField: DiagValue] = [
+            .kind: .tag(ready.kind.rawValue), .outcome: .tag(ready.outcome.rawValue),
+            .path: .tag(ready.path), .attempt: .int(ready.attempts), .gap: .int(ready.gap),
+            .viewing: .bool(ready.viewing), .kept: .bool(ready.kept),
+        ]
+        if let v = ready.backgroundMs { f[.backgroundMs] = .number(v) }
+        if let v = ready.firstContentMs { f[.firstContentMs] = .number(v) }
+        if let v = ready.wsOpenMs { f[.wsOpenMs] = .number(v) }
+        if let v = ready.authedMs { f[.authedMs] = .number(v) }
+        if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
+        if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
+        if let v = ready.previousExit { f[.previousExit] = .tag(v) }
+        if let v = ready.failure { f[.cause] = .tag(v) }
+        return f
+    }
+}
+#endif

@@ -1124,7 +1124,7 @@ export class KrakiWSClient {
       for (const ts of sessions) {
         if (ts.lastSeq <= 0) continue;
         const fromSeq = Math.max(1, ts.lastSeq - WARMUP_PER_SESSION + 1);
-        messageProvider.fetchRange(ts.id, fromSeq, ts.lastSeq, { initial: true });
+        messageProvider.warmRange(ts.id, fromSeq, ts.lastSeq);
       }
       logger.info('warm-up: no preview timestamps, loading all', { sessions: sessions.filter(s => s.lastSeq > 0).length });
       return;
@@ -1158,7 +1158,7 @@ export class KrakiWSClient {
     let used = 0;
     for (const s of eager) {
       const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
-      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      messageProvider.warmRange(s.id, fromSeq, s.lastSeq);
       used += Math.min(s.lastSeq, WARMUP_PER_SESSION);
     }
 
@@ -1168,7 +1168,7 @@ export class KrakiWSClient {
       const cost = Math.min(s.lastSeq, WARMUP_PER_SESSION);
       if (used + cost > WARMUP_BUDGET) break;
       const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
-      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      messageProvider.warmRange(s.id, fromSeq, s.lastSeq);
       used += cost;
       budgetFilled++;
     }

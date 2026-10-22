@@ -42,6 +42,9 @@ export function buildApnsPayload(payload?: PushPayload): string {
   });
 }
 
+/** Opens the HTTP/2 session to an APNs host (tests substitute their own). */
+export type ApnsConnect = (authority: string) => http2.ClientHttp2Session;
+
 export interface ApnsConfig {
   /** Path to the .p8 private key file */
   keyPath: string;
@@ -53,6 +56,7 @@ export interface ApnsConfig {
   bundleId: string;
   /** Default environment */
   environment?: 'production' | 'sandbox';
+  connect?: ApnsConnect;
 }
 
 export class ApnsProvider implements PushProvider {
@@ -65,6 +69,7 @@ export class ApnsProvider implements PushProvider {
   private readonly defaultEnvironment: 'production' | 'sandbox';
 
   private sessions = new Map<string, http2.ClientHttp2Session>();
+  private readonly connect: ApnsConnect;
   private jwt: { token: string; issuedAt: number } | null = null;
 
   constructor(config: ApnsConfig) {
@@ -73,6 +78,7 @@ export class ApnsProvider implements PushProvider {
     this.teamId = config.teamId;
     this.defaultBundleId = config.bundleId;
     this.defaultEnvironment = config.environment ?? 'production';
+    this.connect = config.connect ?? ((authority) => http2.connect(authority));
   }
 
   async send(token: string, payload: PushPayload, opts?: {
@@ -99,17 +105,24 @@ export class ApnsProvider implements PushProvider {
 
   private async sendRaw(host: string, token: string, bundleId: string, body: string): Promise<PushResult> {
     const logger = getLogger();
-    const sessionBefore = this.sessions.get(host);
+    // The session this attempt uses (opened now if there is none yet).
+    const sessionBefore = this.getSession(host);
     const result = await this.attemptSend(host, token, bundleId, body);
 
-    // Retry once on connection-level errors (stale session after idle).
+    // Retry once on connection-level errors (stale session after idle: an
+    // expected event, not a failure unless the retry fails too).
     // Only destroy if the session hasn't already been replaced by a concurrent retry.
     if (!result.success && isConnectionError(result.error)) {
       logger.info('APNs connection error, retrying with fresh session', { error: result.error, tokenSuffix: token.slice(-8) });
       if (this.sessions.get(host) === sessionBefore) {
         this.destroySession(host);
       }
-      return this.attemptSend(host, token, bundleId, body);
+      const startedAt = performance.now();
+      const retry = await this.attemptSend(host, token, bundleId, body);
+      const ms = Math.round(performance.now() - startedAt);
+      if (retry.success) logger.info('APNs retry succeeded', { tokenSuffix: token.slice(-8), ms, apnsId: retry.id });
+      else logger.warn('APNs retry failed', { tokenSuffix: token.slice(-8), ms, error: retry.error });
+      return { ...retry, retried: true };
     }
 
     return result;
@@ -139,9 +152,12 @@ export class ApnsProvider implements PushProvider {
 
       let responseData = '';
       let statusCode = 0;
+      let apnsId: string | undefined;
 
       req.on('response', (headers) => {
         statusCode = headers[':status'] as number;
+        const id = headers['apns-id'];
+        if (typeof id === 'string') apnsId = id;
       });
 
       req.on('data', (chunk: Buffer) => {
@@ -150,7 +166,7 @@ export class ApnsProvider implements PushProvider {
 
       req.on('end', () => {
         if (statusCode === 200) {
-          resolve({ success: true });
+          resolve({ success: true, ...(apnsId && { id: apnsId }) });
         } else if (statusCode === 410) {
           logger.info('APNs token gone (410), marking for removal', { tokenSuffix: token.slice(-8) });
           resolve({ success: false, gone: true, error: 'Token no longer valid' });
@@ -175,8 +191,11 @@ export class ApnsProvider implements PushProvider {
       });
 
       req.on('error', (err) => {
-        logger.error('APNs request error', { error: (err as Error).message, tokenSuffix: token.slice(-8) });
-        resolve({ success: false, error: (err as Error).message });
+        const error = (err as Error).message;
+        // A connection error is retried (and its outcome logged) by sendRaw.
+        if (isConnectionError(error)) logger.debug('APNs request error', { error, tokenSuffix: token.slice(-8) });
+        else logger.warn('APNs request error', { error, tokenSuffix: token.slice(-8) });
+        resolve({ success: false, error });
       });
 
       req.setTimeout(APNS_REQUEST_TIMEOUT_MS, () => {
@@ -201,7 +220,7 @@ export class ApnsProvider implements PushProvider {
     let session = this.sessions.get(host);
     if (session && !session.destroyed && !session.closed) return session;
 
-    session = http2.connect(`https://${host}`);
+    session = this.connect(`https://${host}`);
     session.on('error', () => {
       this.sessions.delete(host);
     });

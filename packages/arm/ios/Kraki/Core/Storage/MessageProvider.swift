@@ -54,10 +54,8 @@ final class MessageProvider {
     /// overlapping background reads.
     private var loadingOlderDB: Set<String> = []
 
-    /// Per-turn trace pulls already issued (dedup), keyed `sid:bubbleSeq`.
-    /// Turn traces requested, with when. A trace the store has since evicted
-    /// is requested again once the earlier request has had time to answer.
-    private var tracePulled: [String: Date] = [:]
+    /// Per-turn trace pulls already issued or in flight (dedup).
+    private var traceRequests = TurnTraceRequestLedger()
     /// Sessions whose live card snapshot has been requested (dedup).
     private var cardRequested: Set<String> = []
 
@@ -823,25 +821,6 @@ final class MessageProvider {
 
     // MARK: - Push-Gap Recovery
 
-    /// Single funnel for every live persistent push that
-    /// `MessageRouter` previously sent straight to
-    /// `messageStore.append`. Buffers the message and runs the drain
-    /// loop — anything contiguous with the store's tail commits
-    /// immediately; anything that opens a gap waits in the buffer
-    /// while we fetch the missing range from tentacle.
-    ///
-    /// Replaces 13 call sites in `MessageRouter`. The store's
-    /// `append` contract changes accordingly: the gap branch is now
-    /// a DEBUG assertion (see `MessageStore.append`).
-    func ingestTailCandidate(_ sessionId: String, json: Data) {
-        #if KRAKI_DIAG
-        let diagWork = KrakiDiag.beginWork()
-        defer { KrakiDiag.endWork(diagWork, source: "provider.ingest_json", session: sessionId) }
-        #endif
-        guard let msg = ProducerMessageDecoder.decode(json) else { return }
-        ingestTailCandidate(sessionId, [msg])
-    }
-
     /// Multi-message overload used by `handleRangeBatch`.
     func ingestTailCandidate(_ sessionId: String, _ messages: [ChatMessage]) {
         #if KRAKI_DIAG
@@ -1063,44 +1042,41 @@ final class MessageProvider {
 
     /// Pull one turn's TRACE steps for the "Steps" popup (deduped). The reply
     /// (`turn_trace_batch`) lands in `handleTurnTraceBatch`.
-    func requestTurnTrace(sessionId: String, bubbleSeq: Int) {
-        guard bubbleSeq > 0 else { return }
-        let key = "\(sessionId):\(bubbleSeq)"
-        if let requestedAt = tracePulled[key] {
-            let cached = appState?.messageStore.turnSteps(sessionId, bubbleSeq: bubbleSeq) != nil
-            guard !cached, Date().timeIntervalSince(requestedAt) > 10 else { return }
-        }
-        guard appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
-        // Only a recent request dedupes; forget old ones so a long-lived
-        // process doesn't keep one entry per turn ever opened.
-        if tracePulled.count > 500 {
-            let cutoff = Date().addingTimeInterval(-60)
-            tracePulled = tracePulled.filter { $0.value > cutoff }
-        }
-        tracePulled[key] = Date()
+    func requestTurnTrace(sessionId: String, bubbleSeq: Int, turnEnded: Bool = false) {
+        guard bubbleSeq > 0, appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
+        let cached = appState?.messageStore.turnSteps(sessionId, bubbleSeq: bubbleSeq) != nil
+        guard traceRequests.shouldRequest("\(sessionId):\(bubbleSeq)", cached: cached, repullIfInFlight: turnEnded) else { return }
         appState?.commandSender?.requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
     }
 
     /// Force a re-pull of a turn's trace on the next request (e.g. a live turn).
     func invalidateTurnTrace(sessionId: String, bubbleSeq: Int) {
-        tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)")
+        traceRequests.invalidate("\(sessionId):\(bubbleSeq)")
     }
 
     /// Inject a pulled trace into the store. A still-running turn
     /// (`complete == false`) is left re-pullable so idle can reconcile.
     func handleTurnTraceBatch(sessionId: String, bubbleSeq: Int, entries: [ChatMessage], complete: Bool) {
         appState?.messageStore.setTurnSteps(sessionId, bubbleSeq: bubbleSeq, entries)
-        if !complete { tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)") }
+        if traceRequests.replied("\(sessionId):\(bubbleSeq)", complete: complete) {
+            requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
+        }
     }
 
     /// On idle: find the just-concluded bubble (agent_message / system_message)
-    /// and pull its authoritative trace once.
+    /// and pull its authoritative trace once. A trace still unfinished under
+    /// another key (a live Steps sheet reads the prompt's seq) is pulled once
+    /// more as well, or its final steps would be missing until reopened.
     func pullLatestTurnTrace(_ sessionId: String) {
         guard let appState else { return }
         for m in appState.messageStore.recentFromDB(sessionId, limit: 30).reversed() {
             if m.type == "agent_message" || m.type == "system_message" {
                 invalidateTurnTrace(sessionId: sessionId, bubbleSeq: m.seq)
-                requestTurnTrace(sessionId: sessionId, bubbleSeq: m.seq)
+                requestTurnTrace(sessionId: sessionId, bubbleSeq: m.seq, turnEnded: true)
+                for seq in traceRequests.unfinishedSeqs(sessionId) where seq != m.seq {
+                    invalidateTurnTrace(sessionId: sessionId, bubbleSeq: seq)
+                    requestTurnTrace(sessionId: sessionId, bubbleSeq: seq, turnEnded: true)
+                }
                 return
             }
             if m.type == "user_message" { return }
@@ -1149,7 +1125,7 @@ final class MessageProvider {
         headDropped.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
-        tracePulled.removeAll()
+        traceRequests.clear()
         cardRequested.removeAll()
         appState?.sessionStore.loadingSessions.removeAll()
         KLog.chat("🧹 [2/history disconnect] clearedSlots=\(slotCount) preservedWindows=1")
@@ -1163,7 +1139,7 @@ final class MessageProvider {
         outstanding.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
-        tracePulled.removeAll()
+        traceRequests.clear()
         cardRequested.removeAll()
         appState?.sessionStore.loadingSessions.removeAll()
     }
@@ -1189,7 +1165,7 @@ extension MessageProvider {
         }
         outstanding.removeValue(forKey: sessionId)
         pendingTail.removeValue(forKey: sessionId)
-        tracePulled = tracePulled.filter { !$0.key.hasPrefix("\(sessionId):") }
+        traceRequests.forgetSession(sessionId)
         cardRequested.remove(sessionId)
         appState?.sessionStore.setLoading(sessionId, false)
     }
@@ -1306,3 +1282,30 @@ enum MessageProviderDebug {
     nonisolated(unsafe) static var olderPageDelayMs: UInt64 = 0
 }
 #endif
+
+extension MessageProvider {
+    /// Single funnel for every live persistent push that
+    /// `MessageRouter` previously sent straight to
+    /// `messageStore.append`. Buffers the message and runs the drain
+    /// loop — anything contiguous with the store's tail commits
+    /// immediately; anything that opens a gap waits in the buffer
+    /// while we fetch the missing range from tentacle.
+    ///
+    /// Replaces 13 call sites in `MessageRouter`. The store's
+    /// `append` contract changes accordingly: the gap branch is now
+    /// a DEBUG assertion (see `MessageStore.append`).
+    func ingestTailCandidate(_ sessionId: String, json: Data) {
+        #if KRAKI_DIAG
+        // Decoding only: the ingest itself is timed by the `[ChatMessage]`
+        // overload (`provider.ingest_messages`). Timing both counted it twice
+        // (`provider.ingest_json` wrapped it; 59 of 68 pairs identical).
+        let diagWork = KrakiDiag.beginWork()
+        let msg = ProducerMessageDecoder.decode(json)
+        KrakiDiag.endWork(diagWork, source: "provider.decode_json", session: sessionId)
+        #else
+        let msg = ProducerMessageDecoder.decode(json)
+        #endif
+        guard let msg else { return }
+        ingestTailCandidate(sessionId, [msg])
+    }
+}

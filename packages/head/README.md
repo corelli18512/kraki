@@ -79,12 +79,18 @@ deployments do not require a Head restart. See Monitor's migration instructions.
   naming the failed check. Point uptime monitors here.
 - `GET /internal/metrics` — counters and timings for independently managed
   host monitoring: connections, auth ok/failed by code,
-  pulse frames and bytes in/out, forwarded messages, push sent/failed, and how long
-  the relay takes to handle one frame (histogram). Counts only: no device, user, IP
+  pulse frames and bytes in/out, forwarded messages, push sent/failed, account API
+  requests, and how long the relay takes to handle one frame (histogram). Counts only: no device, user, IP
   or payload data. Answers **direct loopback requests only**; anything that came
   through a reverse proxy (any forwarding header) or from another address gets 404.
-- The log carries a `health` line every 30 s (connections, memory, durable rows,
-  event-loop delay `evlLagMs` p99 / `evlMaxMs`).
+- The log carries a `health` line (connections, memory, durable rows, event-loop
+  delay `evlLagMs` p99 / `evlMaxMs` beyond the 20 ms sampling interval, `upSec`, and
+  on the account service `apiReq` / `apiErr` since the previous line). It is sampled
+  every 30 s and logged when connections, endpoints, durable rows or RSS (±10 MB)
+  change or the loop stalled ≥ 100 ms, otherwise every 5 minutes.
+- The account service logs one `Account API request` line per request (status,
+  `ms`, caller, device) under the `X-Kraki-Request-Id` an edge sends and logs with
+  its own outcome.
 
 ## Useful options
 

@@ -121,7 +121,16 @@ final class WebSocketClient: NSObject {
     private var intentionalClose = false
     private var generation = 0
     private var phaseDeadline: DispatchWorkItem?
-    static let connectTimeout: TimeInterval = 30
+    /// A TCP/TLS/WebSocket handshake that has not opened within this long is
+    /// replaced (doubling per consecutive miss, up to `connectMaxTimeout`).
+    /// Mac diag 10-20: the first connect after a reboot hung the full 30 s
+    /// while the retry opened in 1.1 s; the slowest open seen is 3.8 s.
+    static let connectTimeout: TimeInterval = 10
+    static let connectMaxTimeout: TimeInterval = 30
+    private(set) var consecutiveConnectTimeouts = 0
+    var currentConnectTimeout: TimeInterval {
+        min(Self.connectTimeout * pow(2, Double(consecutiveConnectTimeouts)), Self.connectMaxTimeout)
+    }
     static let authenticationTimeout: TimeInterval = 90
     /// A sent challenge/token auth frame must get an answer within this long
     /// (doubling per consecutive miss, up to `authReplyMaxTimeout`) or the
@@ -221,7 +230,7 @@ final class WebSocketClient: NSObject {
         // as an absolute upper bound.
         task?.maximumMessageSize = 16 * 1024 * 1024
         task?.resume()
-        armPhaseDeadline(after: Self.connectTimeout, reason: "connect_timeout")
+        armPhaseDeadline(after: currentConnectTimeout, reason: "connect_timeout")
     }
 
     func disconnect() {
@@ -343,6 +352,7 @@ final class WebSocketClient: NSObject {
 
     #if DEBUG
     func debugSetConsecutiveAuthReplyTimeouts(_ count: Int) { consecutiveAuthReplyTimeouts = count }
+    func debugSetConsecutiveConnectTimeouts(_ count: Int) { consecutiveConnectTimeouts = count }
     #endif
 
     var currentAuthReplyTimeout: TimeInterval {
@@ -622,6 +632,7 @@ final class WebSocketClient: NSObject {
         let epoch = generation
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.generation == epoch, !self.isAuthenticated else { return }
+            if reason == "connect_timeout" { self.consecutiveConnectTimeouts += 1 }
             self.recover(reason: reason)
         }
         phaseDeadline = work
@@ -720,6 +731,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
             return
         }
         KLog.d("✅ WebSocket opened")
+        consecutiveConnectTimeouts = 0
         // Opening the TCP/WebSocket handshake is not enough to call a
         // connection stable. Proxies can accept and reset it a few seconds
         // later; resetting here traps us in a 1-second reconnect loop. Keep the

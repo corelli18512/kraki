@@ -198,3 +198,19 @@ describe('wire codec — DATA coalesceKey (spec §12)', () => {
     expect(() => encodeFrame(at256)).toThrow();
   });
 });
+
+describe('wire codec — large payloads', () => {
+  it('encodes a 64 KB DATA payload exactly once, after the header, as a copy', () => {
+    const payload = new Uint8Array(64 * 1024).map((_, i) => (i * 31) & 0xff);
+    const bytes = encodeFrame({ t: 'data', seq: 7n, ack: 3n, payload, durable: false }, 1);
+    // magic, v2, DATA, stream 1, flags, seq u64, ack u64, len u32, payload
+    const headerLength = 4 + 1 + 8 + 8 + 4;
+    expect(bytes.length).toBe(headerLength + payload.length);
+    expect(Array.from(bytes.subarray(headerLength - 4, headerLength))).toEqual([0, 1, 0, 0]);
+    expect(bytes.subarray(headerLength)).toEqual(payload);
+    payload[0] = 0xff;
+    expect(bytes[headerLength]).toBe(0);
+    const frame = decodeFrame(bytes);
+    expect(frame?.t === 'data' && frame.payload.length).toBe(64 * 1024);
+  });
+});

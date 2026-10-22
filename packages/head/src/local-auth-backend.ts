@@ -14,7 +14,7 @@ import type { AuthProvider, AuthUser } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger } from './logger.js';
 import { suggestRegionForIp } from './ip-geo.js';
 
 export interface LocalAuthBackendOptions {
@@ -121,7 +121,7 @@ export class LocalAuthBackend implements AuthBackend {
 
     const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) {
-      logger.warn('Auth rejected', { method: auth.method, ip: clientIp, reason: resolved.message });
+      logger.warn('Auth rejected', { method: authLogField(auth.method), ip: authLogField(clientIp), reason: authLogField(resolved.message) });
       return resolved;
     }
 
@@ -176,7 +176,18 @@ export class LocalAuthBackend implements AuthBackend {
     const publicKeyPem = importPublicKey(device.publicKey);
     const valid = verifyChallengeSignature(nonce, signature, publicKeyPem);
     if (!valid) {
-      logger.warn('Challenge-response auth failed', { deviceId });
+      // Which keys were involved, without the keys: a client that signed with
+      // a different key than it registered (e.g. process-local keys swapped
+      // in mid-handshake) shows a presented encryption key differing too.
+      logger.warn('Challenge-response auth failed', {
+        deviceId,
+        signingKeyFp: keyFingerprint(device.publicKey),
+        storedEncryptionKeyFp: device.encryptionKey ? keyFingerprint(device.encryptionKey) : undefined,
+        presentedEncryptionKeyFp: encryptionKey ? keyFingerprint(encryptionKey) : undefined,
+        nonceFp: keyFingerprint(nonce).slice(0, 12),
+        signatureLength: signature.length,
+        headRegion,
+      });
       return { ok: false, code: 'invalid_signature', message: 'Invalid signature' };
     }
 

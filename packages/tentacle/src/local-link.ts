@@ -21,7 +21,8 @@
  * auth). Browser origins are refused outright.
  *
  * Discovery: `<KRAKI_HOME>/local-link.json` (0600) carries the port and this
- * Tentacle's device ID. It is removed on shutdown.
+ * Tentacle's device ID. It is removed on shutdown (only if still ours) and
+ * republished when another process removed it (ensureDiscoveryFile).
  */
 
 import { randomBytes } from "node:crypto";
@@ -73,6 +74,16 @@ export function appProofMessage(
 	return `kraki-local-link/v${LOCAL_LINK_VERSION}/app\n${tentacleNonce}\n${tentacleId}\n${appId}`;
 }
 
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		// EPERM: alive, owned by another user.
+		return (err as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
 export interface LocalLinkHost {
 	/** This Tentacle's device ID, once known. */
 	tentacleId(): string | undefined;
@@ -118,6 +129,8 @@ export class LocalLinkServer {
 	private tickTimer: ReturnType<typeof setInterval> | null = null;
 	private pingTimer: ReturnType<typeof setInterval> | null = null;
 	private port = 0;
+	/** Instance of a foreign live record already warned about. */
+	private reportedForeign: unknown = undefined;
 	private readonly stats = {
 		framesOut: 0,
 		framesIn: 0,
@@ -166,7 +179,10 @@ export class LocalLinkServer {
 		this.tickTimer = setInterval(() => {
 			for (const peer of this.peers.values()) peer.pulse.tick();
 		}, TICK_MS);
-		this.pingTimer = setInterval(() => this.pingPeers(), PING_MS);
+		this.pingTimer = setInterval(() => {
+			this.pingPeers();
+			this.ensureDiscoveryFile();
+		}, PING_MS);
 		this.tickTimer.unref?.();
 		this.pingTimer.unref?.();
 		logger.info(
@@ -239,6 +255,50 @@ export class LocalLinkServer {
 	/** Drop a peer (e.g. the device was removed from the account). */
 	disconnectPeer(appId: string, reason: string): void {
 		this.peers.get(appId)?.ws.close(4003, reason);
+	}
+
+	/**
+	 * Republish the discovery record when it is gone or names a listener that
+	 * is no longer alive. Another process in the same KRAKI_HOME (a test, a
+	 * dev run, a stale daemon) could replace the record and delete it again on
+	 * exit; the Mac app then had no local link until this daemon restarted.
+	 * A record of another live listener (a successor during handover) is left
+	 * alone. Returns what it found.
+	 */
+	ensureDiscoveryFile(): "ours" | "republished" | "foreign" {
+		if (!this.listening) return "ours";
+		let current: { instance?: unknown; pid?: unknown } | null = null;
+		try {
+			current = JSON.parse(readFileSync(this.filePath, "utf8"));
+		} catch {
+			current = null;
+		}
+		if (current?.instance === this.instance) return "ours";
+		const otherPid = typeof current?.pid === "number" ? current.pid : undefined;
+		if (current && otherPid !== undefined && isProcessAlive(otherPid)) {
+			if (this.reportedForeign !== current.instance) {
+				this.reportedForeign = current.instance;
+				logger.warn(
+					{ otherPid, file: this.filePath },
+					"Local link discovery file belongs to another live listener; leaving it",
+				);
+			}
+			return "foreign";
+		}
+		try {
+			this.writeDiscoveryFile();
+		} catch (err) {
+			logger.warn(
+				{ err: (err as Error).message, file: this.filePath },
+				"Local link discovery file could not be republished",
+			);
+			return "foreign";
+		}
+		logger.warn(
+			{ found: current ? "dead-listener" : "missing", otherPid, port: this.port },
+			"Local link discovery file was replaced or removed; republished",
+		);
+		return "republished";
 	}
 
 	private writeDiscoveryFile(): void {

@@ -66,6 +66,13 @@ final class PushManager: NSObject {
     /// Latest registration round-trip result.
     var registered: Bool = false
     var lastError: String?
+    /// The token already registered on the current authenticated connection.
+    /// Auth and the APNs token callback of one foreground both register;
+    /// the relay saw two registrations per session (cn relay 10-17→10-21).
+    @ObservationIgnored private var registeredOnConnection: String?
+    #if DEBUG
+    private(set) var registrationsSentForTesting = 0
+    #endif
 
     // MARK: - Dependencies
 
@@ -167,6 +174,7 @@ final class PushManager: NSObject {
     /// retry on next successful auth.
     func disable() {
         userEnabled = false
+        registeredOnConnection = nil
         pendingUnregister = true
         sendUnregister()
         deviceToken = nil
@@ -192,6 +200,8 @@ final class PushManager: NSObject {
     /// pending unregistration (from a prior `disable()` while offline) and
     /// re-registration when push is enabled.
     func onAuthenticated() {
+        // A new connection: the Head knows nothing of this one yet.
+        registeredOnConnection = nil
         // If the user disabled push but the unregister never reached the relay,
         // retry now that we're connected.
         if pendingUnregister {
@@ -308,7 +318,8 @@ final class PushManager: NSObject {
     private func sendRegisterIfReady() {
         guard userEnabled else { return }
         guard let appState, appState.connectionStatus == .connected else { return }
-        guard let token = deviceToken else { return }
+        guard let token = deviceToken, token != registeredOnConnection else { return }
+        registeredOnConnection = token
 
         let env = Self.detectAPNSEnvironment()
         let bundleId = Bundle.main.bundleIdentifier ?? "chat.kraki.ios"
@@ -323,6 +334,9 @@ final class PushManager: NSObject {
             ],
         ]
         sendControl(message)
+        #if DEBUG
+        registrationsSentForTesting += 1
+        #endif
         KLog.d("📤 register_push_token (\(env), …\(token.suffix(8)))")
     }
 

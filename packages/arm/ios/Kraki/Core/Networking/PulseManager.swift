@@ -143,6 +143,7 @@ final class PulseManager {
         replayable: Bool = false
     ) {
         guard let payload = try? JSONSerialization.data(withJSONObject: object) else { return }
+        payloadsHandedOff += 1
         // Large payloads to a Tentacle that reassembles go as small ordered
         // parts so a slow uplink keeps showing progress. Connection-scoped
         // commands stay whole: a purge on disconnect must not leave a partial.
@@ -234,6 +235,14 @@ final class PulseManager {
     /// would stall for a heartbeat interval per window, so parts go at once.
     var acksPromptly = false
     private var inflight: [(seq: UInt64, bytes: Int, sentAt: Date)] = []
+    /// Newest live seq handed to Pulse, and whether parts still wait to go
+    /// (send.summary `uploadMs`).
+    private(set) var lastSentLiveSeq: UInt64 = 0
+    var hasQueuedUpload: Bool { !outQueue.isEmpty }
+    /// E2E payloads handed to this Pulse, and the connection generation while
+    /// authenticated (send.summary `uploadMs` is measured on that one only).
+    private(set) var payloadsHandedOff = 0
+    var liveGeneration: Int? { authenticated ? generation : nil }
 
     #if DEBUG
     var queuedForTesting: Int { outQueue.count }
@@ -282,6 +291,7 @@ final class PulseManager {
         connectionScoped: Bool
     ) -> UInt64 {
         let (seq, effects) = live.send([UInt8](payload), durable: false, coalesceKey: nil)
+        lastSentLiveSeq = seq
         if let target {
             targetByStream[Self.liveStream, default: [:]][seq] = target
         }
