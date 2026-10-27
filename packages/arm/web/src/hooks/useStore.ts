@@ -92,7 +92,6 @@ const initialState = {
   updateProgress: new Map(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
-  loadingSessions: new Set<string>(),
   pendingSessions: new Set<string>(),
   localSessions: [],
   localSessionsLoading: false,
@@ -594,17 +593,6 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionUsage: next };
     }),
 
-  setSessionLoading: (sessionId, loading) =>
-    set((state) => {
-      const next = new Set(state.loadingSessions);
-      if (loading) {
-        next.add(sessionId);
-      } else {
-        next.delete(sessionId);
-      }
-      return { loadingSessions: next };
-    }),
-
   addPendingSession: (sessionId) =>
     set((state) => {
       const next = new Set(state.pendingSessions);
@@ -821,7 +809,6 @@ export const useStore = create<Store>()(persist((set) => ({
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
-    loadingSessions: new Set(),
     pendingSessions: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until the session_list
@@ -858,7 +845,6 @@ export const useStore = create<Store>()(persist((set) => ({
     usageRefreshes: new Map(),
     sessionUsage: new Map(),
     sessionPreviews: new Map(),
-    loadingSessions: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   })),

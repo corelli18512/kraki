@@ -131,7 +131,6 @@ class MessageProvider {
     this.rangeTombstones.delete(sessionId);
     this.tailFailures.delete(sessionId);
     this.uncertainEmptySessions.delete(sessionId);
-    getStore().setSessionLoading(sessionId, false);
     for (const listener of this.rangeListeners) listener();
   }
   /** Sessions currently loading */
@@ -294,7 +293,6 @@ class MessageProvider {
     this.loadingSessions.add(sessionId);
     this.loadingThroughSeq.set(sessionId, toSeq);
     if (options?.foreground) this.loadingForeground.add(sessionId);
-    if (options?.initial) getStore().setSessionLoading(sessionId, true);
 
     try {
       const completed = await this.loadRange(sessionId, clampedFrom, toSeq, operation);
@@ -335,7 +333,6 @@ class MessageProvider {
         this.loadingSessions.delete(sessionId);
         this.loadingThroughSeq.delete(sessionId);
         this.loadingForeground.delete(sessionId);
-        getStore().setSessionLoading(sessionId, false);
         const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
         if (pendingLastSeq !== undefined) {
           this.pendingTailReconciles.delete(sessionId);

@@ -115,7 +115,7 @@ export async function staleIDB(deleted = false, control = false) {
     await until(() => requested, 'new generation pending');
     const loadingBefore = messageProvider.isLoading(sessionId);
     gate.release(); await old;
-    const result = { invariant: messageProvider.isLoading(sessionId), loadingBefore, loadingAfter: messageProvider.isLoading(sessionId), uiLoadingAfter: useStore.getState().loadingSessions.has(sessionId), oldRows: useStore.getState().messages.get(sessionId)?.length };
+    const result = { invariant: messageProvider.isLoading(sessionId), loadingBefore, loadingAfter: messageProvider.isLoading(sessionId), oldRows: useStore.getState().messages.get(sessionId)?.length };
     messageProvider.handleRangeBatch(sessionId, [message(2)], 2, 2, false); await fresh;
     return result;
   } finally { gate.restore(); }
