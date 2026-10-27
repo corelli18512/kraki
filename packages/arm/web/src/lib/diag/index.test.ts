@@ -73,6 +73,16 @@ describe('Diag experience summary wiring', () => {
     expect(recorder.drain().events.map(({ ev, d }) => ev === 'app.phase' ? d.phase : ev === 'ready.summary' ? `${d.kind}:${d.backgroundMs}` : ev))
       .toEqual(['background', 'active', 'wake:60000']);
   });
+  it('keeps events recorded before start (the outbox restores at module load) and records them at start', () => {
+    const d = new Diag();
+    d.record('outbox.state', 'private-session', { clientId: 'c1', phase: 'restored' });
+    d.start(async () => ({ status: 204, body: '' }), { version: '1', build: '0' });
+    d.record('outbox.state', 'private-session', { clientId: 'c1', phase: 'sending' });
+    expect(recorders[0]!.drain().events.filter((e) => e.ev === 'outbox.state').map(({ sid, d }) => ({ sid, d }))).toEqual([
+      { sid: 'private-session', d: { clientId: 'c1', phase: 'restored' } },
+      { sid: 'private-session', d: { clientId: 'c1', phase: 'sending' } },
+    ]);
+  });
   it('wires longtask completion into ui.busy and suppresses background observations', () => {
     let observed!: PerformanceObserverCallback;
     vi.stubGlobal('PerformanceObserver', class {
