@@ -106,6 +106,7 @@ export class LocalAuthBackend implements AuthBackend {
     device: DeviceInfo,
     headRegion?: string,
     clientIp?: string,
+    remoteClient?: boolean,
   ): Promise<AuthOutcome> {
     const logger = getLogger();
 
@@ -119,7 +120,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unknown_auth_method', message: 'Use startChallenge/verifyChallenge for challenge auth' };
     }
 
-    const resolved = await this.resolveAuthUser(auth, clientIp);
+    const resolved = await this.resolveAuthUser(auth, clientIp, remoteClient);
     if (this.isAuthError(resolved)) {
       logger.warn('Auth rejected', { method: authLogField(auth.method), ip: authLogField(clientIp), reason: authLogField(resolved.message) });
       return resolved;
@@ -299,11 +300,12 @@ export class LocalAuthBackend implements AuthBackend {
   async requestPairingToken(
     token: string,
     ip?: string,
+    remoteClient?: boolean,
   ): Promise<{ ok: true; userId: string; pairingToken: string; expiresIn: number } | { ok: false; code: string; message: string }> {
     // Try all providers
     let unavailable: string | undefined;
     for (const provider of this.authProviders.values()) {
-      const result = await provider.authenticate({ token, ip });
+      const result = await provider.authenticate({ token, ip, remoteClient });
       if (!result.ok && result.retryable) unavailable = result.message;
       if (result.ok) {
         this.storage.upsertUser(result.user.id, result.user.login, result.user.provider, result.user.email);
@@ -610,9 +612,9 @@ export class LocalAuthBackend implements AuthBackend {
     };
   }
 
-  private async resolveAuthUser(auth: AuthMethod, clientIp?: string): Promise<AuthUser | { ok: false; code: string; message: string }> {
+  private async resolveAuthUser(auth: AuthMethod, clientIp?: string, remoteClient?: boolean): Promise<AuthUser | { ok: false; code: string; message: string }> {
     let provider: AuthProvider | undefined;
-    let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string; ip?: string } = {};
+    let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string } = {};
 
     switch (auth.method) {
       case 'github_token':
@@ -645,7 +647,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'auth_rejected', message: `Auth method ${auth.method} not configured` };
     }
 
-    const result = await provider.authenticate({ ...credentials, ip: clientIp });
+    const result = await provider.authenticate({ ...credentials, ip: clientIp, remoteClient });
     if (!result.ok) {
       return { ok: false, code: result.retryable ? 'service_unavailable' : 'auth_rejected', message: result.message };
     }

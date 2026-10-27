@@ -79,7 +79,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
 
     const renameClock = server.renameClock;
     const tokenStart = performance.now();
-    const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
+    const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip, state.remoteClient);
     state.authTiming.tokenMs = Math.round(performance.now() - tokenStart);
     metrics().authStages.token.observe(state.authTiming.tokenMs);
     if (!socketStillAuthenticating(server, ws, state)) return;
@@ -485,7 +485,7 @@ export async function handleRequestPairingToken(server: HeadServer, ws: WebSocke
     server.sendError(ws, 'Token required for pairing request');
     return;
   }
-  const result = await server.authBackend.requestPairingToken(msg.token, state.ip);
+  const result = await server.authBackend.requestPairingToken(msg.token, state.ip, state.remoteClient);
   if (ws.readyState !== WebSocket.OPEN) return;
   if (!result.ok) {
     sendAuthError(server, ws, result.code as AuthErrorCode, result.message);

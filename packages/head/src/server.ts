@@ -10,7 +10,7 @@ import { LocalAuthBackend } from './local-auth-backend.js';
 import { authLogField, getLogger, LogThrottle } from './logger.js';
 import { HealthLog } from './health-log.js';
 import { trace, fp } from './trace.js';
-import { clientIp } from './client-ip.js';
+import { clientIp, isDirectLoopback } from './client-ip.js';
 import type { AuthBackend } from './auth-backend.js';
 import { handleControlMessage, firePushPreview } from './server/account-control.js';
 import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken, sendAuthError } from './server/auth-flow.js';
@@ -291,6 +291,7 @@ export class HeadServer {
       authenticated: false,
       isAlive: true,
       ip,
+      remoteClient: req ? !isDirectLoopback(req) : undefined,
       connectedAt: Date.now(),
       pongOverdueAt: null,
       pendingLivenessBroadcast: false,
