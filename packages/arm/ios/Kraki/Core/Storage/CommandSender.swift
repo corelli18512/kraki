@@ -1025,22 +1025,23 @@ final class CommandSender {
     private func schedulePendingTimeout(requestId: String) {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(30))
-            guard let self,
-                  let placeholderId = self.pendingPlaceholderIds[requestId],
-                  let appState = self.appState,
-                  appState.sessionStore.isPending(placeholderId) else { return }
-            appState.sessionStore.setPendingError(
-                placeholderId,
-                reason: String(localized: "Request timed out")
-            )
-            // The computer may still create the session later. Keep the first
-            // message so it lands in that session's draft instead of being lost
-            // (not sent: the user may already have retried).
-            if let prompt = self.pendingCreateRequests[requestId], !prompt.isEmpty {
-                self.timedOutCreatePrompts[requestId] = prompt
-            }
-            self.clearPendingRequest(requestId)
+            self?.expirePendingRequest(requestId)
         }
+    }
+
+    /// No `session_created` in time: fail the placeholder ("Request timed out").
+    func expirePendingRequest(_ requestId: String) {
+        guard let placeholderId = pendingPlaceholderIds[requestId], let appState,
+              appState.sessionStore.isPending(placeholderId) else { return }
+        appState.sessionStore.setPendingError(placeholderId, reason: String(localized: "Request timed out"))
+        // The first message goes back to the new-session draft so it can be
+        // retried. The computer may still create the session later: keep it
+        // for that session's draft too (not sent: the user may have retried).
+        if let prompt = pendingCreateRequests[requestId], !prompt.isEmpty {
+            timedOutCreatePrompts[requestId] = prompt
+            recoverNewSessionText(prompt)
+        }
+        clearPendingRequest(requestId)
     }
 
     /// Drop in-flight bookkeeping for a requestId (resolution, error,
@@ -1247,6 +1248,7 @@ final class CommandSender {
         guard let appState else { return }
         if let prompt = timedOutCreatePrompts.removeValue(forKey: requestId) {
             appState.sessionStore.setDraft(sessionId, prompt)
+            withdrawRecoveredNewSessionText(prompt)
             return
         }
         #if DEBUG
@@ -1320,7 +1322,9 @@ final class CommandSender {
                 appState.sessionStore.navigateToSession = placeholderId
             }
         }
-        pendingCreateRequests.removeValue(forKey: requestId)
+        // A typed first message goes back to the new-session draft (a voice
+        // one was recovered with its placeholder above).
+        if let prompt = pendingCreateRequests.removeValue(forKey: requestId) { recoverNewSessionText(prompt) }
         pendingCreateTitles.removeValue(forKey: requestId)
         forkSources.removeValue(forKey: requestId)
     }
