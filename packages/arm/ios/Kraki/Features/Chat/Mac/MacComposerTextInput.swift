@@ -279,6 +279,9 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         /// A focus intent not applied yet: the editor was not in a key window.
         var pendingFocus = false
         private var keyWindowObserver: NSObjectProtocol?
+        #if DEBUG
+        var waitsForKeyWindow: Bool { keyWindowObserver != nil }
+        #endif
 
         init(_ parent: MacComposerScrollableTextInput) {
             self.parent = parent
@@ -325,7 +328,9 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             // Marked IME text intentionally does not round-trip through the
             // persisted draft, but it is still visible native text and must
             // hide the SwiftUI placeholder immediately.
-            reportVisualTextPresence(of: textView)
+            // Deferred while the composer itself edits (inside a SwiftUI
+            // update, e.g. discarding a composition): no state writes there.
+            reportVisualTextPresence(of: textView, deferred: isApplying)
             guard !isApplying else { return }
             textView.scrollRangeToVisible(textView.selectedRange())
             // Do not round-trip marked IME text through SwiftUI. Replacing the

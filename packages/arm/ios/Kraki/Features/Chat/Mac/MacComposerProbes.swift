@@ -323,24 +323,23 @@ enum MacComposerPasteFocusRegression {
                     // persisted draft remains empty, but the placeholder must
                     // already be hidden because the NSTextView is not empty.
                     state.text = ""
-                    coordinator.isApplying = true
-                    replacement.string = "zhong"
+                    replacement.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                                              replacementRange: NSRange(location: NSNotFound, length: 0))
                     coordinator.textDidChange(
                         Notification(name: NSText.didChangeNotification, object: replacement)
                     )
-                    coordinator.isApplying = false
                     let placeholderHiddenForNativeText = state.nativeEditorHasText
                         && !MacComposerPlaceholderPolicy.isVisible(
                             committedText: state.text,
                             nativeEditorHasText: state.nativeEditorHasText
                         )
 
+                    replacement.unmarkText()
                     replacement.string = ""
-                    coordinator.isApplying = true
+                    coordinator.wasComposing = false
                     coordinator.textDidChange(
                         Notification(name: NSText.didChangeNotification, object: replacement)
                     )
-                    coordinator.isApplying = false
                     let placeholderRestoredAfterClear = !state.nativeEditorHasText
                         && MacComposerPlaceholderPolicy.isVisible(
                             committedText: state.text,
@@ -369,7 +368,9 @@ enum MacComposerPasteFocusRegression {
                         )
 
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                            let externalCleared = !state.focused
+                            // Referencing the coordinator keeps it alive until its
+                            // deferred focus decision has run.
+                            let externalCleared = !state.focused && coordinator.textView === replacement
                             let passed = teardownPreserved
                                 && replacementPreserved
                                 && pasteRestoredBinding

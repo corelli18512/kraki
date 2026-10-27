@@ -161,6 +161,137 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === editor)
     }
 
+    private final class ToggleKeyWindow: NSWindow {
+        var reportsKey = false
+        override var canBecomeKey: Bool { true }
+        override var isKeyWindow: Bool { reportsKey }
+    }
+
+    /// A focus request while the window is not key (app in the background,
+    /// launching) waits: no focus is taken until the window becomes key,
+    /// then the editor takes it exactly once and stops observing.
+    func testFocusRequestWaitsUntilTheWindowBecomesKey() throws {
+        let state = InputState()
+        let window = ToggleKeyWindow(contentRect: NSRect(x: -6000, y: -6000, width: 400, height: 200),
+                                     styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        self.window = window
+        let host = NSHostingView(rootView: InputHost(state: state))
+        host.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+        let field = NSTextField(frame: NSRect(x: 10, y: 170, width: 100, height: 22))
+        host.addSubview(field)
+        window.contentView = host
+        window.orderFrontRegardless()
+        drain(300)
+        let editor = try editor(in: window)
+        let coordinator = try XCTUnwrap(editor.delegate as? MacComposerScrollableTextInput.Coordinator)
+
+        state.focused = true; state.focusRequest += 1
+        drain(300)
+        XCTAssertFalse(window.firstResponder === editor, "took focus in a window that is not key")
+        XCTAssertTrue(coordinator.waitsForKeyWindow)
+        state.tick += 1 // unrelated re-render while still not key
+        drain(200)
+        XCTAssertFalse(window.firstResponder === editor)
+
+        window.reportsKey = true
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        XCTAssertTrue(window.firstResponder === editor, "did not take focus when the window became key")
+        XCTAssertFalse(coordinator.waitsForKeyWindow, "the key-window observer was not removed")
+        XCTAssertTrue(state.focused)
+
+        // Later key changes do not re-assert focus.
+        XCTAssertTrue(window.makeFirstResponder(field)); drain(200)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        drain(100)
+        XCTAssertFalse(window.firstResponder === editor)
+        XCTAssertNotNil(field.currentEditor())
+    }
+
+    // MARK: Image preview
+
+    @Observable final class PreviewState { var open = false }
+
+    /// The chat composer with MainWindowView's image preview overlay above it.
+    struct PreviewHost: View {
+        @Bindable var preview: PreviewState
+        let image: NSImage
+        var body: some View {
+            ZStack {
+                VStack(spacing: 0) { Spacer(minLength: 0); MacChatComposer(sessionId: "voice-a") }
+                if preview.open {
+                    MacImagePreviewOverlay(selection: MacImagePreviewSelection(image: image, title: "shot.png"),
+                                           onClose: { preview.open = false })
+                }
+            }
+        }
+    }
+
+    /// The image preview takes first responder (zoom keys). Closing it hands
+    /// focus back to the composer if the composer had it; otherwise focus
+    /// is not pulled into the composer.
+    func testClosingTheImagePreviewReturnsFocusToTheComposer() throws {
+        MacComposerMetrics.snapshotFlatGlass = true
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: IOSVoiceHoldScenarioDriver(automaticCorrections: false))
+        let preview = PreviewState()
+        let image = NSImage(size: NSSize(width: 40, height: 30), flipped: false) { rect in
+            NSColor.systemTeal.setFill(); rect.fill(); return true
+        }
+        let window = makeWindow(width: 640, height: 300)
+        let root = PreviewHost(preview: preview, image: image)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).environment(app)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 300))
+        let host = NSHostingView(rootView: root)
+        host.frame = container.bounds
+        let field = NSTextField(frame: NSRect(x: 10, y: 270, width: 200, height: 22))
+        container.addSubview(host)
+        container.addSubview(field)
+        window.contentView = container
+        window.orderFrontRegardless(); window.makeKey()
+        drain(500)
+        let editor = try editor(in: window)
+        XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
+        type("draft", into: editor); drain(150)
+
+        preview.open = true
+        drain(400)
+        XCTAssertTrue(window.firstResponder is MacZoomableImageView, "the preview did not take focus")
+        rerenderComposer(app)
+        XCTAssertTrue(window.firstResponder is MacZoomableImageView, "the composer took focus from the open preview")
+
+        preview.open = false
+        drain(400)
+        XCTAssertTrue(window.firstResponder === editor, "closing the preview did not return focus to the composer")
+        type(" more", into: editor); drain(150)
+        XCTAssertEqual(app.sessionStore.drafts["voice-a"], "draft more")
+
+        // Opened from another field: closing does not pull focus into the composer.
+        XCTAssertTrue(window.makeFirstResponder(field)); drain(200)
+        preview.open = true; drain(400)
+        preview.open = false; drain(400)
+        XCTAssertFalse(window.firstResponder === editor, "closing the preview pulled focus into the composer")
+    }
+
+    /// Paging creates a new zoom view per image; the composer to refocus is
+    /// passed on, and only the view that has focus when it closes hands back.
+    func testImagePreviewPagingKeepsTheComposerToRefocus() throws {
+        let (window, _, _) = makeChatComposer()
+        let editor = try editor(in: window)
+        XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
+        let content = try XCTUnwrap(window.contentView)
+        let first = MacZoomableImageView(frame: content.bounds)
+        content.addSubview(first)
+        XCTAssertTrue(window.firstResponder === first)
+        XCTAssertTrue(first.composerToRefocus === editor)
+        let second = MacZoomableImageView(frame: content.bounds)
+        content.addSubview(second)
+        first.removeFromSuperview()
+        XCTAssertTrue(window.firstResponder === second)
+        XCTAssertTrue(second.composerToRefocus === editor)
+        second.removeFromSuperview()
+        XCTAssertTrue(window.firstResponder === editor)
+    }
+
     // MARK: IME
 
     /// Clear (and Send / deny / answer: each sets the draft to "") while a
@@ -323,5 +454,15 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], "voice text")
     }
 
+
+    /// The app's composer paste/focus regression probe (also run by the
+    /// automation driver) passes against the current focus model.
+    func testPasteFocusRegressionProbePasses() {
+        let done = expectation(description: "probe")
+        var result: [String: Any] = [:]
+        MacComposerPasteFocusRegression.run { result = $0; done.fulfill() }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(result["passed"] as? Bool, true, "\(result)")
+    }
 }
 #endif
