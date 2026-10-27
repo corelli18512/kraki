@@ -87,6 +87,35 @@ import UIKit
         XCTAssertLessThan(green.2, 0.3)
     }
 
+    /// iPhone Duo fold/unfold (or rotation) while the viewer is open: the
+    /// pager must stay exactly on the page being viewed at the new width.
+    func testResizingWhileOpenStaysOnThePage() throws {
+        let items = [UIColor.red, .green, .blue].enumerated().map { index, color in
+            IOSImagePreviewItem(id: "img-\(index)", image: image(color), title: "image-\(index + 1).png")
+        }
+        let host = UIHostingController(rootView: IOSImagePreviewGallery(selection: IOSImagePreviewSelection(items: items, initialIndex: 2)))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 466, height: 678)
+        window.windowLevel = .alert + 1
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        let scroll = try XCTUnwrap(pager(host.view))
+        XCTAssertEqual(scroll.contentOffset.x, scroll.bounds.width * 2, accuracy: 1, "opens on page 3")
+        for (step, size) in [CGSize(width: 951, height: 669), CGSize(width: 466, height: 678),
+                             CGSize(width: 951, height: 669)].enumerated() {
+            window.frame = CGRect(origin: .zero, size: size)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+            XCTAssertEqual(scroll.bounds.width, size.width, accuracy: 1, "step \(step): pager follows the window")
+            XCTAssertEqual(scroll.contentOffset.x, scroll.bounds.width * 2, accuracy: 1,
+                           "step \(step): still exactly on page 3 (offset \(scroll.contentOffset.x))")
+            let blue = centerColor(snapshot(window, "kraki-preview-resize-\(step).png"))
+            XCTAssertGreaterThan(blue.2, 0.8, "step \(step): page 3 shows the blue image: \(blue)")
+        }
+    }
+
     /// A message with two images, the second still downloading: the viewer
     /// opens on the first, swipes to the second (progress), and that page
     /// becomes the image as the chunks land — without reopening.
