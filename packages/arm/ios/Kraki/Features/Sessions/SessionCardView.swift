@@ -10,11 +10,14 @@ import SwiftUI
 struct SessionCardView: View {
     @Environment(AppState.self) private var appState
     let sessionId: String
+    /// Two-column layout: the Mac sidebar row geometry (small avatar, 10 pt
+    /// gap). Text keeps the iOS sizes.
+    var sidebar = false
 
     var body: some View {
         if let session = appState.sessionStore.sessions[sessionId]
             ?? appState.sessionStore.archivedSessionInfo(sessionId) {
-            SessionCardBody(session: session)
+            SessionCardBody(session: session, sidebar: sidebar)
                 .environment(appState)
         }
     }
@@ -23,6 +26,7 @@ struct SessionCardView: View {
 private struct SessionCardBody: View {
     @Environment(AppState.self) private var appState
     let session: SessionInfo
+    var sidebar = false
 
     private var projection: SessionCardProjection {
         SessionCardProjection.make(
@@ -58,14 +62,14 @@ private struct SessionCardBody: View {
     private var cardTitle: String { session.displayTitle }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: sidebar ? 10 : 12) {
             AgentAvatar(
                 agent: session.agent,
                 model: session.model,
                 sessionId: session.id,
-                size: .lg
+                size: sidebar ? .sm : .lg
             )
-            .padding(.top, 3)
+            .padding(.top, sidebar ? 2 : 3)
 
             VStack(alignment: .leading, spacing: 2) {
                 titleRow
@@ -77,7 +81,7 @@ private struct SessionCardBody: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, sidebar ? 0 : 2)
         .contentShape(Rectangle())
     }
 
@@ -126,7 +130,7 @@ private struct SessionCardBody: View {
         SessionCardMetadataRow(machineName: projection.machineName, model: projection.model,
                                effort: projection.effortLabel, sessionId: session.id,
                                font: .caption, deviceColor: .secondary, modelColor: Color(.tertiaryLabel),
-                               statusColor: deviceStatusColor)
+                               statusColor: sidebar ? nil : deviceStatusColor)
     }
 
     private var previewRow: some View {

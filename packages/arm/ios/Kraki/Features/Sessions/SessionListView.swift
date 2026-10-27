@@ -12,6 +12,8 @@ struct SessionListView: View {
     private let openSession: (String) -> Void
     /// The Session shown beside the list (two-column layout), highlighted.
     private let selectedSessionId: String?
+    /// Two-column layout: the Mac sidebar (search rail, compact rows).
+    private let sidebar: Bool
     @State private var showNewSession = false
     @State private var selectedDeviceFilter: String? = nil
     @State private var isSearching = false
@@ -21,9 +23,11 @@ struct SessionListView: View {
     @State private var showToolIconGallery = false
     #endif
 
-    init(selectedSessionId: String? = nil, startsSearching: Bool = false, openSession: @escaping (String) -> Void) {
+    init(selectedSessionId: String? = nil, sidebar: Bool = false, startsSearching: Bool = false,
+         openSession: @escaping (String) -> Void) {
         self.openSession = openSession
         self.selectedSessionId = selectedSessionId
+        self.sidebar = sidebar
         _isSearching = State(initialValue: startsSearching)
     }
 
@@ -72,7 +76,7 @@ struct SessionListView: View {
         .onChange(of: filteredSessions.count) { old, new in
             KLog.d("📂 [snapshot] SessionListView count change: \(old) → \(new)")
         }
-        .modifier(FloatingSessionListHeader { header })
+        .modifier(SidebarOrFloatingHeader(sidebar: sidebar) { sidebar ? AnyView(sidebarRail) : AnyView(header) })
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
@@ -109,6 +113,66 @@ struct SessionListView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
     }
 
+    // MARK: - Sidebar rail (two-column layout, MainWindowView.sidebarSectionHeader)
+
+    private var sidebarRail: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.textMuted)
+                    IMESearchField(placeholder: String(localized: "Search"), text: $searchQuery,
+                                   focusOnAppear: false, accessibilityIdentifier: "session-sidebar-search")
+                    if !searchQuery.isEmpty {
+                        Button { searchQuery = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear Search")
+                    }
+                }
+                .padding(.horizontal, 9)
+                .frame(height: SessionSplitLayout.railControlHeight)
+                .background(Color.surfaceSecondary.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.borderPrimary.opacity(0.65), lineWidth: 1))
+                // Lit while nothing is open, as on Mac ("the right side is a new session").
+                let composing = selectedSessionId == nil
+                Button { showNewSession = true } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: SessionSplitLayout.railButtonSize, height: SessionSplitLayout.railButtonSize)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(composing ? Color.krakiPrimary.opacity(0.18) : .clear))
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                        .padding(.horizontal, -7)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(composing ? Color.krakiPrimary : Color.textSecondary)
+                .accessibilityLabel("New Session")
+            }
+            .padding(.horizontal, 10)
+            .frame(height: SessionSplitLayout.railHeight)
+            if appState.showsReconnecting {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small).scaleEffect(0.75)
+                    Text("Connecting…")
+                        .scaledFont(12, weight: .medium)
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 26)
+                .background(Color.surfaceSecondary.opacity(0.6))
+                .transition(.opacity)
+            }
+            AccountAccessUpgradeBanner()
+        }
+        .background(Color.surfacePrimary)
+        .animation(.easeInOut(duration: 0.2), value: appState.showsReconnecting)
+    }
+
     private var wordmarkLongPress: (() -> Void)? {
         #if DEBUG
         return { showToolIconGallery = true }
@@ -131,15 +195,17 @@ struct SessionListView: View {
             appState: appState,
             deviceFilter: selectedDeviceFilter,
             searchQuery: searchQuery,
-            topContentInset: FloatingSessionListHeader<EmptyView>.floats ? headerHeight : 0,
+            topContentInset: sidebar ? SessionSplitLayout.listVerticalPadding
+                : (FloatingSessionListHeader<EmptyView>.floats ? headerHeight : 0),
             archivedCount: archivedCount,
             archivedIds: archivedCount == 0 ? [] : sessionStore.archivedSessionInfos(deviceId: selectedDeviceFilter).map(\.id),
-            selectedSessionId: selectedSessionId
+            selectedSessionId: selectedSessionId,
+            sidebarStyle: sidebar
         ) { sessionId in
             openSession(sessionId)
         }
         .background(Color.surfacePrimary)
-        .ignoresSafeArea(.container, edges: FloatingSessionListHeader<EmptyView>.floats ? [.top, .bottom] : .bottom)
+        .ignoresSafeArea(.container, edges: sidebar ? .bottom : (FloatingSessionListHeader<EmptyView>.floats ? [.top, .bottom] : .bottom))
     }
 
     // MARK: - Empty State
@@ -218,6 +284,20 @@ struct SessionListView: View {
 /// iOS 26: the header floats over the list in a safe-area bar, so rows scroll
 /// beneath it with the system's soft scroll-edge effect (no opaque band that
 /// fights the Liquid Glass tab bar). Earlier systems keep an inset header.
+/// Sidebar: the rail is a plain bar above the rows (as on Mac). Otherwise the
+/// iPhone floating glass header.
+private struct SidebarOrFloatingHeader<Bar: View>: ViewModifier {
+    let sidebar: Bool
+    @ViewBuilder var bar: () -> Bar
+    func body(content: Content) -> some View {
+        if sidebar {
+            content.safeAreaInset(edge: .top, spacing: 0) { bar() }
+        } else {
+            content.modifier(FloatingSessionListHeader(bar: bar))
+        }
+    }
+}
+
 private struct FloatingSessionListHeader<Bar: View>: ViewModifier {
     @ViewBuilder var bar: () -> Bar
 
