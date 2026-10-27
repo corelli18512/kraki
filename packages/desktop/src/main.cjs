@@ -237,8 +237,8 @@ function createWindow() {
 
 // ── Tray: is this PC online (presence.cjs) ──
 const trayImages = {};
-/** Monochrome glyph matching the taskbar (white on dark, black on light),
- *  like a macOS template image. build/tray/*.ico from make-tray-icons.py. */
+/** Full-colour logo for the taskbar theme (logo-dark.png on a dark taskbar,
+ *  logo.png on a light one). build/tray/*.ico from make-tray-icons.py. */
 function trayTheme() {
   return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? 'dark' : 'light';
 }
