@@ -195,10 +195,22 @@ struct DeviceDetailView: View {
                 .id(nav.id)
                 .environment(appState)
         }
-        .modifier(DeviceRenameAlert(title: Text("Rename Device"), device: device,
-                                    isPresented: $showRename, draft: $nameDraft) { name in
-            appState.commandSender?.renameDevice(deviceId: device.id, name: name)
-        })
+        .alert("Rename Device", isPresented: $showRename) {
+            TextField(device.ownName, text: $nameDraft)
+                .onChange(of: nameDraft) { _, value in
+                    if value.unicodeScalars.count > DeviceName.maxLength {
+                        nameDraft = String(String.UnicodeScalarView(value.unicodeScalars.prefix(DeviceName.maxLength)))
+                    }
+                }
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                if let name = DeviceName.renameValue(draft: nameDraft, for: device) {
+                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                }
+            }
+        } message: {
+            Text("Shown on all your devices. Leave it empty to use \"\(device.ownName)\".")
+        }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {

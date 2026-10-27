@@ -11,7 +11,6 @@ struct DevicesPane: View {
     @State private var showingPairing = false
     @State private var removing: DeviceSummary?
     @State private var renaming: DeviceSummary?
-    @State private var showRename = false
     @State private var nameDraft = ""
 
     private var devices: [DeviceSummary] {
@@ -35,7 +34,7 @@ struct DevicesPane: View {
                                   canRemove: Self.canRemove(device, appDeviceId: appState.deviceId,
                                                             thisMacDeviceId: tentacleCLI.configInfo?.deviceId),
                                   onRemove: { removing = device },
-                                  onRename: { nameDraft = device.name; renaming = device; showRename = true })
+                                  onRename: { nameDraft = device.name; renaming = device })
                     }
                 }
             }
@@ -61,12 +60,22 @@ struct DevicesPane: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingPairing) { PairingSheet() }
-        .modifier(DeviceRenameAlert(
-            title: Text("Rename \(renaming?.name ?? String(localized: "device"))"), device: renaming,
-            isPresented: $showRename, draft: $nameDraft, fieldIdentifier: "prefs.devices.renameField"
-        ) { name in
-            if let id = renaming?.id { appState.commandSender?.renameDevice(deviceId: id, name: name) }
-        })
+        .alert(
+            "Rename \(renaming?.name ?? String(localized: "device"))",
+            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+        ) {
+            TextField(renaming?.ownName ?? "", text: $nameDraft)
+                .accessibilityIdentifier("prefs.devices.renameField")
+            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Save") {
+                if let device = renaming, let name = DeviceName.renameValue(draft: nameDraft, for: device) {
+                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                }
+                renaming = nil
+            }
+        } message: {
+            Text("Shown on all your devices. Leave it empty to use \"\(renaming?.ownName ?? "")\".")
+        }
         .alert(
             "Remove \(removing?.name ?? String(localized: "device"))?",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })

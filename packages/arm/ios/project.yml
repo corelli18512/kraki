@@ -344,7 +344,6 @@ targets:
       # chat placeholder, pairing). Their iOS analogues stay iOS-only — the
       # macOS chat surface will be rewritten against the pure-spine model.
       - path: Kraki/Features/Devices/DeviceTrustViews.swift
-      - path: Kraki/Features/Devices/DeviceRenameAlert.swift
       - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
       - path: Kraki/Features/Sessions/MacSessionActivityDots.swift
       - path: Kraki/Features/Sessions/ArchivedSessionsView.swift

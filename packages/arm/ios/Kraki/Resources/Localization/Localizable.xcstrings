@@ -5869,16 +5869,6 @@
         }
       }
     },
-    "Names can be up to %lld characters." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "名称最多 %lld 个字符。"
-          }
-        }
-      }
-    },
     "Needs approval: %@" : {
       "localizations" : {
         "zh-Hans" : {

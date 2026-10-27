@@ -165,7 +165,6 @@
 		3200AE2BD95C80C7DB502E88 /* AuthDeadlineAdversarialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE6BE0CEF94681EB074FC434 /* AuthDeadlineAdversarialTests.swift */; };
 		3251E949F9D67D6469CBB46C /* CommandSender+QueuedPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7635B3827574C0F3685DEC6 /* CommandSender+QueuedPrompt.swift */; };
 		329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D022FEB21EC483DA523C2A /* NativeSessionPreviewGlyphTests.swift */; };
-		32B7089BA346C57B86E0B411 /* DeviceRenameAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD276C23C2E3B89A2DBDF03 /* DeviceRenameAlert.swift */; };
 		32DF29FABA40CB5C5FFEC3F1 /* AttachmentRequestModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */; };
 		331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		33284C120326EAC492164F6D /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
@@ -300,7 +299,6 @@
 		63E651E7838FC6F14D2F059E /* MacBubbleActionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */; };
 		643B4887AD8378885D34A43E /* MacChatScrollView+ScrollAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E95F198E48647A1FD91245C6 /* MacChatScrollView+ScrollAnimation.swift */; };
 		64C8802AAF6FFD17B750E407 /* CoinfraCrypto in Frameworks */ = {isa = PBXBuildFile; productRef = 8C099CEF99730C7439A68CEE /* CoinfraCrypto */; };
-		663C3C40F23031804EE742F3 /* DeviceRenameAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD276C23C2E3B89A2DBDF03 /* DeviceRenameAlert.swift */; };
 		6694584044EDB20D4B5557D1 /* ComposerGeometryProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08F4E76DD80D22CD217938B /* ComposerGeometryProbeTests.swift */; };
 		66A6C11F3EBF6B9ACEB6C37B /* IOSHTMLArtifactPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D03C9BE20F8F95D518BC3CC /* IOSHTMLArtifactPreview.swift */; };
 		66DF9008513F4B3A31CC4D9A /* DeviceKeyPins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645235464E5F1E95452AE7C0 /* DeviceKeyPins.swift */; };
@@ -817,7 +815,6 @@
 		1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatComposer.swift; sourceTree = "<group>"; };
 		1BBBDEBF428C4E7A629F6AA8 /* MacStartingVoiceChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartingVoiceChat.swift; sourceTree = "<group>"; };
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
-		1DD276C23C2E3B89A2DBDF03 /* DeviceRenameAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRenameAlert.swift; sourceTree = "<group>"; };
 		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		1DFBB790DF1D20B3FABDFBA9 /* ReconnectRound2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectRound2Tests.swift; sourceTree = "<group>"; };
 		1E254833E8916A34AD087E56 /* BackgroundReconnectingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundReconnectingTests.swift; sourceTree = "<group>"; };
@@ -1776,7 +1773,6 @@
 			children = (
 				6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */,
 				01A6162027FE71CB62BA4255 /* DeviceListView.swift */,
-				1DD276C23C2E3B89A2DBDF03 /* DeviceRenameAlert.swift */,
 				568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */,
 				53725A9D19063A94558FE9E8 /* DeviceUpdateSection.swift */,
 			);
@@ -2606,7 +2602,6 @@
 				1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */,
 				1B42793DBF367956483611AD /* DeviceKeyPins.swift in Sources */,
 				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
-				663C3C40F23031804EE742F3 /* DeviceRenameAlert.swift in Sources */,
 				50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */,
 				68D1986FB0D305A056E0BF47 /* DeviceTrust.swift in Sources */,
 				27B956914DEE0DB45921EA26 /* DeviceTrustViews.swift in Sources */,
@@ -2892,7 +2887,6 @@
 				9C0DB5CFA181283D2785F926 /* DeleteAccountSection.swift in Sources */,
 				E62EED37DE736BEA02B37D52 /* DeviceDates.swift in Sources */,
 				66DF9008513F4B3A31CC4D9A /* DeviceKeyPins.swift in Sources */,
-				32B7089BA346C57B86E0B411 /* DeviceRenameAlert.swift in Sources */,
 				B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */,
 				DA761F29446D005358B330AF /* DeviceTrust.swift in Sources */,
 				01FC5C4762616D0B0C8B9F78 /* DeviceTrustViews.swift in Sources */,
