@@ -110,4 +110,23 @@ final class SessionListReorderUITests: XCTestCase {
         XCTAssertEqual(numbers, numbers.sorted())
         XCTAssertEqual(Set(numbers).count, numbers.count, "a new message reached the top card on every tick")
     }
+
+    /// Swipe open → switch tab while Sessions keep getting messages → back:
+    /// the swipe is closed, the list has caught up, and later reorders land.
+    func testLeavingWithASwipeOpenClosesItAndCatchesUp() {
+        settle(5.5)
+        rows.element(boundBy: 3).swipeLeft()
+        XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 2))
+        let frozen = order()
+        app.buttons["Devices"].firstMatch.tap()
+        settle(6) // ≥ 2 ticks while away
+        app.buttons["Sessions"].firstMatch.tap()
+        settle(1.5)
+        XCTAssertFalse(app.buttons["Pin"].exists, "the swipe closed when the list was left")
+        XCTAssertNotEqual(order(), frozen, "deferred reorders applied on return")
+        let a = order()
+        settle(5.2) // two more ticks
+        XCTAssertNotEqual(order(), a, "reorders keep landing afterwards")
+    }
 }
+

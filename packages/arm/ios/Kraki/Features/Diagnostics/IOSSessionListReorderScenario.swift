@@ -12,6 +12,10 @@ import UIKit
 /// Enabled with `KRAKI_IOS_NEW_SESSION_SCENARIO=1` plus
 /// `KRAKI_SCENARIO_LIST_TICKER_MS=<interval>`. Used to look at swipe actions
 /// and row animation while the list reorders.
+///
+/// Every digest sends `pinned: false` and the scripted Tentacle ignores
+/// `pin_session`, so a Pin tapped here is reverted by the next tick: this
+/// scenario can't test pinning.
 @MainActor
 enum IOSSessionListReorderScenario {
     private struct Row {

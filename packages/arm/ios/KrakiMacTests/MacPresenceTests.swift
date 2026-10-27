@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import Observation
 @testable import Kraki_Dev
 
 /// "Is this Mac online" — the one status the menu bar, the menus and Settings
@@ -58,6 +59,31 @@ final class MacPresenceTests: XCTestCase {
                       "a relay redeploy or Wi-Fi roam never flashes the menu bar")
         XCTAssertFalse(TentacleCLIManager.relayReachable(
             downSince: now.addingTimeInterval(-(TentacleCLIManager.relayDownGrace + 1)), now: now))
+    }
+
+    /// The stored flag flips on the poll after the grace period, so the menu
+    /// bar (which observes it) is invalidated without any other state change.
+    func testRelayReachableFlipsOnTheFirstPollPastTheGrace() {
+        let cli = TentacleCLIManager()
+        let t0 = Date()
+        cli.applyRelayState("connected", now: t0)
+        XCTAssertTrue(cli.relayReachable)
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(1))
+        XCTAssertTrue(cli.relayReachable, "within the grace period")
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(4))
+        XCTAssertTrue(cli.relayReachable)
+        // The menu bar reads onlineStatus; with only identical values written
+        // since the first down poll it must still be told when the grace ends.
+        var invalidated = false
+        withObservationTracking { _ = cli.onlineStatus } onChange: { invalidated = true }
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(12))
+        XCTAssertTrue(invalidated, "observers are notified when the grace runs out")
+        XCTAssertFalse(cli.relayReachable, "same relayState string, but the grace ran out")
+        cli.applyRelayState("connected", now: t0.addingTimeInterval(15))
+        XCTAssertTrue(cli.relayReachable)
+        XCTAssertNil(cli.relayDownSince)
+        cli.applyRelayState(nil, now: t0.addingTimeInterval(40))
+        XCTAssertTrue(cli.relayReachable, "older daemons report nothing")
     }
 
     func testRemoteOnlyMacIsNeverOffline() {

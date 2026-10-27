@@ -196,6 +196,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             swipeActionsOpen = false
             needsApplyOnAppear = needsApplyOnAppear || pendingSnapshotApply
             pendingSnapshotApply = false
+            // Leaving the list closes the swipe: otherwise it is still open on
+            // return while rows move again underneath it.
+            tableView.setEditing(false, animated: false)
         }
     }
 
@@ -481,6 +484,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         applySnapshot(animated: animated)
     }
 
+    // A Session deleted or archived while its swipe is open keeps its row
+    // until the swipe closes; Pin/Unread on it then target a Session that is
+    // gone, which the Tentacle ignores.
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard let appState,
               let sessionId = dataSource.itemIdentifier(for: indexPath),
