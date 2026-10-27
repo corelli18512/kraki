@@ -6254,7 +6254,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "暂无会话"
+            "value" : "还没有会话"
           }
         }
       }
@@ -11382,6 +11382,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "缩小"
+          }
+        }
+      }
+    },
+    "Select a session" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个会话"
+          }
+        }
+      }
+    },
+    "Tap + to start a session on one of your computers." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点 + 在你的一台电脑上开始一个会话。"
+          }
+        }
+      }
+    },
+    "Choose a session from the list to continue the conversation." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从列表中选择一个会话继续对话。"
           }
         }
       }
