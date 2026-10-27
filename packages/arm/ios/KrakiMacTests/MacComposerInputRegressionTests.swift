@@ -377,13 +377,12 @@ final class MacComposerInputRegressionTests: XCTestCase {
         drain(400)
         XCTAssertTrue(editor.hasMarkedText())
         XCTAssertGreaterThan(scroll.contentSize.height, oneRow + 10, "the composer did not grow for the wrapped composition")
-        // Tolerance: while the box animates, AppKit can leave the text view
-        // a few points taller than the clip (audit finding 9, a separate
-        // fix); that is padding, below the edge fade's hidden-text threshold.
-        let paddingOverflow = MacScrollEdgeFade.minimumHiddenText
-        XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: paddingOverflow,
+        // Settled, the document fits the clip exactly: the composer is the
+        // only writer of the editor's height (audit finding 9).
+        let exact: CGFloat = 0.01
+        XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: exact,
                        "the composing text is scrolled inside a box that is too short")
-        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: paddingOverflow, "the committed text scrolled out of view")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: exact, "the committed text scrolled out of view")
         // The box takes the two-row (stacked) layout like committed text
         // that wraps: the editor spans the box instead of following the
         // attach button.
@@ -394,7 +393,7 @@ final class MacComposerInputRegressionTests: XCTestCase {
 
         editor.unmarkText(); drain(300)
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], editor.string)
-        XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: paddingOverflow)
+        XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: exact)
     }
 
     // MARK: Undo
