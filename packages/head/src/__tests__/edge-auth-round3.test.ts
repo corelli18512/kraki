@@ -108,7 +108,12 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     return { ws, messages };
   }
 
-  it.each(['verify', 'token'])('a newer token remember fences an older successful %s even with unchanged identity', async (kind) => {
+  // A client retries a slow (>= 5 s) sign-in on a new socket while the first
+  // is still at the account service. When the retry's answer lands after the
+  // first one was stored, it lost only to an answer for the same account and
+  // keys: it signs in (with that newer answer), instead of costing one more
+  // failed round.
+  it.each(['verify', 'token'])('a newer answer for the same identity does not fail an older successful %s', async (kind) => {
     await seed(); const epoch = cache.epoch('phone');
     // An account-service nonce: the held verify really succeeds, so only the epoch fence can veto it.
     const nonce = await accountNonce();
@@ -118,11 +123,38 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
       : remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     await until(() => held.length === 1); hold = undefined;
     expect(held[0].result).toMatchObject({ ok: true });
+    account.upsertDevice('laptop', 'u', 'Laptop', 'tentacle', 'desktop', exportPublicKey(generateKeyPair().publicKey), 'enc-laptop');
     const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     expect(fresh.ok).toBe(true); expect(cache.epoch('phone')).toBeGreaterThan(epoch);
     const updated = cache.epoch('phone'); release();
-    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
+    const answer = await pending;
+    expect(answer).toMatchObject({ ok: true, deviceId: 'phone', authMethod: kind === 'verify' ? 'challenge' : 'pairing' });
+    // The newer answer's device list, never the older one's.
+    expect(answer.ok && answer.devices.map((d) => d.id)).toContain('laptop');
     expect(cache.epoch('phone')).toBe(updated); expect(cache.lookup('phone')).toBeDefined();
+  });
+
+  it('a newer answer with another encryption key still fences an older successful verify', async () => {
+    await seed();
+    const nonce = await accountNonce();
+    hold = '/api/auth/verify';
+    const pending = remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    await until(() => held.length === 1); hold = undefined;
+    const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, { ...device, encryptionKey: 'enc-2' });
+    expect(fresh.ok).toBe(true); release();
+    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
+  });
+
+  it('a drop between request and answer still fences it, even if the same identity was stored again', async () => {
+    await seed();
+    const nonce = await accountNonce();
+    hold = '/api/auth/verify';
+    const pending = remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    await until(() => held.length === 1); hold = undefined;
+    remote.forgetLocalTrust('phone');
+    const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
+    expect(fresh.ok).toBe(true); release();
+    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
   });
 
   // Was: "a delayed old background key success cannot overwrite a newer

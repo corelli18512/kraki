@@ -82,6 +82,9 @@ export class EdgeAuthCache {
   /** Bumped whenever a device's trust is dropped: an account-service answer
    *  requested before the drop must not bring it back. */
   private readonly epochs = new Map<string, number>();
+  /** Bumped only when a device's trust is dropped (`forget`), not when a
+   *  newer answer is stored: see `newerAnswerFor`. */
+  private readonly drops = new Map<string, number>();
   /** Monotonic clock of trust changes, and when each device last changed:
    *  fences answers for requests that did not know the device id yet. */
   private changeClock = 0;
@@ -112,6 +115,9 @@ export class EdgeAuthCache {
   /** Current trust epoch of a device (see `remember`). */
   epoch(deviceId: string): number { return this.epochs.get(deviceId) ?? 0; }
 
+  /** How often the device's trust was dropped (see `newerAnswerFor`). */
+  dropCount(deviceId: string): number { return this.drops.get(deviceId) ?? 0; }
+
   /** The id belongs to an account deleted through this edge. */
   isTombstoned(deviceId: string): boolean {
     return this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined;
@@ -132,8 +138,9 @@ export class EdgeAuthCache {
    * The account service accepted this device (challenge or token auth).
    * `epochAtRequest` (from `epoch()` before the request was sent) fences the
    * answer: if the device was dropped, or a newer answer was stored, since
-   * the request left, this one is `stale` and must not be acted on. Storing
-   * advances the epoch, so an older answer can never overwrite a newer one.
+   * the request left, this one is `stale` and must not be acted on (but see
+   * `newerAnswerFor`). Storing advances the epoch, so an older answer can
+   * never overwrite a newer one.
    */
   remember(result: AuthResult, epochAtRequest?: number): 'stored' | 'stale' | 'skipped' {
     if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return 'stale';
@@ -173,7 +180,26 @@ export class EdgeAuthCache {
   forget(deviceId: string): void {
     this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?').run(deviceId);
     this.lastRevalidation.delete(deviceId);
+    this.drops.set(deviceId, this.dropCount(deviceId) + 1);
     this.bump(deviceId);
+  }
+
+  /**
+   * For an answer `remember` called `stale`: if all that happened since its
+   * request left (`dropsAtRequest` from `dropCount()`) is that a newer answer
+   * for the same account and keys was stored, that newer answer. A client
+   * that retried a slow sign-in gets both answers; the later one may use
+   * the stored one instead of failing. Undefined when trust was dropped or
+   * the account or keys changed: then the stale answer must fail.
+   */
+  newerAnswerFor(result: AuthResult, dropsAtRequest: number): AuthResult | undefined {
+    if (dropsAtRequest !== this.dropCount(result.deviceId)) return undefined;
+    const row = this.db.prepare('SELECT user_id, public_key, encryption_key, result_json FROM edge_auth_cache WHERE device_id = ?')
+      .get(result.deviceId) as { user_id: string; public_key: string; encryption_key: string | null; result_json: string } | undefined;
+    const self = result.devices.find((d) => d.id === result.deviceId);
+    if (!row || !self || row.user_id !== result.userId || row.public_key !== self.publicKey
+      || (row.encryption_key ?? undefined) !== (self.encryptionKey ?? undefined)) return undefined;
+    try { return JSON.parse(row.result_json) as AuthResult; } catch { return undefined; }
   }
 
   deviceIds(): string[] {

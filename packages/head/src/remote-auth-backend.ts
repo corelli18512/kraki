@@ -177,6 +177,7 @@ export class RemoteAuthBackend implements AuthBackend {
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
     const epoch = device.deviceId && cache ? cache.epoch(device.deviceId) : undefined;
+    const drops = device.deviceId && cache ? cache.dropCount(device.deviceId) : undefined;
     const clock = cache?.clock() ?? 0;
     // The account service throttles failed logins per client IP; forward the
     // end user's address, not this edge's.
@@ -194,6 +195,8 @@ export class RemoteAuthBackend implements AuthBackend {
       if (cache?.isTombstoned(result.ok ? result.deviceId : '')) {
         return { ok: false, code: 'account_deleted', message: 'This Kraki account was deleted.' };
       }
+      const newer = result.ok && !unnamedButStale && drops !== undefined ? cache?.newerAnswerFor(result, drops) : undefined;
+      if (newer) return { ...newer, authMethod: result.authMethod };
       return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
     }
     return result;
@@ -253,9 +256,14 @@ export class RemoteAuthBackend implements AuthBackend {
       // (removed, account deleted) or a retryable refusal.
     }
     const epoch = cache?.epoch(deviceId);
+    const drops = cache?.dropCount(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
     if (cache && cache === this.edgeCache) {
       if (result.ok && this.storeAuthoritative(cache, result, epoch) === 'stale') {
+        // Lost only to a newer answer for the same identity (the client
+        // retried a slow sign-in): sign in with that one.
+        const newer = cache.newerAnswerFor(result, drops!);
+        if (newer) return { ...newer, authMethod: result.authMethod };
         return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
       }
       // Only a verdict about the device drops trust (a wrong signature from

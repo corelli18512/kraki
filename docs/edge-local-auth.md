@@ -69,7 +69,9 @@ next poll. `KRAKI_EDGE_LOCAL_AUTH=0` disables it on an edge.
   revocation, and every stored account-service answer advance it. An answer
   requested before the latest change is dropped (and a foreground sign-in
   that crossed one fails retryably) so nothing older can revive or
-  overwrite newer trust.
+  overwrite newer trust. One exception: if the only change was a newer
+  stored answer for the same account and keys (a client retried a slow
+  sign-in), the older sign-in completes with that newer answer.
 - A device id that the account service now assigns to another account
   retires this edge's old mirror and Pulse state before the new owner signs
   in; ids of an account deleted here are tombstoned and never sign in again.
