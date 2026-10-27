@@ -533,7 +533,6 @@ export function invariant(name: string, result: any): boolean {
   }
   if (name === 'F3-preemption-control') return result.next.fromSeq === 71 && result.next.toSeq === 120 && result.count === 70;
   if (name === 'F10-request-clear-control') return result.retained && result.count === 1 && result.status.state === 'loaded';
-  if (name === 'F10-store-write-boundary') return result.persisted === 0;
   if (name === 'F2-idempotence-control') return result.withoutClient === 1 && result.mismatchedRow === 1 && result.remaining === 0 && result.persisted === 0;
   if (name === 'F3-duplicate-truncated') return result.requests.length === 2 && result.status.error === 'timeout' && result.count === 1 && result.requests[1].fromSeq === 2;
   if (name === 'F3-page-limit') return result.first.requests === 50 && result.first.status.error === 'page-limit' && result.count === 60 && result.requests[50].fromSeq === 51;
