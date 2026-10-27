@@ -1930,6 +1930,16 @@
         }
       }
     },
+    "Browser sign-in is not available yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不支持在浏览器中登录。"
+          }
+        }
+      }
+    },
     "Build" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2879,6 +2889,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "修正"
+          }
+        }
+      }
+    },
+    "Could not reach Kraki. Check your network connection, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 Kraki。请检查网络连接后重试。"
           }
         }
       }
@@ -4206,6 +4226,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "GitHub 运行 ID"
+          }
+        }
+      }
+    },
+    "GitHub sign-in could not be verified. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证 GitHub 登录，请重试。"
+          }
+        }
+      }
+    },
+    "GitHub sign-in was cancelled." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消 GitHub 登录。"
           }
         }
       }
@@ -8524,16 +8564,6 @@
         }
       }
     },
-    "Setup failed." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置失败。"
-          }
-        }
-      }
-    },
     "Setup stopped unexpectedly (exit %d)." : {
       "localizations" : {
         "zh-Hans" : {
@@ -8904,6 +8934,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "退出登录…"
+          }
+        }
+      }
+    },
+    "Sign-in did not finish. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成。请重试。"
           }
         }
       }
@@ -9640,6 +9680,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电脑已离线"
+          }
+        }
+      }
+    },
+    "The GitHub code expired. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 验证码已过期，请重试。"
           }
         }
       }

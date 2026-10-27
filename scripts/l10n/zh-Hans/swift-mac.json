@@ -204,7 +204,6 @@
     "Set up this Mac": "设置这台 Mac",
     "Setting up…": "正在设置…",
     "Settings…": "设置…",
-    "Setup failed.": "设置失败。",
     "Setup stopped unexpectedly (exit %d).": "设置意外停止（退出码 %d）。",
     "Setup stopped unexpectedly (exit %d). %@": "设置意外停止（退出码 %d）。%@",
     "Show Account Usage": "显示账户用量",
@@ -297,7 +296,13 @@
     "… (showing the end of the log)": "…（显示日志末尾）",
     "unknown": "未知",
     "Couldn't relaunch Kraki": "无法重新打开 Kraki",
-    "Quit Kraki and open it again to use the new language.": "请退出 Kraki 后重新打开，以使用新语言。"
+    "Quit Kraki and open it again to use the new language.": "请退出 Kraki 后重新打开，以使用新语言。",
+    "Could not reach Kraki. Check your network connection, then try again.": "无法连接 Kraki。请检查网络连接后重试。",
+    "The GitHub code expired. Try again.": "GitHub 验证码已过期，请重试。",
+    "GitHub sign-in was cancelled.": "已取消 GitHub 登录。",
+    "GitHub sign-in could not be verified. Try again.": "无法验证 GitHub 登录，请重试。",
+    "Browser sign-in is not available yet.": "暂不支持在浏览器中登录。",
+    "Sign-in did not finish. Try again.": "登录未完成。请重试。"
   },
   "englishPlurals": {
     "Ready · %lld models": {
