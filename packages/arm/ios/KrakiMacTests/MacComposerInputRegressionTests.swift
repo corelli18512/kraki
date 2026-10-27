@@ -362,7 +362,7 @@ final class MacComposerInputRegressionTests: XCTestCase {
     /// A composition that wraps onto a new line grows the composer like
     /// committed text does; before, the box stayed one row and the committed
     /// text scrolled out of view until commit.
-    func testMarkedTextThatWrapsGrowsTheComposer() throws {
+    func testMarkedTextThatWrapsGrowsTheComposer() async throws {
         let (window, app, _) = makeChatComposer(width: 640)
         let editor = try editor(in: window)
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
@@ -374,12 +374,16 @@ final class MacComposerInputRegressionTests: XCTestCase {
 
         editor.setMarkedText("zhongwenshurufashiyixiahuanhang", selectedRange: NSRange(location: 31, length: 0),
                              replacementRange: NSRange(location: NSNotFound, length: 0))
-        drain(400)
+        // Settled, the document fits the clip exactly: the composer is the
+        // only writer of the editor's height (audit finding 9). Polled, not
+        // a fixed wait, before the exact assertions.
+        let exact: CGFloat = 0.01
+        try await waitBriefly {
+            scroll.contentSize.height > oneRow + 10 && abs(scroll.contentSize.height - editor.frame.height) < exact
+                && abs(scroll.contentView.bounds.minY) < exact
+        }
         XCTAssertTrue(editor.hasMarkedText())
         XCTAssertGreaterThan(scroll.contentSize.height, oneRow + 10, "the composer did not grow for the wrapped composition")
-        // Settled, the document fits the clip exactly: the composer is the
-        // only writer of the editor's height (audit finding 9).
-        let exact: CGFloat = 0.01
         XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: exact,
                        "the composing text is scrolled inside a box that is too short")
         XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: exact, "the committed text scrolled out of view")
@@ -391,7 +395,10 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], "Fix the failing tests in my-app, then run the whole suite",
                        "marked text must not reach the draft")
 
-        editor.unmarkText(); drain(300)
+        editor.unmarkText()
+        try await waitBriefly {
+            app.sessionStore.drafts["voice-a"] == editor.string && abs(scroll.contentSize.height - editor.frame.height) < exact
+        }
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], editor.string)
         XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: exact)
     }
@@ -428,8 +435,16 @@ final class MacComposerInputRegressionTests: XCTestCase {
 
         // One typing run is one undo step (NSTextView coalesces typing).
         XCTAssertTrue(validates(undo, in: window), "Edit ▸ Undo is disabled after typing")
+        var changeNotes = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSText.didChangeNotification, object: editor,
+                                                              queue: nil) { _ in changeNotes += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
         XCTAssertTrue(window.firstResponder?.tryToPerform(undo, with: nil) == true)
         drain(200)
+        // TextKit 1 posts its own change for the undo; the editor's explicit
+        // didChangeText() is a guarantee on top (a second, no-op publish).
+        print("UNDO NSText.didChange notifications per undo: \(changeNotes)")
+        XCTAssertGreaterThanOrEqual(changeNotes, 1, "undo did not announce the change")
         XCTAssertEqual(editor.string, "")
         XCTAssertEqual(app.sessionStore.drafts["voice-a"] ?? "", "", "undo changed the editor but not the draft")
         rerenderComposer(app)

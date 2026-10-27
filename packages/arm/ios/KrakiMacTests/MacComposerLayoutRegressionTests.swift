@@ -71,6 +71,13 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
         }
     }
 
+    /// Polls (up to 2 s) until the geometry is `settled`, then returns it: a
+    /// loaded runner may not have run the last layout pass after a fixed wait.
+    private func settledGeometry(of editor: NSTextView, _ settled: (Geometry) -> Bool) async throws -> Geometry {
+        try await waitBriefly { (try? geometry(of: editor)).map(settled) ?? false }
+        return try geometry(of: editor)
+    }
+
     private func geometry(of editor: NSTextView) throws -> Geometry {
         let scroll = try XCTUnwrap(editor.enclosingScrollView as? MacEdgeFadingScrollView)
         return Geometry(clip: scroll.contentView.bounds, document: editor.frame.height,
@@ -129,10 +136,49 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
         }
     }
 
+    /// Showing a Session whose draft is long mounts a new composer. Before
+    /// its first real tile the clip is 0 pt wide: the editor laid the whole
+    /// draft out at that width (about one glyph per line) only to lay it out
+    /// again at the real width. All layouts during the mount are counted.
+    func testMountingWithALongDraftDoesNotLayItOutAtADegenerateWidth() async throws {
+        MacComposerMetrics.snapshotFlatGlass = true
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: IOSVoiceHoldScenarioDriver(automaticCorrections: false))
+        app.sessionStore.setDraft("voice-a", Self.longDraft(20_000))
+        let window = KeyableWindow(contentRect: NSRect(x: -6000, y: -6000, width: 640, height: 220),
+                                   styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        self.window = window
+        let root = VStack(spacing: 0) { Spacer(minLength: 0); MacChatComposer(sessionId: "voice-a") }
+            .frame(maxWidth: .infinity, maxHeight: .infinity).environment(app)
+        TextKitLayoutCounter.start(excluding: nil)
+        let start = CFAbsoluteTimeGetCurrent()
+        window.contentView = NSHostingView(rootView: root)
+        window.orderFrontRegardless()
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date())
+        let mountMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        TextKitLayoutCounter.stop()
+        let wholeTextWidths = TextKitLayoutCounter.wholeTextWidths
+        print(String(format: "LAYOUT mount with a 20k draft: %.1fms, whole-text layouts at container widths %@",
+                     mountMs, wholeTextWidths.map { String(format: "%.0f", $0) }.joined(separator: ",")))
+        let degenerate = wholeTextWidths.filter { $0 <= 1 }
+        XCTAssertEqual(degenerate, [], "the whole draft was laid out at a degenerate width while mounting")
+        let editor = try editor(in: window)
+        let expected = Self.independentHeight(editor.string, editorWidth: 640)
+        _ = try await settledGeometry(of: editor) { _ in
+            abs(editor.frame.height - Self.independentHeight(editor.string, editorWidth: editor.frame.width).height) < 0.01
+        }
+        XCTAssertEqual(editor.string.count, 20_000)
+        XCTAssertGreaterThan(expected.lines, 100)
+        XCTAssertEqual(editor.frame.height, Self.independentHeight(editor.string, editorWidth: editor.frame.width).height,
+                       accuracy: 0.01, "the mounted editor is not fitted to its text")
+    }
+
     /// Caret at the end of a 5,000-character draft: the last line sits at the
     /// bottom of the box, with no blank row below it and no bottom fade. The
     /// document height is the editor's real text height and does not flip.
-    func testLongDraftWithTheCaretAtTheEndSettlesAtTheBottom() throws {
+    func testLongDraftWithTheCaretAtTheEndSettlesAtTheBottom() async throws {
         let (window, app) = makeChatComposer()
         let editor = try editor(in: window)
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
@@ -145,9 +191,10 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
             type(key, into: editor)
             for _ in 0..<12 { drain(16); documentHeights.insert(editor.frame.height) }
         }
-        drain(300)
-        let settled = try geometry(of: editor)
         let expected = Self.independentHeight(editor.string, editorWidth: editor.frame.width).height
+        let settled = try await settledGeometry(of: editor) {
+            abs($0.document - expected) < 0.01 && abs($0.clip.maxY - $0.document) < 0.01
+        }
         print("LAYOUT long draft settled \(settled.description) expectedDoc=\(expected) heightsSeen=\(documentHeights.sorted())")
         XCTAssertEqual(settled.document, expected, accuracy: 0.01, "the document is not the text's height")
         XCTAssertEqual(documentHeights.count, 1, "the document height flipped while typing: \(documentHeights.sorted())")
@@ -169,9 +216,10 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
         let (window, app) = makeChatComposer()
         let editor = try editor(in: window)
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
-        for size in [100, 5_000, 20_000] {
+        for (size, atStart) in [(100, false), (5_000, false), (20_000, false), (20_000, true)] {
             app.sessionStore.setDraft("voice-a", Self.longDraft(size)); drain(500)
-            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0)); drain(200)
+            let caret = atStart ? 0 : (editor.string as NSString).length
+            editor.setSelectedRange(NSRange(location: caret, length: 0)); drain(200)
             var samples: [Double] = []
             for index in 0..<15 {
                 let start = CFAbsoluteTimeGetCurrent()
@@ -182,8 +230,8 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
                 drain(30)
             }
             samples.sort()
-            print(String(format: "PERF keystroke chars=%d median=%.1fms max=%.1fms",
-                         size, samples[samples.count / 2], samples.last ?? 0))
+            print(String(format: "PERF keystroke chars=%d caret=%@ median=%.1fms max=%.1fms",
+                         size, atStart ? "start" : "end", samples[samples.count / 2], samples.last ?? 0))
         }
     }
 
@@ -234,21 +282,21 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
     /// box once settled (≤ 3 lines) no edge fades, also mid-animation; when
     /// settled, the document is exactly the clip's height (or, beyond three
     /// lines, the caret's last line ends exactly at the clip's bottom).
-    func testGrowAndShrinkSettleWithAnExactFit() throws {
+    func testGrowAndShrinkSettleWithAnExactFit() async throws {
         let (window, app) = makeChatComposer(width: 640)
         let editor = try editor(in: window)
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
         let lineHeight = MacComposerScrollableTextInput.height(lines: 2) - MacComposerScrollableTextInput.height(lines: 1)
         let cap = MacComposerScrollableTextInput.height(lines: MacComposerMetrics.maxVisibleTextLines)
         var transientFades: [String] = []
+        var caretLineHidden: [String] = []
         var settledProblems: [String] = []
         var maxTransientOverflow: CGFloat = 0
         var overflowByStep: [String] = []
-        func sample(_ label: String, lines: Int) throws {
+        func sample(_ label: String, lines: Int) async throws {
             var stepOverflow: CGFloat = 0
             defer { overflowByStep.append("\(label)=\(stepOverflow)") }
             let fits = MacComposerScrollableTextInput.height(lines: CGFloat(lines)) <= cap + 0.5
-            var last: Geometry?
             for index in 0..<24 {
                 drain(16)
                 let state = try geometry(of: editor)
@@ -257,10 +305,18 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
                 if fits, state.fadesTop || state.fadesBottom {
                     transientFades.append("\(label) t=\(index * 16)ms \(state.description)")
                 }
-                last = state
+                // While the box grows, the clip follows the caret: only text
+                // above the caret's line may be cut off, never the line itself.
+                if fits, abs(state.clip.maxY - state.document) > 0.01 {
+                    caretLineHidden.append("\(label) t=\(index * 16)ms \(state.description)")
+                }
             }
-            guard let settled = last else { return }
             let expectedDoc = MacComposerScrollableTextInput.height(lines: CGFloat(lines))
+            let settled = try await settledGeometry(of: editor) { state in
+                guard abs(state.document - expectedDoc) < 0.01 else { return false }
+                return fits ? abs(state.overflow) < 0.01 && abs(state.clip.minY) < 0.01
+                    : abs(state.clip.height - cap) < 0.01 && abs(state.clip.maxY - state.document) < 0.01
+            }
             if abs(settled.document - expectedDoc) > 0.01 { settledProblems.append("\(label) doc \(settled.description) expected \(expectedDoc)") }
             if fits {
                 if abs(settled.overflow) > 0.01 || abs(settled.clip.minY) > 0.01 {
@@ -278,29 +334,31 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
         for (index, line) in lines.enumerated() {
             if index > 0 { editor.insertNewlineIgnoringFieldEditor(nil) }
             type(line, into: editor)
-            try sample("grow\(index + 1)", lines: index + 1)
+            try await sample("grow\(index + 1)", lines: index + 1)
         }
         for count in (1..<lines.count).reversed() {
             let text = editor.string as NSString
             let newline = text.range(of: "\n", options: .backwards)
             editor.setSelectedRange(NSRange(location: newline.location, length: text.length - newline.location))
             editor.deleteBackward(nil)
-            try sample("shrink\(count)", lines: count)
+            try await sample("shrink\(count)", lines: count)
         }
         editor.selectAll(nil); editor.deleteBackward(nil)
-        try sample("empty", lines: 1)
+        try await sample("empty", lines: 1)
         print("LAYOUT grow/shrink maxTransientOverflow=\(maxTransientOverflow) lineHeight=\(lineHeight) transientFades=\(transientFades.count)")
         print("LAYOUT grow/shrink transient overflow (document − clip) by step: \(overflowByStep.joined(separator: " "))")
         transientFades.prefix(20).forEach { print("LAYOUT transient fade \($0)") }
         settledProblems.forEach { print("LAYOUT settled problem \($0)") }
         XCTAssertEqual(settledProblems, [])
         XCTAssertEqual(transientFades, [], "edge fades over text that fits the box once settled")
+        caretLineHidden.prefix(20).forEach { print("LAYOUT caret line hidden \($0)") }
+        XCTAssertEqual(caretLineHidden, [], "the caret's line was cut off below the box")
         XCTAssertEqual(app.sessionStore.drafts["voice-a"] ?? "", "")
     }
 
     /// CJK, emoji (fallback fonts with their own line heights) and mixed
     /// drafts: the box, the document and the editor's layout agree exactly.
-    func testCJKAndEmojiDraftsSettleWithAnExactFit() throws {
+    func testCJKAndEmojiDraftsSettleWithAnExactFit() async throws {
         let (window, app) = makeChatComposer(width: 640)
         let editor = try editor(in: window)
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
@@ -309,8 +367,11 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
                       "第一行\n第二行 👍\n第三行"]
         for draft in drafts {
             app.sessionStore.setDraft("voice-a", ""); drain(200)
-            type(draft, into: editor); drain(400)
-            let state = try geometry(of: editor)
+            type(draft, into: editor)
+            let state = try await settledGeometry(of: editor) {
+                abs($0.document - Self.independentHeight(editor.string, editorWidth: editor.frame.width).height) < 0.01
+                    && abs($0.overflow) < 0.01 && abs($0.clip.minY) < 0.01
+            }
             let expected = Self.independentHeight(editor.string, editorWidth: editor.frame.width).height
             XCTAssertEqual(state.document, expected, accuracy: 0.01, "\(draft): \(state.description)")
             XCTAssertEqual(state.clip.height, state.document, accuracy: 0.01, "\(draft): \(state.description)")
@@ -323,7 +384,7 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
     /// The new-session composer shares the editor (3 to 10 lines): beyond
     /// ten lines the caret's line ends at the clip's bottom; back to one
     /// line, the document is exactly the three-line box.
-    func testNewSessionComposerSettlesWithAnExactFit() throws {
+    func testNewSessionComposerSettlesWithAnExactFit() async throws {
         let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: IOSVoiceHoldScenarioDriver(automaticCorrections: false))
         let window = KeyableWindow(contentRect: NSRect(x: -6000, y: -6000, width: 820, height: 520),
                                    styleMask: [.borderless], backing: .buffered, defer: false)
@@ -340,8 +401,9 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
             if index > 1 { editor.insertNewlineIgnoringFieldEditor(nil) }
             type("Line \(index) of the task", into: editor); drain(60)
         }
-        drain(400)
-        let tall = try geometry(of: editor)
+        let tall = try await settledGeometry(of: editor) {
+            abs($0.clip.height - MacComposerScrollableTextInput.height(lines: 10)) < 0.01 && abs($0.clip.maxY - $0.document) < 0.01
+        }
         XCTAssertEqual(tall.document, MacComposerScrollableTextInput.height(lines: 12), accuracy: 0.01, tall.description)
         XCTAssertEqual(tall.clip.height, MacComposerScrollableTextInput.height(lines: 10), accuracy: 0.01, tall.description)
         XCTAssertEqual(tall.clip.maxY, tall.document, accuracy: 0.01, tall.description)
@@ -351,8 +413,9 @@ final class MacComposerLayoutRegressionTests: XCTestCase {
         let firstLineEnd = text.range(of: "\n").location
         editor.setSelectedRange(NSRange(location: firstLineEnd, length: text.length - firstLineEnd))
         editor.deleteBackward(nil)
-        drain(400)
-        let short = try geometry(of: editor)
+        let short = try await settledGeometry(of: editor) {
+            abs($0.clip.height - MacComposerScrollableTextInput.height(lines: 3)) < 0.01 && abs($0.overflow) < 0.01
+        }
         XCTAssertEqual(short.clip.height, MacComposerScrollableTextInput.height(lines: 3), accuracy: 0.01, short.description)
         XCTAssertEqual(short.document, short.clip.height, accuracy: 0.01, short.description)
         XCTAssertEqual(short.clip.minY, 0, accuracy: 0.01, short.description)
@@ -369,6 +432,8 @@ private enum TextKitLayoutCounter {
     /// Of `count`: layouts that reached the end of the text.
     static var wholeTextLayouts = 0
     static var widths: [CGFloat] = []
+    /// Container widths of the layouts that reached the end of the text.
+    static var wholeTextWidths: [CGFloat] = []
     static weak var excludedStorage: NSTextStorage?
     private static var installed = false
     private static let pairs: [(String, Selector)] = [
@@ -382,6 +447,7 @@ private enum TextKitLayoutCounter {
         count = 0
         wholeTextLayouts = 0
         widths = []
+        wholeTextWidths = []
         if !installed { exchange(); installed = true }
     }
 
@@ -396,8 +462,12 @@ private enum TextKitLayoutCounter {
         MainActor.assumeIsolated {
             if let excludedStorage, layoutManager.textStorage === excludedStorage { return }
             count += 1
-            if layoutManager.firstUnlaidCharacterIndex() >= (layoutManager.textStorage?.length ?? 0) { wholeTextLayouts += 1 }
-            widths.append(layoutManager.textContainers.first?.size.width ?? -1)
+            let width = layoutManager.textContainers.first?.size.width ?? -1
+            if layoutManager.firstUnlaidCharacterIndex() >= (layoutManager.textStorage?.length ?? 0) {
+                wholeTextLayouts += 1
+                wholeTextWidths.append(width)
+            }
+            widths.append(width)
         }
     }
 
