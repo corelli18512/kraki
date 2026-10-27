@@ -51,6 +51,16 @@ describe('Diag experience summary wiring', () => {
         firstActivityMs: 90, firstTextMs: 90, deltas: 1, maxGapMs: 0, stalls: 0 } },
     ]);
   });
+  it('maps open.summary with the reconnecting flag, like native AppState', () => {
+    const { d, recorder } = harness();
+    let now = 0;
+    d.stability.now = () => now;
+    d.stability.conversationOpened('private-session', 4, 2, false); // the cold app opening is in progress
+    now = 120; d.stability.conversationRendered('private-session', 4, 4, true);
+    expect(recorder.drain().events.filter((e) => e.ev === 'open.summary').map(({ sid, d }) => ({ sid, d }))).toEqual([
+      { sid: undefined, d: { outcome: 'current', gap: 2, firstContentMs: 120, viewCurrentMs: 120, reconnecting: true } },
+    ]);
+  });
   it('wires longtask completion into ui.busy and suppresses background observations', () => {
     let observed!: PerformanceObserverCallback;
     vi.stubGlobal('PerformanceObserver', class {

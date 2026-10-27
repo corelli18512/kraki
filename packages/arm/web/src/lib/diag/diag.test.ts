@@ -157,6 +157,35 @@ describe('StabilityTracker (port)', () => {
     t.connecting(); go(200); t.authenticated(); t.sessionListApplied(null);
     expect(out).toEqual([{ outage: expect.objectContaining({ reason: 'peer_closed', code: 1006, detectMs: 400, outcome: 'recovered', attempts: 2, reconnectMs: 500, impactMs: 900 }) }]);
   });
+  it('an opening during an outage or app opening is recorded with reconnecting, without cancelling that record (native)', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.conversationOpened('s', 3, 3, true); t.conversationRendered('s', 3, 3, true);
+    go(1000); t.transportLost('peer_closed', 1006, 0);
+    t.conversationOpened('s', 5, 3, false);
+    t.connecting(); go(300); t.authenticated(); t.sessionListApplied({ sessionId: 's', lastSeq: 5, localSeq: 3 });
+    go(200); t.conversationRendered('s', 5, 5, true);
+    expect(out).toEqual([
+      { open: expect.objectContaining({ outcome: 'current', reconnecting: false }) },
+      { open: expect.objectContaining({ outcome: 'current', reconnecting: true, gap: 2, currentMs: 500 }) },
+      { outage: expect.objectContaining({ outcome: 'recovered', reconnectMs: 300 }) },
+    ]);
+    out.length = 0;
+    t.appHidden(); go(1000); t.appVisible(true, true); // warm opening in progress
+    t.conversationOpened('s', 5, 5, false);
+    go(StabilityTracker.readyTimeout);
+    expect(out).toEqual([
+      { ready: expect.objectContaining({ kind: 'warm', outcome: 'timeout' }) },
+      { open: expect.objectContaining({ outcome: 'timeout', reconnecting: true }) },
+    ]);
+  });
+  it('offline with no reconnect running, an opening is not recorded', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.conversationOpened('s', 5, 3, false);
+    go(StabilityTracker.readyTimeout);
+    expect(out).toEqual([]);
+  });
 });
 
 describe('SendTracker (port)', () => {

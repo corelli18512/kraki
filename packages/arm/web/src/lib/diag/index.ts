@@ -55,6 +55,7 @@ export class Diag {
     });
     this.stability.onOpen = (o) => this.record('open.summary', undefined, {
       outcome: o.outcome, gap: o.gap, firstContentMs: o.firstContentMs, viewCurrentMs: o.currentMs,
+      reconnecting: o.reconnecting,
     });
     this.sends.onSummary = (s) => this.record('send.summary', undefined, {
       kind: s.kind, outcome: s.outcome, shown: s.shown, shownMs: s.shownMs, falseAlarm: sendFalseAlarm(s),

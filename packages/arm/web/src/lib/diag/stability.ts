@@ -24,6 +24,8 @@ export interface OpenSummary {
   firstContentMs?: number;
   currentMs?: number;
   gap: number;
+  /** Opened while an app-open or outage record was in progress. */
+  reconnecting: boolean;
   outcome: 'current' | 'left' | 'timeout';
 }
 export interface OutageSummary {
@@ -71,11 +73,13 @@ export class StabilityTracker {
   private target: { sessionId: string; seq: number } | null = null;
   private opening: { sessionId: string; since: number; target: number; value: OpenSummary } | null = null;
   private generation = 0;
+  private openGeneration = 0;
 
   /** Discard identity-bound milestones and invalidate their timers without summaries.
    * Keep the process exit marker, current network path, clocks and callbacks. */
   reset(): void {
     this.generation += 1;
+    this.openGeneration += 1;
     this.everVisible = this.everAuthenticated = false;
     this.hiddenAt = this.asleepAt = this.lastPathChange = this.lastWake = null;
     this.readySince = null;
@@ -194,12 +198,17 @@ export class StabilityTracker {
 
   get wantsConversationUpdates(): boolean { return !!this.ready || !!this.target || !!this.opening; }
 
+  /** A tap while (re)connecting is recorded too, flagged `reconnecting`
+   * (native: "reconnected, opened the chat, Syncing…"). */
   conversationOpened(sessionId: string, lastSeq: number, localSeq: number, online: boolean): void {
     this.finishOpen('left');
-    if (!online || this.ready || this.outage || this.hiddenAt !== null || this.asleepAt !== null) return;
-    this.opening = { sessionId, since: this.now(), target: lastSeq, value: { gap: Math.max(0, lastSeq - localSeq), outcome: 'current' } };
-    const token = ++this.generation;
-    this.schedule(StabilityTracker.readyTimeout, () => { if (this.generation === token) this.finishOpen('timeout'); });
+    const reconnecting = !!this.ready || !!this.outage;
+    // Offline with no reconnect in progress: nothing to wait for.
+    if (!(online || reconnecting) || this.hiddenAt !== null || this.asleepAt !== null) return;
+    this.opening = { sessionId, since: this.now(), target: lastSeq, value: { gap: Math.max(0, lastSeq - localSeq), reconnecting, outcome: 'current' } };
+    // Its own counter: an opening must not cancel the ready/outage timeout.
+    const token = ++this.openGeneration;
+    this.schedule(StabilityTracker.readyTimeout, () => { if (this.openGeneration === token) this.finishOpen('timeout'); });
   }
 
   conversationRendered(sessionId: string, localSeq: number, lastSeq: number, hasContent: boolean): void {
