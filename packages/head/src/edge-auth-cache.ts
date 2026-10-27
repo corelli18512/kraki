@@ -27,9 +27,10 @@
  */
 
 import type Database from 'better-sqlite3';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
 import type { AuthResult } from './auth-backend.js';
+import { ChallengeNonces } from './challenge-nonce.js';
 
 export interface EdgeAuthCacheOptions {
   /** Longest time since the account service last confirmed a device. */
@@ -57,12 +58,9 @@ export const DEFAULT_REVALIDATE_MS = 60_000;
 /** A challenge must be answered within this (the Head also enforces it per
  *  socket, for account-service nonces too). */
 const NONCE_TTL_MS = 5 * 60_000;
-/** Used/expired local nonces are remembered this long, so a late answer is
- *  still recognised as ours (and rejected) instead of looking unknown. */
-const NONCE_RETAIN_MS = 24 * 3600_000;
-const MAX_NONCES = 20_000;
 
-/** What `takeNonce` found: `local` = issued here for this device and unused. */
+/** What `checkNonce` found: `local` = issued here for this device and not
+ *  yet accepted; `foreign` = issued here for another device, or accepted. */
 export type NonceCheck = 'local' | 'expired' | 'foreign' | 'unknown';
 
 /** Short, stable fingerprint of a signing key, for status polls. */
@@ -74,10 +72,12 @@ export class EdgeAuthCache {
   readonly maxStaleMs: number;
   readonly revalidateMs: number;
   private readonly now: () => number;
-  /** Nonces this edge issued itself (not the account service). Kept (marked
-   *  used) until twice their lifetime so a reuse is recognised, not mistaken
-   *  for an account-service nonce. */
-  private readonly localNonces = new Map<string, { deviceId: string; expiresAt: number; used: boolean }>();
+  /** Nonces this edge issued itself (not the account service). They carry
+   *  their own proof of origin, so issuing stores nothing (a flood of
+   *  challenge starts cannot void another device's nonce), and a reused or
+   *  late one is still recognised as ours, never mistaken for an
+   *  account-service nonce. */
+  private readonly localNonces: ChallengeNonces;
   private readonly lastRevalidation = new Map<string, number>();
   /** Bumped whenever a device's trust is dropped: an account-service answer
    *  requested before the drop must not bring it back. */
@@ -91,6 +91,7 @@ export class EdgeAuthCache {
     this.maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
     this.revalidateMs = options.revalidateMs ?? DEFAULT_REVALIDATE_MS;
     this.now = options.now ?? Date.now;
+    this.localNonces = new ChallengeNonces(NONCE_TTL_MS, () => this.now());
     db.exec(`CREATE TABLE IF NOT EXISTS edge_auth_cache (
       device_id   TEXT PRIMARY KEY,
       user_id     TEXT NOT NULL,
@@ -188,31 +189,23 @@ export class EdgeAuthCache {
   }
 
   issueNonce(deviceId: string): string {
-    this.sweepNonces();
-    // Bounded: oldest first. An evicted nonce reads as unknown (the account
-    // service decides), and the Head still rejects any answer older than
-    // five minutes on the socket that asked.
-    while (this.localNonces.size >= MAX_NONCES) {
-      const oldest = this.localNonces.keys().next().value;
-      if (oldest === undefined) break;
-      this.localNonces.delete(oldest);
-    }
-    const nonce = randomBytes(32).toString('hex');
-    this.localNonces.set(nonce, { deviceId, expiresAt: this.now() + NONCE_TTL_MS, used: false });
-    return nonce;
+    return this.localNonces.issue(deviceId);
   }
 
   /**
-   * Consume a nonce. `unknown` means this edge did not issue it (an
+   * Where a nonce came from. `unknown` means this edge did not issue it (an
    * account-service nonce); anything but `local` and `unknown` must be
    * rejected, never passed on to the account service.
    */
-  takeNonce(nonce: string, deviceId: string): NonceCheck {
-    const entry = this.localNonces.get(nonce);
-    if (!entry) return 'unknown';
-    if (entry.used || entry.deviceId !== deviceId) { entry.used = true; return 'foreign'; }
-    entry.used = true;
-    return entry.expiresAt >= this.now() ? 'local' : 'expired';
+  checkNonce(nonce: string, deviceId: string): NonceCheck {
+    const check = this.localNonces.check(nonce, deviceId);
+    if (check === 'valid') return 'local';
+    return check === 'used' ? 'foreign' : check;
+  }
+
+  /** The answer to this `local` nonce was accepted: never again. */
+  acceptNonce(nonce: string): void {
+    this.localNonces.accept(nonce);
   }
 
   verifySignature(entry: CachedDevice, nonce: string, signature: string): boolean {
@@ -229,17 +222,6 @@ export class EdgeAuthCache {
     if (this.now() - last < this.revalidateMs) return false;
     this.lastRevalidation.set(deviceId, this.now());
     return true;
-  }
-
-  private lastSweep = 0;
-  private sweepNonces(): void {
-    const now = this.now();
-    // At most once a minute: issuing a nonce must not scan the whole map.
-    if (now - this.lastSweep < 60_000) return;
-    this.lastSweep = now;
-    for (const [nonce, entry] of this.localNonces) {
-      if (entry.expiresAt + NONCE_RETAIN_MS < now) this.localNonces.delete(nonce);
-    }
   }
 }
 

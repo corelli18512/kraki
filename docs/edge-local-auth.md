@@ -61,7 +61,10 @@ next poll. `KRAKI_EDGE_LOCAL_AUTH=0` disables it on an edge.
   status check after the next sign-in, or one 5-minute poll otherwise.
 - Nonces issued locally are single-use, bound to their device, and expire
   after 5 minutes; the Head also rejects any challenge answer (local or
-  account-service nonce) older than 5 minutes on that socket.
+  account-service nonce) older than 5 minutes on that socket. A nonce carries
+  its issue time and MACs under the edge's secret (`challenge-nonce.ts`), so
+  issuing one stores nothing and no flood of challenge starts can void
+  another device's pending nonce; only accepted nonces are remembered.
 - Every trust change has an epoch: removal / account deletion on the edge,
   revocation, and every stored account-service answer advance it. An answer
   requested before the latest change is dropped (and a foreground sign-in

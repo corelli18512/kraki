@@ -125,6 +125,27 @@ describe('PR577 adversarial edge auth', { timeout: 30_000 }, () => {
     expect(calls).toEqual([]);
   });
 
+  it('a flood of local challenge starts does not void a pending local nonce', async () => {
+    await warm();
+    const nonce = cache.issueNonce('phone');
+    // Challenge starts need no sign-in; each one used to take a slot in a 20k pool.
+    for (let i = 0; i < 20_001; i++) cache.issueNonce('attacker-device');
+    calls.length = 0;
+    const result = await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc-1', 'us');
+    expect(result).toMatchObject({ ok: true, local: true });
+    expect(calls).not.toContain('/api/auth/verify');
+  });
+
+  it('a wrong local answer does not burn the nonce; the accepted one is single-use', async () => {
+    await warm();
+    const nonce = cache.issueNonce('phone');
+    expect((await remote.verifyChallenge('phone', nonce, signChallenge('c'.repeat(64), keys.privateKey), 'enc-1', 'us')).ok).toBe(false);
+    expect((await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc-1', 'us')).ok).toBe(true);
+    calls.length = 0;
+    expect((await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc-1', 'us')).ok).toBe(false);
+    expect(calls).not.toContain('/api/auth/verify');
+  });
+
   it('expired and replayed local nonces are rejected, never passed to the account service', async () => {
     await warm();
     const nonce = cache.issueNonce('phone');

@@ -227,7 +227,7 @@ export class RemoteAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
-    const check = (cache ?? this.nonceSource)?.takeNonce(nonce, deviceId) ?? 'unknown';
+    const check = (cache ?? this.nonceSource)?.checkNonce(nonce, deviceId) ?? 'unknown';
     if (check === 'expired' || check === 'foreign') {
       // Issued by this edge, but stale, reused or for another device. The
       // account service never saw it; retryable so the client asks again.
@@ -237,6 +237,8 @@ export class RemoteAuthBackend implements AuthBackend {
       const cached = this.localChallengeActive ? cache!.lookup(deviceId) : undefined;
       const sameKeys = cached !== undefined && (encryptionKey === undefined || encryptionKey === cached.encryptionKey);
       if (cached && sameKeys && cache!.verifySignature(cached, nonce, signature)) {
+        // Single use (nothing since checkNonce awaited).
+        cache!.acceptNonce(nonce);
         metrics().inc('auth.localVerify');
         if (cache!.claimRevalidation(deviceId)) {
           // The account service only verifies nonces it issued, so the
