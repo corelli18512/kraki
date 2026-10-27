@@ -5,7 +5,11 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     let allowsInitialNavigation: Bool
-    @State private var sessionPath = NavigationPath()
+    /// Open Sessions, oldest first. On wide windows the first one is shown
+    /// beside the list (the Mac's selection) and later ones (forks) are
+    /// pushed over it; on narrow windows all are pushed over the list. The
+    /// same stack serves both, so a fold/unfold keeps the open chat alive.
+    @State private var sessionPath: [SessionNavID] = []
     @State private var devicePath = NavigationPath()
     @State private var selectedTab: Int = 0
     @State private var showNewSession = false
@@ -52,7 +56,7 @@ struct MainTabView: View {
             // Pop the chat detail so they land on the session list
             // instead of a "Session not found" placeholder.
             selectedTab = 0
-            sessionPath = NavigationPath()
+            sessionPath = []
         }
         #if DEBUG
         .task(id: allowsInitialNavigation) {
@@ -64,7 +68,7 @@ struct MainTabView: View {
             for _ in 0..<100 {
                 if appState.sessionStore.sessions[target] != nil {
                     selectedTab = 0
-                    sessionPath = NavigationPath()
+                    sessionPath = []
                     sessionPath.append(SessionNavID(id: target))
                     return
                 }
@@ -107,7 +111,7 @@ struct MainTabView: View {
             }
             return
         }
-        sessionPath = NavigationPath()
+        sessionPath = []
         sessionPath.append(SessionNavID(id: target))
     }
 
@@ -117,7 +121,7 @@ struct MainTabView: View {
         // a notification-created detail hierarchy from materializing behind the
         // cold-launch gate.
         selectedTab = 1
-        sessionPath = NavigationPath()
+        sessionPath = []
         devicePath = NavigationPath()
         devicePath.append(DeviceNavID(id: target))
         appState.deviceStore.navigateToDeviceId = nil
@@ -126,17 +130,53 @@ struct MainTabView: View {
     // MARK: - Sub-views (shared)
 
     private var sessionsContent: some View {
-        NavigationStack(path: $sessionPath) {
-            SessionListView(navigationPath: $sessionPath)
-                .navigationDestination(for: SessionNavID.self) { nav in
-                    // Identity per Session: when a route's id changes (pending
-                    // placeholder → created Session) the page must disappear
-                    // and appear again, not silently rebind its sessionId.
-                    SessionDetailView(sessionId: nav.id)
-                        .id(nav.id)
-                        .environment(appState)
+        GeometryReader { geometry in
+            let wide = SessionSplitLayout.isWide(geometry.size.width)
+            HStack(spacing: 0) {
+                if wide {
+                    NavigationStack {
+                        SessionListView(selectedSessionId: sessionPath.first?.id) { select($0) }
+                    }
+                    .frame(width: SessionSplitLayout.sidebarWidth)
+                    .transition(.move(edge: .leading))
+                    Rectangle()
+                        .fill(Color.borderPrimary.opacity(0.55))
+                        .frame(width: 1)
+                        .ignoresSafeArea()
                 }
+                // Same position in both layouts: SwiftUI keeps this stack, and
+                // the chat pushed on it, across a fold/unfold.
+                NavigationStack(path: $sessionPath) {
+                    Group {
+                        if wide {
+                            SessionSplitPlaceholder()
+                        } else {
+                            SessionListView { sessionPath.append(SessionNavID(id: $0)) }
+                        }
+                    }
+                    .navigationDestination(for: SessionNavID.self) { nav in
+                        // Identity per Session: when a route's id changes (pending
+                        // placeholder → created Session) the page must disappear
+                        // and appear again, not silently rebind its sessionId.
+                        SessionDetailView(sessionId: nav.id)
+                            .id(nav.id)
+                            .environment(\.sessionSplit, SessionSplitContext(
+                                active: wide, isDetailRoot: wide && sessionPath.first == nav))
+                            .environment(appState)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
+    }
+
+    /// Two-column layout: show this Session beside the list (no push animation,
+    /// like selecting a row in the Mac sidebar).
+    private func select(_ id: String) {
+        guard sessionPath != [SessionNavID(id: id)] else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { sessionPath = [SessionNavID(id: id)] }
     }
 
     private var devicesContent: some View {

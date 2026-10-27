@@ -12,6 +12,7 @@ struct SessionDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.sessionSplit) private var split
 
     let sessionId: String
 
@@ -66,7 +67,9 @@ struct SessionDetailView: View {
         // not-found, and the live chat — so the optimistic landing
         // from "Create Session" doesn't briefly show the tab bar
         // before the real session arrives.
-        .hidesTabBar()
+        // Beside the list (wide windows) the tab bar stays: it is the way to
+        // Devices and Settings, as on iPad.
+        .hidesTabBar(!split.active)
         .onAppear {
             KLog.chat("👆 [2/history TAP] session=\(sessionId.prefix(12)) — entering ChatView")
             appState.beginViewingSession(sessionId)
@@ -173,7 +176,10 @@ struct SessionDetailView: View {
         }
         // Pending / not-found routes: back + title only.
         return AnyView(HStack(spacing: 10) {
-            headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
+            if !split.isDetailRoot {
+                headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
+                    .background(ViewMarker(id: "chat-back-button"))
+            }
             ZStack {
                 if !title.isEmpty {
                     titleCapsule(title, opensInfo: false)
@@ -190,7 +196,10 @@ struct SessionDetailView: View {
     /// spreads the four modes across the full width right of the back button.
     private func headerWithMode(title: String) -> some View {
         HStack(spacing: 8) {
-            headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
+            if !split.isDetailRoot {
+                headerButton(systemName: "chevron.left", label: String(localized: "Back")) { dismiss() }
+                    .background(ViewMarker(id: "chat-back-button"))
+            }
             if !modePickerExpanded {
                 ZStack {
                     if !title.isEmpty {

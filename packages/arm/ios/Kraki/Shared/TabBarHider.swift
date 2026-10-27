@@ -25,11 +25,21 @@ import SwiftUI
 import UIKit
 
 struct TabBarHider: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> Controller { Controller() }
-    func updateUIViewController(_ uiViewController: Controller, context: Context) {}
+    /// False keeps the page but lets the tab bar show (two-column layout).
+    var active = true
+    func makeUIViewController(context: Context) -> Controller {
+        let controller = Controller(); controller.active = active; return controller
+    }
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        guard controller.active != active else { return }
+        controller.active = active
+        // A fold/unfold changes this without any navigation: reconcile now.
+        Controller.reconcile(controller.tabBarController ?? Controller.anyTabBarController, animated: true, ignoringTransition: true)
+    }
 
     final class Controller: UIViewController {
         private static let registry = NSHashTable<Controller>.weakObjects()
+        var active = true
 
         override func viewDidLoad() {
             super.viewDidLoad()
@@ -95,7 +105,7 @@ struct TabBarHider: UIViewControllerRepresentable {
 
         // MARK: Truth
 
-        private static var anyTabBarController: UITabBarController? {
+        fileprivate static var anyTabBarController: UITabBarController? {
             registry.allObjects.lazy.compactMap(\.tabBarController).first
         }
 
@@ -103,7 +113,7 @@ struct TabBarHider: UIViewControllerRepresentable {
         /// and that stack belongs to the selected tab of `tabBarController`.
         fileprivate func isVisiblePage(in tabBarController: UITabBarController,
                                        afterCommittedPop: Bool = false) -> Bool {
-            guard isViewLoaded,
+            guard active, isViewLoaded,
                   let navigation = navigationController,
                   let top = navigation.topViewController else { return false }
             // During a committed interactive pop, `topViewController` may still
@@ -169,8 +179,8 @@ private extension UIViewController {
 extension View {
     /// Hides the parent UITabBarController's tab bar while this view is the
     /// visible page of the selected tab. Tracks interactive swipe-back.
-    func hidesTabBar() -> some View {
-        background(TabBarHider().frame(width: 0, height: 0))
+    func hidesTabBar(_ active: Bool = true) -> some View {
+        background(TabBarHider(active: active).frame(width: 0, height: 0))
     }
 }
 
