@@ -146,5 +146,43 @@ final class ChatWidthChangeTests: XCTestCase {
             XCTAssertLessThanOrEqual(overflow(fx), 0.5)
         }
     }
+
+    /// ↑ tapped right after a fold: the fold's delayed anchor restores
+    /// (0.1/0.35/0.8 s) must not pull the navigation back to the old anchor.
+    func testNavigationRightAfterAFoldIsNotPulledBack() throws {
+        let fx = try fixtures.makeFixture(total: 80, onScreen: true)
+        resize(fx, CGSize(width: 466, height: 678))
+        drag(fx, to: fx.cv.contentSize.height * 0.4)
+        let start = try XCTUnwrap(anchor(fx))
+        guard let window = fx.vc.view.window else { return XCTFail("chat is not in a window") }
+        window.frame = CGRect(origin: .zero, size: CGSize(width: 951, height: 669))
+        fx.vc.view.frame = window.bounds
+        fx.vc.view.layoutIfNeeded()
+        drain(30)
+        guard let target = fx.vc.automationUpTargetItem else { throw XCTSkip("no earlier reply to jump to") }
+        let targetID = fx.vc.items[target]
+        fx.vc.automationTapUp()
+        drain(1600)
+        XCTAssertNotNil(position(of: targetID, fx), "the ↑ target is on screen")
+        if let now = position(of: start.id, fx) {
+            XCTAssertGreaterThan(abs(now - start.delta), 20, "navigation was not reverted to the fold's anchor")
+        }
+    }
+
+    /// Text size changes while nothing is visible (no reading anchor):
+    /// fall back to the newest message instead of leaving a blank viewport.
+    func testTextSizeChangeWithoutAReadingAnchorPinsToTheNewest() throws {
+        let fx = try fixtures.makeFixture(total: 60, onScreen: true)
+        resize(fx, CGSize(width: 466, height: 678))
+        drag(fx, to: fx.cv.contentSize.height * 0.3)
+        XCTAssertFalse(fx.vc.followingBottom)
+        fx.cv.contentOffset.y = fx.cv.contentSize.height + 4000
+        fx.cv.layoutIfNeeded()
+        XCTAssertNil(fx.vc.currentReadingAnchor(), "nothing on screen to anchor to")
+        fx.vc.laidOutTextSize = "stale"
+        fx.vc.relayoutForTextSizeChange()
+        drain(300)
+        XCTAssertLessThan(abs(fx.vc.distanceToBottom()), 2, "pinned to the newest message")
+    }
 }
 #endif
