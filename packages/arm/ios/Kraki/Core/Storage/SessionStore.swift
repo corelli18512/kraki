@@ -242,6 +242,10 @@ final class SessionStore {
     var drafts: [String: String] = [:]
     /// Fences async voice updates, including edit-then-restore-to-the-same-text.
     private(set) var draftRevisions: [String: UInt64] = [:]
+    /// The image staged in a Session's composer, kept beside its draft so it
+    /// survives switching Sessions (the Chat view is rebuilt per Session).
+    /// In memory only, like the drafts. Set through `setStagedImage`.
+    var stagedImages: [String: StagedComposerImage] = [:]
     var navigateToSession: String?
     /// Set with `navigateToSession` when the target replaces a still-visible
     /// pending placeholder (create/fork/import resolved). The navigation layer
@@ -939,6 +943,7 @@ final class SessionStore {
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
         drafts.removeValue(forKey: id)
+        stagedImages.removeValue(forKey: id)
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
     }
@@ -1141,7 +1146,6 @@ final class SessionStore {
             drafts[id] = text
         }
     }
-
     // MARK: - Reset
 
     func reset() {
@@ -1155,6 +1159,7 @@ final class SessionStore {
         sessionPreviews.removeAll()
         drafts.removeAll()
         draftRevisions.removeAll()
+        stagedImages.removeAll()
         navigateToSession = nil
         navigationReplacesPlaceholder = false
         navigationPushesOnTop = false

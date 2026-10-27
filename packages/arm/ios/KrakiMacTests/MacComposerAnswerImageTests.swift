@@ -41,12 +41,13 @@ final class MacComposerAnswerImageTests: XCTestCase {
         let png = try XCTUnwrap(NSImage(size: NSSize(width: 4, height: 4), flipped: false) { rect in
             NSColor.systemTeal.setFill(); rect.fill(); return true
         }.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        app.sessionStore.setStagedImage(sid, StagedComposerImage(data: png, mimeType: "image/png"))
         let question = PendingQuestion(id: "q1", sessionId: sid, question: "Which screen?", choices: nil, timestamp: Date())
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 700, height: 140),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: MacChatComposer(
-            sessionId: sid, pendingQuestion: question, initialImageData: png).environment(app))
+            sessionId: sid, pendingQuestion: question).environment(app))
         window.makeKeyAndOrderFront(nil)
         self.window = window
         drain(400)

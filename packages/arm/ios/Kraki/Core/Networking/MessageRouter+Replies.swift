@@ -69,6 +69,7 @@ extension MessageRouter {
         for sid in removed {
             appState.messageStore.clearRuntimeStatus(sid)
             appState.messageStore.clearCard(sid)
+            appState.sessionStore.setStagedImage(sid, nil)
         }
         appState.noteSessionListApplied()
         reconcileReplies(idle: idle, removed: removed)
