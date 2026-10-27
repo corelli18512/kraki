@@ -54,8 +54,8 @@ struct DeviceDetailView: View {
     }
 
     private var canRemove: Bool {
-        // Offline in the middle of an update is a restart, not a dead computer.
-        !device.online && !isCurrentDevice && appState.deviceStore.updateProgress[device.id]?.isActive != true
+        !device.online && !isCurrentDevice
+            && !DeviceUpdateSection.blocksRemoval(appState.deviceStore.updateProgress[device.id], now: Date())
     }
 
     private var statusLabel: String {

@@ -157,6 +157,38 @@
         }
       }
     },
+    "%@ still runs Kraki %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ still runs Kraki %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 仍在运行 Kraki %2$@。"
+          }
+        }
+      }
+    },
+    "%@ wasn’t installed on %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ wasn’t installed on %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 未安装到 %2$@ 上。"
+          }
+        }
+      }
+    },
     "%@ · attempt %@" : {
       "localizations" : {
         "en" : {
@@ -369,38 +401,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 已被占用（%d）。请选择其他快捷键。"
-          }
-        }
-      }
-    },
-    "%@ is back online but still runs Kraki %@." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is back online but still runs Kraki %2$@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ 已重新上线，但仍在运行 Kraki %2$@。"
-          }
-        }
-      }
-    },
-    "%@ is back online, but %@ wasn’t installed." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is back online, but %2$@ wasn’t installed."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ 已重新上线，但 %2$@ 未安装。"
           }
         }
       }

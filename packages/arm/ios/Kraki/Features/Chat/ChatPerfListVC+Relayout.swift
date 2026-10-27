@@ -38,14 +38,16 @@ extension ChatPerfListVC {
         // Per list: another open chat may already have refreshed the key.
         guard laidOutTextSize != TKTextSize.key, collectionView != nil else { return }
         laidOutTextSize = TKTextSize.key
-        relayoutLoadedWindow(keeping: followingBottom ? .newest : currentReadingAnchor(), reason: "text-size")
+        // Nothing on screen to anchor to (e.g. mid-reload): the newest message.
+        relayoutLoadedWindow(keeping: followingBottom ? .newest : currentReadingAnchor() ?? .newest, reason: "text-size")
         chatPerfLog.log("[text-size] relayout size=\(TKTextSize.key) items=\(items.count)")
     }
 
     // MARK: Width changes (iPhone Duo fold/unfold, iPad resize, rotation)
 
-    /// Called from `viewDidLayoutSubviews`. The anchor was captured in
-    /// `viewWillLayoutSubviews`, before the list took its new width.
+    /// Called from `viewDidLayoutSubviews`. The anchor was captured while the
+    /// list still had its old width (`rememberReadingAnchor`, from scrolls and
+    /// same-width layouts), before it took the new one.
     func handleWidthChangeIfNeeded() {
         guard collectionView != nil, !isLeavingView else { return }
         let width = collectionView.bounds.width
@@ -144,7 +146,8 @@ extension ChatPerfListVC {
             let generation = widthAnchorGeneration
             restore(anchor)
             // Background height measurement settles rows above the anchor
-            // just after a full re-layout; follow it until the user scrolls.
+            // just after a full re-layout; follow it until the user scrolls
+            // or navigates (both bump `widthAnchorGeneration`).
             for delay in [0.1, 0.35, 0.8] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self, self.collectionView != nil, self.widthAnchorGeneration == generation,
