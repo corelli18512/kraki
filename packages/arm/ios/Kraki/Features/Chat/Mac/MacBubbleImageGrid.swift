@@ -695,9 +695,26 @@ final class MacZoomableImageView: NSView {
     }
     #endif
 
+    /// The composer editor that was typing when the preview took focus.
+    /// Closing the preview gives focus back to it; paging (a new view per
+    /// image) passes it on. Any other previous responder is left alone.
+    private(set) weak var composerToRefocus: MacComposerTextView?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        window?.makeFirstResponder(self)
+        guard let window else { return }
+        let previous = window.firstResponder
+        composerToRefocus = previous as? MacComposerTextView
+            ?? (previous as? MacZoomableImageView)?.composerToRefocus
+        window.makeFirstResponder(self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, let window, window.firstResponder === self,
+           let composer = composerToRefocus, composer.window === window {
+            window.makeFirstResponder(composer)
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     func setZoom(_ value: CGFloat) {

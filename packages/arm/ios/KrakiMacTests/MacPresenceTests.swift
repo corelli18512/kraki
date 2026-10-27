@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import Observation
 @testable import Kraki_Dev
 
 /// "Is this Mac online" — the one status the menu bar, the menus and Settings
@@ -31,6 +32,60 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertEqual(status(.running(pid: 1), install: .unknown), .checking)
     }
 
+    func testRunningButOffTheServerIsNotOnline() {
+        // Moved house, Wi-Fi down: the service runs but the phone can't reach it.
+        let reconnecting = MacOnlineStatus.resolve(
+            installState: installed, daemonState: .running(pid: 42), mode: .builtIn, role: .runsAgents,
+            relayReachable: false)
+        XCTAssertEqual(reconnecting, .reconnecting)
+        XCTAssertFalse(reconnecting.isOnline)
+        XCTAssertFalse(reconnecting.needsFixing, "a network blip is not a broken install")
+        XCTAssertLessThan(MacMenuBarIcon.alpha(for: .reconnecting), 1)
+        // Reachability only matters while the service runs.
+        XCTAssertEqual(MacOnlineStatus.resolve(
+            installState: installed, daemonState: .stopped, mode: .builtIn, role: .runsAgents,
+            relayReachable: false), .offline)
+    }
+
+    func testRelayDownNeedsAGracePeriodBeforeItShows() {
+        let now = Date()
+        XCTAssertTrue(TentacleCLIManager.relayStateIsUp("connected"))
+        XCTAssertTrue(TentacleCLIManager.relayStateIsUp(nil), "older daemons don't report it")
+        for state in ["connecting", "authenticating", "disconnected"] {
+            XCTAssertFalse(TentacleCLIManager.relayStateIsUp(state), state)
+        }
+        XCTAssertTrue(TentacleCLIManager.relayReachable(downSince: nil, now: now))
+        XCTAssertTrue(TentacleCLIManager.relayReachable(downSince: now.addingTimeInterval(-3), now: now),
+                      "a relay redeploy or Wi-Fi roam never flashes the menu bar")
+        XCTAssertFalse(TentacleCLIManager.relayReachable(
+            downSince: now.addingTimeInterval(-(TentacleCLIManager.relayDownGrace + 1)), now: now))
+    }
+
+    /// The stored flag flips on the poll after the grace period, so the menu
+    /// bar (which observes it) is invalidated without any other state change.
+    func testRelayReachableFlipsOnTheFirstPollPastTheGrace() {
+        let cli = TentacleCLIManager()
+        let t0 = Date()
+        cli.applyRelayState("connected", now: t0)
+        XCTAssertTrue(cli.relayReachable)
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(1))
+        XCTAssertTrue(cli.relayReachable, "within the grace period")
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(4))
+        XCTAssertTrue(cli.relayReachable)
+        // The menu bar reads onlineStatus; with only identical values written
+        // since the first down poll it must still be told when the grace ends.
+        var invalidated = false
+        withObservationTracking { _ = cli.onlineStatus } onChange: { invalidated = true }
+        cli.applyRelayState("connecting", now: t0.addingTimeInterval(12))
+        XCTAssertTrue(invalidated, "observers are notified when the grace runs out")
+        XCTAssertFalse(cli.relayReachable, "same relayState string, but the grace ran out")
+        cli.applyRelayState("connected", now: t0.addingTimeInterval(15))
+        XCTAssertTrue(cli.relayReachable)
+        XCTAssertNil(cli.relayDownSince)
+        cli.applyRelayState(nil, now: t0.addingTimeInterval(40))
+        XCTAssertTrue(cli.relayReachable, "older daemons report nothing")
+    }
+
     func testRemoteOnlyMacIsNeverOffline() {
         // Nothing runs here by choice; that is not "offline".
         XCTAssertEqual(status(.stopped, role: .remoteOnly), .controlsOthersOnly)
@@ -42,13 +97,13 @@ final class MacPresenceTests: XCTestCase {
     func testOnlyBrokenStatesNeedFixing() {
         XCTAssertTrue(MacOnlineStatus.needsLoginItems.needsFixing)
         XCTAssertTrue(MacOnlineStatus.problem("x").needsFixing)
-        for ok: MacOnlineStatus in [.online, .offline, .goingOnline, .goingOffline, .checking, .controlsOthersOnly] {
+        for ok: MacOnlineStatus in [.online, .reconnecting, .offline, .goingOnline, .goingOffline, .checking, .controlsOthersOnly] {
             XCTAssertFalse(ok.needsFixing, "\(ok)")
         }
     }
 
     func testUserFacingWordingNeverMentionsTheService() {
-        let all: [MacOnlineStatus] = [.checking, .online, .goingOnline, .goingOffline, .offline,
+        let all: [MacOnlineStatus] = [.checking, .online, .reconnecting, .goingOnline, .goingOffline, .offline,
                                       .needsLoginItems, .controlsOthersOnly]
         for s in all {
             let text = ([s.title] + [s.detail].compactMap { $0 }).joined(separator: " ").lowercased()

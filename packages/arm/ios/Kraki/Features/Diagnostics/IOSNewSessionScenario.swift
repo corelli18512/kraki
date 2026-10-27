@@ -81,6 +81,7 @@ enum IOSNewSessionScenario {
                 return true
             }
             scriptedTentacle = tentacle
+            IOSSessionListReorderScenario.install(on: app)
             return app
         } catch {
             fatalError("new-session scenario: \(error)")

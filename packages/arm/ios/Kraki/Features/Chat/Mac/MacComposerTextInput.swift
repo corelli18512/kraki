@@ -101,7 +101,78 @@ final class MacComposerTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
     var onTakeOver: (() -> Void)?
+    /// This editor gained (true) or gave up (false) first responder: a click,
+    /// a move to another field, or a programmatic change.
+    var onFirstResponderChange: ((Bool) -> Void)?
+    /// IME marked text was set or ended. AppKit posts no NSText.didChange
+    /// for marked text, so layout learns about a composition here.
+    var onMarkedTextChange: (() -> Void)?
     var voicePendingRange: NSRange?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFirstResponderChange?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFirstResponderChange?(false) }
+        return resigned
+    }
+
+    /// The click that activates an inactive window lands in the composer
+    /// (NSTextView ignores it by default). The composer used to take focus
+    /// back on the activation re-render instead, from whichever field had it.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // MARK: Undo / Redo
+    //
+    // Edit ▸ Undo/Redo and ⌘Z/⇧⌘Z send undo:/redo: up the responder chain.
+    // NSTextView does not implement them; NSWindow does, with the window's
+    // undo manager, which never holds this draft's records. So the editor
+    // answers them itself, against `draftUndoManager`. (TextKit 2 does not
+    // register typing with the text view or its storage as the undo target,
+    // so the window's manager could not be scrubbed per editor instead.)
+
+    @objc func undo(_ sender: Any?) { stepDraftUndo(redo: false) }
+    @objc func redo(_ sender: Any?) { stepDraftUndo(redo: true) }
+
+    private func stepDraftUndo(redo: Bool) {
+        guard canStepDraftUndo(redo: redo) else { return }
+        // Later typing must start a new record, not extend an undone one.
+        breakUndoCoalescing()
+        if redo { draftUndoManager.redo() } else { draftUndoManager.undo() }
+        // TextKit 2 applies the undo without posting NSText.didChange, so
+        // the draft (and the next re-render) would keep the old text.
+        didChangeText()
+    }
+
+    private func canStepDraftUndo(redo: Bool) -> Bool {
+        guard isEditable, !hasMarkedText() else { return false }
+        return redo ? draftUndoManager.canRedo : draftUndoManager.canUndo
+    }
+
+    private func validateDraftUndo(_ item: NSValidatedUserInterfaceItem) -> Bool? {
+        switch item.action {
+        case #selector(undo(_:)):
+            (item as? NSMenuItem)?.title = draftUndoManager.undoMenuItemTitle
+            return canStepDraftUndo(redo: false)
+        case #selector(redo(_:)):
+            (item as? NSMenuItem)?.title = draftUndoManager.redoMenuItemTitle
+            return canStepDraftUndo(redo: true)
+        default:
+            return nil
+        }
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        validateDraftUndo(menuItem) ?? super.validateMenuItem(menuItem)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        validateDraftUndo(item) ?? super.validateUserInterfaceItem(item)
+    }
 
     func refreshVoiceStyling() {
         guard !hasMarkedText(), let storage = textStorage else { return }
@@ -138,6 +209,12 @@ final class MacComposerTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         onTakeOver?()
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedTextChange?()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onMarkedTextChange?()
     }
 
     override func paste(_ sender: Any?) {
@@ -158,6 +235,10 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
     @Binding var nativeEditorHasText: Bool
+    /// The editor's visible text while an IME composition is marked (nil
+    /// otherwise). Layout only: composers size the box from it so a wrapping
+    /// composition grows it; marked text never reaches the draft (`text`).
+    @Binding var nativeComposingText: String?
     let enabled: Bool
     let focusRequest: Int
     var selectionRequest: NSRange? = nil
@@ -188,9 +269,27 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         var wasComposing = false
         var appliedFocusRequest = -1
         var appliedSelectionRequest: NSRange?
+        /// The draft value the editor last showed (applied from or published
+        /// to `text`). A different `text` is an external replacement (Clear,
+        /// Send, deny, answer, voice, Edit), not this editor's own publish.
+        var syncedText: String
+        /// The `focused` value of the last update: only its turning true (or
+        /// a new focusRequest) asks the editor to take first responder.
+        var appliedFocused = false
+        /// A focus intent not applied yet: the editor was not in a key window.
+        var pendingFocus = false
+        private var keyWindowObserver: NSObjectProtocol?
+        #if DEBUG
+        var waitsForKeyWindow: Bool { keyWindowObserver != nil }
+        #endif
 
         init(_ parent: MacComposerScrollableTextInput) {
             self.parent = parent
+            self.syncedText = parent.text
+        }
+
+        deinit {
+            if let keyWindowObserver { NotificationCenter.default.removeObserver(keyWindowObserver) }
         }
 
         func reportVisualTextPresence(
@@ -204,6 +303,10 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
                 let hasText = !textView.string.isEmpty
                 if self.parent.nativeEditorHasText != hasText {
                     self.parent.nativeEditorHasText = hasText
+                }
+                let composingText = textView.hasMarkedText() ? textView.string : nil
+                if self.parent.nativeComposingText != composingText {
+                    self.parent.nativeComposingText = composingText
                 }
             }
             if deferred {
@@ -225,7 +328,9 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             // Marked IME text intentionally does not round-trip through the
             // persisted draft, but it is still visible native text and must
             // hide the SwiftUI placeholder immediately.
-            reportVisualTextPresence(of: textView)
+            // Deferred while the composer itself edits (inside a SwiftUI
+            // update, e.g. discarding a composition): no state writes there.
+            reportVisualTextPresence(of: textView, deferred: isApplying)
             guard !isApplying else { return }
             textView.scrollRangeToVisible(textView.selectedRange())
             // Do not round-trip marked IME text through SwiftUI. Replacing the
@@ -238,6 +343,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             }
             let committedComposition = wasComposing
             wasComposing = false
+            syncedText = textView.string
             if parent.text != textView.string {
                 parent.text = textView.string
             }
@@ -263,19 +369,27 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
 
         func textDidEndEditing(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            // A teardown notification from an obsolete native view must not
-            // clear FocusState. A genuine responder move from the current live
-            // editor can be decided immediately; a transient nil responder is
-            // checked once after AppKit finishes the handoff.
-            guard textView === self.textView,
-                  let window = textView.window,
-                  self.parent.focused else { return }
-            if window.firstResponder is MacComposerTextView { return }
-            if let externalView = window.firstResponder as? NSView,
-               externalView !== textView {
-                self.parent.focused = false
-                return
+            clearFocusIfEditorLostFirstResponder(textView)
+        }
+
+        /// Keeps `focused` in step with the editor's first responder state, so
+        /// a click into it sticks and a move to another field is not undone
+        /// by the next update.
+        func editorFirstResponderChanged(_ textView: MacComposerTextView, isFirstResponder: Bool) {
+            guard textView === self.textView else { return }
+            if isFirstResponder {
+                pendingFocus = false
+                if !parent.focused { parent.focused = true }
+            } else {
+                clearFocusIfEditorLostFirstResponder(textView)
             }
+        }
+
+        /// Decided after AppKit finishes the hand-off: while textDidEndEditing
+        /// or resignFirstResponder runs, the window still reports this editor
+        /// as first responder. A teardown (the obsolete view left the window)
+        /// or a hand-off to a replacement Composer editor keeps the binding.
+        private func clearFocusIfEditorLostFirstResponder(_ textView: NSTextView) {
             DispatchQueue.main.async { [weak self, weak textView] in
                 guard let self,
                       let textView,
@@ -283,7 +397,39 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
                       let window = textView.window,
                       !(window.firstResponder is MacComposerTextView),
                       self.parent.focused else { return }
+                self.pendingFocus = false
                 self.parent.focused = false
+            }
+        }
+
+        /// Applies a pending focus intent once the editor is in a key window.
+        func applyPendingFocus(explicitRequest: Bool) {
+            guard pendingFocus else { return }
+            guard parent.focused else { pendingFocus = false; return }
+            guard let textView, let window = textView.window else { return }
+            guard window.isKeyWindow else { applyPendingFocusWhenKey(window); return }
+            pendingFocus = false
+            if window.firstResponder !== textView {
+                isApplying = true
+                window.makeFirstResponder(textView)
+                isApplying = false
+            }
+            if explicitRequest, window.firstResponder !== textView {
+                restoreCurrentTextViewFocus(attemptsRemaining: 3)
+            }
+        }
+
+        private func applyPendingFocusWhenKey(_ window: NSWindow) {
+            if let keyWindowObserver { NotificationCenter.default.removeObserver(keyWindowObserver) }
+            keyWindowObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let observer = self.keyWindowObserver { NotificationCenter.default.removeObserver(observer) }
+                    self.keyWindowObserver = nil
+                    self.applyPendingFocus(explicitRequest: false)
+                }
             }
         }
 
@@ -334,6 +480,16 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         textView.onPasteCompleted = { [weak coordinator = context.coordinator] in
             coordinator?.restoreFocusAfterPaste()
         }
+        textView.onFirstResponderChange = { [weak coordinator = context.coordinator, weak textView] isFirstResponder in
+            guard let textView else { return }
+            coordinator?.editorFirstResponderChanged(textView, isFirstResponder: isFirstResponder)
+        }
+        textView.onMarkedTextChange = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else { return }
+            // Deferred when the composer itself ends a composition (inside a
+            // SwiftUI update); immediate for the user's IME input.
+            coordinator.reportVisualTextPresence(of: textView, deferred: coordinator.isApplying)
+        }
         textView.drawsBackground = false
         textView.isRichText = false
         textView.importsGraphics = false
@@ -383,8 +539,18 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         }
         textView.isEditable = enabled
         textView.isSelectable = enabled
-        if textView.string != text, !textView.hasMarkedText() {
+        // While an IME composition is marked the editor intentionally differs
+        // from the committed draft; leave it alone. But an external
+        // replacement of the draft must win: otherwise the commit republishes
+        // the cleared or already sent text.
+        let externalReplacement = text != context.coordinator.syncedText
+        if textView.string != text, !textView.hasMarkedText() || externalReplacement {
             context.coordinator.isApplying = true
+            if textView.hasMarkedText() {
+                textView.inputContext?.discardMarkedText()
+                textView.unmarkText()
+                context.coordinator.wasComposing = false
+            }
             let selection = textView.selectedRange()
             textView.string = text
             // Send, Clear, voice and Edit replace the whole draft without an
@@ -395,6 +561,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: min(selection.location, textView.string.utf16.count), length: 0))
             context.coordinator.isApplying = false
         }
+        context.coordinator.syncedText = text
         if let selectionRequest, context.coordinator.appliedSelectionRequest != selectionRequest,
            !textView.hasMarkedText() {
             context.coordinator.isApplying = true
@@ -429,24 +596,26 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         scrollView.verticalScroller = nil
         scrollView.horizontalScroller = nil
 
-        let hasExplicitFocusRequest = context.coordinator.appliedFocusRequest != focusRequest
-        context.coordinator.appliedFocusRequest = focusRequest
-        DispatchQueue.main.async { [weak scrollView, weak textView, weak coordinator = context.coordinator] in
-            guard let scrollView, let textView, let window = scrollView.window else { return }
-            if focused {
-                if window.isKeyWindow, window.firstResponder !== textView {
-                    coordinator?.isApplying = true
-                    window.makeFirstResponder(textView)
-                    coordinator?.isApplying = false
-                }
-                if hasExplicitFocusRequest, window.firstResponder !== textView {
-                    coordinator?.restoreCurrentTextViewFocus(attemptsRemaining: 3)
-                }
+        // Take first responder only on a focus intent: a new focusRequest, or
+        // `focused` turning true (session selected, voice ended). Re-asserting
+        // it on every update while `focused` was true pulled focus back from
+        // other fields (sidebar Search) on any re-render.
+        let coordinator = context.coordinator
+        let hasExplicitFocusRequest = coordinator.appliedFocusRequest != focusRequest
+        coordinator.appliedFocusRequest = focusRequest
+        if focused, hasExplicitFocusRequest || !coordinator.appliedFocused { coordinator.pendingFocus = true }
+        if !focused { coordinator.pendingFocus = false }
+        coordinator.appliedFocused = focused
+        DispatchQueue.main.async { [weak scrollView, weak textView, weak coordinator] in
+            guard let scrollView, let textView, let coordinator, let window = scrollView.window else { return }
+            // The live binding, not this update's: a click since then counts.
+            if coordinator.parent.focused {
+                coordinator.applyPendingFocus(explicitRequest: hasExplicitFocusRequest)
             } else if window.firstResponder === textView {
                 window.makeFirstResponder(nil)
             }
             textView.scrollRangeToVisible(textView.selectedRange())
-            coordinator?.edgeFade?.scheduleUpdate()
+            coordinator.edgeFade?.scheduleUpdate()
         }
     }
 
@@ -465,7 +634,10 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         context: Context
     ) -> CGSize? {
         let width = max(1, proposal.width ?? nsView.frame.width)
-        let measured = Self.measuredHeight(text, width: width)
+        // While composing, size for the visible text, marked part included.
+        let editor = nsView.documentView as? NSTextView
+        let layoutText = editor?.hasMarkedText() == true ? editor?.string ?? text : text
+        let measured = Self.measuredHeight(layoutText, width: width)
         let minHeight = minLines.map(Self.height(lines:)) ?? MacComposerMetrics.minimumTextHeight
         let maxHeight = max(minHeight, Self.height(lines: maxLines))
         return CGSize(width: width, height: min(max(measured, minHeight), maxHeight))
