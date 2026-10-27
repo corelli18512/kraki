@@ -764,6 +764,9 @@ extension TentacleCLIManager {
         return String(cString: buffer)
     }
 
+    /// Where Sparkle keeps the old bundle while it installs an update.
+    nonisolated static let sparkleInstallationComponent = "/org.sparkle-project.Sparkle/Installation/"
+
     /// Description of the first daemon process whose helper was replaced:
     /// its executable was deleted, or it runs from where Sparkle moved the
     /// old bundle during an update. Nil when every live one runs a helper
@@ -772,9 +775,6 @@ extension TentacleCLIManager {
     /// restart only relaunches the copy launchd registered and kills its
     /// running turns. Processes that already exited are skipped: gone is not
     /// stale.
-    /// Where Sparkle keeps the old bundle while it installs an update.
-    nonisolated static let sparkleInstallationComponent = "/org.sparkle-project.Sparkle/Installation/"
-
     nonisolated static func staleDaemonBinary(
         pids: [Int],
         expectedPath: String,
