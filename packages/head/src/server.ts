@@ -605,7 +605,7 @@ export class HeadServer {
     this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
   }
 
-  /** Presence (device_joined/left/removed/pending): the destination's next
+  /** Presence (device_joined/left/removed/pending/renamed): the destination's next
    *  `auth_ok` device list supersedes it, so it is never replayed across a
    *  reconnect (a stale device_left would hide an online peer). */
   sendPresenceToDevice(deviceId: string, msg: Record<string, unknown>): void {

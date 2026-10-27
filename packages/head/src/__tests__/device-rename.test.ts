@@ -6,7 +6,7 @@
  * so every edge shows it.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
 import { MAX_DEVICE_NAME_LENGTH } from '@kraki/protocol';
@@ -84,6 +84,22 @@ describe('rename_device', () => {
       expect(msg).toEqual({ type: 'device_renamed', deviceId: laptop.deviceId, name: 'Work laptop', defaultName: 'corelli-mbp' });
     }
     expect(storage.getDevice(laptop.deviceId)).toMatchObject({ name: 'Work laptop', reportedName: 'corelli-mbp', displayName: 'Work laptop' });
+  });
+
+  it('is sent as presence, so a reconnect\'s auth_ok list supersedes an unacked older name', async () => {
+    const phone = await connect('Kraki iOS', 'app');
+    const laptop = await connect('corelli-mbp', 'tentacle');
+    const presence = vi.spyOn(head.server.pulseHub, 'sendPresenceToDevice');
+    const control = vi.spyOn(head.server.pulseHub, 'sendToDevice');
+
+    const heard = next(phone, 'device_renamed');
+    phone.send({ type: 'rename_device', deviceId: laptop.deviceId, name: 'Work laptop' });
+    await heard;
+    const renamedFrames = (spy: typeof presence) => spy.mock.calls
+      .filter(([, payload]) => JSON.parse(Buffer.from(payload).toString('utf8')).msg?.type === 'device_renamed')
+      .map(([dest]) => dest);
+    expect(renamedFrames(presence).sort()).toEqual([phone.deviceId, laptop.deviceId].sort());
+    expect(renamedFrames(control)).toEqual([]);
   });
 
   it('keeps the custom name when the device signs in again with its own name', async () => {
