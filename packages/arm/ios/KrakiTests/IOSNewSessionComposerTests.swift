@@ -66,6 +66,45 @@ final class IOSNewSessionComposerTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.drafts[key] ?? "", "", "the new-session draft is not left with the speech")
     }
 
+    @Observable final class Presence { var shown = true }
+
+    struct SheetHost: View {
+        let presence: Presence
+        let app: AppState
+        var body: some View {
+            VStack {
+                if presence.shown {
+                    IOSNewSessionComposer(canStart: true,
+                                          voiceContext: { VoiceSessionContextBuilder.buildNewSession(agent: "pi", model: "m", deviceName: "PC") },
+                                          onSendText: { _ in }, onSendVoice: {})
+                }
+            }
+            .environment(app)
+        }
+    }
+
+    /// Swiping the New Session sheet away while dictating must stop the
+    /// microphone (the speech stays as the new-session draft), as the chat
+    /// composer and the Mac sheet do.
+    func testClosingTheSheetWhileDictatingStopsRecording() throws {
+        let presence = Presence()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = UIHostingController(rootView: SheetHost(presence: presence, app: app))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        drain(300)
+        startRecording()
+        driver.emit(.partial("帮我看看"))
+        drain(100)
+        XCTAssertTrue(app.iosVoiceComposer.isRecording(in: key))
+
+        presence.shown = false
+        drain(400)
+        XCTAssertFalse(app.iosVoiceComposer.isRecording(in: key), "the microphone stops with the sheet")
+    }
+
     func testNothingStartsWithoutDictation() {
         XCTAssertFalse(NewSessionStart.withVoice(app, device: "voice-test-device", agent: "pi", model: "m",
                                                  effort: nil, title: nil))
