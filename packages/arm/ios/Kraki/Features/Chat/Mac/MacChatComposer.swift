@@ -73,9 +73,6 @@ struct MacChatComposer: View {
     var hasLiveCard = false
 
     @Environment(AppState.self) private var appState
-    @State private var imageData: Data?
-    @State private var previewImage: NSImage?
-    @State private var imageMimeType = "image/jpeg"
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
@@ -114,16 +111,13 @@ struct MacChatComposer: View {
         pendingPermission: PendingPermission? = nil,
         pendingQuestion: PendingQuestion? = nil,
         isCompacting: Bool = false,
-        hasLiveCard: Bool = false,
-        initialImageData: Data? = nil
+        hasLiveCard: Bool = false
     ) {
         self.sessionId = sessionId
         self.pendingPermission = pendingPermission
         self.pendingQuestion = pendingQuestion
         self.isCompacting = isCompacting
         self.hasLiveCard = hasLiveCard
-        _imageData = State(initialValue: initialImageData)
-        _previewImage = State(initialValue: initialImageData.flatMap(NSImage.init(data:)))
     }
 
     private static let inputBoxHeight: CGFloat = MacComposerMetrics.capsuleHeight
@@ -151,9 +145,13 @@ struct MacChatComposer: View {
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    private var hasImage: Bool { imageData != nil }
+    /// Kept per Session in the store (like the draft): this view is rebuilt
+    /// whenever another Session is shown.
+    private var stagedImage: StagedComposerImage? { sessionStore.stagedImages[sessionId] }
+    private var previewImage: NSImage? { stagedImage.flatMap(MacComposerImages.preview) }
+    private var hasImage: Bool { stagedImage != nil }
     private var stagedImageAttachments: [ImageAttachment]? {
-        imageData.map { [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())] }
+        stagedImage.map { [ImageAttachment(type: "image", mimeType: $0.mimeType, data: $0.data.base64EncodedString())] }
     }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
     private var voiceComposer: IOSVoiceComposer { appState.iosVoiceComposer }
@@ -451,13 +449,13 @@ struct MacChatComposer: View {
         .onPasteCommand(
             of: [.image, .fileURL],
             validator: { providers in
-                guard canAttachImage else { return nil }
+                guard canAttachImage, MacComposerPastePolicy.attachesImage(.general) else { return nil }
                 return providers.first(where: { provider in
                     provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
                         || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
                 })
             },
-            perform: loadPastedImage
+            perform: pasteClipboardImage
         )
     }
 
@@ -529,6 +527,11 @@ struct MacChatComposer: View {
         }
         .buttonStyle(.plain)
         .labelAndHelp(MacControlHelp.clearMessage)
+        .background {
+            #if DEBUG
+            MacComposerControlGeometryProbe(identifier: "chat-clear")
+            #endif
+        }
     }
 
     private var inlineVoiceButton: some View {
@@ -691,12 +694,10 @@ struct MacChatComposer: View {
         let attachments = message.attachments ?? []
         // Never discard an image if the single-image composer already has
         // another one, or cannot decode it. Keep the complete staged bubble.
-        guard attachments.count <= 1, attachments.isEmpty || imageData == nil else { NSSound.beep(); return }
+        guard attachments.count <= 1, attachments.isEmpty || !hasImage else { NSSound.beep(); return }
         if let attachment = attachments.first {
-            guard let data = Data(base64Encoded: attachment.data), let image = NSImage(data: data) else { NSSound.beep(); return }
-            imageData = data
-            previewImage = image
-            imageMimeType = attachment.mimeType
+            guard let data = Data(base64Encoded: attachment.data), NSImage(data: data) != nil else { NSSound.beep(); return }
+            sessionStore.setStagedImage(sessionId, StagedComposerImage(data: data, mimeType: attachment.mimeType))
         }
         let original = sender.originalText(sessionId: sessionId, clientId: clientID) ?? ""
         sender.discardPending(sessionId: sessionId, clientId: clientID)
@@ -822,36 +823,11 @@ struct MacChatComposer: View {
         attachImage(image)
     }
 
-    private func loadPastedImage(_ provider: NSItemProvider) {
-        if let imageType = provider.registeredTypeIdentifiers.first(where: { identifier in
-            UTType(identifier)?.conforms(to: .image) == true
-        }) {
-            provider.loadDataRepresentation(forTypeIdentifier: imageType) { data, _ in
-                Task { @MainActor in
-                    guard let data, let image = NSImage(data: data) else {
-                        imageAttachError = String(localized: "The clipboard image couldn't be read.")
-                        return
-                    }
-                    attachImage(image)
-                    isFocused = true
-                }
-            }
-            return
-        }
-
-        provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-            Task { @MainActor in
-                guard let data,
-                      let string = String(data: data, encoding: .utf8),
-                      let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
-                      url.isFileURL else {
-                    imageAttachError = String(localized: "The clipboard doesn't contain a readable image.")
-                    return
-                }
-                loadImage(url)
-                isFocused = true
-            }
-        }
+    /// Edit ▸ Paste that reaches SwiftUI: the same decision as the ⌘V probe.
+    private func pasteClipboardImage(_: NSItemProvider) {
+        guard let image = MacComposerPastePolicy.image(from: .general) else { return }
+        attachImage(image)
+        isFocused = true
     }
 
     private func attachImage(_ image: NSImage) {
@@ -859,9 +835,7 @@ struct MacChatComposer: View {
         for quality in [0.8, 0.6] {
             if let data = MacComposerImages.jpegData(from: image, maxDimension: 1024, quality: quality),
                data.count <= maxSize {
-                imageData = data
-                previewImage = NSImage(data: data)
-                imageMimeType = "image/jpeg"
+                sessionStore.setStagedImage(sessionId, StagedComposerImage(data: data, mimeType: "image/jpeg"))
                 return
             }
         }
@@ -870,8 +844,7 @@ struct MacChatComposer: View {
     }
 
     private func clearImage() {
-        imageData = nil
-        previewImage = nil
+        sessionStore.setStagedImage(sessionId, nil)
     }
 
 }

@@ -14,7 +14,7 @@ final class MacComposerAnswerImageTests: XCTestCase {
     private var sent: [[String: Any]] = []
 
     override func tearDown() {
-        window?.orderOut(nil); window?.contentView = nil; window = nil
+        window?.orderOut(nil); window?.contentView = nil; window = nil; app = nil
         sent = []
         super.tearDown()
     }
@@ -23,11 +23,14 @@ final class MacComposerAnswerImageTests: XCTestCase {
 
     private func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
 
+    private var app: AppState?
+
     /// Mounts the composer and presses Return in its editor.
     private func answer(agent: String, draft: String) throws -> MacComposerTextView {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-answer-image-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        self.app = app
         app.sessionStore.sessions[sid] = SessionInfo(
             id: sid, deviceId: "dev", deviceName: "Mac", agent: agent, title: "Answer",
             state: .active, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1, createdAt: Date(), pinned: false)
@@ -41,12 +44,13 @@ final class MacComposerAnswerImageTests: XCTestCase {
         let png = try XCTUnwrap(NSImage(size: NSSize(width: 4, height: 4), flipped: false) { rect in
             NSColor.systemTeal.setFill(); rect.fill(); return true
         }.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        app.sessionStore.setStagedImage(sid, StagedComposerImage(data: png, mimeType: "image/png"))
         let question = PendingQuestion(id: "q1", sessionId: sid, question: "Which screen?", choices: nil, timestamp: Date())
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 700, height: 140),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: MacChatComposer(
-            sessionId: sid, pendingQuestion: question, initialImageData: png).environment(app))
+            sessionId: sid, pendingQuestion: question).environment(app))
         window.makeKeyAndOrderFront(nil)
         self.window = window
         drain(400)
@@ -80,6 +84,7 @@ final class MacComposerAnswerImageTests: XCTestCase {
             XCTAssertEqual(sent.count, 1, agent)
             XCTAssertEqual(sent.first?["text"] as? String, "Yes", agent)
             XCTAssertNil(sent.first?["attachments"], agent)
+            XCTAssertNotNil(app?.sessionStore.stagedImages[sid], "\(agent): the image stays in the composer")
             tearDownWindow()
 
             sent = []

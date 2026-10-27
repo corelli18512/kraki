@@ -3,7 +3,6 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 #if DEBUG
 /// Passive markers on the actual controls, for geometry and real hit-test
@@ -152,8 +151,9 @@ final class MacComposerVoiceKeyProbeView: NSView {
 /// SwiftUI's `.onPasteCommand` is not reliably reached when the underlying
 /// macOS `NSTextField`/field editor consumes Command-V first. This probe uses an
 /// app-local event monitor (not a global monitor) and only intercepts paste while
-/// this Composer's FocusState is active. Text-only paste is returned untouched
-/// to the native responder chain.
+/// this Composer's FocusState is active. Anything `MacComposerPastePolicy` does
+/// not take as an image (text, text with a picture of it, other files) is
+/// returned untouched to the native responder chain.
 struct MacComposerPasteProbe: NSViewRepresentable {
     let enabled: Bool
     let onPasteImage: (NSImage) -> Void
@@ -185,7 +185,7 @@ final class MacComposerPasteProbeView: NSView {
                   event.window === self.window,
                   event.modifierFlags.shortcutModifiers == .command,
                   event.charactersIgnoringModifiers?.lowercased() == "v",
-                  let image = Self.image(from: .general) else {
+                  let image = MacComposerPastePolicy.image(from: .general) else {
                 return event
             }
             self.onPasteImage?(image)
@@ -197,36 +197,6 @@ final class MacComposerPasteProbeView: NSView {
 
     deinit {
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
-    }
-
-    private static func image(from pasteboard: NSPasteboard) -> NSImage? {
-        // Covers screenshots and browser-provided TIFF/PNG/NSImage payloads.
-        if let image = NSImage(pasteboard: pasteboard) { return image }
-
-        // Finder commonly places a copied file on the pasteboard as a file URL.
-        let options: [NSPasteboard.ReadingOptionKey: Any] = [
-            .urlReadingFileURLsOnly: true,
-        ]
-        if let urls = pasteboard.readObjects(
-            forClasses: [NSURL.self],
-            options: options
-        ) as? [URL] {
-            for url in urls where url.isFileURL {
-                if let image = NSImage(contentsOf: url) { return image }
-            }
-        }
-
-        // Some apps advertise a concrete image UTI without vending NSImage.
-        for type in [
-            NSPasteboard.PasteboardType(UTType.png.identifier),
-            .tiff,
-        ] {
-            if let data = pasteboard.data(forType: type),
-               let image = NSImage(data: data) {
-                return image
-            }
-        }
-        return nil
     }
 }
 
