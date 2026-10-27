@@ -34,7 +34,7 @@ final class MacComposerInputRegressionTests: XCTestCase {
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
     private func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { views($0) } }
     private func editor(in window: NSWindow) throws -> MacComposerTextView {
-        try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacComposerTextView }.first)
+        try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerTextView }.first)
     }
     private func type(_ text: String, into editor: NSTextView) {
         editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -208,7 +208,8 @@ final class MacComposerInputRegressionTests: XCTestCase {
                              replacementRange: NSRange(location: NSNotFound, length: 0))
         drain(150)
 
-        let marker = try XCTUnwrap(views(window.contentView!).first { $0.identifier?.rawValue == "mac.newSession.create" })
+        let content = try XCTUnwrap(window.contentView)
+        let marker = try XCTUnwrap(views(content).first { $0.identifier?.rawValue == "mac.newSession.create" })
         let frame = marker.convert(marker.bounds, to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: CGPoint(x: frame.midX, y: frame.midY),
