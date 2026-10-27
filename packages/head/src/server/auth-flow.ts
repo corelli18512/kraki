@@ -239,6 +239,13 @@ function withMirroredInternal(server: HeadServer, user: AuthResult['user']): Aut
   return { ...user, preferences: internal ? { ...rest, internal: true } : rest };
 }
 
+/** Mirror the account service's `internal` flag onto the edge's user row
+ *  (missing preferences = unknown, leave as is). */
+export function mirrorInternalFlag(server: HeadServer, result: AuthResult): void {
+  if (!result.ok || !result.user.preferences || typeof result.user.preferences !== 'object') return;
+  server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
+}
+
 /** See handleBackendAuthResult: a mirrored device now owned by another account. */
 export function retireForeignMirror(server: HeadServer, deviceId: string, userId: string): void {
   const local = server.storage.getDevice(deviceId);
@@ -276,9 +283,7 @@ export function mirrorAuthResult(server: HeadServer, result: AuthResult, renameC
     // completeAuthHandshake and in preferences_updated: mirror the flag so an
     // internal account is not dropped to stable builds by an edge, and a
     // revoked one does not stay on dogfood. Missing preferences = unknown.
-    if (result.user.preferences && typeof result.user.preferences === 'object') {
-      server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
-    }
+    mirrorInternalFlag(server, result);
     for (const [i, d] of result.devices.entries()) {
       try {
         // The account service sends the name to show; when the user renamed

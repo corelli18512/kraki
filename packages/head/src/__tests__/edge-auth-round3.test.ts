@@ -134,6 +134,22 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     expect(cache.epoch('phone')).toBe(updated); expect(cache.lookup('phone')).toBeDefined();
   });
 
+  it('a cached remote answer mirrors internal even when its socket closed before the handshake', async () => {
+    // The account answer is cached (storeAuthoritative) but the socket that asked
+    // closed first (client auth deadline), so the handshake's mirror never ran.
+    account.setInternal('u', true);
+    edge.upsertUser('u', 'qa', 'open');
+    edge.upsertDevice('phone', 'u', 'Phone', 'app', 'ios', pub, 'enc');
+    const nonce = await accountNonce();
+    const result = await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    expect(result.ok).toBe(true);
+    cache.claimRevalidation('phone');
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    const authOk = current.messages.find((m) => m.type === 'auth_ok') as { user: { preferences?: Record<string, unknown> } };
+    expect(authOk.user.preferences?.internal).toBe(true);
+  });
+
   it('a newer answer with another encryption key still fences an older successful verify', async () => {
     await seed();
     const nonce = await accountNonce();

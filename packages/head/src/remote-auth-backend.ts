@@ -63,6 +63,11 @@ export class RemoteAuthBackend implements AuthBackend {
   private lifecycle = 0;
   /** The account service rejected a device that may be connected here. */
   onRevoked?: (revocation: EdgeRevocation) => void;
+  /** An authoritative answer was cached: the edge mirrors account-owned
+   *  state (the `internal` flag) here too, so the mirror is never older than
+   *  the cache that local sign-ins answer from (even when the socket that
+   *  asked closed before its handshake completed). */
+  onAuthoritative?: (result: AuthResult) => void;
   /** Whether a device has a live connection here; unset keeps every cached
    *  row in the status poll (see EdgeAuthCache.pruneStale). */
   isConnected?: (deviceId: string) => boolean;
@@ -291,6 +296,7 @@ export class RemoteAuthBackend implements AuthBackend {
   private storeAuthoritative(cache: EdgeAuthCache, result: AuthResult, epoch: number | undefined): 'stored' | 'stale' | 'skipped' {
     const before = cache.identity(result.deviceId);
     const stored = cache.remember(result, epoch);
+    if (stored === 'stored') this.onAuthoritative?.(result);
     if (stored !== 'stored' || !before) return stored;
     const after = cache.identity(result.deviceId);
     if (after && (after.userId !== before.userId || after.keyFingerprint !== before.keyFingerprint)) {
