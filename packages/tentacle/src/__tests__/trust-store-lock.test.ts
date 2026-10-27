@@ -166,3 +166,28 @@ process.stdout.write('\\nWON=' + won + '\\n');`;
     expect(readdirSync(dir).filter((f) => f.includes('.lock') || f.endsWith('.tmp'))).toEqual([]);
   }, 60_000);
 });
+
+describe('Windows sharing violations (#508, found on a real Windows run)', () => {
+  it('retries EPERM/EACCES/EBUSY only on Windows, and gives up on other errors', async () => {
+    const { __windowsSharing: w } = await import('../trust-store.js');
+    const err = (code: string) => Object.assign(new Error(code), { code });
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+      expect(w.isWindowsSharingError(err(code), 'win32')).toBe(true);
+      expect(w.isWindowsSharingError(err(code), 'darwin')).toBe(false);
+    }
+    expect(w.isWindowsSharingError(err('ENOENT'), 'win32')).toBe(false);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      let calls = 0;
+      expect(w.retryWindowsSharing(() => { if (++calls < 3) throw err('EPERM'); return 'ok'; })).toBe('ok');
+      expect(calls).toBe(3);
+      calls = 0;
+      expect(() => w.retryWindowsSharing(() => { calls++; throw err('ENOENT'); })).toThrow('ENOENT');
+      expect(calls).toBe(1);
+      expect(() => w.retryWindowsSharing(() => { throw err('EBUSY'); }, 30)).toThrow('EBUSY');
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+});

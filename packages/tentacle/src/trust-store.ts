@@ -113,7 +113,7 @@ export function writeTrustPolicy(dir: string, policy: TrustPolicy): void {
 export function readTrustPolicy(dir: string): TrustPolicy {
   let text: string;
   try {
-    text = readFileSync(join(dir, 'policy.json'), 'utf8');
+    text = retryWindowsSharing(() => readFileSync(join(dir, 'policy.json'), 'utf8'));
   } catch (err) {
     // No policy: an install that predates device trust (compatible).
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { enforce: false, revision: 0 };
@@ -129,10 +129,38 @@ export function readTrustPolicy(dir: string): TrustPolicy {
   }
 }
 
+/**
+ * Windows refuses, for a moment, to replace or open a file another process
+ * has open or is deleting (EPERM / EACCES / EBUSY), where POSIX would just
+ * succeed. Those are retried for a short while; anything else is real.
+ */
+const WINDOWS_SHARING_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function isWindowsSharingError(err: unknown, platform = process.platform): boolean {
+  return platform === 'win32' && WINDOWS_SHARING_CODES.has((err as NodeJS.ErrnoException)?.code ?? '');
+}
+function retryWindowsSharing<T>(fn: () => T, timeoutMs = 2_000): T {
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isWindowsSharingError(err) || Date.now() > deadline) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(5 * 2 ** attempt, 50));
+    }
+  }
+}
+/** @internal Exported for tests. */
+export const __windowsSharing = { isWindowsSharingError, retryWindowsSharing };
+
 function writePrivateJson(path: string, value: unknown): void {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
-  renameSync(tmp, path);
+  try {
+    retryWindowsSharing(() => renameSync(tmp, path));
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* gone */ }
+    throw err;
+  }
 }
 
 /** A complete lock token: `<pid>.<uuid>`. */
@@ -190,7 +218,8 @@ function publishLock(path: string, token: string): boolean {
     linkSync(tmp, path);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    // Windows: a lock its owner is deleting cannot be created yet (EPERM).
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST' || isWindowsSharingError(err)) return false;
   } finally {
     try { unlinkSync(tmp); } catch { /* gone */ }
   }
@@ -198,7 +227,7 @@ function publishLock(path: string, token: string): boolean {
     writeFileSync(path, token, { mode: 0o600, flag: 'wx' });
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST' && !isWindowsSharingError(err)) throw err;
     return false;
   }
 }
@@ -322,7 +351,7 @@ export class TrustStore {
     this.policy = readTrustPolicy(dir);
     this.stamps.policy = this.mtime(this.policyPath);
     try {
-      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')));
+      this.replayGuard.import(JSON.parse(retryWindowsSharing(() => readFileSync(this.replayPath, 'utf8'))));
     } catch (err) {
       // Lost replay state — unreadable, malformed, or missing while apps are
       // paired: refuse everything that could have been accepted before (also
@@ -427,7 +456,7 @@ export class TrustStore {
     this.stamps.devices = this.mtime(this.devicesPath);
     this.devices.clear();
     try {
-      const raw = JSON.parse(readFileSync(this.devicesPath, 'utf8')) as { version?: number; devices?: Record<string, TrustedDevice> };
+      const raw = JSON.parse(retryWindowsSharing(() => readFileSync(this.devicesPath, 'utf8'))) as { version?: number; devices?: Record<string, TrustedDevice> };
       for (const [id, d] of Object.entries(raw.devices ?? {})) {
         if (isRawPublicKey(d?.identityKey) && isRawPublicKey(d?.encryptionKey)) this.devices.set(id, d);
       }
