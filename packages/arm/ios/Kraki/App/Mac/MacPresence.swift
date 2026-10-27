@@ -29,6 +29,10 @@ import SwiftUI
 enum MacOnlineStatus: Equatable {
     case checking
     case online
+    /// The service runs but has not reached the Kraki server for a while
+    /// (no internet, captive Wi-Fi, server unreachable). Phones can't use
+    /// this Mac until it reconnects, so it must not read as online.
+    case reconnecting
     case goingOnline
     case goingOffline
     case offline
@@ -42,7 +46,8 @@ enum MacOnlineStatus: Equatable {
         installState: TentacleCLIManager.InstallState,
         daemonState: TentacleCLIManager.DaemonState,
         mode: TentacleMode,
-        role: BuiltInTentacle.ThisMacRole
+        role: BuiltInTentacle.ThisMacRole,
+        relayReachable: Bool = true
     ) -> MacOnlineStatus {
         if mode == .builtIn, role == .remoteOnly { return .controlsOthersOnly }
         switch installState {
@@ -52,7 +57,7 @@ enum MacOnlineStatus: Equatable {
         }
         switch daemonState {
         case .unknown: return .checking
-        case .running: return .online
+        case .running: return relayReachable ? .online : .reconnecting
         case .starting: return .goingOnline
         case .stopping: return .goingOffline
         case .stopped: return .offline
@@ -75,6 +80,7 @@ enum MacOnlineStatus: Equatable {
         switch self {
         case .checking: return String(localized: "Checking this Mac…")
         case .online: return String(localized: "This Mac is online")
+        case .reconnecting: return String(localized: "This Mac is reconnecting…")
         case .goingOnline: return String(localized: "This Mac is going online…")
         case .goingOffline: return String(localized: "This Mac is going offline…")
         case .offline: return String(localized: "This Mac is offline")
@@ -86,6 +92,7 @@ enum MacOnlineStatus: Equatable {
     var detail: String? {
         switch self {
         case .online: return String(localized: "Your phone and other computers can use its agents")
+        case .reconnecting: return String(localized: "Can't reach the Kraki server. Check this Mac's internet connection.")
         case .offline: return String(localized: "Your phone can't use the agents on this Mac")
         case .needsLoginItems: return String(localized: "Turn Kraki on in System Settings › Login Items")
         case .problem(let message): return message
@@ -101,7 +108,8 @@ extension TentacleCLIManager {
             installState: installState,
             daemonState: daemonState,
             mode: mode,
-            role: BuiltInTentacle.thisMacRole
+            role: BuiltInTentacle.thisMacRole,
+            relayReachable: relayReachable
         )
     }
 
@@ -121,7 +129,7 @@ extension TentacleCLIManager {
 
     var canGoOffline: Bool {
         switch onlineStatus {
-        case .online, .goingOnline: return true
+        case .online, .reconnecting, .goingOnline: return true
         default: return false
         }
     }
@@ -197,7 +205,7 @@ enum MacMenuBarIcon {
     static func alpha(for status: MacOnlineStatus) -> CGFloat {
         switch status {
         case .online, .checking, .controlsOthersOnly, .needsLoginItems, .problem: return 1
-        case .goingOnline, .goingOffline: return 0.6
+        case .goingOnline, .goingOffline, .reconnecting: return 0.6
         case .offline: return 0.4
         }
     }
