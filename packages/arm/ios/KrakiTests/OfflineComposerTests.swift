@@ -12,6 +12,13 @@ import UIKit
     private let device = "voice-test-device"
 
     private func drain(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    /// Busy CI runners: wait for the real state instead of a fixed delay.
+    @discardableResult
+    private func drain(until condition: () -> Bool, timeout: Double = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { drain(0.02) }
+        return condition()
+    }
     private func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
     private func editor(_ host: UIViewController) -> UITextView? {
         all(host.view).compactMap { $0 as? UITextView }.first(where: \.isEditable)
@@ -92,12 +99,15 @@ import UIKit
         self.app = app
         let voice = app.iosVoiceComposer
         voice.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
-        let deadline = Date().addingTimeInterval(2)
-        while !voice.isRecording(in: sid), Date() < deadline { drain(0.02) }
-        XCTAssertTrue(voice.isRecording(in: sid))
+        // The mic must really be open (lease + connection), or ↑ before that
+        // correctly returns the words to the box and nothing is staged.
+        let controller = app.voiceInputController
+        XCTAssertTrue(drain(until: { controller.isRecording && controller.activeSessionID == self.sid }),
+                      "voice never started recording; controller=\(controller.state)")
         driver.emit(.partial("voice first"))
-        drain(0.1)
+        XCTAssertTrue(drain(until: { voice.rawText == "voice first" }))
         XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt))
+        XCTAssertTrue(voice.isFinishing(in: sid), "the voice message is staged while it is corrected")
 
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -109,21 +119,22 @@ import UIKit
         window.rootViewController = host
         window.makeKeyAndVisible()
         self.window = window
-        drain(0.3)
+        drain(until: { self.editor(host) != nil })
         let field = try XCTUnwrap(editor(host))
         field.becomeFirstResponder()
         field.insertText("typed second")
-        drain(0.1)
+        XCTAssertTrue(drain(until: { app.sessionStore.drafts[self.sid] == "typed second" }))
+        XCTAssertTrue(voice.isFinishing(in: sid), "still correcting when Return is pressed")
         field.insertText("\n")
         drain(0.1)
         XCTAssertTrue(sent.isEmpty, "a keyboard structured response cannot overtake correcting voice")
         XCTAssertEqual(app.sessionStore.drafts[sid], "typed second", "blocked submission retains the draft")
 
         driver.emit(.final("voice first corrected", rawText: "voice first"))
-        drain(0.2)
+        drain(until: { sent.count >= 1 })
         XCTAssertEqual(sent, ["send_input"])
         field.insertText("\n")
-        drain(0.2)
+        drain(until: { sent.count >= 2 })
         XCTAssertEqual(sent, ["send_input", answering ? "send_input" : "deny"])
         XCTAssertEqual(app.sessionStore.drafts[sid] ?? "", "")
     }
