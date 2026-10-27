@@ -276,9 +276,3 @@ export function isDeviceRejection(code: string | undefined): boolean {
   return code === 'unknown_device' || code === 'device_not_found' || code === 'account_deleted'
     || code === 'wrong_region' || code === 'user_not_found';
 }
-
-/** Account-service answers that mean "this device may not sign in here". */
-export function isDefinitiveRejection(code: string | undefined): boolean {
-  return code !== undefined && code !== 'service_unavailable' && code !== 'internal_error'
-    && code !== 'rate_limited' && code !== 'bad_request' && code !== 'not_supported' && code !== 'auth_unavailable';
-}
