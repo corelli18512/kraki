@@ -8,7 +8,10 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(AppState.self) private var appState
 
-    @Binding var navigationPath: NavigationPath
+    /// Opens a Session: a push on iPhone, the detail column in two-column layout.
+    private let openSession: (String) -> Void
+    /// The Session shown beside the list (two-column layout), highlighted.
+    private let selectedSessionId: String?
     @State private var showNewSession = false
     @State private var selectedDeviceFilter: String? = nil
     @State private var isSearching = false
@@ -18,9 +21,14 @@ struct SessionListView: View {
     @State private var showToolIconGallery = false
     #endif
 
-    init(navigationPath: Binding<NavigationPath>, startsSearching: Bool = false) {
-        _navigationPath = navigationPath
+    init(selectedSessionId: String? = nil, startsSearching: Bool = false, openSession: @escaping (String) -> Void) {
+        self.openSession = openSession
+        self.selectedSessionId = selectedSessionId
         _isSearching = State(initialValue: startsSearching)
+    }
+
+    init(navigationPath: Binding<NavigationPath>, startsSearching: Bool = false) {
+        self.init(startsSearching: startsSearching) { navigationPath.wrappedValue.append(SessionNavID(id: $0)) }
     }
 
     private var sessionStore: SessionStore { appState.sessionStore }
@@ -125,9 +133,10 @@ struct SessionListView: View {
             searchQuery: searchQuery,
             topContentInset: FloatingSessionListHeader<EmptyView>.floats ? headerHeight : 0,
             archivedCount: archivedCount,
-            archivedIds: archivedCount == 0 ? [] : sessionStore.archivedSessionInfos(deviceId: selectedDeviceFilter).map(\.id)
+            archivedIds: archivedCount == 0 ? [] : sessionStore.archivedSessionInfos(deviceId: selectedDeviceFilter).map(\.id),
+            selectedSessionId: selectedSessionId
         ) { sessionId in
-            navigationPath.append(SessionNavID(id: sessionId))
+            openSession(sessionId)
         }
         .background(Color.surfacePrimary)
         .ignoresSafeArea(.container, edges: FloatingSessionListHeader<EmptyView>.floats ? [.top, .bottom] : .bottom)

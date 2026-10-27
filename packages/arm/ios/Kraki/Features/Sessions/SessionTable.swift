@@ -27,6 +27,8 @@ struct SessionTable: UIViewControllerRepresentable {
     /// so SwiftUI re-runs `updateUIViewController` when they change.
     var archivedCount: Int = 0
     var archivedIds: [String] = []
+    /// Highlighted row (two-column layout: the Session shown beside the list).
+    var selectedSessionId: String?
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
@@ -38,6 +40,7 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
+        vc.selectedSessionId = selectedSessionId
         return vc
     }
 
@@ -49,6 +52,7 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
+        vc.selectedSessionId = selectedSessionId
         KLog.d("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
     }
@@ -68,6 +72,22 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     var onCellTapped: ((String) -> Void)?
     var archivedCount = 0
     var archivedIds: [String] = []
+    /// Same highlight as the Mac sidebar (Kraki blue, 15 %).
+    var selectedSessionId: String? {
+        didSet { if oldValue != selectedSessionId { refreshSelectionHighlight() } }
+    }
+    static func rowBackground(selected: Bool) -> UIColor {
+        selected ? UIColor(Color.krakiPrimary.opacity(0.15)) : UIColor(Color.surfacePrimary)
+    }
+    private func refreshSelectionHighlight() {
+        guard let tableView, let dataSource else { return }
+        for path in tableView.indexPathsForVisibleRows ?? [] {
+            guard let id = dataSource.itemIdentifier(for: path), id != Self.archivedHeaderId,
+                  let cell = tableView.cellForRow(at: path) else { continue }
+            let session = id.hasPrefix(Self.archivedPrefix) ? String(id.dropFirst(Self.archivedPrefix.count)) : id
+            cell.backgroundColor = Self.rowBackground(selected: session == selectedSessionId)
+        }
+    }
     /// Collapsed every time the list is created.
     private var archivedExpanded = false
 
@@ -241,7 +261,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                     .environment(appState)
             }
             .margins(.all, 0)
-            cell.backgroundColor = UIColor(Color.surfacePrimary)
+            cell.backgroundColor = Self.rowBackground(selected: rowSessionId == self.selectedSessionId)
             cell.selectedBackgroundView = {
                 let v = UIView()
                 v.backgroundColor = UIColor.systemGray4.withAlphaComponent(0.6)
