@@ -78,7 +78,32 @@ final class TentacleCLIManager {
     /// Daemon-reported Full Disk Access ("granted" | "denied" | "missing").
     private(set) var fdaStatus: String?
     /// Relay connection state reported by the daemon.
-    private(set) var relayState: String?
+    private(set) var relayState: String? {
+        didSet {
+            if Self.relayStateIsUp(relayState) {
+                relayDownSince = nil
+            } else if relayDownSince == nil {
+                relayDownSince = Date()
+            }
+        }
+    }
+    /// When the daemon last stopped reporting a live relay connection.
+    private(set) var relayDownSince: Date?
+    /// A reconnect shorter than this (relay deploy, Wi-Fi roam) never shows.
+    static let relayDownGrace: TimeInterval = 10
+
+    /// Daemons before status.json had relayState report nothing: trust them.
+    static func relayStateIsUp(_ state: String?) -> Bool {
+        state == nil || state == "connected"
+    }
+
+    /// False once the running daemon has been off the relay past the grace
+    /// period, so the menu bar stops claiming this Mac is online.
+    static func relayReachable(downSince: Date?, now: Date = Date()) -> Bool {
+        guard let downSince else { return true }
+        return now.timeIntervalSince(downSince) < relayDownGrace
+    }
+    var relayReachable: Bool { Self.relayReachable(downSince: relayDownSince) }
     /// Version of the running daemon binary (may lag the app after an update).
     private(set) var runningDaemonVersion: String?
 

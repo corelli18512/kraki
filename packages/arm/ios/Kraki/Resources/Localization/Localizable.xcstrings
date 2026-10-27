@@ -48,6 +48,26 @@
         }
       }
     },
+    "Can't reach the Kraki server. Check this Mac's internet connection." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连不上 Kraki 服务器。请检查这台 Mac 的网络连接。"
+          }
+        }
+      }
+    },
+    "This Mac is reconnecting…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 正在重新连接…"
+          }
+        }
+      }
+    },
     "_Image unavailable_" : {
       "localizations" : {
         "zh-Hans" : {

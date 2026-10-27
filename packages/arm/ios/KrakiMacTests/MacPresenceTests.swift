@@ -31,6 +31,35 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertEqual(status(.running(pid: 1), install: .unknown), .checking)
     }
 
+    func testRunningButOffTheServerIsNotOnline() {
+        // Moved house, Wi-Fi down: the service runs but the phone can't reach it.
+        let reconnecting = MacOnlineStatus.resolve(
+            installState: installed, daemonState: .running(pid: 42), mode: .builtIn, role: .runsAgents,
+            relayReachable: false)
+        XCTAssertEqual(reconnecting, .reconnecting)
+        XCTAssertFalse(reconnecting.isOnline)
+        XCTAssertFalse(reconnecting.needsFixing, "a network blip is not a broken install")
+        XCTAssertLessThan(MacMenuBarIcon.alpha(for: .reconnecting), 1)
+        // Reachability only matters while the service runs.
+        XCTAssertEqual(MacOnlineStatus.resolve(
+            installState: installed, daemonState: .stopped, mode: .builtIn, role: .runsAgents,
+            relayReachable: false), .offline)
+    }
+
+    func testRelayDownNeedsAGracePeriodBeforeItShows() {
+        let now = Date()
+        XCTAssertTrue(TentacleCLIManager.relayStateIsUp("connected"))
+        XCTAssertTrue(TentacleCLIManager.relayStateIsUp(nil), "older daemons don't report it")
+        for state in ["connecting", "authenticating", "disconnected"] {
+            XCTAssertFalse(TentacleCLIManager.relayStateIsUp(state), state)
+        }
+        XCTAssertTrue(TentacleCLIManager.relayReachable(downSince: nil, now: now))
+        XCTAssertTrue(TentacleCLIManager.relayReachable(downSince: now.addingTimeInterval(-3), now: now),
+                      "a relay redeploy or Wi-Fi roam never flashes the menu bar")
+        XCTAssertFalse(TentacleCLIManager.relayReachable(
+            downSince: now.addingTimeInterval(-(TentacleCLIManager.relayDownGrace + 1)), now: now))
+    }
+
     func testRemoteOnlyMacIsNeverOffline() {
         // Nothing runs here by choice; that is not "offline".
         XCTAssertEqual(status(.stopped, role: .remoteOnly), .controlsOthersOnly)
@@ -42,13 +71,13 @@ final class MacPresenceTests: XCTestCase {
     func testOnlyBrokenStatesNeedFixing() {
         XCTAssertTrue(MacOnlineStatus.needsLoginItems.needsFixing)
         XCTAssertTrue(MacOnlineStatus.problem("x").needsFixing)
-        for ok: MacOnlineStatus in [.online, .offline, .goingOnline, .goingOffline, .checking, .controlsOthersOnly] {
+        for ok: MacOnlineStatus in [.online, .reconnecting, .offline, .goingOnline, .goingOffline, .checking, .controlsOthersOnly] {
             XCTAssertFalse(ok.needsFixing, "\(ok)")
         }
     }
 
     func testUserFacingWordingNeverMentionsTheService() {
-        let all: [MacOnlineStatus] = [.checking, .online, .goingOnline, .goingOffline, .offline,
+        let all: [MacOnlineStatus] = [.checking, .online, .reconnecting, .goingOnline, .goingOffline, .offline,
                                       .needsLoginItems, .controlsOthersOnly]
         for s in all {
             let text = ([s.title] + [s.detail].compactMap { $0 }).joined(separator: " ").lowercased()

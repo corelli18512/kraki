@@ -139,6 +139,11 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     private var snapshotApplyInFlight = false
     private var pendingSnapshotApply = false
     private var pendingSnapshotAnimated = false
+    /// A row's swipe actions are open. Reordering underneath them hides the
+    /// buttons for the whole move animation and can slide a different row
+    /// under the user's finger, so row moves wait until the swipe closes.
+    /// Row contents still update live (SwiftUI observes the store).
+    private var swipeActionsOpen = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -187,6 +192,11 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         scrollIndicator.hide()
+        if swipeActionsOpen {
+            swipeActionsOpen = false
+            needsApplyOnAppear = needsApplyOnAppear || pendingSnapshotApply
+            pendingSnapshotApply = false
+        }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { scrollIndicator.beginScrolling() }
@@ -272,7 +282,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
 
     func applySnapshot(animated: Bool) {
-        if snapshotApplyInFlight {
+        if snapshotApplyInFlight || swipeActionsOpen {
             pendingSnapshotApply = true
             pendingSnapshotAnimated = pendingSnapshotAnimated || animated
             return
@@ -456,6 +466,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         KLog.chat("👆 [session-list] tap session=\(id.prefix(12))")
         onCellTapped?(id)
+    }
+
+    func tableView(_ tableView: UITableView, willBeginEditingRowAt indexPath: IndexPath) {
+        swipeActionsOpen = true
+    }
+
+    func tableView(_ tableView: UITableView, didEndEditingRowAt indexPath: IndexPath?) {
+        swipeActionsOpen = false
+        guard pendingSnapshotApply, !snapshotApplyInFlight else { return }
+        let animated = pendingSnapshotAnimated
+        pendingSnapshotApply = false
+        pendingSnapshotAnimated = false
+        applySnapshot(animated: animated)
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
