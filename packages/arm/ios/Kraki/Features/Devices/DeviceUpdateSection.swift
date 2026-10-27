@@ -65,9 +65,11 @@ struct DeviceUpdateSection: View {
         if let p = Self.presentation(device: device, store: store, now: now) {
             switch p.icon {
             case .spinner:
-                StatusRow(spinner: true, title: p.title, detail: p.detail, progress: p.progress)
+                StatusRow(spinner: true, title: p.title, detail: p.detail,
+                          detailIsMarkdown: p.detailIsMarkdown, progress: p.progress)
             case let .symbol(symbol, tint):
-                StatusRow(symbol: symbol, tint: tint, title: p.title, detail: p.detail, progress: p.progress)
+                StatusRow(symbol: symbol, tint: tint, title: p.title, detail: p.detail,
+                          detailIsMarkdown: p.detailIsMarkdown, progress: p.progress)
             }
             ForEach(p.actions, id: \.self) { actionRow($0) }
         }
@@ -107,6 +109,9 @@ struct DeviceUpdateSection: View {
         var icon: Icon
         var title: String
         var detail: String?
+        /// Only the update how-to (backticked `kraki update`) is Markdown;
+        /// other details carry device names and tentacle errors verbatim.
+        var detailIsMarkdown = false
         var progress: Double?
         var actions: [Action] = []
     }
@@ -119,6 +124,7 @@ struct DeviceUpdateSection: View {
         return Presentation(icon: .symbol("arrow.down.circle.fill", .krakiPrimary),
                             title: u.isMacApp ? String(localized: "Kraki for Mac \(u.latest) is available") : String(localized: "Kraki \(u.latest) is available"),
                             detail: u.remote ? nil : blockedText(u, store.deviceUpdates[device.id]?.remoteBlock),
+                            detailIsMarkdown: !u.remote,
                             actions: u.remote ? [.updateNow(enabled: device.online)] : [])
     }
 
@@ -193,6 +199,7 @@ private struct StatusRow: View {
     var spinner = false
     let title: String
     var detail: String?
+    var detailIsMarkdown = false
     var progress: Double?
 
     var body: some View {
@@ -211,7 +218,9 @@ private struct StatusRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.body)
                 if let detail {
-                    Text(LocalizedStringKey(detail))
+                    Group {
+                        if detailIsMarkdown { Text(LocalizedStringKey(detail)) } else { Text(verbatim: detail) }
+                    }
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -132,6 +132,26 @@ final class DeviceUpdateRenderTests: XCTestCase {
                        "Kraki 0.38.10 wasn’t installed on Mac mini.")
     }
 
+    /// Device names and tentacle error text are shown verbatim; only the
+    /// how-to-update help (backticked `kraki update`) is Markdown.
+    func testOnlyUpdateHelpDetailIsMarkdown() throws {
+        let available = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let failed = try store(online: true, available,
+                               DeviceUpdateProgress(phase: .failed, error: "*lab* [x](https://example.com) failed"))
+        let shown = DeviceUpdateSection.presentation(device: device(), store: failed.deviceStore, now: Date())
+        XCTAssertEqual(shown?.detail, "*lab* [x](https://example.com) failed")
+        XCTAssertEqual(shown?.detailIsMarkdown, false)
+        let named = try store(online: true, available, DeviceUpdateProgress(phase: .updated, to: "0.38.10"))
+        XCTAssertEqual(DeviceUpdateSection.presentation(device: device(), store: named.deviceStore, now: Date())?
+            .detailIsMarkdown, false)
+
+        let manual = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: false)
+        let help = DeviceUpdateSection.presentation(device: device(), store: try store(online: true, manual, nil).deviceStore,
+                                                    now: Date())
+        XCTAssertEqual(help?.detail, "Run `kraki update` on that computer.")
+        XCTAssertEqual(help?.detailIsMarkdown, true)
+    }
+
     /// Renders every state (catches crashes); waits for a settled frame and
     /// writes PNGs only when KRAKI_UPDATE_RENDER_DIR is set.
     func testRenderUpdateStates() throws {
