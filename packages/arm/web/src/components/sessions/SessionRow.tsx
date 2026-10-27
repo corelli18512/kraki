@@ -161,7 +161,7 @@ export const SessionRow = memo(function SessionRow({
             {unread ? <BellOff /> : <BellRing />} {unread ? t('row.markRead') : t('row.markUnread')}
           </button>
           {/* Mac: Rename lives in Session Info, opened over the selected chat. */}
-          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`); setMenu(null); }}><Pencil /> {t('row.rename')}</button>
+          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`, { replace: selected }); setMenu(null); }}><Pencil /> {t('row.rename')}</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
             <GitFork /> {t('row.fork')}
           </button>

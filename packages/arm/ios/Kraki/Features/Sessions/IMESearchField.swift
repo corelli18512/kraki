@@ -41,10 +41,22 @@ struct IMESearchField: UIViewRepresentable {
     }
 
     func updateUIView(_ field: UITextField, context: Context) {
-        context.coordinator.text = $text
-        // Never overwrite the field while the IME is composing: that cancels
-        // the composition. External changes (Clear button) apply otherwise.
-        if field.markedTextRange == nil, field.text != text { field.text = text }
+        let coordinator = context.coordinator
+        coordinator.text = $text
+        if text != coordinator.published {
+            // Changed from outside (the Clear button): applies even mid-
+            // composition, which it ends; otherwise the next commit would
+            // publish the old text back.
+            coordinator.published = text
+            coordinator.applyingExternalChange = true
+            if field.markedTextRange != nil { field.unmarkText() }
+            if field.text != text { field.text = text }
+            coordinator.applyingExternalChange = false
+        } else if field.markedTextRange == nil, field.text != text {
+            // Never overwrite the field while the IME is composing: that
+            // cancels the composition.
+            field.text = text
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
@@ -55,14 +67,22 @@ struct IMESearchField: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
+        /// The last value this field put into (or saw in) the binding; any
+        /// other value was set from outside.
+        var published: String
+        var applyingExternalChange = false
+        init(text: Binding<String>) {
+            self.text = text
+            published = text.wrappedValue
+        }
 
         @objc func edited(_ field: UITextField) { publish(field) }
         @objc func changed(_ note: Notification) { (note.object as? UITextField).map(publish) }
 
         func publish(_ field: UITextField) {
-            guard field.markedTextRange == nil else { return }
+            guard !applyingExternalChange, field.markedTextRange == nil else { return }
             let value = field.text ?? ""
+            published = value
             if text.wrappedValue != value { text.wrappedValue = value }
         }
 

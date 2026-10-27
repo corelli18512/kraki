@@ -70,6 +70,11 @@ struct IOSNewSessionComposer: View {
                 .accessibilityLabel(recording ? String(localized: "Start session with what you said") : String(localized: "Start session"))
         }
         .onAppear { if !recording { focused = true } }
+        .onDisappear {
+            // Sheet swiped away: an utterance in progress becomes the draft
+            // and the microphone stops (as on the Mac).
+            voice.depart(sessionID: Self.draftID)
+        }
         .alert(VoiceConsent.title, isPresented: $showVoiceConsent) {
             Button(VoiceConsent.continueButton) {
                 VoiceConsent.grant()

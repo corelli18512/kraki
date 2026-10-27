@@ -8,7 +8,10 @@
 ///
 /// - only after a fresh setup sign-in (`pendingKey`, set by BuiltInSetupView);
 /// - never when the account already has a phone (it is cleared instead);
-/// - "Skip for Now", "Start Using Kraki" or quitting before it shows all end it.
+/// - once on screen it stays until "Skip for Now" or "Start Using Kraki": the
+///   phone joining is its success state, and a reconnect does not hide it.
+///   Quitting while it is pending brings it back on the next launch unless
+///   the account has a phone by then.
 ///
 /// Later, the phone is connected from the idle pane link, the Kraki menu
 /// ("Connect Your Phone…") or Settings › Devices.
@@ -23,7 +26,8 @@ struct MacConnectPhoneStep: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(Self.pendingKey) private var pending = false
     /// Wait briefly for the account's device list before deciding, so a user
-    /// who already has a phone never sees the step flash.
+    /// who already has a phone never sees the step flash. Once settled the
+    /// decision is latched for the step's lifetime.
     @State private var settled = false
 
     /// Phones only: a browser or another computer does not count.
@@ -42,17 +46,22 @@ struct MacConnectPhoneStep: View {
 
     var body: some View {
         ZStack {
-            if settled, Self.shouldShow(pending: pending, connected: appState.connectionStatus == .connected,
-                                       devicesKnown: devicesKnown, hasPhone: hasPhone) {
+            if settled && pending {
                 MacConnectPhoneStepPage { finish() }
                     .transition(.opacity)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: settled)
         .task(id: pending && appState.connectionStatus == .connected && devicesKnown) {
-            guard pending, appState.connectionStatus == .connected, devicesKnown else { return }
+            guard !settled, pending, appState.connectionStatus == .connected, devicesKnown else { return }
             try? await Task.sleep(for: .milliseconds(700))
-            if hasPhone { pending = false } else { settled = true }
+            guard !Task.isCancelled else { return }
+            if hasPhone {
+                pending = false
+            } else if Self.shouldShow(pending: pending, connected: appState.connectionStatus == .connected,
+                                      devicesKnown: devicesKnown, hasPhone: false) {
+                settled = true
+            }
         }
     }
 

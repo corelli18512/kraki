@@ -69,7 +69,7 @@ jobs:
           tar xzf actionlint.tgz actionlint
           ./actionlint -shellcheck= -color
       - name: Test change routing and release provenance
-        run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs scripts/release/*.test.mjs
+        run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs scripts/release/*.test.mjs scripts/l10n/*.test.mjs
       - name: Localization check (keys, placeholders, untranslated/hard-coded ratchet)
         # Dependency-free and fast; runs for every change (incl. catalog-only).
         run: node scripts/l10n/check.mjs

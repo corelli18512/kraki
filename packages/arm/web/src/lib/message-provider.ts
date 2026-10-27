@@ -131,7 +131,6 @@ class MessageProvider {
     this.rangeTombstones.delete(sessionId);
     this.tailFailures.delete(sessionId);
     this.uncertainEmptySessions.delete(sessionId);
-    getStore().setSessionLoading(sessionId, false);
     for (const listener of this.rangeListeners) listener();
   }
   /** Sessions currently loading */
@@ -256,17 +255,20 @@ class MessageProvider {
     return this.memoryWindow(sessionId, from, to) !== null;
   }
 
-  /** The held spine rows of [from, to] when the window is fully covered. */
-  private memoryWindow(sessionId: string, from: number, to: number): ChatMessage[] | null {
+  /** The held spine rows of [from, to] when the window is fully covered.
+   *  `tombstones: false` counts only rows actually held: loadRange's own
+   *  request below ignores tombstones too (an earlier page's absence must not
+   *  stop a foreground tail reconcile from asking the Tentacle). */
+  private memoryWindow(sessionId: string, from: number, to: number, { tombstones = true } = {}): ChatMessage[] | null {
     const memory = getStore().messages.get(sessionId);
     if (!memory?.length) return null;
     const spine = memory.filter((message) => isSpineCacheMessage(message)
       && 'sessionId' in message && message.sessionId === sessionId
       && (message as { seq: number }).seq >= from && (message as { seq: number }).seq <= to);
-    const gaps = (this.rangeTombstones.get(sessionId) ?? []).reduce(
-      (remaining, [lo, hi]) => excludeInterval(remaining, lo, hi),
-      missingIntervals(spine, from, to),
-    );
+    const holes = missingIntervals(spine, from, to);
+    const gaps = tombstones
+      ? (this.rangeTombstones.get(sessionId) ?? []).reduce((remaining, [lo, hi]) => excludeInterval(remaining, lo, hi), holes)
+      : holes;
     return gaps.length === 0 ? spine : null;
   }
 
@@ -294,8 +296,6 @@ class MessageProvider {
     this.loadingSessions.add(sessionId);
     this.loadingThroughSeq.set(sessionId, toSeq);
     if (options?.foreground) this.loadingForeground.add(sessionId);
-    if (options?.initial) getStore().setSessionLoading(sessionId, true);
-    this.setRangeStatus(sessionId, { state: 'loading' });
 
     try {
       const completed = await this.loadRange(sessionId, clampedFrom, toSeq, operation);
@@ -336,7 +336,6 @@ class MessageProvider {
         this.loadingSessions.delete(sessionId);
         this.loadingThroughSeq.delete(sessionId);
         this.loadingForeground.delete(sessionId);
-        getStore().setSessionLoading(sessionId, false);
         const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
         if (pendingLastSeq !== undefined) {
           this.pendingTailReconciles.delete(sessionId);
@@ -372,7 +371,7 @@ class MessageProvider {
     // request, so an IDB read could only re-deliver what is already shown (a
     // chat open's route reconcile followed by its subscription snapshot at the
     // same seq; a closing idle followed by the session_list digest).
-    const held = this.memoryWindow(sessionId, from, to);
+    const held = this.memoryWindow(sessionId, from, to, { tombstones: false });
     if (held) {
       this.confirmEchoedOutbox(sessionId, held);
       return true;
@@ -401,6 +400,9 @@ class MessageProvider {
     let request: [number, number] | undefined = missing.length ? [missing[0][0], to] : undefined;
     for (let page = 0; request; page++) {
       if (page === 50) throw new RangeFailure('page-limit');
+      // Loading is shown only while the Tentacle is asked: a window served
+      // from memory or the cache (every closing idle) must not flash it.
+      if (page === 0) this.setRangeStatus(sessionId, { state: 'loading' });
       const [requestFrom, requestTo] = request;
       const batch = await this.requestFromTentacle(sessionId, requestFrom - 1, requestTo - requestFrom + 1);
       if (!this.owns(sessionId, operation)) return false;

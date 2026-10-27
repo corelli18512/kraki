@@ -54,8 +54,8 @@ struct DeviceDetailView: View {
     }
 
     private var canRemove: Bool {
-        // Offline in the middle of an update is a restart, not a dead computer.
-        !device.online && !isCurrentDevice && appState.deviceStore.updateProgress[device.id]?.isActive != true
+        !device.online && !isCurrentDevice
+            && !DeviceUpdateSection.blocksRemoval(appState.deviceStore.updateProgress[device.id], now: Date())
     }
 
     private var statusLabel: String {
@@ -107,10 +107,12 @@ struct DeviceDetailView: View {
 
             // Subscription accounts signed in on this device. Each account's card in
             // Devices › Accounts merges it across every device that shares it.
-            if device.online, appState.deviceStore.deviceFeatures[device.id]?.contains("account_usage") == true
-                || appState.deviceStore.deviceUsage[device.id]?.accounts.isEmpty == false {
+            // As in Devices: only when an account has reported, never as an
+            // empty card with a Refresh button.
+            let accounts = appState.deviceStore.usageForDevice(device.id)
+            if device.online, !accounts.isEmpty {
                 Section {
-                    ForEach(appState.deviceStore.usageForDevice(device.id)) { reading in
+                    ForEach(accounts) { reading in
                         AccountUsageRow(merged: reading)
                     }
                 } header: {

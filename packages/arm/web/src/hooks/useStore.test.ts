@@ -193,6 +193,18 @@ describe('useStore', () => {
       expect(useStore.getState().sessions.get('s1')?.deviceName).toBe(mockDevice.name);
     });
 
+    it('setDevices and upsertDevice relabel sessions renamed while this app was offline', () => {
+      useStore.getState().upsertSession({ id: 's1', deviceId: 'dev-1', deviceName: mockDevice.name, agent: 'copilot', state: 'idle', messageCount: 0 });
+      useStore.getState().upsertSession({ id: 's2', deviceId: 'dev-2', deviceName: mockDevice2.name, agent: 'copilot', state: 'idle', messageCount: 0 });
+      useStore.getState().setDevices([{ ...mockDevice, name: 'Work laptop', defaultName: mockDevice.name }, mockDevice2]);
+      expect(useStore.getState().sessions.get('s1')?.deviceName).toBe('Work laptop');
+      expect(useStore.getState().sessions.get('s2')?.deviceName).toBe(mockDevice2.name);
+
+      useStore.getState().upsertDevice({ ...mockDevice2, name: 'Build box', defaultName: mockDevice2.name });
+      expect(useStore.getState().sessions.get('s2')?.deviceName).toBe('Build box');
+      expect(useStore.getState().sessions.get('s1')?.deviceName).toBe('Work laptop');
+    });
+
     it('setDeviceOnline toggles online status', () => {
       useStore.getState().setDevices([mockDevice]);
       useStore.getState().setDeviceOnline('dev-1', false);

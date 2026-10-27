@@ -96,6 +96,16 @@ describe('DiagClient (native DiagClient protocol)', () => {
     expect(gone.recorder.isEnabled).toBe(false);
   });
 
+  it('overlapping ticks send one request at a time and count the daily bytes once (native single task)', async () => {
+    const h = harness();
+    await h.configure(); h.recorder.record('app.launch', undefined);
+    h.advance(5_000); await Promise.all([h.client.tick(), h.client.tick()]);
+    expect(h.calls.map((c) => c.path)).toEqual(['config']);
+    h.advance(15_000); await Promise.all([h.client.tick(), h.client.tick(), h.client.tick()]);
+    expect(h.calls.map((c) => c.path)).toEqual(['config', 'batch']);
+    expect(Number(h.storage.m.get('kraki.diag.bytes'))).toBe(h.calls[1]!.body!.byteLength);
+  });
+
   it('a transient failure keeps the identical batch for a backed-off retry', async () => {
     const h = harness({ batch: { status: 503 } });
     await h.configure(); h.recorder.record('app.launch', undefined);
@@ -156,6 +166,59 @@ describe('StabilityTracker (port)', () => {
     t.transportLost('transport_silent', undefined, 0); // dropped again before catching up
     t.connecting(); go(200); t.authenticated(); t.sessionListApplied(null);
     expect(out).toEqual([{ outage: expect.objectContaining({ reason: 'peer_closed', code: 1006, detectMs: 400, outcome: 'recovered', attempts: 2, reconnectMs: 500, impactMs: 900 }) }]);
+  });
+  it('an opening during an outage or app opening is recorded with reconnecting, without cancelling that record (native)', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.conversationOpened('s', 3, 3, true); t.conversationRendered('s', 3, 3, true);
+    go(1000); t.transportLost('peer_closed', 1006, 0);
+    t.conversationOpened('s', 5, 3, false);
+    t.connecting(); go(300); t.authenticated(); t.sessionListApplied({ sessionId: 's', lastSeq: 5, localSeq: 3 });
+    go(200); t.conversationRendered('s', 5, 5, true);
+    expect(out).toEqual([
+      { open: expect.objectContaining({ outcome: 'current', reconnecting: false }) },
+      { open: expect.objectContaining({ outcome: 'current', reconnecting: true, gap: 2, currentMs: 500 }) },
+      { outage: expect.objectContaining({ outcome: 'recovered', reconnectMs: 300 }) },
+    ]);
+    out.length = 0;
+    t.appHidden(); t.transportLost('peer_closed', 1006, 0); go(1000); t.appVisible(true, true); // warm opening in progress
+    t.conversationOpened('s', 5, 5, false);
+    go(StabilityTracker.readyTimeout);
+    expect(out).toEqual([
+      { ready: expect.objectContaining({ kind: 'warm', outcome: 'timeout' }) },
+      { open: expect.objectContaining({ outcome: 'timeout', reconnecting: true }) },
+    ]);
+  });
+  it('warm opening on a socket that stayed signed in is current at once and marked kept (native keptConnection)', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, true); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.appHidden(); go(5000); t.appVisible(true, true);
+    expect(out).toEqual([{ ready: expect.objectContaining({ kind: 'warm', outcome: 'ready', kept: true, backgroundMs: 5000, wsOpenMs: 0, authedMs: 0, listFreshMs: 0, viewCurrentMs: 0 }) }]);
+    // A socket lost while hidden reconnects: a normal warm record, not kept.
+    out.length = 0;
+    t.appHidden(); t.transportLost('peer_closed', 1006, 0); go(5000); t.appVisible(true, true);
+    t.connecting(); go(100); t.authenticated(); t.sessionListApplied(null);
+    expect(out).toEqual([{ ready: expect.objectContaining({ kind: 'warm', outcome: 'ready', authedMs: 100 }) }]);
+    expect((out[0] as { ready: { kept?: boolean } }).ready.kept).toBeUndefined();
+  });
+  it('sleep: the next visibility is a wake opening, even when the window was also hidden; later outages count from the wake', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.systemWillSleep(); t.appHidden(); go(60_000);
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null);
+    go(1000); t.transportLost('peer_closed', 1006, 120_000);
+    t.connecting(); go(100); t.authenticated(); t.sessionListApplied(null);
+    expect(out).toEqual([
+      { ready: expect.objectContaining({ kind: 'wake', backgroundMs: 60_000, outcome: 'ready' }) },
+      { outage: expect.objectContaining({ afterWake: true, detectMs: 1000, outcome: 'recovered' }) },
+    ]);
+  });
+  it('offline with no reconnect running, an opening is not recorded', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.conversationOpened('s', 5, 3, false);
+    go(StabilityTracker.readyTimeout);
+    expect(out).toEqual([]);
   });
 });
 

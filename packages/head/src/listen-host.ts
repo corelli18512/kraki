@@ -3,9 +3,9 @@
  *
  * `open` auth without a shared key lets anyone who can reach the port join
  * the `local` account and drive its computers. That mode therefore listens
- * on loopback by default, and refuses a non-loopback HOST until
+ * on loopback by default, and refuses a non-loopback host until
  * OPEN_SHARED_KEY is set. Every other mode keeps Node's default bind (all
- * interfaces) unless HOST is set.
+ * interfaces) unless a host is set.
  */
 
 import { isIP } from 'node:net';
@@ -13,7 +13,7 @@ import { isIP } from 'node:net';
 export const LOOPBACK_HOST = '127.0.0.1';
 
 export interface ListenHostInput {
-  /** HOST env / --host flag; empty when unset. */
+  /** KRAKI_HOST env / --host flag; empty when unset. */
   host: string;
   authModes: readonly string[];
   /** OPEN_SHARED_KEY env / --open-shared-key flag; empty when unset. */
@@ -52,6 +52,6 @@ export function resolveListenHost(input: ListenHostInput): ListenHostResult {
       `Refusing to listen on ${host}: auth mode "open" without a shared key lets anyone who can reach ` +
       'this port control your computers.\n' +
       '  Set OPEN_SHARED_KEY=<long random secret> (and put the same secret in ~/.kraki/channel.key on each computer),\n' +
-      '  or use --auth github / --auth apikey, or listen on loopback only (unset HOST or use --host 127.0.0.1).',
+      '  or use --auth github / --auth apikey, or listen on loopback only (unset KRAKI_HOST or use --host 127.0.0.1).',
   };
 }

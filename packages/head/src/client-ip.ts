@@ -20,6 +20,19 @@ export function clientIp(req: IncomingMessage | undefined, trustedProxies = conf
   return normalize(forwarded) ?? peer;
 }
 
+const FORWARDING_HEADERS = ['x-forwarded-for', 'x-real-ip', 'forwarded', 'x-forwarded-host', 'cf-connecting-ip'];
+
+/** The request came straight from this machine: a loopback peer and no
+ *  forwarding header (a reverse proxy on this host connects from loopback
+ *  too, but adds one). */
+export function isDirectLoopback(req: IncomingMessage): boolean {
+  if (FORWARDING_HEADERS.some((h) => req.headers[h] !== undefined)) return false;
+  const addr = req.socket.remoteAddress ?? '';
+  // All of 127.0.0.0/8, like listen-host's isLoopbackHost (a relay bound to
+  // 127.0.0.2 sees its local clients from that address).
+  return addr === '::1' || /^(::ffff:)?127\./.test(addr);
+}
+
 export function isTrustedProxy(address: string, trustedProxies: ReadonlySet<string>): boolean {
   return address === '127.0.0.1' || address === '::1' || trustedProxies.has(address);
 }

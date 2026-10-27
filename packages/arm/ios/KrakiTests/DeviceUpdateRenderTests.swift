@@ -4,8 +4,9 @@ import UIKit
 import XCTest
 @testable import Kraki
 
-/// Renders the device detail page's update section in every state for review.
-/// Writes PNGs to KRAKI_UPDATE_RENDER_DIR when set.
+/// The device detail page's update section in every state: what each state
+/// shows (title and action rows) is asserted; PNGs for review are written to
+/// KRAKI_UPDATE_RENDER_DIR when set.
 @MainActor
 final class DeviceUpdateRenderTests: XCTestCase {
     private let id = "mini"
@@ -45,20 +46,119 @@ final class DeviceUpdateRenderTests: XCTestCase {
         ]
     }
 
+    private typealias Presentation = DeviceUpdateSection.Presentation
+
+    /// Title and action rows per state, in `states` order.
+    private let expected: [String: (String, [Presentation.Action])] = [
+        "01-available": ("Kraki 0.38.10 is available", [.updateNow(enabled: true)]),
+        "02-available-offline": ("Kraki 0.38.10 is available", [.updateNow(enabled: false)]),
+        "03-requested": ("Asking Mac mini to update…", []),
+        "04-busy": ("2 sessions are running", [.choose]),
+        "05-waiting": ("Waiting for sessions to finish", []),
+        "06-downloading": ("Downloading Kraki 0.38.10…", []),
+        "07-installing": ("Installing Kraki 0.38.10…", []),
+        "08-installing-late": ("The update didn’t finish", [.retry, .dismiss]),
+        "09-updated": ("Updated to Kraki 0.38.10", []),
+        "11-rolled-back": ("Update didn’t work", [.dismiss]),
+        "12-failed": ("Couldn’t update", [.retry, .dismiss]),
+    ]
+
+    private func store(online: Bool, _ info: DeviceUpdateInfo?, _ progress: DeviceUpdateProgress?) throws -> AppState {
+        let app = try app()
+        let store = app.deviceStore
+        store.setDevices([device(online: online)])
+        if online {
+            store.setGreeting(id, name: "Mac mini",
+                              agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)],
+                              version: info?.current ?? "0.38.9")
+        }
+        if let info { store.setDeviceUpdate(id, update: info) }
+        store.setUpdateProgress(id, progress)
+        return app
+    }
+
+    func testUpdateStatesShowTheirTitleAndActions() throws {
+        for (name, online, info, progress) in states {
+            let app = try store(online: online, info, progress)
+            let shown = DeviceUpdateSection.presentation(device: device(online: online), store: app.deviceStore, now: Date())
+            guard let (title, actions) = expected[name] else {
+                XCTAssertNil(shown, "\(name) shows no update section")
+                XCTAssertFalse(DeviceUpdateSection.isShown(app.deviceStore, id), name)
+                continue
+            }
+            XCTAssertTrue(DeviceUpdateSection.isShown(app.deviceStore, id), name)
+            XCTAssertEqual(shown?.title, title, name)
+            XCTAssertEqual(shown?.actions, actions, name)
+        }
+    }
+
+    /// A computer that never comes back from an update (or goes offline
+    /// before answering) must not leave the section stuck without Dismiss,
+    /// nor keep Remove Device hidden until the app relaunches.
+    func testStalledUpdateOfflineOffersDismissAndAllowsRemoval() throws {
+        let available = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let late = Date().addingTimeInterval(-(DeviceUpdateSection.installTimeout + 20))
+        for phase in [DeviceUpdateProgress.Phase.requested, .waiting_idle, .downloading, .installing] {
+            let progress = DeviceUpdateProgress(phase: phase, from: "0.38.9", to: "0.38.10", at: late)
+            let app = try store(online: false, available, progress)
+            let shown = DeviceUpdateSection.presentation(device: device(online: false), store: app.deviceStore, now: Date())
+            XCTAssertEqual(shown?.title, "Mac mini isn’t back online yet", "\(phase)")
+            XCTAssertEqual(shown?.actions, [.dismiss], "\(phase)")
+            XCTAssertFalse(DeviceUpdateSection.blocksRemoval(progress, now: Date()), "\(phase)")
+        }
+        let fresh = DeviceUpdateProgress(phase: .installing, from: "0.38.9", to: "0.38.10")
+        XCTAssertTrue(DeviceUpdateSection.blocksRemoval(fresh, now: Date()), "offline mid-update is a restart")
+        let shown = DeviceUpdateSection.presentation(device: device(online: false),
+                                                     store: try store(online: false, available, fresh).deviceStore, now: Date())
+        XCTAssertEqual(shown?.title, "Installing Kraki 0.38.10…")
+        XCTAssertFalse(DeviceUpdateSection.blocksRemoval(DeviceUpdateProgress(phase: .failed), now: Date()))
+        XCTAssertFalse(DeviceUpdateSection.blocksRemoval(nil, now: Date()))
+    }
+
+    /// A slow install never went offline, and the computer reports what it
+    /// runs: the timeout copy must not claim it came "back online" or name a
+    /// version other than the one it reports.
+    func testInstallTimeoutReportsTheComputersCurrentVersion() throws {
+        let late = Date().addingTimeInterval(-(DeviceUpdateSection.installTimeout + 20))
+        let reported = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let progress = DeviceUpdateProgress(phase: .installing, from: "0.38.8", to: "0.38.10", at: late)
+        let app = try store(online: true, reported, progress)
+        let shown = DeviceUpdateSection.presentation(device: device(), store: app.deviceStore, now: Date())
+        XCTAssertEqual(shown?.title, "The update didn’t finish")
+        XCTAssertEqual(shown?.detail, "Mac mini still runs Kraki 0.38.9.")
+
+        let unknown = try store(online: true, nil, DeviceUpdateProgress(phase: .installing, to: "0.38.10", at: late))
+        XCTAssertEqual(DeviceUpdateSection.presentation(device: device(), store: unknown.deviceStore, now: Date())?.detail,
+                       "Kraki 0.38.10 wasn’t installed on Mac mini.")
+    }
+
+    /// Device names and tentacle error text are shown verbatim; only the
+    /// how-to-update help (backticked `kraki update`) is Markdown.
+    func testOnlyUpdateHelpDetailIsMarkdown() throws {
+        let available = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let failed = try store(online: true, available,
+                               DeviceUpdateProgress(phase: .failed, error: "*lab* [x](https://example.com) failed"))
+        let shown = DeviceUpdateSection.presentation(device: device(), store: failed.deviceStore, now: Date())
+        XCTAssertEqual(shown?.detail, "*lab* [x](https://example.com) failed")
+        XCTAssertEqual(shown?.detailIsMarkdown, false)
+        let named = try store(online: true, available, DeviceUpdateProgress(phase: .updated, to: "0.38.10"))
+        XCTAssertEqual(DeviceUpdateSection.presentation(device: device(), store: named.deviceStore, now: Date())?
+            .detailIsMarkdown, false)
+
+        let manual = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: false)
+        let help = DeviceUpdateSection.presentation(device: device(), store: try store(online: true, manual, nil).deviceStore,
+                                                    now: Date())
+        XCTAssertEqual(help?.detail, "Run `kraki update` on that computer.")
+        XCTAssertEqual(help?.detailIsMarkdown, true)
+    }
+
+    /// Renders every state (catches crashes); waits for a settled frame and
+    /// writes PNGs only when KRAKI_UPDATE_RENDER_DIR is set.
     func testRenderUpdateStates() throws {
         let dir = ProcessInfo.processInfo.environment["KRAKI_UPDATE_RENDER_DIR"]
         for (name, online, info, progress) in states {
-            let app = try app()
-            let store = app.deviceStore
-            store.setDevices([device(online: online)])
-            if online {
-                store.setGreeting(id, name: "Mac mini",
-                                  agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)],
-                                  version: info?.current ?? "0.38.9")
-            }
-            if let info { store.setDeviceUpdate(id, update: info) }
-            store.setUpdateProgress(id, progress)
-            for style in [UIUserInterfaceStyle.light, .dark] {
+            let app = try store(online: online, info, progress)
+            for style in dir == nil ? [UIUserInterfaceStyle.light] : [.light, .dark] {
                 let host = UIHostingController(rootView: NavigationStack {
                     DeviceDetailView(device: device(online: online))
                 }.environment(app))
@@ -70,13 +170,16 @@ final class DeviceUpdateRenderTests: XCTestCase {
                 window.overrideUserInterfaceStyle = style
                 window.rootViewController = host
                 window.makeKeyAndVisible()
-                RunLoop.main.run(until: Date().addingTimeInterval(0.8))
-                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                }
-                if let dir, let png = image.pngData() {
-                    try png.write(to: URL(fileURLWithPath: dir)
-                        .appendingPathComponent("update-\(name)-\(style == .dark ? "dark" : "light").png"))
+                host.view.layoutIfNeeded()
+                if let dir {
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                    let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    }
+                    if let png = image.pngData() {
+                        try png.write(to: URL(fileURLWithPath: dir)
+                            .appendingPathComponent("update-\(name)-\(style == .dark ? "dark" : "light").png"))
+                    }
                 }
                 window.isHidden = true
             }

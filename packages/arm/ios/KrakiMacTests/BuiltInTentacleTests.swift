@@ -152,6 +152,26 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertNil(R.phase(after: .starting, line: "not json"))
     }
 
+    /// The CLI's `message` is English terminal text; the Mac shows localized
+    /// copy picked from `code`, like Windows (`DesktopSetup.tsx` SIGN_IN_ERRORS).
+    func testSetupErrorShowsCopyForTheCodeNotTheCLIMessage() {
+        typealias R = TentacleSetupRunner
+        func failure(_ code: String, _ message: String) -> R.Phase? {
+            R.phase(after: .starting, line: #"{"event":"error","code":"\#(code)","message":"\#(message)"}"#)
+        }
+        let network = R.Phase.failed(message: "Could not reach Kraki. Check your network connection, then try again.")
+        XCTAssertEqual(failure("relay_unreachable", "Cannot reach the Kraki relay (connect ECONNREFUSED 127.0.0.1:443)."), network)
+        XCTAssertEqual(failure("network", "Could not reach Kraki (fetch failed)."), network)
+        XCTAssertEqual(failure("client_id_unavailable", "x"), network)
+        XCTAssertEqual(failure("expired", "x"), .failed(message: "The GitHub code expired. Try again."))
+        XCTAssertEqual(failure("denied", "x"), .failed(message: "GitHub sign-in was cancelled."))
+        XCTAssertEqual(failure("bad_callback", "Invalid sign-in callback."), .failed(message: "GitHub sign-in could not be verified. Try again."))
+        XCTAssertEqual(failure("token_invalid", "x"), .failed(message: "GitHub sign-in could not be verified. Try again."))
+        XCTAssertEqual(failure("oauth_unavailable", "x"), .failed(message: "Browser sign-in is not available yet."))
+        XCTAssertEqual(failure("exchange_failed", "GitHub sign-in failed (500)."), .failed(message: "Sign-in did not finish. Try again."))
+        XCTAssertEqual(R.phase(after: .starting, line: #"{"event":"error"}"#), .failed(message: "Sign-in did not finish. Try again."))
+    }
+
     func testBrowserSignInEvents() {
         typealias R = TentacleSetupRunner
         let url = #"{"event":"oauth_url","url":"https://github.com/login/oauth/authorize?client_id=c","callbackScheme":"kraki"}"#

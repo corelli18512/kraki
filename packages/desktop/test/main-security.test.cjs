@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { readFileSync, mkdtempSync, writeFileSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
@@ -9,7 +10,7 @@ const mainPath = path.join(__dirname, '../src/main.cjs');
 const AUTHORIZE = 'https://github.com/login/oauth/authorize?client_id=c&redirect_uri=https%3A%2F%2Fapp.kraki.chat%2Fauth%2Fcallback&state=s';
 
 /** main.cjs against a recording Electron fake. */
-function loadMain() {
+function loadMain({ userData = '/nonexistent/kraki-security-test', displays = [] } = {}) {
   const mainRequire = createRequire(mainPath);
   const handlers = new Map();
   const windows = [];
@@ -42,7 +43,7 @@ function loadMain() {
   }
   const electron = {
     app: {
-      getPath: () => '/nonexistent/kraki-security-test', getVersion: () => 'test',
+      getPath: () => userData, getVersion: () => 'test',
       setAppUserModelId: () => {}, requestSingleInstanceLock: () => true,
       on: () => {}, whenReady: () => ({ then: () => {} }), commandLine: { appendSwitch: () => {} },
       setBadgeCount: () => {}, getLoginItemSettings: () => ({ openAtLogin: false }), setLoginItemSettings: () => {},
@@ -58,7 +59,16 @@ function loadMain() {
     nativeTheme: { shouldUseDarkColors: false },
     net: { fetch: async () => { notes.push('fetch'); return { status: 200, text: async () => '' }; } },
     protocol: { registerSchemesAsPrivileged: () => {} },
-    screen: { getAllDisplays: () => [] },
+    screen: {
+      getAllDisplays: () => displays,
+      // Electron: the display with the largest overlap (nearest if none).
+      getDisplayMatching: (r) => displays.map((d) => {
+        const a = d.workArea;
+        const w = Math.max(0, Math.min(r.x + r.width, a.x + a.width) - Math.max(r.x, a.x));
+        const h = Math.max(0, Math.min(r.y + r.height, a.y + a.height) - Math.max(r.y, a.y));
+        return { d, area: w * h };
+      }).sort((p, q) => q.area - p.area)[0]?.d,
+    },
     shell: {
       openExternal: (u) => { external.push(u); return Promise.resolve(); },
       openPath: (p) => { opened.push(p); return Promise.resolve(''); },
@@ -76,8 +86,9 @@ function loadMain() {
     console,
   });
   vm.runInContext(readFileSync(mainPath, 'utf8'), context);
+  const loadBounds = vm.runInContext('loadBounds', context);
   vm.runInContext('loadBounds = () => null; createWindow()', context);
-  return { context, handlers, windows, external, opened, notes, main: windows[0] };
+  return { loadBounds, context, handlers, windows, external, opened, notes, main: windows[0] };
 }
 
 /** A built-in Kraki that records every use. */
@@ -182,4 +193,45 @@ test('sign-in window opens https links only; built-in sign-in callback is unchan
   assert.equal(signIn.closed, false);
   signIn.emit('will-redirect', { preventDefault() {} }, 'https://app.kraki.chat/auth/callback/desktop?code=1&state=2');
   assert.equal(await result, 'kraki://auth/callback?code=1&state=2');
+});
+
+test('This PC: a failing CLI command shows localized copy plus the CLI\'s last line (Mac parity), never the raw child_process error', { skip: process.platform === 'win32' }, async () => {
+  const env = loadMain();
+  const home = mkdtempSync(path.join(tmpdir(), 'kraki-main-'));
+  try {
+    writeFileSync(path.join(home, 'config.json'), '{}');
+    const bin = path.join(home, 'kraki');
+    writeFileSync(bin, '#!/bin/sh\necho "kraki: daemon is not installed" >&2\nexit 1\n', { mode: 0o755 });
+    env.context.__builtIn = { bin, marker: () => null, home: () => home };
+    vm.runInContext('builtIn = __builtIn', env.context);
+    const event = { sender: env.main.webContents, senderFrame: env.main.webContents.mainFrame };
+    const detail = ' kraki: daemon is not installed';
+    for (const [action, error] of [['start', "Couldn't start the command-line Kraki."], ['stop', "Couldn't stop the command-line Kraki."], ['restart', "Couldn't restart the command-line Kraki."]]) {
+      const result = { ...await env.handlers.get('kraki:builtin-external-presence').fn(event, action) };
+      assert.deepEqual(result, { ok: false, error: error + detail });
+      assert.doesNotMatch(result.error, /Command failed|\//);
+    }
+    assert.deepEqual({ ...await env.handlers.get('kraki:settings-remote-updates').fn(event, false) }, { ok: false, error: 'Kraki could not change its update policy.' + detail });
+  } finally { rmSync(home, { recursive: true }); }
+});
+
+test('restored window bounds go to the display holding most of the window and fit its work area', () => {
+  const userData = mkdtempSync(path.join(tmpdir(), 'kraki-bounds-'));
+  const left = { workArea: { x: 0, y: 0, width: 1920, height: 1040 } };
+  const right = { workArea: { x: 1920, y: 0, width: 1920, height: 1040 } };
+  const restore = (saved, displays) => {
+    writeFileSync(path.join(userData, 'window-state.json'), JSON.stringify(saved));
+    const bounds = loadMain({ userData, displays }).loadBounds();
+    return bounds && { ...bounds };
+  };
+  try {
+    // 120 px on the left display, 1080 px on the right one: stays on the right.
+    assert.deepEqual(restore({ x: 1800, y: 100, width: 1200, height: 800 }, [left, right]), { x: 1920, y: 100, width: 1200, height: 800 });
+    assert.deepEqual(restore({ x: 1800, y: 100, width: 1200, height: 800 }, [right, left]), { x: 1920, y: 100, width: 1200, height: 800 });
+    // Scaling went from 100% to 150%: the work area shrank under the window.
+    assert.deepEqual(restore({ x: 400, y: 200, width: 1600, height: 1000, maximized: false }, [{ workArea: { x: 0, y: 0, width: 1280, height: 680 } }]),
+      { x: 0, y: 0, width: 1280, height: 680, maximized: false });
+    // Its display is gone: Electron's default placement.
+    assert.equal(restore({ x: 5000, y: 100, width: 1200, height: 800 }, [left, right]), null);
+  } finally { rmSync(userData, { recursive: true }); }
 });

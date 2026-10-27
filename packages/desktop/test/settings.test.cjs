@@ -159,3 +159,17 @@ test('CLI probe failures surface localized messages, never child_process output'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test('a failed CLI command keeps the last line it printed, never Node\'s "Command failed" wrapper (Mac parity)', { skip: process.platform === 'win32' }, async () => {
+  const { exec, withCliDetail, cliFailureDetail } = require('../src/settings.cjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'kraki-settings-'));
+  try {
+    const file = path.join(dir, 'kraki');
+    writeFileSync(file, '#!/bin/sh\necho "starting" ; echo "kraki: daemon is not installed" >&2 ; echo "" >&2 ; exit 1\n', { mode: 0o755 });
+    const error = await exec(file, ['stop']).then(() => null, (e) => e);
+    assert.ok(error);
+    assert.equal(cliFailureDetail(error), 'kraki: daemon is not installed');
+    assert.equal(withCliDetail("Couldn't stop the command-line Kraki.", error), "Couldn't stop the command-line Kraki. kraki: daemon is not installed");
+    assert.equal(withCliDetail('X.', new Error('Command failed: /x/kraki.exe stop')), 'X.');
+    assert.doesNotMatch(withCliDetail('X.', Object.assign(new Error('e'), { stderr: 'Command failed: /x/kraki.exe stop\n' })), /Command failed/);
+  } finally { rmSync(dir, { recursive: true }); }
+});

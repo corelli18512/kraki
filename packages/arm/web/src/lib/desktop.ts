@@ -130,6 +130,8 @@ export interface KrakiDesktopBridge {
   /** Performance data upload (Settings › Share Performance Data). The shell
    *  only sends to `<relay origin>/api/diag/v1/{config,batch}`, no redirects. */
   diag?: { request: (req: import('./diag/client').DiagHttpRequest) => Promise<{ status: number; body: string }> };
+  /** System sleep/wake (Electron powerMonitor). Absent in older shells. */
+  onPower?: (handler: (event: 'suspend' | 'resume') => void) => () => void;
 }
 
 declare global {

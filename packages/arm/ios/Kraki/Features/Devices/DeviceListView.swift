@@ -20,13 +20,6 @@ struct DeviceListView: View {
         tentacles.filter { !$0.online }
     }
 
-    /// Usage is optional: most people never sign a Claude or Codex
-    /// subscription in on their computers. Show the section only when at least
-    /// one account has reported, never as an empty card with a Refresh button.
-    static func showsAccounts(_ store: DeviceStore) -> Bool {
-        !store.mergedUsage().isEmpty
-    }
-
     var body: some View {
         Group {
             if tentacles.isEmpty {
@@ -79,6 +72,10 @@ struct DeviceListView: View {
 
             // Subscription usage is secondary to the computers themselves, and
             // per account (merged across devices): it follows the device list.
+            // Usage is optional: most people never sign a Claude or Codex
+            // subscription in on their computers. Show the section only when at
+            // least one account has reported, never as an empty card with a
+            // Refresh button.
             let accounts = appState.deviceStore.mergedUsage()
             if !accounts.isEmpty {
                 let outdated = appState.deviceStore.devicesNeedingUsageUpdate()

@@ -63,6 +63,14 @@ export class RemoteAuthBackend implements AuthBackend {
   private lifecycle = 0;
   /** The account service rejected a device that may be connected here. */
   onRevoked?: (revocation: EdgeRevocation) => void;
+  /** An authoritative answer was cached: the edge mirrors account-owned
+   *  state (the `internal` flag) here too, so the mirror is never older than
+   *  the cache that local sign-ins answer from (even when the socket that
+   *  asked closed before its handshake completed). */
+  onAuthoritative?: (result: AuthResult) => void;
+  /** Whether a device has a live connection here; unset keeps every cached
+   *  row in the status poll (see EdgeAuthCache.pruneStale). */
+  isConnected?: (deviceId: string) => boolean;
 
   constructor(options: RemoteAuthBackendOptions) {
     this.accountUrl = options.accountUrl.replace(/\/+$/, '');
@@ -112,6 +120,9 @@ export class RemoteAuthBackend implements AuthBackend {
     const cache = this.edgeCache;
     if (!cache) return;
     const lifecycle = this.lifecycle;
+    // Rows too old for local sign-in only matter while their device is
+    // connected (a revocation must still kick it); the rest would be polled forever.
+    if (only === undefined) cache.pruneStale((deviceId) => this.isConnected?.(deviceId) ?? true);
     // Identity and epoch captured together, before any request is out.
     const entries = cache.entries().filter((e) => only === undefined || e.deviceId === only)
       .map((e) => ({ ...e, epoch: cache.epoch(e.deviceId) }));
@@ -177,6 +188,7 @@ export class RemoteAuthBackend implements AuthBackend {
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
     const epoch = device.deviceId && cache ? cache.epoch(device.deviceId) : undefined;
+    const drops = device.deviceId && cache ? cache.dropCount(device.deviceId) : undefined;
     const clock = cache?.clock() ?? 0;
     // The account service throttles failed logins per client IP; forward the
     // end user's address, not this edge's.
@@ -194,6 +206,8 @@ export class RemoteAuthBackend implements AuthBackend {
       if (cache?.isTombstoned(result.ok ? result.deviceId : '')) {
         return { ok: false, code: 'account_deleted', message: 'This Kraki account was deleted.' };
       }
+      const newer = result.ok && !unnamedButStale && drops !== undefined ? cache?.newerAnswerFor(result, drops) : undefined;
+      if (newer) return { ...newer, authMethod: result.authMethod };
       return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
     }
     return result;
@@ -227,7 +241,7 @@ export class RemoteAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const cache = this.edgeCache;
-    const check = (cache ?? this.nonceSource)?.takeNonce(nonce, deviceId) ?? 'unknown';
+    const check = (cache ?? this.nonceSource)?.checkNonce(nonce, deviceId) ?? 'unknown';
     if (check === 'expired' || check === 'foreign') {
       // Issued by this edge, but stale, reused or for another device. The
       // account service never saw it; retryable so the client asks again.
@@ -237,6 +251,8 @@ export class RemoteAuthBackend implements AuthBackend {
       const cached = this.localChallengeActive ? cache!.lookup(deviceId) : undefined;
       const sameKeys = cached !== undefined && (encryptionKey === undefined || encryptionKey === cached.encryptionKey);
       if (cached && sameKeys && cache!.verifySignature(cached, nonce, signature)) {
+        // Single use (nothing since checkNonce awaited).
+        cache!.acceptNonce(nonce);
         metrics().inc('auth.localVerify');
         if (cache!.claimRevalidation(deviceId)) {
           // The account service only verifies nonces it issued, so the
@@ -251,9 +267,14 @@ export class RemoteAuthBackend implements AuthBackend {
       // (removed, account deleted) or a retryable refusal.
     }
     const epoch = cache?.epoch(deviceId);
+    const drops = cache?.dropCount(deviceId);
     const result = await this.post<AuthOutcome>('/api/auth/verify', { deviceId, nonce, signature, encryptionKey, headRegion });
     if (cache && cache === this.edgeCache) {
       if (result.ok && this.storeAuthoritative(cache, result, epoch) === 'stale') {
+        // Lost only to a newer answer for the same identity (the client
+        // retried a slow sign-in): sign in with that one.
+        const newer = cache.newerAnswerFor(result, drops!);
+        if (newer) return { ...newer, authMethod: result.authMethod };
         return { ok: false, code: 'service_unavailable', message: 'Device changed during sign-in, try again' };
       }
       // Only a verdict about the device drops trust (a wrong signature from
@@ -275,6 +296,7 @@ export class RemoteAuthBackend implements AuthBackend {
   private storeAuthoritative(cache: EdgeAuthCache, result: AuthResult, epoch: number | undefined): 'stored' | 'stale' | 'skipped' {
     const before = cache.identity(result.deviceId);
     const stored = cache.remember(result, epoch);
+    if (stored === 'stored') this.onAuthoritative?.(result);
     if (stored !== 'stored' || !before) return stored;
     const after = cache.identity(result.deviceId);
     if (after && (after.userId !== before.userId || after.keyFingerprint !== before.keyFingerprint)) {

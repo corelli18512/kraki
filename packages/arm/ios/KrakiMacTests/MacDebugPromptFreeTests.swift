@@ -133,6 +133,16 @@ final class MacDebugPromptFreeTests: XCTestCase {
         XCTAssertEqual(TentacleCLIManager.staleDaemonBinary(
             pids: [10], expectedPath: helper, isAlive: alive, pathOf: { _ in moved }),
             "pid 10: \(moved)")
+        // Another copy of the app (a second install, a translocated or a
+        // development build) is not a replaced binary: restarting would only
+        // relaunch the copy launchd registered and kill its running turns.
+        for copy in [
+            "/Users/x/Downloads/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki",
+            "/private/var/folders/ab/T/AppTranslocation/1234/d/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki",
+        ] {
+            XCTAssertNil(TentacleCLIManager.staleDaemonBinary(
+                pids: [10], expectedPath: helper, isAlive: alive, pathOf: { _ in copy }), copy)
+        }
         // An exited process is not stale.
         XCTAssertNil(TentacleCLIManager.staleDaemonBinary(
             pids: [10], expectedPath: helper, isAlive: { _ in false }, pathOf: { _ in nil }))

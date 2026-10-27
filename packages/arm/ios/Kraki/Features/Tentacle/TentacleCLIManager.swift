@@ -764,10 +764,17 @@ extension TentacleCLIManager {
         return String(cString: buffer)
     }
 
-    /// Description of the first daemon process that no longer runs the
-    /// helper at `expectedPath` (its executable was deleted or lives
-    /// elsewhere), or nil when every live one does. Processes that already
-    /// exited are skipped: gone is not stale.
+    /// Where Sparkle keeps the old bundle while it installs an update.
+    nonisolated static let sparkleInstallationComponent = "/org.sparkle-project.Sparkle/Installation/"
+
+    /// Description of the first daemon process whose helper was replaced:
+    /// its executable was deleted, or it runs from where Sparkle moved the
+    /// old bundle during an update. Nil when every live one runs a helper
+    /// that is still installed. A daemon of another copy of the app (a second
+    /// install, a translocated or a development build) is not stale: a
+    /// restart only relaunches the copy launchd registered and kills its
+    /// running turns. Processes that already exited are skipped: gone is not
+    /// stale.
     nonisolated static func staleDaemonBinary(
         pids: [Int],
         expectedPath: String,
@@ -782,7 +789,7 @@ extension TentacleCLIManager {
                 continue
             }
             let actual = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            if actual != expected { return "pid \(pid): \(path)" }
+            if actual != expected, actual.contains(Self.sparkleInstallationComponent) { return "pid \(pid): \(path)" }
         }
         return nil
     }

@@ -140,6 +140,37 @@ final class IOSSearchIMETests: XCTestCase {
         XCTAssertTrue(field.isFirstResponder)
     }
 
+    @Observable final class Query { var text = "" }
+
+    struct FieldHost: View {
+        @Bindable var query: Query
+        var body: some View { IMESearchField(placeholder: "Search Sessions", text: $query.text) }
+    }
+
+    /// The header's × sets the query to "" while "zh" is still being
+    /// composed after a committed "中": the field must empty (composition
+    /// dropped), and the next commit must not bring "中" back.
+    func testClearWhileComposingEmptiesTheField() throws {
+        let query = Query()
+        window.rootViewController = UIHostingController(rootView: FieldHost(query: query))
+        drain(600)
+        let field = try openSearch()
+        commit(field, "中")
+        XCTAssertEqual(query.text, "中")
+        compose(field, "zh")
+        XCTAssertNotNil(field.markedTextRange)
+        XCTAssertEqual(query.text, "中")
+
+        query.text = ""
+        drain(400)
+        XCTAssertEqual(field.text ?? "", "", "Clear empties the field")
+        XCTAssertNil(field.markedTextRange, "Clear ends the composition")
+        XCTAssertEqual(query.text, "")
+
+        commit(field, "国")
+        XCTAssertEqual(query.text, "国", "the cleared text does not come back")
+    }
+
     /// Plain (non-IME) typing still filters live, character by character.
     func testLatinTypingFiltersLive() throws {
         let field = try openSearch()

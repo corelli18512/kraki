@@ -19,11 +19,15 @@ export interface ReadySummary {
   path: string;
   outcome: 'ready' | 'abandoned' | 'timeout';
   previousExit?: string;
+  /** Warm only: the signed-in socket survived the background (native `kept`). */
+  kept?: boolean;
 }
 export interface OpenSummary {
   firstContentMs?: number;
   currentMs?: number;
   gap: number;
+  /** Opened while an app-open or outage record was in progress. */
+  reconnecting: boolean;
   outcome: 'current' | 'left' | 'timeout';
 }
 export interface OutageSummary {
@@ -57,6 +61,8 @@ export class StabilityTracker {
   private hiddenAt: number | null = null;
   private asleepAt: number | null = null;
   private everAuthenticated = false;
+  /** Signed in on a socket that has not been lost since (native: connected). */
+  private signedIn = false;
   private lastPathChange: number | null = null;
   private lastWake: number | null = null;
   private readySince: number | null = null;
@@ -71,12 +77,14 @@ export class StabilityTracker {
   private target: { sessionId: string; seq: number } | null = null;
   private opening: { sessionId: string; since: number; target: number; value: OpenSummary } | null = null;
   private generation = 0;
+  private openGeneration = 0;
 
   /** Discard identity-bound milestones and invalidate their timers without summaries.
    * Keep the process exit marker, current network path, clocks and callbacks. */
   reset(): void {
     this.generation += 1;
-    this.everVisible = this.everAuthenticated = false;
+    this.openGeneration += 1;
+    this.everVisible = this.everAuthenticated = this.signedIn = false;
     this.hiddenAt = this.asleepAt = this.lastPathChange = this.lastWake = null;
     this.readySince = null;
     this.ready = null;
@@ -93,6 +101,8 @@ export class StabilityTracker {
     if (this.asleepAt !== null) {
       const asleep = this.asleepAt;
       this.asleepAt = null;
+      // Hidden during the sleep too: this wake opening covers it.
+      this.hiddenAt = null;
       this.lastWake = this.now();
       this.begin('wake', asleep, true, viewing);
       return;
@@ -104,6 +114,13 @@ export class StabilityTracker {
       const hidden = this.hiddenAt;
       this.hiddenAt = null;
       this.begin('warm', hidden, true, viewing);
+      if (this.signedIn && this.ready) {
+        // Still signed in and receiving: current the moment it shows
+        // (StabilityTracker.swift appVisible keptConnection).
+        this.ready.kept = true;
+        this.ready.wsOpenMs = this.ready.authedMs = this.ready.listFreshMs = this.ready.viewCurrentMs = 0;
+        this.finishReady('ready');
+      }
     }
   }
 
@@ -129,6 +146,7 @@ export class StabilityTracker {
   }
 
   connecting(): void {
+    this.signedIn = false;
     if (this.ready) {
       this.readyConnects += 1;
       this.ready.attempts = Math.max(0, this.readyConnects - 1);
@@ -141,6 +159,7 @@ export class StabilityTracker {
   }
 
   transportLost(reason: string, code: number | undefined, quietForMs: number | undefined): void {
+    this.signedIn = false;
     if (this.hiddenAt !== null || this.asleepAt !== null || !this.everAuthenticated || this.ready) return;
     if (this.outage) {
       if (this.outageReauthed !== null) {
@@ -169,7 +188,7 @@ export class StabilityTracker {
   }
 
   authenticated(): void {
-    this.everAuthenticated = true;
+    this.everAuthenticated = this.signedIn = true;
     if (this.readySince !== null && this.ready) {
       if (this.ready.authedMs === undefined) this.ready.authedMs = this.ms(this.readySince);
       this.awaitingList = true;
@@ -194,12 +213,17 @@ export class StabilityTracker {
 
   get wantsConversationUpdates(): boolean { return !!this.ready || !!this.target || !!this.opening; }
 
+  /** A tap while (re)connecting is recorded too, flagged `reconnecting`
+   * (native: "reconnected, opened the chat, Syncing…"). */
   conversationOpened(sessionId: string, lastSeq: number, localSeq: number, online: boolean): void {
     this.finishOpen('left');
-    if (!online || this.ready || this.outage || this.hiddenAt !== null || this.asleepAt !== null) return;
-    this.opening = { sessionId, since: this.now(), target: lastSeq, value: { gap: Math.max(0, lastSeq - localSeq), outcome: 'current' } };
-    const token = ++this.generation;
-    this.schedule(StabilityTracker.readyTimeout, () => { if (this.generation === token) this.finishOpen('timeout'); });
+    const reconnecting = !!this.ready || !!this.outage;
+    // Offline with no reconnect in progress: nothing to wait for.
+    if (!(online || reconnecting) || this.hiddenAt !== null || this.asleepAt !== null) return;
+    this.opening = { sessionId, since: this.now(), target: lastSeq, value: { gap: Math.max(0, lastSeq - localSeq), reconnecting, outcome: 'current' } };
+    // Its own counter: an opening must not cancel the ready/outage timeout.
+    const token = ++this.openGeneration;
+    this.schedule(StabilityTracker.readyTimeout, () => { if (this.openGeneration === token) this.finishOpen('timeout'); });
   }
 
   conversationRendered(sessionId: string, localSeq: number, lastSeq: number, hasContent: boolean): void {
