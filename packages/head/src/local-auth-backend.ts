@@ -5,6 +5,7 @@
 
 import { randomBytes } from 'crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
+import { ChallengeNonces } from './challenge-nonce.js';
 import { keyFingerprint } from './edge-auth-cache.js';
 import { v4 as uuid } from 'uuid';
 import type { AuthMethod, DeviceInfo, DeviceSummary } from '@kraki/protocol';
@@ -62,9 +63,6 @@ export type EdgeJoinOutcome =
 /** How long a challenge nonce from startChallenge may be answered. Head
  *  closes a socket that has not authenticated after 15 s, so this is ample. */
 const CHALLENGE_NONCE_TTL_MS = 60_000;
-/** Outstanding challenges per device (parallel reconnects, several edges);
- *  the oldest is dropped beyond this. */
-const MAX_CHALLENGE_NONCES_PER_DEVICE = 4;
 
 /** Unused pairing tokens a user may hold at once. Each is one `kraki pair`
  *  (or setup) QR code; creating another beyond this voids the oldest. */
@@ -87,9 +85,10 @@ export class LocalAuthBackend implements AuthBackend {
   private region?: string;
   private regionUrls: Record<string, string>;
   private pairingTokens = new Map<string, { userId: string; expiresAt: number }>();
-  /** Challenge nonces issued by startChallenge and not yet answered, per
-   *  device: verifyChallenge only accepts one of these, once. */
-  private challengeNonces = new Map<string, Array<{ nonce: string; expiresAt: number }>>();
+  /** Challenge nonces issued by startChallenge: verifyChallenge only accepts
+   *  one of these, for its device, once. Issuing stores nothing, so other
+   *  people's challenge starts cannot void a device's pending nonce. */
+  private challengeNonces = new ChallengeNonces(CHALLENGE_NONCE_TTL_MS);
 
   constructor(options: LocalAuthBackendOptions) {
     this.storage = options.storage;
@@ -144,12 +143,7 @@ export class LocalAuthBackend implements AuthBackend {
     const regionCheck = this.checkRegion(device.userId, headRegion);
     if (regionCheck) return regionCheck;
 
-    const nonce = randomBytes(32).toString('hex');
-    const now = Date.now();
-    const issued = (this.challengeNonces.get(deviceId) ?? []).filter((c) => c.expiresAt >= now);
-    issued.push({ nonce, expiresAt: now + CHALLENGE_NONCE_TTL_MS });
-    this.challengeNonces.set(deviceId, issued.slice(-MAX_CHALLENGE_NONCES_PER_DEVICE));
-    return { ok: true, nonce, userId: device.userId, deviceId };
+    return { ok: true, nonce: this.challengeNonces.issue(deviceId), userId: device.userId, deviceId };
   }
 
   async verifyChallenge(
@@ -166,8 +160,8 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'device_not_found', message: 'Device not found' };
     }
 
-    if (!this.consumeChallengeNonce(deviceId, nonce)) {
-      // Not issued here, already used or expired. Retryable on purpose:
+    if (this.challengeNonces.check(nonce, deviceId) !== 'valid') {
+      // Not issued here (or for another device), already used or expired. Retryable on purpose:
       // clients wipe their pairing on `invalid_signature`, and a nonce lost
       // to a restart of this process must only cost a reconnect.
       logger.warn('Challenge-response auth with an unknown nonce', { deviceId });
@@ -191,6 +185,9 @@ export class LocalAuthBackend implements AuthBackend {
       });
       return { ok: false, code: 'invalid_signature', message: 'Invalid signature' };
     }
+    // Single use from here on (nothing above awaited, so no second answer
+    // to this nonce got past the check meanwhile).
+    this.challengeNonces.accept(nonce);
 
     // Update encryption key if provided
     const updatedKey = encryptionKey ?? device.encryptionKey ?? undefined;
@@ -485,21 +482,7 @@ export class LocalAuthBackend implements AuthBackend {
     for (const [token, data] of this.pairingTokens) {
       if (now > data.expiresAt) this.pairingTokens.delete(token);
     }
-    for (const [deviceId, issued] of this.challengeNonces) {
-      const live = issued.filter((c) => c.expiresAt >= now);
-      if (live.length) this.challengeNonces.set(deviceId, live);
-      else this.challengeNonces.delete(deviceId);
-    }
-  }
-
-  /** Remove `nonce` from the device's issued challenges; whether it was there and unexpired. */
-  private consumeChallengeNonce(deviceId: string, nonce: string): boolean {
-    const issued = this.challengeNonces.get(deviceId);
-    const index = issued?.findIndex((c) => c.nonce === nonce) ?? -1;
-    if (!issued || index < 0) return false;
-    const [challenge] = issued.splice(index, 1);
-    if (!issued.length) this.challengeNonces.delete(deviceId);
-    return challenge.expiresAt >= Date.now();
+    this.challengeNonces.sweep();
   }
 
   // ── Private helpers ───────────────────────────────────
