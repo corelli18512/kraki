@@ -23,9 +23,14 @@ version_at() {
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))'
 }
 
-# Everything bundled into the helper binary (tests and docs excluded).
+# The helper's sources and its build script (tests and docs excluded).
+# pnpm-lock.yaml is not watched: most of its changes are other packages'
+# dependencies. A helper rebuilt only for a dependency at the same version is
+# caught at runtime instead: the app restarts a daemon whose executable was
+# deleted by the update (TentacleCLIManager.staleDaemonBinary).
 PATHS=(
   packages/tentacle packages/protocol packages/crypto packages/pulse
+  scripts/mac/build-tentacle-helper.sh
   ':(exclude)**/__tests__/**' ':(exclude)**/*.test.ts' ':(exclude)**/*.md'
 )
 
