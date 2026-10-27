@@ -713,11 +713,6 @@ final class SessionStore {
     /// notification extension all project this same boolean-per-Session set.
     private(set) var unreadSessionIDs: Set<String> = []
 
-    private static func unreadIDs(in sessions: [String: SessionInfo]) -> Set<String> {
-        Set(sessions.values.compactMap { session in
-            session.readSeq < session.lastSeq ? session.id : nil
-        })
-    }
 
     var totalUnread: Int {
         unreadSessionIDs.count
