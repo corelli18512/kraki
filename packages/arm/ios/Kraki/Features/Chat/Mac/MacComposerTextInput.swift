@@ -10,6 +10,13 @@ import SwiftUI
 /// scroll view, that edge fades out — a hint that there is more.
 final class MacScrollEdgeFade {
     static let length: CGFloat = 14
+    /// Overflow up to this is padding, not hidden text. While the composer
+    /// animates its height, AppKit (`-[NSTextView _superviewClipViewFrameChanged:]`)
+    /// sets the text view's height and minSize to the clip's intermediate
+    /// height, while the composer writes the measured one. Whichever write
+    /// lands last wins, so a one-line draft could keep a few points of
+    /// overflow and a bottom fade over its only line until the next keystroke.
+    static let minimumHiddenText: CGFloat = 4
     private weak var scrollView: NSScrollView?
     private let mask = CAGradientLayer()
     private var observers: [NSObjectProtocol] = []
@@ -46,8 +53,8 @@ final class MacScrollEdgeFade {
         guard let scrollView, let layer = scrollView.layer else { return }
         let clip = scrollView.contentView.bounds
         let documentHeight = scrollView.documentView?.frame.height ?? 0
-        let top = clip.minY > 0.5
-        let bottom = clip.maxY < documentHeight - 0.5
+        let top = clip.minY > Self.minimumHiddenText
+        let bottom = documentHeight - clip.maxY > Self.minimumHiddenText
         fadesTop = top; fadesBottom = bottom
         guard top || bottom else {
             if layer.mask != nil { layer.mask = nil }
