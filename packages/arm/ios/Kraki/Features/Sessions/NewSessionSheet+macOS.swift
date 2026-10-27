@@ -59,13 +59,15 @@ struct NewSessionComposer: View {
     @State private var showVoiceConsent = false
     @State private var focusRequest = 0
     @State private var nativeEditorHasText = false
+    /// The editor's text while an IME composition is marked (layout only).
+    @State private var nativeComposingText: String?
     @State private var selection: NSRange?
     @State private var editorWidth: CGFloat = 0
     @State private var voiceStartHeight: CGFloat = 0
     /// Recording shares the editor's width, growing range and initial height.
     private var editorHeightKey: CGFloat {
         let preview = voiceComposer.preview
-        let visible = voiceOwnsComposer ? preview.prefix + preview.spoken + preview.suffix : text
+        let visible = voiceOwnsComposer ? preview.prefix + preview.spoken + preview.suffix : nativeComposingText ?? text
         let fitted = MacComposerScrollableTextInput.fittedHeight(
             visible, width: editorWidth, minLines: CGFloat(minLines), maxLines: 10)
         return voiceOwnsComposer ? max(voiceStartHeight, fitted) : fitted
@@ -315,6 +317,7 @@ struct NewSessionComposer: View {
                         text: textBinding,
                         focused: $focused,
                         nativeEditorHasText: $nativeEditorHasText,
+                        nativeComposingText: $nativeComposingText,
                         enabled: !voiceOwnsComposer,
                         focusRequest: focusRequest,
                         selectionRequest: voiceComposer.editorSessionID == Self.draftID ? voiceComposer.selectionRequest : nil,
