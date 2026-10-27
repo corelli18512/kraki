@@ -197,6 +197,25 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     expect(revocations).toContainEqual(expect.objectContaining({ deviceId: 'phone' }));
   });
 
+  it('drops cache rows too old for local sign-in from the status poll', async () => {
+    await seed();
+    now += 25 * 3600_000;
+    expect(cache.lookup('phone')).toBeUndefined();
+    await remote.pollDeviceStatus();
+    expect(cache.deviceIds()).not.toContain('phone');
+  });
+
+  it('keeps polling an old row while its device is connected, so a removal still kicks it', async () => {
+    await seed(); cache.claimRevalidation('phone');
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    now += 25 * 3600_000;
+    await remote.pollDeviceStatus();
+    expect(cache.deviceIds()).toContain('phone');
+    account.deleteDevice('phone'); await remote.pollDeviceStatus();
+    expect(revocations).toContainEqual(expect.objectContaining({ deviceId: 'phone' }));
+  });
+
   // `internal` (dogfood) is mirrored to the edge on every remote sign-in of
   // the account; a sign-in from the cache must report that mirrored flag, not
   // the one in this device's own (up to 24 h old) cached answer.

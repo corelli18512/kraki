@@ -33,7 +33,10 @@ key still matches this edge's device mirror:
    the account service. Answers: `ok`; `unknown_device` (removed, or the id
    now belongs to another account) → forget + close with that auth error;
    `account_deleted`; `wrong_region` (with the redirect); `key_changed` →
-   forget and close (1012) so the device signs in again remotely.
+   forget and close (1012) so the device signs in again remotely. Before
+   each poll the edge drops cached devices whose answer is older than 24
+   hours (they can't sign in locally anyway) unless they are connected:
+   a connected device stays in the poll so a removal still closes it.
 
 Everything else uses the old remote path unchanged:
 

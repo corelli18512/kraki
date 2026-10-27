@@ -73,6 +73,7 @@ export class HeadServer {
       // service's background answers.
       const remote = this.authBackend;
       remote.onRevoked = (revocation) => this.revokeDevice(revocation);
+      remote.isConnected = (deviceId) => this.connections.has(deviceId);
     }
     this.wss = new WebSocketServer({
       noServer: true,

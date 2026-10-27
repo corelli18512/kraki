@@ -63,6 +63,9 @@ export class RemoteAuthBackend implements AuthBackend {
   private lifecycle = 0;
   /** The account service rejected a device that may be connected here. */
   onRevoked?: (revocation: EdgeRevocation) => void;
+  /** Whether a device has a live connection here; unset keeps every cached
+   *  row in the status poll (see EdgeAuthCache.pruneStale). */
+  isConnected?: (deviceId: string) => boolean;
 
   constructor(options: RemoteAuthBackendOptions) {
     this.accountUrl = options.accountUrl.replace(/\/+$/, '');
@@ -112,6 +115,9 @@ export class RemoteAuthBackend implements AuthBackend {
     const cache = this.edgeCache;
     if (!cache) return;
     const lifecycle = this.lifecycle;
+    // Rows too old for local sign-in only matter while their device is
+    // connected (a revocation must still kick it); the rest would be polled forever.
+    if (only === undefined) cache.pruneStale((deviceId) => this.isConnected?.(deviceId) ?? true);
     // Identity and epoch captured together, before any request is out.
     const entries = cache.entries().filter((e) => only === undefined || e.deviceId === only)
       .map((e) => ({ ...e, epoch: cache.epoch(e.deviceId) }));

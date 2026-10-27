@@ -202,6 +202,24 @@ export class EdgeAuthCache {
     try { return JSON.parse(row.result_json) as AuthResult; } catch { return undefined; }
   }
 
+  /**
+   * Delete rows too old for local sign-in (`maxStaleMs`) unless `keep` says
+   * otherwise. Not a revocation (no epoch change): the device's next sign-in
+   * goes to the account service and stores a fresh row. A connected device
+   * must be kept: the status poll of its row is what kicks it if it is
+   * removed or moved elsewhere.
+   */
+  pruneStale(keep: (deviceId: string) => boolean): void {
+    const rows = this.db.prepare('SELECT device_id FROM edge_auth_cache WHERE verified_at < ?')
+      .all(this.now() - this.maxStaleMs) as Array<{ device_id: string }>;
+    const remove = this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?');
+    for (const { device_id: deviceId } of rows) {
+      if (keep(deviceId)) continue;
+      remove.run(deviceId);
+      this.lastRevalidation.delete(deviceId);
+    }
+  }
+
   deviceIds(): string[] {
     return (this.db.prepare('SELECT device_id FROM edge_auth_cache').all() as Array<{ device_id: string }>)
       .map((r) => r.device_id);
