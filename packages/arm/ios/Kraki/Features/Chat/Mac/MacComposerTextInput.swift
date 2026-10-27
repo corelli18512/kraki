@@ -104,6 +104,9 @@ final class MacComposerTextView: NSTextView {
     /// This editor gained (true) or gave up (false) first responder: a click,
     /// a move to another field, or a programmatic change.
     var onFirstResponderChange: ((Bool) -> Void)?
+    /// IME marked text was set or ended. AppKit posts no NSText.didChange
+    /// for marked text, so layout learns about a composition here.
+    var onMarkedTextChange: (() -> Void)?
     var voicePendingRange: NSRange?
 
     override func becomeFirstResponder() -> Bool {
@@ -201,6 +204,12 @@ final class MacComposerTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         onTakeOver?()
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedTextChange?()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onMarkedTextChange?()
     }
 
     override func paste(_ sender: Any?) {
@@ -464,6 +473,12 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         textView.onFirstResponderChange = { [weak coordinator = context.coordinator, weak textView] isFirstResponder in
             guard let textView else { return }
             coordinator?.editorFirstResponderChanged(textView, isFirstResponder: isFirstResponder)
+        }
+        textView.onMarkedTextChange = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else { return }
+            // Deferred when the composer itself ends a composition (inside a
+            // SwiftUI update); immediate for the user's IME input.
+            coordinator.reportVisualTextPresence(of: textView, deferred: coordinator.isApplying)
         }
         textView.drawsBackground = false
         textView.isRichText = false

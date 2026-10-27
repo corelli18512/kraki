@@ -236,6 +236,7 @@ final class MacComposerInputRegressionTests: XCTestCase {
         type("Fix the failing tests in my-app, then run the whole suite", into: editor); drain(400)
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
         let oneRow = scroll.contentSize.height
+        let oneRowMinX = scroll.convert(scroll.bounds, to: nil).minX
         XCTAssertEqual(editor.frame.height, oneRow, accuracy: 0.5, "precondition: the committed draft is one line")
 
         editor.setMarkedText("zhongwenshurufashiyixiahuanhang", selectedRange: NSRange(location: 31, length: 0),
@@ -246,6 +247,11 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertEqual(scroll.contentSize.height, editor.frame.height, accuracy: 0.5,
                        "the composing text is scrolled inside a box that is too short")
         XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5, "the committed text scrolled out of view")
+        // The box takes the two-row (stacked) layout like committed text
+        // that wraps: the editor spans the box instead of following the
+        // attach button.
+        XCTAssertLessThan(scroll.convert(scroll.bounds, to: nil).minX, oneRowMinX - 10,
+                          "a wrapping composition kept the one-row layout")
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], "Fix the failing tests in my-app, then run the whole suite",
                        "marked text must not reach the draft")
 
@@ -310,5 +316,6 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertEqual(editor.string, "voice text")
         XCTAssertEqual(app.sessionStore.drafts["voice-a"], "voice text")
     }
+
 }
 #endif
