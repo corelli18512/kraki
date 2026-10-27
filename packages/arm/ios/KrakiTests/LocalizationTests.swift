@@ -15,12 +15,12 @@ final class LocalizationTests: XCTestCase {
     func testSimplifiedChineseCatalogShips() throws {
         let zh = try bundle("zh-Hans")
         XCTAssertEqual(zh.localizedString(forKey: "Language", value: nil, table: nil), "语言")
-        XCTAssertEqual(zh.localizedString(forKey: "time.justNow", value: nil, table: nil), "刚刚")
+        XCTAssertEqual(zh.localizedString(forKey: "just now", value: nil, table: nil), "刚刚")
+        // relativeTimestamp's compact keys (Helpers.swift).
+        XCTAssertEqual(zh.localizedString(forKey: "%lldm ago", value: nil, table: nil), "%lld 分钟前")
         XCTAssertEqual(zh.localizedString(forKey: "NSMicrophoneUsageDescription", value: nil, table: "InfoPlist").contains("语音"), true)
     }
 
-    func testSupportedLanguagesHaveNativeNames() {
-        XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["en", "zh-Hans"])
     /// The test schemes pin English (project.yml `language: en`); tests that
     /// assert copy rely on it even on a zh-Hans Mac or simulator.
     func testTestHostRunsInEnglish() {
@@ -28,14 +28,8 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(Locale.current.language.languageCode?.identifier, "en")
     }
 
+    func testSupportedLanguagesHaveNativeNames() {
+        XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["en", "zh-Hans"])
         XCTAssertEqual(AppLanguage.simplifiedChinese.nativeName, "简体中文")
-    }
-
-    func testRelativeTimeIsLocaleAware() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let en = KrakiFormat.relative(now.addingTimeInterval(-300), now: now, locale: Locale(identifier: "en"))
-        let zh = KrakiFormat.relative(now.addingTimeInterval(-300), now: now, locale: Locale(identifier: "zh-Hans"))
-        XCTAssertTrue(en.contains("5") && en.contains("ago"), en)
-        XCTAssertTrue(zh.contains("5") && zh.contains("前"), zh)
     }
 }

@@ -4,8 +4,8 @@
 /// Catalog). SwiftUI `Text("…")`, `Button("…")`, `Label("…", …)` etc. look
 /// literals up automatically; for a `String` built in code use
 /// `String(localized: "…")`, and for model/enum copy return
-/// `LocalizedStringResource`. Never hand-build "5m ago" / "3 items": use
-/// `KrakiFormat` and catalog plural variants.
+/// `LocalizedStringResource`. Never hand-build plurals ("3 items"): use one
+/// interpolated key with catalog plural variants.
 ///
 /// Language choice:
 ///   • default: follows the system (Apple's per-app language resolution);
@@ -119,19 +119,4 @@ enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
         UIApplication.shared.open(url)
     }
     #endif
-}
-
-/// Locale-aware formatting shared by iOS and macOS.
-enum KrakiFormat {
-    /// "now" / "5m ago" / "3h ago" (en) — "现在" / "5分钟前" (zh-Hans).
-    static func relative(_ date: Date, now: Date = .now, locale: Locale = .current) -> String {
-        if abs(now.timeIntervalSince(date)) < 60 {
-            return String(localized: "time.justNow", defaultValue: "just now", comment: "Relative time under a minute")
-        }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = locale
-        formatter.unitsStyle = .abbreviated
-        formatter.dateTimeStyle = .numeric
-        return formatter.localizedString(for: date, relativeTo: now)
-    }
 }

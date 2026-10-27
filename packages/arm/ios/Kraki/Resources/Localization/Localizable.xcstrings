@@ -10270,23 +10270,6 @@
         }
       }
     },
-    "time.justNow" : {
-      "comment" : "Relative time under a minute",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "just now"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刚刚"
-          }
-        }
-      }
-    },
     "Timed out loading this attachment" : {
       "localizations" : {
         "zh-Hans" : {
