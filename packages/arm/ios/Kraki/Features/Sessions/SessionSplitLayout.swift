@@ -8,8 +8,16 @@ enum SessionSplitLayout {
     /// Narrower than this keeps the single-column iPhone layout (iPhone Duo
     /// outer display, and either app in Split View).
     static let minimumWidth: CGFloat = 700
-    /// The list column (the Mac sidebar is 280 pt; iOS rows are larger).
-    static let sidebarWidth: CGFloat = 320
+    /// Mac MainWindowView metrics (sidebarWidth, desktopRailHeight, the
+    /// sidebar list's vertical padding and the seam's inset).
+    static let sidebarWidth: CGFloat = 280
+    static let railHeight: CGFloat = 40
+    /// Search field height and the + button's drawn size (Mac: 28 / 26 pt;
+    /// the + keeps a 40 pt touch area around its drawing).
+    static let railControlHeight: CGFloat = 28
+    static let railButtonSize: CGFloat = 26
+    static let listVerticalPadding: CGFloat = 4
+    static let seamVerticalInset: CGFloat = 20
 
     static func isWide(_ width: CGFloat) -> Bool { width >= minimumWidth }
 }

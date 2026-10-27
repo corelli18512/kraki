@@ -135,14 +135,15 @@ struct MainTabView: View {
             HStack(spacing: 0) {
                 if wide {
                     NavigationStack {
-                        SessionListView(selectedSessionId: sessionPath.first?.id) { select($0) }
+                        SessionListView(selectedSessionId: sessionPath.first?.id, sidebar: true) { select($0) }
                     }
                     .frame(width: SessionSplitLayout.sidebarWidth)
                     .transition(.move(edge: .leading))
+                    // The Mac seam: 1 pt, inset 20 pt from top and bottom.
                     Rectangle()
                         .fill(Color.borderPrimary.opacity(0.55))
                         .frame(width: 1)
-                        .ignoresSafeArea()
+                        .padding(.vertical, SessionSplitLayout.seamVerticalInset)
                 }
                 // Same position in both layouts: SwiftUI keeps this stack, and
                 // the chat pushed on it, across a fold/unfold.

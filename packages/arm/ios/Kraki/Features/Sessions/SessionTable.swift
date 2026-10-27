@@ -29,6 +29,8 @@ struct SessionTable: UIViewControllerRepresentable {
     var archivedIds: [String] = []
     /// Highlighted row (two-column layout: the Session shown beside the list).
     var selectedSessionId: String?
+    /// Two-column layout: Mac sidebar rows.
+    var sidebarStyle = false
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
@@ -41,6 +43,7 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
         vc.selectedSessionId = selectedSessionId
+        vc.sidebarStyle = sidebarStyle
         return vc
     }
 
@@ -72,21 +75,12 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     var onCellTapped: ((String) -> Void)?
     var archivedCount = 0
     var archivedIds: [String] = []
-    /// Same highlight as the Mac sidebar (Kraki blue, 15 %).
+    /// Two-column layout: Mac sidebar rows (see SessionSidebarRowContent).
+    var sidebarStyle = false
+    let sidebarSelection = SessionSidebarSelection()
     var selectedSessionId: String? {
-        didSet { if oldValue != selectedSessionId { refreshSelectionHighlight() } }
-    }
-    static func rowBackground(selected: Bool) -> UIColor {
-        selected ? UIColor(Color.krakiPrimary.opacity(0.15)) : UIColor(Color.surfacePrimary)
-    }
-    private func refreshSelectionHighlight() {
-        guard let tableView, let dataSource else { return }
-        for path in tableView.indexPathsForVisibleRows ?? [] {
-            guard let id = dataSource.itemIdentifier(for: path), id != Self.archivedHeaderId,
-                  let cell = tableView.cellForRow(at: path) else { continue }
-            let session = id.hasPrefix(Self.archivedPrefix) ? String(id.dropFirst(Self.archivedPrefix.count)) : id
-            cell.backgroundColor = Self.rowBackground(selected: session == selectedSessionId)
-        }
+        get { sidebarSelection.id }
+        set { if sidebarSelection.id != newValue { sidebarSelection.id = newValue } }
     }
     /// Collapsed every time the list is created.
     private var archivedExpanded = false
@@ -250,6 +244,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             cell.accessibilityIdentifier = nil
             let rowSessionId = sessionId.hasPrefix(Self.archivedPrefix)
                 ? String(sessionId.dropFirst(Self.archivedPrefix.count)) : sessionId
+            let sidebar = self.sidebarStyle, selection = self.sidebarSelection
             cell.contentConfiguration = UIHostingConfiguration {
                 // Pass only the sessionId so the SwiftUI subtree
                 // re-fetches the current SessionInfo from the
@@ -257,12 +252,17 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                 // SessionInfo struct here would freeze it at cell
                 // configuration time and miss in-place updates from
                 // the store (e.g. unread / readSeq mutations).
-                SessionRowContent(sessionId: rowSessionId, isLast: isLast)
-                    .environment(appState)
+                if sidebar {
+                    SessionSidebarRowContent(sessionId: rowSessionId, selection: selection)
+                        .environment(appState)
+                } else {
+                    SessionRowContent(sessionId: rowSessionId, isLast: isLast)
+                        .environment(appState)
+                }
             }
             .margins(.all, 0)
-            cell.backgroundColor = Self.rowBackground(selected: rowSessionId == self.selectedSessionId)
-            cell.selectedBackgroundView = {
+            cell.backgroundColor = UIColor(Color.surfacePrimary)
+            cell.selectedBackgroundView = sidebar ? UIView() : {
                 let v = UIView()
                 v.backgroundColor = UIColor.systemGray4.withAlphaComponent(0.6)
                 return v
@@ -518,6 +518,31 @@ struct ArchivedHeaderRow: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .contentShape(Rectangle())
+    }
+}
+
+/// The highlighted Session, observed by sidebar rows so a selection change
+/// repaints only the two affected rows (no cell reconfiguration).
+@Observable final class SessionSidebarSelection {
+    var id: String?
+}
+
+/// Mac sidebar row geometry (MacSidebarSessionRow): 6 pt outer inset, 10/7 pt
+/// padding, a 7 pt rounded selection in Kraki blue at 15 %, no separators.
+struct SessionSidebarRowContent: View {
+    let sessionId: String
+    let selection: SessionSidebarSelection
+
+    var body: some View {
+        SessionCardView(sessionId: sessionId, sidebar: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selection.id == sessionId ? Color.krakiPrimary.opacity(0.15) : .clear)
+            )
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
     }
 }
 

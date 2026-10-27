@@ -95,7 +95,7 @@ final class SessionSplitLayoutTests: XCTestCase {
         XCTAssertEqual(sessionTables.count, 1, "the list stays visible")
         XCTAssertEqual(table.selectedSessionId, fixtures.sid)
         let cell = try XCTUnwrap(tableView.cellForRow(at: row))
-        XCTAssertEqual(cell.backgroundColor, SessionTableController.rowBackground(selected: true), "selected row is highlighted")
+        XCTAssertEqual(table.sidebarSelection.id, fixtures.sid, "selected row is highlighted")
         XCTAssertTrue(marked("chat-back-button").isEmpty, "no Back button beside the list")
         XCTAssertFalse(tabBarHidden, "tab bar stays: Devices and Settings remain reachable")
         let chatFrame = chat.view.convert(chat.view.bounds, to: window)
