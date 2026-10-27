@@ -35,6 +35,70 @@ final class MacConnectPhoneStepTests: XCTestCase {
         XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: true))
     }
 
+    private func find(_ identifier: String, in element: AnyObject) -> AnyObject? {
+        find(in: element) { $0.accessibilityIdentifier?() == identifier }
+    }
+
+    private func find(in element: AnyObject, where matches: (AnyObject) -> Bool) -> AnyObject? {
+        if matches(element) { return element }
+        for child in element.accessibilityChildren?() ?? [] {
+            if let found = find(in: child as AnyObject, where: matches) { return found }
+        }
+        return nil
+    }
+
+    /// Through the real overlay: the phone joining is the step's success
+    /// state, so it must not take the step away; only finishing ends it.
+    func testStepStaysUpWhenThePhoneJoinsUntilTheUserFinishes() throws {
+        DeviceTrustTesting.localKrakiHome = FileManager.default.temporaryDirectory.appendingPathComponent("no-local-computer")
+        defer { DeviceTrustTesting.localKrakiHome = nil }
+        let suite = "MacConnectPhoneStepTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: MacConnectPhoneStep.pendingKey)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("phone-step-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.deviceId = "this-mac-app"
+        app.deviceStore.devices["this-mac-app"] = device("this-mac-app", role: .app, kind: .desktop)
+        app.connectionStatus = .connected
+
+        let host = NSHostingView(rootView: MacConnectPhoneStep()
+            .environment(app).environment(TentacleCLIManager()).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 1180, height: 740),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFrontRegardless()
+        windows.append(window)
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertNotNil(find("mac.setup.phone", in: host), "the step shows after a fresh setup")
+
+        app.deviceStore.devices["iphone"] = device("iphone", role: .app, kind: .ios)
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertNotNil(find("mac.setup.phone", in: host), "a joining phone must not remove the step")
+        XCTAssertTrue(defaults.bool(forKey: MacConnectPhoneStep.pendingKey))
+
+        // A reconnect while the step is up neither hides it nor ends it.
+        app.connectionStatus = .disconnected
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        app.connectionStatus = .connected
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertNotNil(find("mac.setup.phone", in: host))
+        XCTAssertTrue(defaults.bool(forKey: MacConnectPhoneStep.pendingKey))
+
+        // The step's container identifier covers its buttons; find Skip by role and title.
+        let finish = try XCTUnwrap(find(in: host) {
+            $0.accessibilityRole?() == .button
+                && ($0.accessibilityTitle?() == "Skip for Now" || $0.accessibilityLabel?() == "Skip for Now")
+        })
+        XCTAssertTrue(finish.accessibilityPerformPress?() ?? false)
+        RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+        XCTAssertFalse(defaults.bool(forKey: MacConnectPhoneStep.pendingKey), "finishing ends the step for good")
+        XCTAssertNil(find("mac.setup.phone", in: host))
+    }
+
     func testRenderConnectPhoneStep() throws {
         guard let dir = ProcessInfo.processInfo.environment["KRAKI_SNAPSHOT_DIR"] else { throw XCTSkip("set KRAKI_SNAPSHOT_DIR") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("phone-step-\(UUID().uuidString)")
