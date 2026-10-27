@@ -246,8 +246,10 @@ enum MacComposerPasteFocusRegression {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 90))
         window.contentView = root
 
-        let original = MacComposerTextView(frame: NSRect(x: 0, y: 40, width: 300, height: 36))
-        let replacement = MacComposerTextView(frame: original.frame)
+        let original = MacComposerTextView(usingTextLayoutManager: false)
+        original.frame = NSRect(x: 0, y: 40, width: 300, height: 36)
+        let replacement = MacComposerTextView(usingTextLayoutManager: false)
+        replacement.frame = original.frame
         let external = MacComposerRegressionExternalFocusView(
             frame: NSRect(x: 0, y: 0, width: 160, height: 24)
         )

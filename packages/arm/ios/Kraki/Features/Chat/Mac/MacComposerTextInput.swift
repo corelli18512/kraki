@@ -215,9 +215,13 @@ final class MacComposerTextView: NSTextView {
     /// least the clip's), measuring the text with this editor's layout.
     func fitDocumentToText(remeasure: Bool = true) {
         guard sizesDocumentToText, let clip = superview as? NSClipView else { return }
+        // Before the first real tile the clip has no width (a new composer
+        // mounting with a long draft): laying the draft out there, about one
+        // glyph per line, would be thrown away at the next tile.
+        let width = clip.bounds.width
+        guard width > MacComposerTextLayout.horizontalInset * 2 + 1 else { return }
         isFittingDocument = true
         defer { isFittingDocument = false }
-        let width = max(1, clip.bounds.width)
         if abs(frame.width - width) > 0.01 { super.setFrameSize(NSSize(width: width, height: frame.height)) }
         if remeasure || abs(textHeightWidth - width) > 0.01 { measureTextHeight() }
         let height = max(textHeight, clip.bounds.height)
@@ -247,17 +251,41 @@ final class MacComposerTextView: NSTextView {
     /// Keeps the clip inside the document, and takes the 1 pt text inset
     /// above the first or below the last line along with its line:
     /// scrolling to a caret on the last line stopped 1 pt short of the
-    /// bottom, which read as hidden text.
+    /// bottom, which read as hidden text. Near both edges (the box almost
+    /// grown), the edge on the caret's side wins, so its line stays whole.
     func snapClipToDocumentEdges() {
         guard let scrollView = enclosingScrollView else { return }
         let clip = scrollView.contentView
         let maxY = max(0, frame.height - clip.bounds.height)
         let inset = textContainerInset.height + 0.5
         var target = min(max(clip.bounds.minY, 0), maxY)
-        if target < inset { target = 0 } else if maxY - target < inset { target = maxY }
+        let nearTop = target < inset, nearBottom = maxY - target < inset
+        if nearTop, nearBottom {
+            target = (caretLineMidY ?? 0) > frame.height / 2 ? maxY : 0
+        } else if nearTop {
+            target = 0
+        } else if nearBottom {
+            target = maxY
+        }
         guard abs(clip.bounds.minY - target) > 0.001 else { return }
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
         scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// The vertical middle of the caret's line, in this view's coordinates.
+    private var caretLineMidY: CGFloat? {
+        guard textLayoutManager == nil, let layoutManager, let textStorage else { return nil }
+        let location = selectedRange().location
+        let line: NSRect
+        if location >= textStorage.length, !layoutManager.extraLineFragmentRect.isEmpty {
+            line = layoutManager.extraLineFragmentRect
+        } else if textStorage.length > 0 {
+            let glyph = layoutManager.glyphIndexForCharacter(at: min(location, textStorage.length - 1))
+            line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        } else {
+            return nil
+        }
+        return line.midY + textContainerOrigin.y
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -282,9 +310,9 @@ final class MacComposerTextView: NSTextView {
     // Edit ▸ Undo/Redo and ⌘Z/⇧⌘Z send undo:/redo: up the responder chain.
     // NSTextView does not implement them; NSWindow does, with the window's
     // undo manager, which never holds this draft's records. So the editor
-    // answers them itself, against `draftUndoManager`. (TextKit 2 does not
-    // register typing with the text view or its storage as the undo target,
-    // so the window's manager could not be scrubbed per editor instead.)
+    // answers them itself, against `draftUndoManager`: the app replaces the
+    // whole draft (Send, Clear, voice, Edit) and must drop exactly this
+    // editor's records, which a private manager allows.
 
     @objc func undo(_ sender: Any?) { stepDraftUndo(redo: false) }
     @objc func redo(_ sender: Any?) { stepDraftUndo(redo: true) }
@@ -294,8 +322,11 @@ final class MacComposerTextView: NSTextView {
         // Later typing must start a new record, not extend an undone one.
         breakUndoCoalescing()
         if redo { draftUndoManager.redo() } else { draftUndoManager.undo() }
-        // TextKit 2 applies the undo without posting NSText.didChange, so
-        // the draft (and the next re-render) would keep the old text.
+        // TextKit 1 announces the undone edit itself, so this is a second,
+        // no-op publish (2 NSText.didChange per ⌘Z, measured by
+        // testUndoAndRedoThroughTheResponderChainUpdateTheDraft). Kept as a
+        // guarantee: a missed change would leave the draft (and the next
+        // re-render) with the old text.
         didChangeText()
     }
 
