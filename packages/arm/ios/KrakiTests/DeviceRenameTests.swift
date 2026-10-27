@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 #if os(macOS)
 @testable import Kraki_Dev
 #else
@@ -101,6 +102,74 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertEqual(app.trustedDeviceName(paired), "Corelli's iPhone")
         XCTAssertEqual(app.trustedDeviceName(gone), "Old iPad", "not on the account: the computer's name")
     }
+
+    #if os(iOS)
+    /// Over the limit nothing is cut while typing (end of the name, IME
+    /// composition); Save brings the alert back with the text as typed and
+    /// the limit in the message instead of silently dropping the rename.
+    @MainActor
+    func testRenameAlertKeepsAnOverLimitNameAndExplainsTheLimit() async throws {
+        try requireForegroundUITests()
+        struct Host: View {
+            let device: DeviceSummary
+            let onSave: (String) -> Void
+            @State private var shown = true
+            @State private var draft = "corelli-mbp"
+            var body: some View {
+                Color.clear.modifier(DeviceRenameAlert(title: Text(verbatim: "Rename"), device: device,
+                                                       isPresented: $shown, draft: $draft, onSave: onSave))
+            }
+        }
+        var saved: [String] = []
+        let device = DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: Host(device: device) { saved.append($0) })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        func presented(after previous: UIAlertController? = nil) async throws -> UIAlertController {
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                if let alert = host.presentedViewController as? UIAlertController, alert !== previous, !alert.isBeingDismissed { return alert }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return try XCTUnwrap(nil as UIAlertController?, "no new alert presented")
+        }
+        /// Types over the whole field, as the keyboard does.
+        func type(_ text: String, into alert: UIAlertController) async throws {
+            let field = try XCTUnwrap(alert.textFields?.first)
+            _ = field.becomeFirstResponder()
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.insertText(text)
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
+        typealias Handler = @convention(block) (UIAlertAction) -> Void
+        func tapSave(_ alert: UIAlertController) throws {
+            let save = try XCTUnwrap(alert.actions.first { $0.title == "Save" })
+            let handler = unsafeBitCast(try XCTUnwrap(save.value(forKey: "handler") as AnyObject?), to: Handler.self)
+            // As a tap does: the alert closes, then the action runs.
+            alert.dismiss(animated: false) { handler(save) }
+        }
+
+        let first = try await presented()
+        let long = String(repeating: "x", count: DeviceName.maxLength) + "é"
+        try await type(long, into: first)
+        XCTAssertEqual(first.textFields?.first?.text, long, "the end of an over-limit name is never cut")
+        try tapSave(first)
+
+        let again = try await presented(after: first)
+        XCTAssertEqual(again.textFields?.first?.text, long, "the text comes back as typed")
+        XCTAssertTrue(again.message?.contains("\(DeviceName.maxLength)") == true, again.message ?? "")
+        XCTAssertTrue(saved.isEmpty)
+
+        try await type("Work laptop", into: again)
+        try tapSave(again)
+        let deadline = Date().addingTimeInterval(5)
+        while saved.isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(saved, ["Work laptop"])
+    }
+    #endif
 
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
