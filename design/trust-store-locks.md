@@ -1,101 +1,93 @@
 # Issue #508: trust-store writer serialization
 
-Status: **still valid; design only**. The lock implementation is unchanged.
-The retained store still serves encryption pins/revocations even though shipping
-clients now use account access rather than pairing-only access
-(`packages/tentacle/src/account-access.ts:1-3`). A local writer race therefore
-still matters; it is not a relay-triggerable attack.
+Status: **the two reproduced races are fixed** inside the existing lock-file
+protocol (`packages/tentacle/src/trust-store.ts`, `withTrustLock`). PID reuse
+(below) is unchanged. The retained store still serves encryption
+pins/revocations even though shipping clients now use account access rather
+than pairing-only access (`packages/tentacle/src/account-access.ts:1-3`). A
+local writer race therefore matters; it is not a relay-triggerable attack.
 
-## Reproduced root causes
+## Root causes (before the fix)
 
-The relevant implementation is `packages/tentacle/src/trust-store.ts:140-195`.
+1. **Lock publication was not atomic.** `tryCreate` called
+   `writeFileSync(path, token, { flag: 'wx' })`: exclusive creation precedes
+   the token write. A waiter could read the empty file, and
+   `holderIsDead('')` returned true. It unlinked the live writer's inode and
+   acquired a different lock at the same path; both processes then ran their
+   read-modify-write concurrently (a stale device snapshot can overwrite a
+   revocation; policy CAS loses its serialization).
+2. **Recovery cleanup was not ownership-safe.** A waiter read a dead
+   `<name>.recover` token and then unlinked the pathname. Another recoverer
+   could replace that dead file with a live recovery lock in between; the
+   waiter deleted the successor's lock.
+3. **PID reuse is indistinguishable from a live holder.** Liveness is
+   `kill(pid, 0)`. An abandoned token whose PID was reused blocks writers
+   until that unrelated process exits: writers time out after five seconds
+   (fail closed, no corruption). **Not changed by this fix.**
 
-1. **Lock publication is not atomic.** `tryCreate` calls
-   `writeFileSync(path, token, { flag: 'wx' })`: exclusive creation precedes the
-   token write. A waiter can read the empty file, and `holderIsDead('')` returns
-   true. It unlinks the live writer's inode and acquires a different lock at
-   the same path. The original writer can finish writing through its open
-   descriptor and enter its transaction with no corresponding pathname lock.
-   Both processes can now execute read-modify-write concurrently. A stale
-   device snapshot can overwrite a revocation; policy CAS can lose its
-   serialization guarantee. Atomic rename of the JSON file alone cannot
-   prevent lost updates.
-2. **Recovery cleanup is not ownership-safe.** The cleanup at line 187 reads a
-   dead recovery token and then unlinks the pathname. Another recoverer can
-   replace that dead lock with a live recovery lock between those operations.
-   The waiter deletes the successor's lock. Adding a second token comparison
-   still leaves a check/unlink window, so it is not a complete fix.
-3. **PID reuse is indistinguishable from a live holder.** `holderIsDead` checks
-   only `kill(pid, 0)`, not process incarnation. An abandoned token whose PID
-   has been reused remains blocked until the unrelated process exits; the
-   current writer normally fails after five seconds rather than corrupting
-   state. UUIDs distinguish lock ownership, but do not identify PID lifetime.
+## Fix
 
-`packages/tentacle/src/__tests__/trust-store-lock.test.ts` deterministically
-reproduces (1) for both devices and policy, and (2) by scheduling a replacement
-between the recovery read and unlink. It uses only a temporary directory. The
-three tests use Vitest `it.fails` because the defect is deliberately unfixed:
-these are expected **assertion failures**, not passing safety guarantees. To
-see the red results, temporarily replace `it.fails` with `it` and run:
+Same files, same token format (`<pid>.<uuid>`), same `<name>.recover`
+take-over lock, no new dependency, synchronous API unchanged.
 
-```sh
-cd packages/tentacle
-npx vitest run src/__tests__/trust-store-lock.test.ts
-```
+- **Atomic publication.** A lock (main, recovery, or removal lock) is written
+  completely to a fresh private temporary file and hard-linked into place
+  (`linkSync` fails with `EEXIST` if the lock exists). The lock path is never
+  observable without its token. Hard links work on APFS/HFS+, ext4/btrfs/xfs
+  and NTFS (`CreateHardLinkW`). A file system without hard links falls back
+  to the previous exclusive create.
+- **Unwritten locks are live until proven abandoned.** A lock whose content is
+  not a complete token (an earlier version between create and write, or the
+  fallback above) is treated as held. It is taken over only once its mtime is
+  older than 10 s, which still recovers a process that crashed in that window.
+- **Ownership-safe removal of a dead recovery lock.** Each dead lock file has a
+  unique name: its token (a UUID never written again) or, for an unwritten
+  file, its inode and nanosecond mtime. Removal of that file runs under
+  `<path>.<key>`, created exclusively. Only one process can hold the right to
+  remove that particular file; once removed it can never reappear at the path,
+  so the check-then-unlink cannot remove a successor. If a remover itself dies,
+  its `<path>.<key>` lock is removed the same way one level deeper (bounded to
+  three levels; beyond that, writers time out rather than guess).
+- The main-lock take-over keeps the legacy `<name>.recover` lock, so new and
+  earlier-version recoverers still exclude each other.
 
-All three fail on the current implementation. The existing live/dead-holder
-test in `src/__tests__/device-trust.test.ts:823-838` covers ordinary takeover
-but not these interleavings. The new tests are controlled schedules, not a
-claim of exhaustive multiprocess/OS stress coverage.
+## Compatibility
 
-## Options (not yet approved or implemented)
+- On-disk trust data (`devices.json`, `policy.json`, …) is untouched.
+- Earlier-version processes running concurrently see only complete tokens from
+  new processes, so they can no longer steal a new process's lock through the
+  empty-file window. New processes wait out an earlier version's empty lock
+  instead of stealing it.
+- Residual mixed-version risk: an earlier-version process still runs the old
+  unconditional dead-recovery cleanup, so it can still remove a successor's
+  recovery lock while both versions run. This ends once every tentacle on the
+  computer is upgraded.
+- A remover that dies after removing a dead lock but before releasing its
+  `<path>.<key>` file leaves that small file behind; it never blocks anything
+  (its name refers to a lock that no longer exists). A crash between writing
+  and removing a temporary file can likewise leave a `.*.lock.tmp` file.
 
-### A. OS-backed transaction lock (preferred if native integration is acceptable)
+## Tests
 
-Use a kernel-held lock on a **stable file that is never unlinked**: an
-appropriate `flock`/`fcntl` primitive on Unix, and `LockFileEx` on Windows.
-Hold it across reread, expected-policy-revision check, mutation, and atomic
-JSON replacement. Process/handle death releases it, removing token-publication,
-recovery-cleanup and PID-reuse logic entirely.
+`packages/tentacle/src/__tests__/trust-store-lock.test.ts`:
 
-Node core does not expose this portably. A reviewed native binding or helper
-would need build/distribution support on every supported OS, plus a defined
-handle/IPC lifetime on parent crash. The existing synchronous APIs must not
-silently become asynchronous. Do not shell out to a presumed installed
-`flock` binary or introduce platform-only locking in this lane. All writers
-must use the same primitive; mixing old lock-file writers and new kernel-lock
-writers is unsafe.
+- an initializing (empty) live `policy.lock` / `devices.lock` is not stolen;
+- a successor recovery lock that replaced a dead one between read and unlink is
+  not removed (deterministic fs schedule);
+- an unwritten lock abandoned long ago is taken over;
+- a dead recovery lock and a dead remover of it are both cleared;
+- a published lock always holds its token, and no temporary files remain;
+- locking still works when hard links are unavailable;
+- four real processes doing concurrent policy compare-and-sets: the final
+  revision equals the number of successful sets (no lost update).
 
-### B. Immutable generations with exclusive atomic publication
+`src/__tests__/device-trust.test.ts` (DT503-07) keeps covering ordinary
+dead-holder take-over and never robbing a live holder.
 
-Read generation N, compute the complete next snapshot, write a private staging
-file completely, then **exclusively publish** generation N+1 using a verified
-same-filesystem atomic primitive (for example, an exclusive hard-link publish
-where supported). Exactly one writer may win N+1; losers must reread and
-recompute, including the policy expected-revision check. Readers must never
-see partially populated generations. Plain `writeFileSync(..., 'wx')` has the
-same empty-file window; compare-then-rename and mtime checks are not CAS.
+## Not done
 
-This avoids a native dependency but changes the storage protocol. It needs
-specified crash durability, generation ordering, bounded retries, safe
-checkpoint/garbage collection without generation reuse, and migration of
-**all** readers/writers, including old daemon/CLI versions. A simple
-"version" JSON field with normal rename is insufficient. Keep devices and
-policy changes serializable at least within each resource, and preserve
-policy revision semantics.
-
-## Required acceptance for a future implementation
-
-- Convert the three expected failures to normal passing tests; retain the
-  existing live/dead-lock and stale-store/revocation regression tests.
-- Real subprocess tests: simultaneous enroll/revoke, concurrent policy CAS
-  (one winner for one expected revision), owner SIGKILL during publication
-  and during write, recovery contention, and PID-incarnation handling.
-- Validate macOS/Linux/Windows filesystem and process-death behavior, private
-  permissions, no stale revocation resurrection, and fail-closed write errors.
-- Define mixed-version upgrade behavior before changing the locking/storage
-  primitive. Do not relax signature, replay, pairing, or account-access policy.
-
-No partial production patch is proposed here: atomic token publication alone
-would leave the recovery/PID problems, and a safe cross-platform replacement
-is larger than a contained issue-triage fix under the no-new-dependencies rule.
+- PID-incarnation tracking (cause 3). A safe fix needs a process start time
+  or a kernel-held lock; Node core exposes neither portably and synchronously.
+- Kernel-held (`flock`/`LockFileEx`) locks or versioned immutable generations
+  remain the long-term options if PID reuse or mixed-version cleanup becomes a
+  practical problem. Either changes the protocol for every writer at once.
