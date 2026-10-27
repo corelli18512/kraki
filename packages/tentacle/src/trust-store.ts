@@ -24,9 +24,9 @@
  */
 
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   generatePairingSecret, isFileSafeId, isRawPublicKey, verifyPairingProof, ReplayGuard, type PairingClaim,
@@ -113,7 +113,7 @@ export function writeTrustPolicy(dir: string, policy: TrustPolicy): void {
 export function readTrustPolicy(dir: string): TrustPolicy {
   let text: string;
   try {
-    text = readFileSync(join(dir, 'policy.json'), 'utf8');
+    text = retryWindowsSharing(() => readFileSync(join(dir, 'policy.json'), 'utf8'));
   } catch (err) {
     // No policy: an install that predates device trust (compatible).
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { enforce: false, revision: 0 };
@@ -129,16 +129,51 @@ export function readTrustPolicy(dir: string): TrustPolicy {
   }
 }
 
+/**
+ * Windows refuses, for a moment, to replace or open a file another process
+ * has open or is deleting (EPERM / EACCES / EBUSY), where POSIX would just
+ * succeed. Those are retried for a short while; anything else is real.
+ */
+const WINDOWS_SHARING_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function isWindowsSharingError(err: unknown, platform = process.platform): boolean {
+  return platform === 'win32' && WINDOWS_SHARING_CODES.has((err as NodeJS.ErrnoException)?.code ?? '');
+}
+function retryWindowsSharing<T>(fn: () => T, timeoutMs = 2_000): T {
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isWindowsSharingError(err) || Date.now() > deadline) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(5 * 2 ** attempt, 50));
+    }
+  }
+}
+/** @internal Exported for tests. */
+export const __windowsSharing = { isWindowsSharingError, retryWindowsSharing };
+
 function writePrivateJson(path: string, value: unknown): void {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
-  renameSync(tmp, path);
+  try {
+    retryWindowsSharing(() => renameSync(tmp, path));
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* gone */ }
+    throw err;
+  }
 }
 
-/** Whether the process that wrote a lock token (`<pid>.<uuid>`) is gone. */
-function holderIsDead(token: string): boolean {
-  const pid = Number(token.split('.')[0]);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+/** A complete lock token: `<pid>.<uuid>`. */
+const LOCK_TOKEN = /^(\d+)\.([A-Za-z0-9-]+)$/;
+/** Versions before #508 created a lock file empty and wrote the token after,
+ *  so an empty (or partly written) lock may belong to a live writer. Only a
+ *  lock left like that for this long is taken for abandoned. */
+const UNWRITTEN_LOCK_GRACE_MS = 10_000;
+/** How many holders in a row may die while removing the same dead lock
+ *  before writers stop trying (and time out instead). */
+const MAX_RECOVERY_DEPTH = 3;
+
+function pidIsGone(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return false;
@@ -147,13 +182,79 @@ function holderIsDead(token: string): boolean {
   }
 }
 
-function tryCreate(path: string, token: string): boolean {
+interface LockHolder {
+  /** Names this particular lock file: its token, which is never written
+   *  again, or for an unwritten lock its inode and mtime. */
+  key: string;
+  /** The holder no longer exists, so the lock may be taken over. */
+  gone: boolean;
+}
+
+/** Who holds the lock at `path`; null when there is no lock. */
+function lockHolder(path: string): LockHolder | null {
+  let held: string;
+  try { held = readFileSync(path, 'utf8'); } catch { return null; }
+  const token = LOCK_TOKEN.exec(held);
+  if (token) {
+    const pid = Number(token[1]);
+    return { key: held, gone: !Number.isSafeInteger(pid) || pid <= 0 || pidIsGone(pid) };
+  }
+  let st;
+  try { st = statSync(path, { bigint: true }); } catch { return null; }
+  return { key: `x${st.ino}-${st.mtimeNs}`, gone: Date.now() - Number(st.mtimeMs) > UNWRITTEN_LOCK_GRACE_MS };
+}
+
+/**
+ * Create the lock file `path` holding `token`, or return false if it exists.
+ * The token is written to a private file first and hard-linked into place, so
+ * the lock is never seen without its token. A file system without hard links
+ * falls back to exclusive create (waiters then wait out an unwritten lock).
+ */
+function publishLock(path: string, token: string): boolean {
+  // A new name each time: it is linked to a lock, so it is never rewritten.
+  const tmp = join(dirname(path), `.${randomUUID()}.lock.tmp`);
+  writeFileSync(tmp, token, { mode: 0o600, flag: 'wx' });
+  try {
+    linkSync(tmp, path);
+    return true;
+  } catch (err) {
+    // Windows: a lock its owner is deleting cannot be created yet (EPERM).
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST' || isWindowsSharingError(err)) return false;
+  } finally {
+    try { unlinkSync(tmp); } catch { /* gone */ }
+  }
   try {
     writeFileSync(path, token, { mode: 0o600, flag: 'wx' });
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST' && !isWindowsSharingError(err)) throw err;
     return false;
+  }
+}
+
+function releaseLock(path: string): void {
+  try { unlinkSync(path); } catch { /* gone */ }
+}
+
+/**
+ * Remove the lock at `path` if its holder is gone. Removal of that one lock
+ * file runs under `<path>.<key>`, a lock named after it: only one process can
+ * remove it, and once removed it never returns, so a successor's lock at
+ * `path` is never removed in its place. A holder of `<path>.<key>` that died
+ * is cleared the same way, one level deeper.
+ */
+function removeAbandonedLock(path: string, token: string, depth = 0): void {
+  const held = lockHolder(path);
+  if (!held?.gone) return;
+  const removal = `${path}.${held.key}`;
+  if (!publishLock(removal, token)) {
+    if (depth < MAX_RECOVERY_DEPTH) removeAbandonedLock(removal, token, depth + 1);
+    return;
+  }
+  try {
+    if (lockHolder(path)?.key === held.key) unlinkSync(path);
+  } catch { /* already gone */ } finally {
+    releaseLock(removal);
   }
 }
 
@@ -164,6 +265,7 @@ function tryCreate(path: string, token: string): boolean {
  * (a live holder, however slow, is never robbed), and only by one process at
  * a time: the take-over itself runs under `<name>.recover`, so no other
  * process can replace the dead lock between our check and its removal.
+ * Earlier versions use the same files, so they keep excluding each other.
  */
 function withTrustLock<T>(dir: string, name: string, fn: () => T): T {
   ensureDir(dir);
@@ -171,20 +273,20 @@ function withTrustLock<T>(dir: string, name: string, fn: () => T): T {
   const recover = `${lock}.recover`;
   const token = `${process.pid}.${randomUUID()}`;
   const deadline = Date.now() + 5_000;
-  while (!tryCreate(lock, token)) {
-    let held = '';
-    try { held = readFileSync(lock, 'utf8'); } catch { continue; /* just released */ }
-    if (holderIsDead(held) && tryCreate(recover, token)) {
+  while (!publishLock(lock, token)) {
+    const held = lockHolder(lock);
+    if (!held) continue; // just released
+    if (held.gone && publishLock(recover, token)) {
       try {
         // Still the same dead holder's lock? (Nobody else can take over now.)
-        if (readFileSync(lock, 'utf8') === held) unlinkSync(lock);
+        if (lockHolder(lock)?.key === held.key) unlinkSync(lock);
       } catch { /* already gone */ } finally {
-        unlinkSync(recover);
+        releaseLock(recover);
       }
       continue;
     }
     // A recovery lock left by a process that died while recovering.
-    try { const r = readFileSync(recover, 'utf8'); if (holderIsDead(r)) unlinkSync(recover); } catch { /* none */ }
+    removeAbandonedLock(recover, token);
     if (Date.now() > deadline) throw new Error('Device trust settings are locked by another process');
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
@@ -249,7 +351,7 @@ export class TrustStore {
     this.policy = readTrustPolicy(dir);
     this.stamps.policy = this.mtime(this.policyPath);
     try {
-      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')));
+      this.replayGuard.import(JSON.parse(retryWindowsSharing(() => readFileSync(this.replayPath, 'utf8'))));
     } catch (err) {
       // Lost replay state — unreadable, malformed, or missing while apps are
       // paired: refuse everything that could have been accepted before (also
@@ -354,7 +456,7 @@ export class TrustStore {
     this.stamps.devices = this.mtime(this.devicesPath);
     this.devices.clear();
     try {
-      const raw = JSON.parse(readFileSync(this.devicesPath, 'utf8')) as { version?: number; devices?: Record<string, TrustedDevice> };
+      const raw = JSON.parse(retryWindowsSharing(() => readFileSync(this.devicesPath, 'utf8'))) as { version?: number; devices?: Record<string, TrustedDevice> };
       for (const [id, d] of Object.entries(raw.devices ?? {})) {
         if (isRawPublicKey(d?.identityKey) && isRawPublicKey(d?.encryptionKey)) this.devices.set(id, d);
       }
