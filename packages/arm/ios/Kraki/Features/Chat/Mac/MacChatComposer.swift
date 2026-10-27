@@ -83,6 +83,8 @@ struct MacChatComposer: View {
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
+    /// The editor's text while an IME composition is marked (layout only).
+    @State private var nativeComposingText: String?
     @State private var selection: NSRange?
     /// Widths of the editor / recording surface (stable while typing), so
     /// the height they will take is known in the same update as the text.
@@ -90,14 +92,18 @@ struct MacChatComposer: View {
     /// Width of the resting box (constant while typing).
     @State private var restingWidth: CGFloat = 0
     private var showsClear: Bool { hasText || hasImage }
+    /// What the editor shows: the draft, or while composing the native text
+    /// including the marked part, so a wrapping composition grows the box.
+    /// Layout only; the draft never holds marked text.
+    private var layoutText: String { nativeComposingText ?? text }
 
     /// Multi-line drafts use two rows: the text spans the box, the controls
     /// sit in a row below (as on iOS, and as dictation). Decided from the
     /// one-row width only, so it switches once at the wrap.
     private var stacksRows: Bool {
-        guard hasText, restingWidth > 1 else { return false }
+        guard !layoutText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, restingWidth > 1 else { return false }
         let oneRowText = restingWidth - 44 - (showsClear ? 26 : 0) - (canShowVoice ? 32 : 0) - 5 - 8
-        return MacComposerScrollableTextInput.fittedHeight(text, width: oneRowText)
+        return MacComposerScrollableTextInput.fittedHeight(layoutText, width: oneRowText)
             > MacComposerMetrics.minimumTextHeight + 0.5
     }
     @State private var inputBoxWidth: CGFloat = 0
@@ -341,7 +347,7 @@ struct MacChatComposer: View {
         if voiceOwnsComposer {
             return 10_000 + voiceBoxHeight
         }
-        return (stacksRows ? 1_000 : 0) + MacComposerScrollableTextInput.fittedHeight(text, width: textInputWidth)
+        return (stacksRows ? 1_000 : 0) + MacComposerScrollableTextInput.fittedHeight(layoutText, width: textInputWidth)
     }
 
     private var inputBox: some View {
@@ -433,6 +439,7 @@ struct MacChatComposer: View {
                     set: { isFocused = $0 }
                 ),
                 nativeEditorHasText: $nativeEditorHasText,
+                nativeComposingText: $nativeComposingText,
                 enabled: !voiceOwnsComposer,
                 focusRequest: composerFocusRequest,
                 selectionRequest: voiceComposer.editorSessionID == sessionId ? voiceComposer.selectionRequest : nil,

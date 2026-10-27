@@ -237,6 +237,7 @@ private final class MacComposerFocusRegressionState {
     var text = ""
     var focused = true
     var nativeEditorHasText = false
+    var nativeComposingText: String?
     var focusRequest = 0
 }
 
@@ -254,6 +255,10 @@ enum MacComposerPasteFocusRegression {
             nativeEditorHasText: Binding(
                 get: { state.nativeEditorHasText },
                 set: { state.nativeEditorHasText = $0 }
+            ),
+            nativeComposingText: Binding(
+                get: { state.nativeComposingText },
+                set: { state.nativeComposingText = $0 }
             ),
             enabled: true,
             focusRequest: state.focusRequest,
