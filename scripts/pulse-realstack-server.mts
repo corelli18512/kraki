@@ -186,10 +186,20 @@ function spawnHead(): ChildProcess {
     cwd: process.cwd(),
     env: { ...process.env, AUTH_MODE: 'open', E2E_MODE: 'true', PAIRING_ENABLED: 'true', LOG_LEVEL: 'info' },
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Its own process group: `pnpm exec tsx` runs the head as a grandchild,
+    // and stopHead() must reach it without touching other processes.
+    detached: true,
   });
   child.stdout!.pipe(headLog); child.stderr!.pipe(headLog);
   children.push(child);
   return child;
+}
+
+/** SIGTERM the head child's whole process group (pnpm → tsx → node). */
+function stopHead(): void {
+  const pid = headProcess?.pid;
+  if (pid === undefined) return;
+  try { process.kill(-pid, 'SIGTERM'); } catch { /* already gone */ }
 }
 let relay2Connected = false;
 
@@ -213,6 +223,7 @@ function pngChunk(type: string, data: Buffer, crc32: (b: Buffer) => number): Buf
 function cleanup() {
   try { relay?.disconnect(); } catch { /* ignore */ }
   try { relay2?.disconnect(); } catch { /* ignore */ }
+  stopHead();
   for (const c of children) { try { c.kill('SIGTERM'); } catch { /* ignore */ } }
 }
 process.on('SIGINT', () => { cleanup(); process.exit(0); });
@@ -606,14 +617,15 @@ async function main(): Promise<void> {
         // Stop the head and start it again on the SAME database file: what
         // survives is what the head persisted. Every client reconnects itself.
         case '/head/restart': {
-          const pid = execSync(`lsof -tiTCP:${RELAY_PORT} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' }).trim();
-          for (const p of pid.split('\n').filter(Boolean)) { try { process.kill(Number(p), 'SIGTERM'); } catch { /* gone */ } }
-          headProcess?.kill('SIGTERM');
+          // Only our own head: never whatever else listens on the port.
+          stopHead();
+          let still = '';
           for (let i = 0; i < 50; i++) {
-            const still = execSync(`lsof -tiTCP:${RELAY_PORT} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+            still = execSync(`lsof -tiTCP:${RELAY_PORT} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' }).trim();
             if (!still) break;
             await new Promise((r) => setTimeout(r, 200));
           }
+          if (still) return json(500, { error: `port ${RELAY_PORT} is still in use (pid ${still})` });
           headProcess = spawnHead();
           await waitForRelay(RELAY_URL);
           return json(200, { ok: true });

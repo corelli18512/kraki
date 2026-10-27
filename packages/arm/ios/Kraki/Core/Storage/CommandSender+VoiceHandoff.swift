@@ -37,4 +37,18 @@ extension CommandSender {
         let existing = store.drafts[key] ?? ""
         store.setDraft(key, existing.isEmpty ? text : existing + "\n" + text)
     }
+
+    /// A timed-out create that succeeded after all: its first message moves
+    /// from the new-session draft (where the timeout put it) to the Session,
+    /// unless the user has since edited or sent that draft.
+    func withdrawRecoveredNewSessionText(_ text: String) {
+        guard !text.isEmpty, let store = appState?.sessionStore else { return }
+        let key = IOSVoiceComposer.newSessionDraftID
+        let existing = store.drafts[key] ?? ""
+        if existing == text {
+            store.setDraft(key, "")
+        } else if existing.hasSuffix("\n" + text) {
+            store.setDraft(key, String(existing.dropLast(text.count + 1)))
+        }
+    }
 }

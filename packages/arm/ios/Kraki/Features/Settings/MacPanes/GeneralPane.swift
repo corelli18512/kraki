@@ -129,6 +129,7 @@ final class LoginItemSetting {
 private struct MacLanguageSection: View {
     @State private var selection: AppLanguage? = AppLanguage.override
     @State private var pendingRelaunch = false
+    @State private var relaunchFailed = false
 
     var body: some View {
         Section {
@@ -147,10 +148,15 @@ private struct MacLanguageSection: View {
                 .font(.system(size: 11)).foregroundStyle(Color.textMuted)
         }
         .alert("Relaunch Kraki to change the language?", isPresented: $pendingRelaunch) {
-            Button("Relaunch Now") { AppLanguage.relaunch() }
+            Button("Relaunch Now") { AppLanguage.relaunch(onFailure: { relaunchFailed = true }) }
             Button("Later", role: .cancel) {}
         } message: {
             Text("Kraki will use the new language the next time it opens.")
+        }
+        .alert("Couldn't relaunch Kraki", isPresented: $relaunchFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Quit Kraki and open it again to use the new language.")
         }
     }
 }

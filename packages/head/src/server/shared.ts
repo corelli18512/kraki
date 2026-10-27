@@ -20,6 +20,9 @@ export interface ClientState {
   userId?: string;
   authenticated: boolean;
   ip?: string;
+  /** The socket came from another machine or through a reverse proxy (not
+   *  straight from loopback): keyless `open` auth refuses it. */
+  remoteClient?: boolean;
   isAlive: boolean;
   /** When the socket opened (ms epoch). */
   connectedAt?: number;

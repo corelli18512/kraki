@@ -87,3 +87,24 @@ it('keeps USD notation and precision in Chinese for ordinary costs', async () =>
     expect(screen.getByText('$0.042')).toBeInTheDocument();
   } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
 });
+
+it('shows an effort level it has no copy for as the agent reported it, not as a translation key', () => {
+  const unknown: ModelDetail[] = [{ ...details[0], supportedReasoningEfforts: ['minimal' as never, 'low'] }];
+  render(<SessionInfoPanel session={session} usage={usage} models={['m1']} modelDetails={unknown} onClose={close} />);
+  expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['minimal', 'Low']);
+});
+
+it('Enter or Escape that confirms an IME candidate in the title neither saves nor closes', () => {
+  render(<SessionInfoPanel session={{ ...session, title: 'Old' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} />);
+  fireEvent.click(screen.getByText('Old'));
+  const input = screen.getByRole('textbox', { name: 'Session title' });
+  fireEvent.compositionStart(input);
+  fireEvent.change(input, { target: { value: '新标题' } });
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+  fireEvent.keyDown(input, { key: 'Escape', keyCode: 229 });
+  expect(commands.renameSession).not.toHaveBeenCalled();
+  expect(screen.getByRole('textbox', { name: 'Session title' })).toBe(input);
+  fireEvent.compositionEnd(input);
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(commands.renameSession).toHaveBeenCalledWith(session.id, '新标题');
+});

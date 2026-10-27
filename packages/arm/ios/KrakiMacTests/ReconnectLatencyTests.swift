@@ -52,6 +52,34 @@ final class ReconnectLatencyTests: XCTestCase {
         XCTAssertEqual(requests.count, 1, "the self-heal asks immediately, not after the 5 s head timeout")
     }
 
+    /// Review of #577: the history guard only looked at the Head socket, so a
+    /// Mac whose Head was down could not catch up from its own Tentacle over
+    /// the still-open local link, which carries the request on its own.
+    func testHistoryGoesOverTheLocalLinkWhileTheHeadIsDown() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sid = "rl-local-link"
+        addSession(app, sid, lastSeq: 12)
+        // Routed by the session's owner, which is the linked Tentacle.
+        var requests: [String] = []
+        app.testOutboundMessageHandler = { msg, _, _ in
+            if msg["type"] as? String == "request_session_messages" { requests.append(msg["sessionId"] as? String ?? "") }
+            return true
+        }
+        let provider = try XCTUnwrap(app.messageProvider)
+        app.connectionStatus = .disconnected
+
+        app.linkLocallyForTesting("another-tentacle")
+        provider.ensureLoaded(sessionId: sid, reason: "openSession")
+        XCTAssertEqual(requests.count, 0, "a link to another Tentacle cannot carry it")
+        XCTAssertFalse(provider.isLoadingHead(sid))
+
+        app.linkLocallyForTesting("rl-tentacle")
+        provider.ensureLoaded(sessionId: sid, reason: "openSession")
+        XCTAssertEqual(requests, [sid])
+        XCTAssertTrue(provider.isLoadingHead(sid))
+    }
+
     /// A Tentacle restored from a backup reports a lower head than this
     /// device counted itself caught up to: catch-up must run again.
     func testALowerTentacleHeadClearsTheCaughtUpMark() throws {

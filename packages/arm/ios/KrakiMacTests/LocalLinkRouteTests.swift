@@ -1,5 +1,6 @@
 import Foundation
 import Pulse
+import SwiftUI
 import XCTest
 @testable import Kraki_Dev
 
@@ -241,5 +242,76 @@ final class LocalLinkRouteTests: XCTestCase {
         let idle = AttachmentStore(cacheDirectory: dir, visibleDwell: 0) { _, _, _ in XCTFail(); return true }
         idle.setTransportReady(true)
         idle.routeChanged()
+    }
+
+    /// Review of #550: a Stop the local link carried is lost when the link
+    /// drops (Stop is connection-scoped, never replayed through the Head), so
+    /// the composer's Stop latch must settle instead of spinning until the
+    /// turn ends. A Stop that went through the Head is not affected.
+    func testStopLostWithTheLocalLinkSettlesTheStopLatch() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ll-stop-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.deviceId = "app-1"
+        app.sessionStore.sessions["S"] = SessionInfo(
+            id: "S", deviceId: "T1", deviceName: "d", agent: "pi", model: "m", title: "t",
+            state: .active, mode: .auto, lastSeq: 3, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
+        app.deviceStore.devices["T1"] = DeviceSummary(
+            id: "T1", name: "d", role: .tentacle, kind: .desktop, publicKey: nil,
+            encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
+        app.connectionStatus = .connected
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        let sender = try XCTUnwrap(app.commandSender)
+        let latch = StopLatchBox()
+        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 40, height: 40),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: StopLatchProbe(box: latch).environment(app))
+        window.orderFrontRegardless()
+        defer { window.close() }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.3)) }
+        settle()
+
+        // Through the Head: a link that comes and goes later does not settle it.
+        XCTAssertTrue(sender.abortSession(sessionId: "S"))
+        app.linkLocallyForTesting("T1")
+        app.localLinkDidChange(tentacleId: "T1", linked: true)
+        app.linkLocallyForTesting(nil)
+        app.localLinkDidChange(tentacleId: "T1", linked: false)
+        settle()
+        XCTAssertNil(app.stopsLostWithLocalLink["S"])
+        XCTAssertTrue(latch.abortPending)
+
+        // Over the link: the link drops before the Tentacle answers.
+        app.linkLocallyForTesting("T1")
+        app.localLinkDidChange(tentacleId: "T1", linked: true)
+        XCTAssertTrue(sender.abortSession(sessionId: "S"))
+        app.linkLocallyForTesting(nil)
+        app.localLinkDidChange(tentacleId: "T1", linked: false)
+        settle()
+        XCTAssertEqual(app.stopsLostWithLocalLink["S"], 1)
+        XCTAssertFalse(latch.abortPending, "Stop is actionable again")
+
+        // Reported once: a later route change does not count it again.
+        app.localLinkDidChange(tentacleId: "T1", linked: false)
+        XCTAssertEqual(app.stopsLostWithLocalLink["S"], 1)
+    }
+}
+
+@MainActor
+private final class StopLatchBox { var abortPending = true }
+
+/// A composer's Stop latch, settled by the real `settlesComposerLatches`.
+private struct StopLatchProbe: View {
+    @Environment(AppState.self) private var appState
+    let box: StopLatchBox
+    @State private var awaitingActive = false
+    @State private var abortPending = true
+
+    var body: some View {
+        Color.clear
+            .settlesComposerLatches(sessionId: "S", state: appState.sessionStore.sessions["S"]?.state,
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
+            .onChange(of: abortPending) { _, pending in box.abortPending = pending }
     }
 }

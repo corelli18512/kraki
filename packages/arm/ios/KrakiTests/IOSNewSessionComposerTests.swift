@@ -66,6 +66,82 @@ final class IOSNewSessionComposerTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.drafts[key] ?? "", "", "the new-session draft is not left with the speech")
     }
 
+    @Observable final class Presence { var shown = true }
+
+    struct SheetHost: View {
+        let presence: Presence
+        let app: AppState
+        var body: some View {
+            VStack {
+                if presence.shown {
+                    IOSNewSessionComposer(canStart: true,
+                                          voiceContext: { VoiceSessionContextBuilder.buildNewSession(agent: "pi", model: "m", deviceName: "PC") },
+                                          onSendText: { _ in }, onSendVoice: {})
+                }
+            }
+            .environment(app)
+        }
+    }
+
+    /// Swiping the New Session sheet away while dictating must stop the
+    /// microphone (the speech stays as the new-session draft), as the chat
+    /// composer and the Mac sheet do.
+    func testClosingTheSheetWhileDictatingStopsRecording() throws {
+        let presence = Presence()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = UIHostingController(rootView: SheetHost(presence: presence, app: app))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        drain(300)
+        startRecording()
+        driver.emit(.partial("帮我看看"))
+        drain(100)
+        XCTAssertTrue(app.iosVoiceComposer.isRecording(in: key))
+
+        presence.shown = false
+        drain(400)
+        XCTAssertFalse(app.iosVoiceComposer.isRecording(in: key), "the microphone stops with the sheet")
+    }
+
+    /// A typed first message whose create fails goes back to the new-session
+    /// draft (the voice path already did), so the user can retry it.
+    func testTypedPromptReturnsToTheDraftWhenCreateFails() throws {
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = sender.createSession(targetDeviceId: "voice-test-device", agentId: "pi", model: "m", prompt: "修一下登录")
+        sender.failPendingRequest(request, reason: "Unknown model")
+        XCTAssertEqual(app.sessionStore.drafts[key], "修一下登录")
+        XCTAssertTrue(inputs.isEmpty)
+    }
+
+    /// A timed-out create returns the typed message to the new-session draft.
+    /// If the computer creates the Session after all, the message moves to
+    /// that Session's draft (not sent, not left in both places).
+    func testTypedPromptReturnsToTheDraftWhenCreateTimesOut() throws {
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = sender.createSession(targetDeviceId: "voice-test-device", agentId: "pi", model: "m", prompt: "修一下登录")
+        sender.expirePendingRequest(request)
+        XCTAssertEqual(app.sessionStore.drafts[key], "修一下登录")
+
+        sender.resolveCreateRequest(request, sessionId: "late")
+        XCTAssertEqual(app.sessionStore.drafts["late"], "修一下登录")
+        XCTAssertEqual(app.sessionStore.drafts[key] ?? "", "")
+        XCTAssertTrue(inputs.isEmpty, "a late Session does not send the message")
+    }
+
+    /// After a timeout the user retried, then the first Session arrived late:
+    /// the retry's text in the composer is not touched.
+    func testLateCreateLeavesAnEditedDraftAlone() throws {
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = sender.createSession(targetDeviceId: "voice-test-device", agentId: "pi", model: "m", prompt: "修一下登录")
+        sender.expirePendingRequest(request)
+        app.sessionStore.setDraft(key, "修一下登录，顺便看看注册")
+        sender.resolveCreateRequest(request, sessionId: "late")
+        XCTAssertEqual(app.sessionStore.drafts[key], "修一下登录，顺便看看注册")
+        XCTAssertEqual(app.sessionStore.drafts["late"], "修一下登录")
+    }
+
     func testNothingStartsWithoutDictation() {
         XCTAssertFalse(NewSessionStart.withVoice(app, device: "voice-test-device", agent: "pi", model: "m",
                                                  effort: nil, title: nil))

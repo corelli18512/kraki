@@ -9,8 +9,9 @@
  *
  * Environment variables:
  *   PORT         Server port (default: 4000)
- *   HOST         Listen address (default: 127.0.0.1 for open auth without
- *                OPEN_SHARED_KEY, otherwise all interfaces)
+ *   KRAKI_HOST   Listen address (default: 127.0.0.1 for open auth without
+ *                OPEN_SHARED_KEY, otherwise all interfaces). Not HOST: tcsh
+ *                exports that as the machine's hostname.
  *   OPEN_SHARED_KEY       Shared secret required by open auth (optional)
  *   DB_PATH      SQLite database path (default: kraki-head.db)
  *   AUTH_MODE    Auth mode: open | github | apikey (default: open)
@@ -88,7 +89,7 @@ if (args.includes('--help') || args.includes('-h')) {
 
   Options:
     --port <n>        Server port (default: 4000, env: PORT)
-    --host <addr>     Listen address (env: HOST). Default: 127.0.0.1 when auth
+    --host <addr>     Listen address (env: KRAKI_HOST). Default: 127.0.0.1 when auth
                       is open without a shared key, otherwise all interfaces.
                       Open auth without a shared key refuses a non-loopback host.
     --db <path>       SQLite database path (default: kraki-head.db, env: DB_PATH)
@@ -169,7 +170,8 @@ if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
 }
 const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
-const HOST = flag('host', process.env.HOST || '');
+// Not HOST: csh/tcsh export it as the machine's hostname.
+const LISTEN_HOST_SETTING = flag('host', process.env.KRAKI_HOST || '');
 const OPEN_SHARED_KEY = flag('open-shared-key', process.env.OPEN_SHARED_KEY || '');
 const API_KEY = process.env.API_KEY;
 const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
@@ -198,7 +200,7 @@ if (REGION_URLS_RAW) {
 }
 const IS_CONNECTED_MODE = MODE === 'edge' ? true : MODE === 'main' ? false : !!ACCOUNT_URL;
 const LISTEN = resolveListenHost({
-  host: HOST,
+  host: LISTEN_HOST_SETTING,
   authModes: AUTH_MODES,
   openSharedKey: OPEN_SHARED_KEY,
   connectedMode: IS_CONNECTED_MODE,

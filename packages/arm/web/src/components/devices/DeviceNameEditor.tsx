@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { MAX_DEVICE_NAME_LENGTH, normalizeDeviceName, type DeviceSummary } from '@kraki/protocol';
 import { useTranslation } from 'react-i18next';
+import { isImeComposing } from '../../lib/ime';
 import { wsClient } from '../../lib/ws-client';
 
 /**
@@ -52,10 +53,7 @@ export function DeviceNameEditor({ device, className }: { device: DeviceSummary;
         }}
         onBlur={save}
         onKeyDown={(e) => {
-          // Enter/Escape while an IME composition is open pick/cancel the
-          // candidate (Chinese, Japanese…); they must not save or close.
-          // keyCode 229 covers Safari, which ends the composition first.
-          if (beforeComposition.current !== null || e.nativeEvent.isComposing || e.keyCode === 229) return;
+          if (beforeComposition.current !== null || isImeComposing(e)) return;
           if (e.key === 'Enter') save();
           if (e.key === 'Escape') {
             e.stopPropagation();

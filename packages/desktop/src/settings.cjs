@@ -6,7 +6,20 @@ const path = require('node:path');
 
 function exec(file, args) {
   return new Promise((resolve, reject) => execFile(file, args, { windowsHide: true, timeout: 5000, maxBuffer: 65536 },
-    (error, stdout) => error ? reject(error) : resolve(String(stdout).trim())));
+    (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve(String(stdout).trim())));
+}
+/** Last non-empty line the CLI printed (stderr, else stdout) when a command
+ *  failed: the Mac shows it after its own sentence (TentacleCLIManager). Node's
+ *  "Command failed: <path> …" wrapper is never used. */
+function cliFailureDetail(error) {
+  const last = (out) => String(out ?? '').split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => l && !/^Command failed:/.test(l)).pop() ?? '';
+  // The error is on stderr; stdout only when stderr said nothing.
+  return (last(error?.stderr) || last(error?.stdout)).slice(0, 300);
+}
+function withCliDetail(message, error) {
+  const detail = cliFailureDetail(error);
+  return detail ? `${message} ${detail}` : message;
 }
 function isKrakiExecutable(file) {
   try { return /^kraki(?:\.exe)?$/i.test(path.basename(file)) && existsSync(file) && statSync(file).isFile(); } catch { return false; }
@@ -33,4 +46,4 @@ function isSafeUsageShortcut(shortcut) {
   if (/^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(key)) return true;
   return parts.some((mod) => /^(?:CommandOrControl|CmdOrCtrl|Command|Cmd|Control|Ctrl|Alt|Option|Super|Meta)$/i.test(mod));
 }
-module.exports = { exec, isKrakiExecutable, probeCli, isSafeUsageShortcut };
+module.exports = { exec, cliFailureDetail, withCliDetail, isKrakiExecutable, probeCli, isSafeUsageShortcut };

@@ -40,6 +40,19 @@ describe('ChatTable (Mac/iOS chat table design)', () => {
     expect(within(win).getByText('1 of 3')).toBeInTheDocument();
   });
 
+  it('Enter that confirms an IME candidate in the search does not jump to the next match', () => {
+    render(<Markdown text={big} />);
+    fireEvent.click(screen.getByText('Open table'));
+    const win = screen.getByTestId('table-window');
+    const search = within(win).getByPlaceholderText('Search');
+    fireEvent.change(search, { target: { value: 'item 1' } });
+    fireEvent.keyDown(search, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(search, { key: 'Enter', keyCode: 229 });
+    expect(within(win).getByText('1 of 3')).toBeInTheDocument();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(within(win).getByText('2 of 3')).toBeInTheDocument();
+  });
+
   it('a small table has no footer', () => {
     render(<Markdown text={'| a | b |\n|---|---|\n| 1 | 2 |'} />);
     expect(screen.queryByText('Open table')).toBeNull();

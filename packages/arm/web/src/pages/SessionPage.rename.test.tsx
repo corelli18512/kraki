@@ -64,6 +64,13 @@ it('every selected Rename opens, closes and reopens; title and unselected Rename
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   rename('A'); opened('A'); close();
 });
+it('Rename on the open session adds no history entry', () => {
+  mount();
+  const length = window.history.length;
+  rename('A'); opened('A'); close();
+  expect(window.location.pathname).toBe('/session/A');
+  expect(window.history.length).toBe(length);
+});
 it('initial info request consumes only its marker and retains unrelated query and hash', () => {
   act(() => window.history.replaceState({}, '', '/session/A?keep=one&info=1&keep=two#anchor'));
   const length = window.history.length;

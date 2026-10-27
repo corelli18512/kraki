@@ -159,6 +159,13 @@ export class DiagClient {
     if (!this.localEnabled) return;
     await this.flush();
     if (!this.foreground || this.busy || !this.credentials) return;
+    // Set before any await: one request at a time (native DiagClient task),
+    // through the spool removal and the next-upload time.
+    this.busy = true;
+    try { await this.request(); } finally { this.busy = false; }
+  }
+
+  private async request(): Promise<void> {
     if (this.now() >= this.nextConfig) { await this.sendConfig(); return; }
     const spool = this.spool;
     if (!this.remoteEnabled || this.now() < this.nextUpload || !spool) return;
@@ -258,11 +265,9 @@ export class DiagClient {
     };
     if (body.byteLength) { headers['Content-Encoding'] = 'gzip'; headers['Content-Type'] = 'application/json'; }
     const generation = this.generation;
-    this.busy = true;
     let res: { status: number; body: string };
     try { res = await this.deps.http({ base: credentials.base, path, headers, ...(body.byteLength ? { body } : {}) }); }
     catch { res = { status: 0, body: '' }; }
-    finally { this.busy = false; }
     if (this.generation !== generation) return null;
     return full ? res : res.status;
   }

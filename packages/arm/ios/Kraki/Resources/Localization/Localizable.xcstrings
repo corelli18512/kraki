@@ -157,6 +157,38 @@
         }
       }
     },
+    "%@ still runs Kraki %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ still runs Kraki %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 仍在运行 Kraki %2$@。"
+          }
+        }
+      }
+    },
+    "%@ wasn’t installed on %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ wasn’t installed on %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 未安装到 %2$@ 上。"
+          }
+        }
+      }
+    },
     "%@ · attempt %@" : {
       "localizations" : {
         "en" : {
@@ -369,38 +401,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 已被占用（%d）。请选择其他快捷键。"
-          }
-        }
-      }
-    },
-    "%@ is back online but still runs Kraki %@." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is back online but still runs Kraki %2$@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ 已重新上线，但仍在运行 Kraki %2$@。"
-          }
-        }
-      }
-    },
-    "%@ is back online, but %@ wasn’t installed." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is back online, but %2$@ wasn’t installed."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ 已重新上线，但 %2$@ 未安装。"
           }
         }
       }
@@ -731,38 +731,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 行"
-          }
-        }
-      }
-    },
-    "%lld rows × %lld columns" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld rows × %2$lld columns"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 行 × %lld 列"
-          }
-        }
-      }
-    },
-    "%lld rows × %lld columns · sorted by %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld rows × %2$lld columns · sorted by %3$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 行 × %lld 列 · 按 %@ 排序"
           }
         }
       }
@@ -1962,6 +1930,16 @@
         }
       }
     },
+    "Browser sign-in is not available yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不支持在浏览器中登录。"
+          }
+        }
+      }
+    },
     "Build" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2915,6 +2893,16 @@
         }
       }
     },
+    "Could not reach Kraki. Check your network connection, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 Kraki。请检查网络连接后重试。"
+          }
+        }
+      }
+    },
     "Could not start Kraki on this Mac: %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3121,6 +3109,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法刷新。请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't relaunch Kraki" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法重新打开 Kraki"
           }
         }
       }
@@ -4228,6 +4226,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "GitHub 运行 ID"
+          }
+        }
+      }
+    },
+    "GitHub sign-in could not be verified. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证 GitHub 登录，请重试。"
+          }
+        }
+      }
+    },
+    "GitHub sign-in was cancelled." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消 GitHub 登录。"
           }
         }
       }
@@ -7351,6 +7369,16 @@
         }
       }
     },
+    "Quit Kraki and open it again to use the new language." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请退出 Kraki 后重新打开，以使用新语言。"
+          }
+        }
+      }
+    },
     "Quit Kraki and take this Mac offline?" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8536,16 +8564,6 @@
         }
       }
     },
-    "Setup failed." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置失败。"
-          }
-        }
-      }
-    },
     "Setup stopped unexpectedly (exit %d)." : {
       "localizations" : {
         "zh-Hans" : {
@@ -8916,6 +8934,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "退出登录…"
+          }
+        }
+      }
+    },
+    "Sign-in did not finish. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成。请重试。"
           }
         }
       }
@@ -9496,22 +9524,6 @@
         }
       }
     },
-    "Table, %lld rows, %lld columns" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Table, %1$lld rows, %2$lld columns"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "表格，%lld 行，%lld 列"
-          }
-        }
-      }
-    },
     "Take This Mac Offline" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9668,6 +9680,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电脑已离线"
+          }
+        }
+      }
+    },
+    "The GitHub code expired. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 验证码已过期，请重试。"
           }
         }
       }
@@ -10244,23 +10266,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这将永久删除此会话及其所有消息。"
-          }
-        }
-      }
-    },
-    "time.justNow" : {
-      "comment" : "Relative time under a minute",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "just now"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刚刚"
           }
         }
       }

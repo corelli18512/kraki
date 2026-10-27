@@ -83,6 +83,8 @@ export function newTailKeys(before: string[], after: string[]): string[] {
   return added.length <= 2 ? added : [];
 }
 const NEAR_TOP = 900;
+/** Momentum scroll events arrive every frame; a longer gap means it stopped. */
+const FLING_GAP_MS = 250;
 
 function ChatScrollerInner<Row extends ScrollerRow>(
   { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onUserInteraction, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
@@ -281,6 +283,11 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     let olderIntent = false;
     let pointerDown = false;
     let touchY: number | null = null;
+    let lastTouchOlder = false;
+    /** A touch that ended moving older: its momentum keeps paging allowed
+     *  until it moves newer or stops (scroll events stop arriving). */
+    let flingOlder = false;
+    let flingEventAt = 0;
     let allowanceFrame = 0;
     olderAllowance.current = false;
     const armOlderMovement = () => {
@@ -296,9 +303,13 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       callbacks.current.onNearTop?.();
     };
     const onScrollEvent = () => {
-      const userOwned = olderAllowance.current && !programmatic.current && !following.current;
-      olderAllowance.current = false;
       const movedOlder = el.scrollTop < previousTop;
+      const now = performance.now();
+      const coasting = flingOlder && movedOlder && now - flingEventAt <= FLING_GAP_MS;
+      flingOlder = coasting;
+      flingEventAt = now;
+      const userOwned = (olderAllowance.current || coasting) && !programmatic.current && !following.current;
+      olderAllowance.current = false;
       const distance = tailTop(el) - el.scrollTop;
       const max = el.scrollHeight - el.clientHeight;
       // Giving back collapsed overlay reach is a browser clamp, not older
@@ -323,6 +334,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     // the unread-entry landing.
     const onUser = (older = false, newer = false) => {
       olderAllowance.current = false;
+      flingOlder = false;
       stopMotion();
       endUnreadEntry();
       previousTop = el.scrollTop;
@@ -352,14 +364,21 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     };
     const onPointerMove = () => { if (pointerDown) armOlderMovement(); };
     const onPointerUp = () => { pointerDown = false; olderAllowance.current = false; };
-    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? null; onUser(); };
+    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? null; lastTouchOlder = false; onUser(); };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? null;
       if (y !== null && touchY !== null) {
         onUser(y > touchY, y < touchY);
         olderGesture(y > touchY);
+        if (y !== touchY) lastTouchOlder = y > touchY;
       }
       touchY = y;
+    };
+    const onTouchEnd = () => {
+      flingOlder = lastTouchOlder;
+      flingEventAt = performance.now();
+      lastTouchOlder = false;
+      touchY = null;
     };
     const onKey = (e: KeyboardEvent) => {
       if (!['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) return;
@@ -371,6 +390,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     el.addEventListener('wheel', onWheel, { passive: true });
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true });
     el.addEventListener('pointerdown', onPointerDown, { passive: true });
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('pointerup', onPointerUp, { passive: true });
@@ -380,6 +401,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
       el.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);

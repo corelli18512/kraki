@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
+import { isImeComposing } from '../../lib/ime';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
 import { Check, Copy, GitFork, Pencil, Trash2 } from 'lucide-react';
@@ -106,6 +107,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onBlur={saveTitle}
                 onKeyDown={(e) => {
+                  if (isImeComposing(e)) return;
                   if (e.key === 'Enter') saveTitle();
                   if (e.key === 'Escape') {
                     e.stopPropagation();
@@ -208,7 +210,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                       );
                     }}
                   >
-                    {t(`sessionInfo.effort.${e}`)}
+                    {t(`sessionInfo.effort.${e}`, { defaultValue: e })}
                   </button>
                 ))}
               </div>

@@ -133,9 +133,6 @@ export interface AppState {
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
 
-  // Sessions currently loading initial messages
-  loadingSessions: Set<string>;
-
   // Sessions with outstanding create/import/fork requests (not yet confirmed by session_created)
   pendingSessions: Set<string>;
 
@@ -197,7 +194,6 @@ export interface AppActions {
   setDeviceUpdate: (deviceId: string, update: DeviceUpdateInfo) => void;
   setUpdateProgress: (deviceId: string, progress: import('../lib/device-update').UpdateProgress | null) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
-  setSessionLoading: (sessionId: string, loading: boolean) => void;
   addPendingSession: (sessionId: string) => void;
   removePendingSession: (sessionId: string) => void;
   setLocalSessions: (sessions: LocalSession[]) => void;

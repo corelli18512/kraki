@@ -10,6 +10,7 @@
  *   (any forwarding header) or from a non-loopback address.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isDirectLoopback } from './client-ip.js';
 import { metrics } from './metrics.js';
 
 export interface ReadinessContext {
@@ -49,14 +50,6 @@ export function readiness(ctx: ReadinessContext, now = Date.now()): { ok: boolea
   const missing = ctx.expectedPushProviders.filter((p) => !loaded.has(p));
   checks.push = missing.length === 0 ? 'ok' : `fail:${missing.join(',')}`;
   return { ok: Object.values(checks).every((v) => v === 'ok'), checks };
-}
-
-const FORWARDING_HEADERS = ['x-forwarded-for', 'x-real-ip', 'forwarded', 'x-forwarded-host', 'cf-connecting-ip'];
-
-export function isDirectLoopback(req: IncomingMessage): boolean {
-  if (FORWARDING_HEADERS.some((h) => req.headers[h] !== undefined)) return false;
-  const addr = req.socket.remoteAddress ?? '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
 }
 
 /** Handles the two endpoints; returns false for any other path. */

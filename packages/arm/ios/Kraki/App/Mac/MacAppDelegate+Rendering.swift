@@ -304,6 +304,21 @@ let vm = ChatViewModel(sessionId: id, appState: appState)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { render() }
     }
 
+    /// The image staged in the composer states' "Image preview" sample.
+    private static func composerSampleImage() -> StagedComposerImage? {
+        let image = NSImage(size: NSSize(width: 96, height: 64))
+        image.lockFocus()
+        NSColor.systemTeal.setFill()
+        NSRect(x: 0, y: 0, width: 96, height: 64).fill()
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 32, y: 16, width: 32, height: 32)).fill()
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return nil }
+        return StagedComposerImage(data: jpeg, mimeType: "image/jpeg")
+    }
+
     /// Headless render of every production composer state. Uses real
     /// `MacChatComposer` instances in an off-screen borderless window and exits
     /// automatically; it never orders a window front or takes focus.
@@ -340,19 +355,6 @@ let vm = ChatViewModel(sessionId: id, appState: appState)
             return app
         }
 
-        let imageData: Data? = {
-            let image = NSImage(size: NSSize(width: 96, height: 64))
-            image.lockFocus()
-            NSColor.systemTeal.setFill()
-            NSRect(x: 0, y: 0, width: 96, height: 64).fill()
-            NSColor.white.setFill()
-            NSBezierPath(ovalIn: NSRect(x: 32, y: 16, width: 32, height: 32)).fill()
-            image.unlockFocus()
-            guard let tiff = image.tiffRepresentation,
-                  let rep = NSBitmapImageRep(data: tiff) else { return nil }
-            return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
-        }()
-
         struct Sample {
             let title: String
             let state: AppState
@@ -370,6 +372,7 @@ let vm = ChatViewModel(sessionId: id, appState: appState)
                                      online: true, connection: .connected, draft: "Preserve the visible anchor")
             let image = makeState(id: "Image attachment", state: .idle, mode: .delegate,
                                   online: true, connection: .connected, draft: "Describe this image")
+            image.sessionStore.setStagedImage("Image attachment", Self.composerSampleImage())
             let offline = makeState(id: "Device offline", state: .idle, mode: .auto,
                                     online: false, connection: .connected, draft: "Compose while offline")
             let reconnecting = makeState(id: "Relay reconnecting", state: .idle, mode: .auto,
@@ -404,7 +407,7 @@ let vm = ChatViewModel(sessionId: id, appState: appState)
                        composer: MacChatComposer(sessionId: "Question answer", pendingQuestion: pendingQuestion,
                                                  hasLiveCard: true)),
                 Sample(title: "Image preview", state: image,
-                       composer: MacChatComposer(sessionId: "Image attachment", initialImageData: imageData)),
+                       composer: MacChatComposer(sessionId: "Image attachment")),
                 Sample(title: "Device offline hint", state: offline,
                        composer: MacChatComposer(sessionId: "Device offline")),
                 Sample(title: "Relay reconnecting hint", state: reconnecting,

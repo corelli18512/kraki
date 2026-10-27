@@ -2,6 +2,17 @@
 import AppKit
 
 enum MacComposerImages {
+    private static let previews = NSCache<NSUUID, NSImage>()
+
+    /// The thumbnail of a staged image, decoded once per attachment rather
+    /// than on every composer update.
+    static func preview(_ image: StagedComposerImage) -> NSImage? {
+        if let cached = previews.object(forKey: image.id as NSUUID) { return cached }
+        guard let decoded = NSImage(data: image.data) else { return nil }
+        previews.setObject(decoded, forKey: image.id as NSUUID)
+        return decoded
+    }
+
     static func jpegData(from image: NSImage, maxDimension: CGFloat, quality: CGFloat) -> Data? {
         let source = image.size
         guard source.width > 0, source.height > 0 else { return nil }

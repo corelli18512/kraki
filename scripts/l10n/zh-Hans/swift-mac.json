@@ -6,8 +6,6 @@
     "%lld agents ready.": "%lld 个 Agent 已就绪。",
     "%lld more…": "还有 %lld 个…",
     "%lld of %lld": "%lld / %lld",
-    "%lld rows × %lld columns": "%lld 行 × %lld 列",
-    "%lld rows × %lld columns · sorted by %@": "%lld 行 × %lld 列 · 按 %@ 排序",
     "%lld sessions are running on this Mac. Reconnecting restarts Kraki here and stops them.": "这台 Mac 上有 %lld 个会话正在运行。重新连接会重启这里的 Kraki 并停止这些会话。",
     "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.": "这台 Mac 上有一个会话正在运行。重新连接会重启这里的 Kraki 并停止该会话。",
     "About": "关于",
@@ -206,7 +204,6 @@
     "Set up this Mac": "设置这台 Mac",
     "Setting up…": "正在设置…",
     "Settings…": "设置…",
-    "Setup failed.": "设置失败。",
     "Setup stopped unexpectedly (exit %d).": "设置意外停止（退出码 %d）。",
     "Setup stopped unexpectedly (exit %d). %@": "设置意外停止（退出码 %d）。%@",
     "Show Account Usage": "显示账户用量",
@@ -232,7 +229,6 @@
     "Supported coding agents": "支持的编程 Agent",
     "Syncing…": "正在同步…",
     "Table": "表格",
-    "Table, %lld rows, %lld columns": "表格，%lld 行，%lld 列",
     "Take This Mac Offline": "让这台 Mac 离线",
     "That computer isn't on your account. Sign in to the same account on both.": "那台电脑不在你的账户下。请在两台设备上登录同一账户。",
     "That isn't a Kraki pairing link.": "这不是 Kraki 配对链接。",
@@ -298,7 +294,15 @@
     "status query failed": "状态查询失败",
     "your computer": "你的电脑",
     "… (showing the end of the log)": "…（显示日志末尾）",
-    "unknown": "未知"
+    "unknown": "未知",
+    "Couldn't relaunch Kraki": "无法重新打开 Kraki",
+    "Quit Kraki and open it again to use the new language.": "请退出 Kraki 后重新打开，以使用新语言。",
+    "Could not reach Kraki. Check your network connection, then try again.": "无法连接 Kraki。请检查网络连接后重试。",
+    "The GitHub code expired. Try again.": "GitHub 验证码已过期，请重试。",
+    "GitHub sign-in was cancelled.": "已取消 GitHub 登录。",
+    "GitHub sign-in could not be verified. Try again.": "无法验证 GitHub 登录，请重试。",
+    "Browser sign-in is not available yet.": "暂不支持在浏览器中登录。",
+    "Sign-in did not finish. Try again.": "登录未完成。请重试。"
   },
   "englishPlurals": {
     "Ready · %lld models": {

@@ -6,7 +6,8 @@ extension View {
     /// `awaitingActive` (a sent prompt waits for its turn to start) ends at the
     /// first session-state transition: once active, later submissions are
     /// steers; once idle, normal prompts. `abortPending` (Stop sent) ends when
-    /// the session goes idle or the app goes offline. Both also end when the
+    /// the session goes idle, the app goes offline or (Mac) the local link
+    /// that carried the Stop drops. Both also end when the
     /// session's newest message is an `error`: a rejected Stop or an input the
     /// computer could not deliver leaves the state unchanged, and the composer
     /// must not stay busy or keep Stop disabled.
@@ -30,8 +31,18 @@ private struct ComposerLatchSettling: ViewModifier {
         return last.seq
     }
 
+    /// Changes when a Stop of this session was lost with the local link.
+    private var stopsLostWithLocalLink: Int {
+        #if os(macOS)
+        appState.stopsLostWithLocalLink[sessionId] ?? 0
+        #else
+        0
+        #endif
+    }
+
     func body(content: Content) -> some View {
         content
+            .onChange(of: stopsLostWithLocalLink) { _, _ in abortPending = false }
             .onChange(of: state) { _, newState in
                 awaitingActive = false
                 if newState == .idle { abortPending = false }

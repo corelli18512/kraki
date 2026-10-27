@@ -578,6 +578,24 @@ describe('RemoteAuthBackend', () => {
       expect((await remoteBackend.verifyChallenge('d1', second.nonce, sign(second.nonce))).ok).toBe(true);
       expect((await remoteBackend.verifyChallenge('d1', first.nonce, sign(first.nonce))).ok).toBe(true);
     });
+
+    it('challenges started by others for the same device id do not void its pending nonce', async () => {
+      const victim = await remoteBackend.startChallenge('d1');
+      if (!victim.ok) throw new Error('no challenge');
+      // Anyone who knows the id can start challenges without signing in.
+      for (let i = 0; i < 50; i++) await remoteBackend.startChallenge('d1');
+      expect((await remoteBackend.verifyChallenge('d1', victim.nonce, sign(victim.nonce))).ok).toBe(true);
+    });
+
+    it('a wrong signature does not let the nonce be answered twice successfully', async () => {
+      const challenge = await remoteBackend.startChallenge('d1');
+      if (!challenge.ok) throw new Error('no challenge');
+      expect(await remoteBackend.verifyChallenge('d1', challenge.nonce, sign('b'.repeat(64))))
+        .toMatchObject({ ok: false });
+      expect((await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce))).ok).toBe(true);
+      expect(await remoteBackend.verifyChallenge('d1', challenge.nonce, sign(challenge.nonce)))
+        .toMatchObject({ ok: false, code: 'service_unavailable' });
+    });
   });
 
   it('should fail gracefully with wrong service key', async () => {

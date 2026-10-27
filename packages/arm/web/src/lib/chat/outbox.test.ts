@@ -105,6 +105,48 @@ describe('outbox', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('a queued input is not dispatched again while its previous hand-off is still in flight', async () => {
+    transportOk = false;
+    outbox.send('s', 'hi');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(outbox.forSession('s')[0].needsDispatch).toBe(true);
+    // The path is back but encryption is slow (queued behind other work).
+    const releases: Array<(ok: boolean) => void> = [];
+    let calls = 0;
+    outbox.configure({
+      send: (msg) => { calls++; sent.push(msg); return new Promise((resolve) => releases.push(resolve)); },
+      isDeliveryPathUp: () => true,
+    });
+    const t = run(Date.now(), 5);
+    expect(calls).toBe(1);
+    releases[0](true);
+    await Promise.resolve();
+    await Promise.resolve();
+    run(t, 3);
+    expect(calls).toBe(1);
+  });
+
+  it('only the first hand-off of a refused input reports the refusal; queued re-dispatches are quiet', async () => {
+    const quiet: Array<boolean | undefined> = [];
+    outbox.configure({
+      send: async (msg, opts) => { sent.push(msg); quiet.push(opts?.quiet); return false; },
+      isDeliveryPathUp: () => true,
+    });
+    outbox.send('s', 'hi');
+    let t = Date.now();
+    for (let i = 0; i < 4; i++) {
+      await Promise.resolve();
+      await Promise.resolve();
+      t = run(t, 1);
+    }
+    expect(quiet.length).toBeGreaterThan(2);
+    expect(quiet[0]).toBeFalsy();
+    expect(quiet.slice(1).every((q) => q === true)).toBe(true);
+    // Mac parity: an input never handed to transport keeps waiting (no timeout).
+    expect(outbox.forSession('s')[0]).toMatchObject({ state: 'sending', needsDispatch: true });
+  });
+
   it('a normal prompt waiting behind a running turn does not accrue unconfirmed time; a steer does', () => {
     let running = true;
     outbox.configure({

@@ -62,10 +62,13 @@ final class AccountUsageRenderTests: XCTestCase {
 
     /// The three cases a user can be in: no Claude/Codex subscription signed in
     /// anywhere, computers whose CLI predates account usage, and accounts present.
+    /// Devices and a device's detail page show the Accounts section only when
+    /// an account has reported (counted in the rendered List, not a helper).
     func testRenderAccountsEmptyStates() throws {
         let dir = ProcessInfo.processInfo.environment["KRAKI_USAGE_RENDER_DIR"]
         let usage = account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x",
                             [window("five_hour", 87, hours: 2.3), window("weekly", 64, hours: 52)])
+        var detailSections: [String: Int] = [:]
         for (name, features, accounts) in [("none", ["account_usage", "account_usage_refresh"], [AccountUsage]()),
                                            ("old-cli", [String](), [AccountUsage]()),
                                            ("accounts", ["account_usage", "account_usage_refresh"], [usage])] {
@@ -82,28 +85,43 @@ final class AccountUsageRenderTests: XCTestCase {
                 store.setDeviceFeatures(id, features: features)
                 if !features.isEmpty { store.setDeviceUsage(id, accounts: accounts) }
             }
-            let shown = DeviceListView.showsAccounts(store)
-            XCTAssertEqual(shown, !accounts.isEmpty, "\(name): Accounts only when there is something to show")
             for style in [UIUserInterfaceStyle.light, .dark] {
-                let host = UIHostingController(rootView: NavigationStack { DeviceListView() }.environment(app))
-                host.overrideUserInterfaceStyle = style
-                let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-                let window = UIWindow(windowScene: scene)
-                window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
-                window.windowLevel = .alert + 1
-                window.overrideUserInterfaceStyle = style
-                window.rootViewController = host
-                window.makeKeyAndVisible()
-                RunLoop.main.run(until: Date().addingTimeInterval(1.2))
-                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                }
+                let (image, sections) = try render(NavigationStack { DeviceListView() }.environment(app), style: style)
+                // Online and Offline, plus Accounts only when an account reported.
+                XCTAssertEqual(sections, accounts.isEmpty ? 2 : 3, "\(name): Devices shows Accounts only when there is something to show")
                 if let dir, let png = image.pngData() {
                     try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-devices-\(name)-\(style == .dark ? "dark" : "light").png"))
                 }
-                window.isHidden = true
             }
+            let mbp = try XCTUnwrap(store.devices["mbp"])
+            detailSections[name] = try render(NavigationStack { DeviceDetailView(device: mbp) }.environment(app), style: .light).sections
         }
+        let base = try XCTUnwrap(detailSections["old-cli"])
+        XCTAssertEqual(detailSections["none"], base, "detail page: no empty Accounts card for a CLI with no accounts")
+        XCTAssertEqual(detailSections["accounts"], base + 1, "detail page: Accounts when the device reported one")
+    }
+
+    /// Renders `view` in a window; returns the image and the number of
+    /// sections in its List.
+    private func render(_ view: some View, style: UIUserInterfaceStyle) throws -> (image: UIImage, sections: Int) {
+        let host = UIHostingController(rootView: view)
+        host.overrideUserInterfaceStyle = style
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.windowLevel = .alert + 1
+        window.overrideUserInterfaceStyle = style
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        func all(_ v: UIView) -> [UIView] { [v] + v.subviews.flatMap(all) }
+        let lists = all(host.view).compactMap { $0 as? UICollectionView }
+        XCTAssertEqual(lists.count, 1, "one List on the page")
+        return (image, lists.reduce(0) { $0 + $1.numberOfSections })
     }
 
     /// Three accounts (Claude Max, Codex, a Claude account needing sign-in),

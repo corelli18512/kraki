@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { highestSeq } from './ChatView';
+import { highestSeq, lowestSeq } from './ChatView';
 import { openQuestions } from '../../lib/chat/spine';
 import type { ChatMessage } from '../../types/store';
 
@@ -24,5 +24,14 @@ describe('conversation head ignores runtime signals', () => {
     const messages = [m('idle', 2), ask(3), m('active', 529)];
     const atHead = highestSeq(messages) >= 3;
     expect(openQuestions(messages, [], atHead).map((q) => q.id)).toEqual(['q1']);
+  });
+});
+
+describe('conversation tail ignores runtime signals', () => {
+  it('a restarted-counter active below the window does not move the older-paging cursor', () => {
+    // After a tentacle restart its broadcast counter starts at 0 again, so an
+    // `active` can carry a seq far below the loaded spine window.
+    const messages = [m('agent_message', 1940), m('idle', 2000), m('active', 37), m('compacting', 12)];
+    expect(lowestSeq(messages)).toBe(1940);
   });
 });

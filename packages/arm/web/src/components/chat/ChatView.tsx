@@ -28,9 +28,12 @@ const OLDER_PAGE = 60;
 const WINDOW_START = 60;
 const WINDOW_PAGE = 40;
 
-function lowestSeq(messages: ChatMessage[]): number {
+/** Lowest conversation (spine) seq held; the older-paging cursor. Runtime
+ *  signals carry the relay's broadcast seq (see `highestSeq`). */
+export function lowestSeq(messages: ChatMessage[]): number {
   let low = 0;
   for (const m of messages) {
+    if (!isSpineMessage(m)) continue;
     const s = seqOf(m);
     if (Number.isInteger(s) && s > 0 && (low === 0 || s < low)) low = s;
   }
