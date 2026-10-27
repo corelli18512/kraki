@@ -36,7 +36,7 @@ export const DIAG_FIELDS = [
   'restored', 'count', 'dropped', 'attempt', 'status', 'bytes',
   'kind', 'outcome', 'path', 'gap', 'viewing', 'backgroundMs', 'firstContentMs', 'wsOpenMs', 'authedMs',
   'listFreshMs', 'viewCurrentMs', 'code', 'detectMs', 'reconnectMs', 'catchupMs', 'impactMs', 'visibleMs',
-  'pathChanged', 'afterWake', 'previousExit', 'reconnecting',
+  'pathChanged', 'afterWake', 'previousExit', 'reconnecting', 'kept',
   'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'offline', 'background', 'confirmMs', 'correctionMs', 'cause',
   'stage', 'confirmed', 'warm', 'startMs', 'recordMs', 'finalizeMs', 'correctionOn',
   'durationMs', 'firstActivityMs', 'firstTextMs', 'deltas', 'maxGapMs', 'stalls',

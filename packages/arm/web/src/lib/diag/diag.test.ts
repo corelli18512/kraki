@@ -181,13 +181,25 @@ describe('StabilityTracker (port)', () => {
       { outage: expect.objectContaining({ outcome: 'recovered', reconnectMs: 300 }) },
     ]);
     out.length = 0;
-    t.appHidden(); go(1000); t.appVisible(true, true); // warm opening in progress
+    t.appHidden(); t.transportLost('peer_closed', 1006, 0); go(1000); t.appVisible(true, true); // warm opening in progress
     t.conversationOpened('s', 5, 5, false);
     go(StabilityTracker.readyTimeout);
     expect(out).toEqual([
       { ready: expect.objectContaining({ kind: 'warm', outcome: 'timeout' }) },
       { open: expect.objectContaining({ outcome: 'timeout', reconnecting: true }) },
     ]);
+  });
+  it('warm opening on a socket that stayed signed in is current at once and marked kept (native keptConnection)', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, true); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.appHidden(); go(5000); t.appVisible(true, true);
+    expect(out).toEqual([{ ready: expect.objectContaining({ kind: 'warm', outcome: 'ready', kept: true, backgroundMs: 5000, wsOpenMs: 0, authedMs: 0, listFreshMs: 0, viewCurrentMs: 0 }) }]);
+    // A socket lost while hidden reconnects: a normal warm record, not kept.
+    out.length = 0;
+    t.appHidden(); t.transportLost('peer_closed', 1006, 0); go(5000); t.appVisible(true, true);
+    t.connecting(); go(100); t.authenticated(); t.sessionListApplied(null);
+    expect(out).toEqual([{ ready: expect.objectContaining({ kind: 'warm', outcome: 'ready', authedMs: 100 }) }]);
+    expect((out[0] as { ready: { kept?: boolean } }).ready.kept).toBeUndefined();
   });
   it('sleep: the next visibility is a wake opening, even when the window was also hidden; later outages count from the wake', () => {
     const { t, out, go } = tracker();

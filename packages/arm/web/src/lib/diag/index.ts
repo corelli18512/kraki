@@ -51,7 +51,7 @@ export class Diag {
     this.stability.onReady = (r) => this.record('ready.summary', undefined, {
       kind: r.kind, outcome: r.outcome, path: r.path, attempt: r.attempts, gap: r.gap, viewing: r.viewing,
       backgroundMs: r.backgroundMs, firstContentMs: r.firstContentMs, wsOpenMs: r.wsOpenMs, authedMs: r.authedMs,
-      listFreshMs: r.listFreshMs, viewCurrentMs: r.viewCurrentMs, previousExit: r.previousExit,
+      listFreshMs: r.listFreshMs, viewCurrentMs: r.viewCurrentMs, previousExit: r.previousExit, kept: r.kept,
     });
     this.stability.onOutage = (o) => this.record('outage.summary', undefined, {
       source: o.reason, outcome: o.outcome, path: o.path, attempt: o.attempts, detectMs: o.detectMs,
