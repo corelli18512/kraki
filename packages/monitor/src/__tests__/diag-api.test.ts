@@ -285,7 +285,9 @@ describe('off-band diagnostics', () => {
     expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.11' })).status).toBe(204);
   });
   it('rate limits by the client address the proxy forwards', async () => {
-    const f = await fixture();
+    const f = await fixture({ now: () => 1_790_000_039_999 });
+    // All 121 requests must share one minute bucket; a wall-clock loop crossing
+    // :00 got 204 instead of 429 (see the device test below).
     for (let i = 0; i < 120; i++) {
       expect((await f.request(Buffer.alloc(0), { 'x-kraki-signature': 'bad', 'x-forwarded-for': '203.0.113.1' })).status).toBe(401);
     }
