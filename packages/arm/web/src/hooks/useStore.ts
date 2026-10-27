@@ -120,6 +120,18 @@ function persistedSessions(sessions: Store['sessions']): Store['sessions'] {
   return persistedSessionsValue;
 }
 
+/** Gives the sessions of `deviceId` the device's current name. Returns the same
+ *  map when nothing changed so subscribers and persistence stay quiet. */
+function relabelSessions(sessions: Store['sessions'], deviceId: string, name: string): Store['sessions'] {
+  let next = sessions;
+  for (const [id, session] of sessions) {
+    if (session.deviceId !== deviceId || session.deviceName === name) continue;
+    if (next === sessions) next = new Map(sessions);
+    next.set(id, { ...session, deviceName: name });
+  }
+  return next;
+}
+
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
@@ -236,14 +248,20 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
+  // The device list is authoritative for names: a computer renamed while this
+  // app was offline must relabel its persisted sessions (as Swift does).
   setDevices: (devices) =>
-    set({ devices: new Map(devices.map((d) => [d.id, d])) }),
+    set((state) => {
+      let sessions = state.sessions;
+      for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
+      return { devices: new Map(devices.map((d) => [d.id, d])), sessions };
+    }),
 
   upsertDevice: (device) =>
     set((state) => {
       const next = new Map(state.devices);
       next.set(device.id, device);
-      return { devices: next };
+      return { devices: next, sessions: relabelSessions(state.sessions, device.id, device.name) };
     }),
 
   removeDevice: (deviceId) =>
@@ -262,12 +280,7 @@ export const useStore = create<Store>()(persist((set) => ({
         devices = new Map(state.devices);
         devices.set(deviceId, defaultName ? { ...rest, name, defaultName } : { ...rest, name });
       }
-      let sessions = state.sessions;
-      for (const [id, session] of state.sessions) {
-        if (session.deviceId !== deviceId || session.deviceName === name) continue;
-        if (sessions === state.sessions) sessions = new Map(state.sessions);
-        sessions.set(id, { ...session, deviceName: name });
-      }
+      const sessions = relabelSessions(state.sessions, deviceId, name);
       return devices === state.devices && sessions === state.sessions ? state : { devices, sessions };
     }),
 
