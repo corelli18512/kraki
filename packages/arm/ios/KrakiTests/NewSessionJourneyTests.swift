@@ -37,6 +37,14 @@ final class NewSessionJourneyTests: XCTestCase {
         }
         XCTAssertFalse(app.messageStore.cards[sid]?.text.isEmpty ?? true,
                        "the scripted producer must yield between deltas, not catch up straight to final")
+        // Let the scripted reply run to its closing idle here: otherwise it keeps
+        // waking the main thread every 35 ms through the next (timing-sensitive)
+        // tests on a slow runner.
+        let settle = Date().addingTimeInterval(15)
+        while (app.messageStore.cards[sid] != nil || app.sessionStore.sessions[sid]?.state != .idle), Date() < settle {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertNil(app.messageStore.cards[sid], "the scripted reply did not finish")
     }
 
     func testNewSessionJourney() throws {
