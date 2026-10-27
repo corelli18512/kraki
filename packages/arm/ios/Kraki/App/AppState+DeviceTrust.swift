@@ -402,7 +402,7 @@ extension AppState {
             guard let self, var current = self.deviceTrust.info[tentacleId], current.pendingEnforce == enforce else { return }
             current.pendingEnforce = nil
             self.deviceTrust.info[tentacleId] = current
-            self.deviceTrust.feedback = .failed(name: self.deviceStore.devices[tentacleId]?.name ?? "your computer", reason: "policy_unconfirmed")
+            self.deviceTrust.feedback = .failed(name: self.deviceStore.devices[tentacleId]?.name ?? String(localized: "your computer"), reason: "policy_unconfirmed")
         }
     }
 
