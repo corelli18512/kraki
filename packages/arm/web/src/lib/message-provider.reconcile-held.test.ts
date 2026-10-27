@@ -63,6 +63,26 @@ describe('tail reconciliation of a held window', () => {
     expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loaded' });
   });
 
+  it('a range served from memory or the cache never reports loading; a Tentacle request does', async () => {
+    const states: string[] = [];
+    const unsubscribe = messageProvider.subscribeRangeStatus(() => states.push(messageProvider.getRangeStatus(SID).state));
+    try {
+      messageProvider.ensureLoaded(SID); // cache-only
+      await idle();
+      messageProvider.reconcileTail(SID, 50); // closing idle, memory-held
+      await idle();
+      expect(states).not.toContain('loading');
+      expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loaded' });
+      db.lastSeq = 50; // seq 51 is not cached: the Tentacle is asked
+      messageProvider.setTentacleInfo(SID, 51, 'dev-t1');
+      messageProvider.reconcileTail(SID, 51);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loading' });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('still reads when the authoritative tail moved past memory', async () => {
     messageProvider.ensureLoaded(SID);
     await idle();

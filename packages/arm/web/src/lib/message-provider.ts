@@ -131,7 +131,6 @@ class MessageProvider {
     this.rangeTombstones.delete(sessionId);
     this.tailFailures.delete(sessionId);
     this.uncertainEmptySessions.delete(sessionId);
-    getStore().setSessionLoading(sessionId, false);
     for (const listener of this.rangeListeners) listener();
   }
   /** Sessions currently loading */
@@ -294,8 +293,6 @@ class MessageProvider {
     this.loadingSessions.add(sessionId);
     this.loadingThroughSeq.set(sessionId, toSeq);
     if (options?.foreground) this.loadingForeground.add(sessionId);
-    if (options?.initial) getStore().setSessionLoading(sessionId, true);
-    this.setRangeStatus(sessionId, { state: 'loading' });
 
     try {
       const completed = await this.loadRange(sessionId, clampedFrom, toSeq, operation);
@@ -336,7 +333,6 @@ class MessageProvider {
         this.loadingSessions.delete(sessionId);
         this.loadingThroughSeq.delete(sessionId);
         this.loadingForeground.delete(sessionId);
-        getStore().setSessionLoading(sessionId, false);
         const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
         if (pendingLastSeq !== undefined) {
           this.pendingTailReconciles.delete(sessionId);
@@ -401,6 +397,9 @@ class MessageProvider {
     let request: [number, number] | undefined = missing.length ? [missing[0][0], to] : undefined;
     for (let page = 0; request; page++) {
       if (page === 50) throw new RangeFailure('page-limit');
+      // Loading is shown only while the Tentacle is asked: a window served
+      // from memory or the cache (every closing idle) must not flash it.
+      if (page === 0) this.setRangeStatus(sessionId, { state: 'loading' });
       const [requestFrom, requestTo] = request;
       const batch = await this.requestFromTentacle(sessionId, requestFrom - 1, requestTo - requestFrom + 1);
       if (!this.owns(sessionId, operation)) return false;

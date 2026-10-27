@@ -77,7 +77,9 @@ function countPersistWrites(): () => number {
 
 /** Wait for warm-up and its asynchronous IndexedDB write-back to finish. */
 async function settle(): Promise<void> {
-  await vi.waitFor(() => { expect(useStore.getState().loadingSessions.size).toBe(0); });
+  await vi.waitFor(() => {
+    expect(Array.from({ length: SESSIONS }, (_, i) => sid(i)).filter((id) => messageProvider.isLoading(id))).toEqual([]);
+  });
   let last = -1;
   while (last !== db.puts + db.rangeReads) {
     last = db.puts + db.rangeReads;
