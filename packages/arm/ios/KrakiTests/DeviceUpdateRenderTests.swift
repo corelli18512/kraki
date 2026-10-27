@@ -4,8 +4,9 @@ import UIKit
 import XCTest
 @testable import Kraki
 
-/// Renders the device detail page's update section in every state for review.
-/// Writes PNGs to KRAKI_UPDATE_RENDER_DIR when set.
+/// The device detail page's update section in every state: what each state
+/// shows (title and action rows) is asserted; PNGs for review are written to
+/// KRAKI_UPDATE_RENDER_DIR when set.
 @MainActor
 final class DeviceUpdateRenderTests: XCTestCase {
     private let id = "mini"
@@ -45,20 +46,59 @@ final class DeviceUpdateRenderTests: XCTestCase {
         ]
     }
 
+    private typealias Presentation = DeviceUpdateSection.Presentation
+
+    /// Title and action rows per state, in `states` order.
+    private let expected: [String: (String, [Presentation.Action])] = [
+        "01-available": ("Kraki 0.38.10 is available", [.updateNow(enabled: true)]),
+        "02-available-offline": ("Kraki 0.38.10 is available", [.updateNow(enabled: false)]),
+        "03-requested": ("Asking Mac mini to update…", []),
+        "04-busy": ("2 sessions are running", [.choose]),
+        "05-waiting": ("Waiting for sessions to finish", []),
+        "06-downloading": ("Downloading Kraki 0.38.10…", []),
+        "07-installing": ("Installing Kraki 0.38.10…", []),
+        "08-installing-late": ("The update didn’t finish", [.retry, .dismiss]),
+        "09-updated": ("Updated to Kraki 0.38.10", []),
+        "11-rolled-back": ("Update didn’t work", [.dismiss]),
+        "12-failed": ("Couldn’t update", [.retry, .dismiss]),
+    ]
+
+    private func store(online: Bool, _ info: DeviceUpdateInfo?, _ progress: DeviceUpdateProgress?) throws -> AppState {
+        let app = try app()
+        let store = app.deviceStore
+        store.setDevices([device(online: online)])
+        if online {
+            store.setGreeting(id, name: "Mac mini",
+                              agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)],
+                              version: info?.current ?? "0.38.9")
+        }
+        if let info { store.setDeviceUpdate(id, update: info) }
+        store.setUpdateProgress(id, progress)
+        return app
+    }
+
+    func testUpdateStatesShowTheirTitleAndActions() throws {
+        for (name, online, info, progress) in states {
+            let app = try store(online: online, info, progress)
+            let shown = DeviceUpdateSection.presentation(device: device(online: online), store: app.deviceStore, now: Date())
+            guard let (title, actions) = expected[name] else {
+                XCTAssertNil(shown, "\(name) shows no update section")
+                XCTAssertFalse(DeviceUpdateSection.isShown(app.deviceStore, id), name)
+                continue
+            }
+            XCTAssertTrue(DeviceUpdateSection.isShown(app.deviceStore, id), name)
+            XCTAssertEqual(shown?.title, title, name)
+            XCTAssertEqual(shown?.actions, actions, name)
+        }
+    }
+
+    /// Renders every state (catches crashes); waits for a settled frame and
+    /// writes PNGs only when KRAKI_UPDATE_RENDER_DIR is set.
     func testRenderUpdateStates() throws {
         let dir = ProcessInfo.processInfo.environment["KRAKI_UPDATE_RENDER_DIR"]
         for (name, online, info, progress) in states {
-            let app = try app()
-            let store = app.deviceStore
-            store.setDevices([device(online: online)])
-            if online {
-                store.setGreeting(id, name: "Mac mini",
-                                  agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)],
-                                  version: info?.current ?? "0.38.9")
-            }
-            if let info { store.setDeviceUpdate(id, update: info) }
-            store.setUpdateProgress(id, progress)
-            for style in [UIUserInterfaceStyle.light, .dark] {
+            let app = try store(online: online, info, progress)
+            for style in dir == nil ? [UIUserInterfaceStyle.light] : [.light, .dark] {
                 let host = UIHostingController(rootView: NavigationStack {
                     DeviceDetailView(device: device(online: online))
                 }.environment(app))
@@ -70,13 +110,16 @@ final class DeviceUpdateRenderTests: XCTestCase {
                 window.overrideUserInterfaceStyle = style
                 window.rootViewController = host
                 window.makeKeyAndVisible()
-                RunLoop.main.run(until: Date().addingTimeInterval(0.8))
-                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                }
-                if let dir, let png = image.pngData() {
-                    try png.write(to: URL(fileURLWithPath: dir)
-                        .appendingPathComponent("update-\(name)-\(style == .dark ? "dark" : "light").png"))
+                host.view.layoutIfNeeded()
+                if let dir {
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                    let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    }
+                    if let png = image.pngData() {
+                        try png.write(to: URL(fileURLWithPath: dir)
+                            .appendingPathComponent("update-\(name)-\(style == .dark ? "dark" : "light").png"))
+                    }
                 }
                 window.isHidden = true
             }
