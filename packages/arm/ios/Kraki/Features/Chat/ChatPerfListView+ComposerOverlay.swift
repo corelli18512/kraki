@@ -26,10 +26,20 @@ extension ChatPerfListVC {
     /// is raised the reader may have scrolled the bubbles it covers into view:
     /// keep that (never pull them back under the glass), but never chase the
     /// composer either. Explicit jumps (↓, a send) go to the newest edge.
-    func followPinOffset(keepingRevealed: Bool) -> CGFloat {
+    /// `revealCap` bounds the kept reveal to what the reader had before a batch
+    /// whose front compensation moved the offset (see `revealedAboveTail`).
+    func followPinOffset(keepingRevealed: Bool, revealCap: CGFloat = .greatestFiniteMagnitude) -> CGFloat {
         let tail = maximumOffsetY()
         guard keepingRevealed, composerOverlayInset > 0 else { return tail }
-        return min(max(tail, reachOffsetY), max(tail, collectionView.contentOffset.y))
+        return min(max(tail, reachOffsetY), max(tail, min(collectionView.contentOffset.y, tail + revealCap)))
+    }
+
+    /// How far the reader has scrolled covered bubbles out from under the
+    /// raised composer. Captured before a prepend: a short, top-aligned window
+    /// clamps the tail at the top, so its front compensation would otherwise
+    /// read as a reveal the reader never made.
+    func revealedAboveTail() -> CGFloat {
+        max(0, collectionView.contentOffset.y - maximumOffsetY())
     }
 
     /// The floating composer grew or shrank. Growth only extends how far the

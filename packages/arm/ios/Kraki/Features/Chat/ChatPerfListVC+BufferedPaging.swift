@@ -205,7 +205,10 @@ extension ChatPerfListVC {
                 chatPerfLog.log("[txn \(txn.id)] STALE older gen=\(gen) cur=\(self.pagingGeneration) — drop")
                 return
             }
-            defer { self.scheduleUnderfilledHistoryCheck() }
+            defer {
+                self.reconcileOlderSpinnerWithoutRowChanges()
+                self.scheduleUnderfilledHistoryCheck()
+            }
             chatPerfLog.log("[txn \(txn.id)] raw top \(winBefore)→\(self.vm.windowTopSeq) moved=\(self.yn(moved)) dt=\(self.f1(txn.lap()))")
             guard moved else {
                 chatPerfLog.log("[txn \(txn.id)] END noop moved=false total=\(self.f1(txn.total()))")
@@ -234,6 +237,29 @@ extension ChatPerfListVC {
         let distanceToOlderEdge = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
         guard distanceToOlderEdge < collectionView.bounds.height else { return }
         pager.resume()
+    }
+
+    /// The spinner otherwise changes only inside a row apply. A raw page of
+    /// nonvisual rows can reach the true start with identical rendered rows,
+    /// so collapse it here, keeping the rows on screen where they are.
+    func reconcileOlderSpinnerWithoutRowChanges() {
+        let showOlderSpinner = hasLoadedWindow && !atOldest
+        guard loadingOlder != showOlderSpinner, items == ids, pendingApply == nil,
+              !measuringOlderPage, !paginationSnapshotDeferred else { return }
+        let delta = showOlderSpinner ? spinnerRowHeight : -spinnerRowHeight
+        UIView.performWithoutAnimation {
+            collectionView.layoutIfNeeded()
+            let offsetBefore = collectionView.contentOffset.y
+            loadingOlder = showOlderSpinner
+            let ctx = UICollectionViewFlowLayoutInvalidationContext()
+            ctx.invalidateFlowLayoutDelegateMetrics = true
+            collectionView.collectionViewLayout.invalidateLayout(with: ctx)
+            collectionView.layoutIfNeeded()
+            // Never compensate past the top: short history stays top-aligned.
+            let target = max(-collectionView.adjustedContentInset.top, offsetBefore + delta)
+            applyFrontShift(target - collectionView.contentOffset.y, gestureDelta: delta)
+        }
+        updateJumpButtonVisibility()
     }
 
     /// Top up the buffer while approaching the top, until it can clear the band.

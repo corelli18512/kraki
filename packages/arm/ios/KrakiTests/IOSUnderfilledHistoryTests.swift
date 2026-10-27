@@ -50,6 +50,29 @@ final class IOSUnderfilledHistoryTests: XCTestCase {
                        "short complete history stays top-aligned")
     }
 
+    func testNonvisualFinalPageStillRemovesOlderSpinner() async throws {
+        // The last raw page (seq 1-6) adds no rendered rows, so no edge apply runs.
+        let vc = try fixture(total: 36, height: 2_200, nonvisualHead: 6)
+        await settle()
+        XCTAssertEqual(vc.vm.windowTopSeq, 1)
+        XCTAssertTrue(vc.atOldest)
+        XCTAssertEqual(vc.items, vc.ids)
+        XCTAssertFalse(vc.loadingOlder, "the true start must not keep a loading-older spinner")
+        XCTAssertEqual(vc.collectionView.contentOffset.y, -vc.collectionView.adjustedContentInset.top, accuracy: 1,
+                       "short complete history stays top-aligned")
+    }
+
+    func testRaisedComposerFillDoesNotManufactureReveal() async throws {
+        let vc = try fixture(total: 180, height: 2_200)
+        vc.updateComposerOverlayInset(200)
+        let initialTop = vc.vm.windowTopSeq
+        await settle()
+        XCTAssertLessThan(vc.vm.windowTopSeq, initialTop)
+        XCTAssertGreaterThanOrEqual(renderedHeight(vc), availableHeight(vc) - 1)
+        XCTAssertEqual(vc.collectionView.contentOffset.y, vc.maximumOffsetY(), accuracy: 1,
+                       "an automatic fill keeps only the reveal the reader had (none), not the composer growth")
+    }
+
     func testFilledTailDoesNotPageAtRest() async throws {
         let vc = try fixture(total: 180, height: 400)
         let top = vc.vm.windowTopSeq
@@ -123,14 +146,15 @@ final class IOSUnderfilledHistoryTests: XCTestCase {
         XCTAssertFalse(vc.allowsEdgePaging)
     }
 
-    private func fixture(total: Int, height: CGFloat, nonvisualTail: Bool = false, storedFrom: Int = 1) throws -> ChatPerfListVC {
+    private func fixture(total: Int, height: CGFloat, nonvisualTail: Bool = false, nonvisualHead: Int = 0,
+                         storedFrom: Int = 1) throws -> ChatPerfListVC {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("underfilled-\(UUID().uuidString)")
         roots.append(root)
         let db = try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite"))
         try db.insert(sid, (storedFrom...total).map { seq in
             let type: String
             let payload: [String: AnyCodable]
-            if nonvisualTail && seq > total - 30 {
+            if (nonvisualTail && seq > total - 30) || seq <= nonvisualHead {
                 type = "idle"; payload = [:]
             } else {
                 switch seq % 3 {

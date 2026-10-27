@@ -162,8 +162,9 @@ extension ChatPerfListVC {
         // the new rows must also be followed, or they land under the composer.
         // An automatic fill can prepend into a short, top-aligned window.
         // Preserve its tail latch atomically rather than leaving an overscroll.
-        let followNewTail = (takeUnderfilledTailFollow() || iB > 0) && followingBottom
-            && !collectionView.isDragging && !collectionView.isDecelerating
+        // Only the reveal held before this batch survives its tail pin.
+        let newTailReveal: CGFloat? = (takeUnderfilledTailFollow() || iB > 0) && followingBottom
+            && !collectionView.isDragging && !collectionView.isDecelerating ? revealedAboveTail() : nil
 
         UIView.performWithoutAnimation {
             // Settle pending layout (e.g. the scroll step that triggered this
@@ -215,7 +216,7 @@ extension ChatPerfListVC {
             // corrects any remaining difference (absolute, never additive).
             let uikitDrift = collectionView.contentOffset.y - offsetBeforeBatch
             applyFrontShift(frontDelta - uikitDrift, gestureDelta: frontDelta)
-            if followNewTail { pinToBottom(reason: "edges-new-tail") }
+            if let newTailReveal { pinToBottom(reason: "edges-new-tail", revealCap: newTailReveal) }
         }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -252,12 +253,12 @@ extension ChatPerfListVC {
     }
     #endif
 
-    func pinToBottom(reason: String, animated: Bool = false) {
+    func pinToBottom(reason: String, animated: Bool = false, revealCap: CGFloat = .greatestFiniteMagnitude) {
         guard collectionView.numberOfItems(inSection: 0) > 0 else { return }
         if !animated, landOnFirstUnreadIfNeeded(reason: reason) { return }
         isPinningBottom = true
         collectionView.layoutIfNeeded()
-        let maxY = followPinOffset(keepingRevealed: reason != "explicit")
+        let maxY = followPinOffset(keepingRevealed: reason != "explicit", revealCap: revealCap)
         lastPinnedViewportSize = collectionView.bounds.size
         lastPinnedAdjustedInsets = tailAdjustedInsets
         scrollPolicy.pinToTail(observedOffset: maxY)
