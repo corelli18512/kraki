@@ -37,12 +37,12 @@ async function fixture(options: { enabled?: boolean; dailyBytes?: number } = {})
   const id = randomUUID();
   const batch = { schema: 1, batchId: id, processId: randomUUID(), platform: 'ios', version: '0.1.1', build: '1',
     events: [{ ev: 'cmd.answer', seq: 1, t: Date.now(), m: 30, sid: 'session-1', d: { questionId: 'q1', textLength: 12, duplicate: false } }] };
-  function request(body = gzipSync(JSON.stringify(batch)), extra: Record<string, string> = {}, path = '/api/diag/v1/batch', method = 'POST') {
+  function request(body = gzipSync(JSON.stringify(batch)), extra: Record<string, string> = {}, path = '/api/diag/v1/batch', method = 'POST', deviceId = device.id) {
     const timestamp = String(Date.now());
-    const signature = sign('sha256', Buffer.from(diagSigningText(method, path, device.id, timestamp, id, body)), key.privateKey).toString('base64');
+    const signature = sign('sha256', Buffer.from(diagSigningText(method, path, deviceId, timestamp, id, body)), key.privateKey).toString('base64');
     return fetch(url + path, { method, headers: {
       'content-type': 'application/json', 'content-encoding': 'gzip',
-      'x-kraki-device': device.id, 'x-kraki-time': timestamp, 'x-kraki-request': id, 'x-kraki-signature': signature, ...extra,
+      'x-kraki-device': deviceId, 'x-kraki-time': timestamp, 'x-kraki-request': id, 'x-kraki-signature': signature, ...extra,
     }, body: method === 'POST' ? new Uint8Array(body) : undefined });
   }
   /** A POST that sends its headers and part of its body, then stalls. */
@@ -273,15 +273,16 @@ describe('off-band diagnostics', () => {
     for (let i = 0; i < 4; i++) await f.stalled({});
     expect((await f.request()).status).toBe(204);
   });
-  it('limits uploads in flight per device, not for the whole collector', async () => {
+  it('unsigned requests naming a device do not hold that device\'s upload slots', async () => {
     const f = await fixture();
-    // Headers that pass the pre-body checks (signature is checked after the body).
-    await f.stalled({ ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.7' });
-    await f.stalled({ ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.8' });
-    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.9' })).status).toBe(204);
-    // A third one for the busy device waits.
-    const busy = await f.request(undefined, { ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': '203.0.113.10' });
-    expect(busy.status).toBe(429);
+    // Headers that pass the pre-body checks (the signature covers the body, so
+    // it is checked after the body); anyone who knows the device id can send them.
+    for (const ip of ['203.0.113.7', '203.0.113.8', '203.0.113.9']) {
+      await f.stalled({ ...f.signedHeaders(otherDevice.id), 'x-forwarded-for': ip });
+    }
+    // The device's own signed upload still goes through.
+    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.10' }, '/api/diag/v1/batch', 'POST', otherDevice.id)).status).toBe(204);
+    expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.11' })).status).toBe(204);
   });
   it('rate limits by the client address the proxy forwards', async () => {
     const f = await fixture();

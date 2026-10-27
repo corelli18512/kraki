@@ -23,18 +23,18 @@ Then run kraki on the coding machine and point it at your relay URL instead of t
 
 ## Reaching the relay from other machines
 
-With `open` auth and no shared key, anyone who can reach the relay joins your account and can drive your computers. So in that mode the relay only listens on loopback, and it refuses to start with a non-loopback `HOST` / `--host` (for example `0.0.0.0`). To serve other machines, pick one:
+With `open` auth and no shared key, anyone who can reach the relay joins your account and can drive your computers. So in that mode the relay only listens on loopback, and it refuses to start with a non-loopback `KRAKI_HOST` / `--host` (for example `0.0.0.0`). To serve other machines, pick one:
 
 - **Shared key (open auth).** Set a long random secret on the relay and put the same secret in `~/.kraki/channel.key` (`chmod 600`) on each computer before running `kraki`:
 
   ```bash
-  OPEN_SHARED_KEY=$(openssl rand -hex 32) HOST=0.0.0.0 kraki-relay
+  OPEN_SHARED_KEY=$(openssl rand -hex 32) KRAKI_HOST=0.0.0.0 kraki-relay
   ```
 
   Every `open` sign-in and every pairing (QR) request must then carry the key. Computers send it from `channel.key`. Apps join by scanning the computer's QR code. Older `kraki` versions connect with the key, but they can't make QR codes on a keyed relay; update `kraki` for that.
-- **GitHub or API-key auth** (`--auth github`, `--auth apikey`). These modes keep listening on all interfaces unless you set `HOST`.
+- **GitHub or API-key auth** (`--auth github`, `--auth apikey`). These modes keep listening on all interfaces unless you set `KRAKI_HOST` or `--host`.
 
-Behind a reverse proxy on the same host (as in the systemd setup below), the default loopback bind already fits: point the proxy at `127.0.0.1:4000`.
+A reverse proxy (nginx, Caddy, …) makes the relay public, even when it runs on the same host and points at `127.0.0.1:4000`. So behind a proxy, always set `OPEN_SHARED_KEY` or use GitHub or API-key auth. Without a key, the relay refuses `open` sign-ins and pairing requests that came through a proxy (they carry `X-Forwarded-For`, `Forwarded` or `X-Real-IP`). A proxy that sends none of these headers looks like a local client, so don't rely on that check: set the key.
 
 ## Enable GitHub Login for the web app
 
@@ -98,7 +98,7 @@ Restart=on-failure
 RestartSec=5
 ```
 
-`/etc/kraki/relay.env` should be `chmod 600`, owned by root, and contain at minimum the keys listed under "Start the relay" plus any optional features you've enabled (GitHub OAuth, push, multi-region edge config).
+`/etc/kraki/relay.env` should be `chmod 600`, owned by root, and contain the auth settings for a public relay (`OPEN_SHARED_KEY`, or `AUTH_MODE=github` / `apikey` with their keys; see [Reaching the relay from other machines](#reaching-the-relay-from-other-machines)) plus any optional features you've enabled (GitHub OAuth, push, multi-region edge config).
 
 ### Deploying a new version
 

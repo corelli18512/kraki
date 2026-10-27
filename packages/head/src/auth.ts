@@ -50,6 +50,9 @@ export interface AuthProvider {
   readonly name: string;
   /** Validate credentials and return user info */
   authenticate(credentials: AuthCredentials): Promise<AuthOutcome>;
+  /** The token is this provider's own secret (the open shared key): no other
+   *  provider may be shown it. */
+  isOwnSecret?(token: string): boolean;
 }
 
 /** Credentials a device can send */
@@ -72,6 +75,9 @@ export interface AuthCredentials {
   redirectUri?: string;
   /** IP address of the connecting device (set by the server, not the client) */
   ip?: string;
+  /** The device connected from another machine or through a reverse proxy
+   *  (set by the server, not the client). */
+  remoteClient?: boolean;
 }
 
 // --- Built-in providers ---
@@ -209,10 +215,16 @@ export class GitHubAuthProvider implements AuthProvider {
   }
 }
 
+/** Why keyless `open` auth refused a client that is not on the relay's machine. */
+export const KEYLESS_OPEN_REMOTE_MESSAGE =
+  'This relay uses open auth without a shared key, so it only accepts devices on its own machine (not through a reverse proxy). '
+  + 'Set OPEN_SHARED_KEY on the relay (and the same secret in ~/.kraki/channel.key on each computer), or use github or apikey auth.';
+
 /**
- * Open provider for self-hosted mode. No validation — all connections accepted.
- * Optionally accepts a shared key so tentacles, head, and apps can use the same
- * secret to form a trusted group without full OAuth.
+ * Open provider for self-hosted mode. Without a shared key it accepts every
+ * client on the relay's own machine (direct loopback) and refuses the rest.
+ * With a shared key, tentacles, head, and apps use the same secret to form a
+ * trusted group without full OAuth.
  *
  * TODO: Support multi-user on self-hosted without OAuth (e.g., local user registry)
  */
@@ -224,12 +236,21 @@ export class OpenAuthProvider implements AuthProvider {
     this.sharedKey = sharedKey;
   }
 
+  isOwnSecret(token: string): boolean {
+    return !!this.sharedKey && safeEqual(token, this.sharedKey);
+  }
+
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {
     if (this.sharedKey) {
       if (!credentials.token || !safeEqual(credentials.token, this.sharedKey)) {
         getLogger().warn('Open auth failed: invalid shared key', { ip: credentials.ip });
         return { ok: false, message: 'Invalid shared key' };
       }
+    } else if (credentials.remoteClient) {
+      // Without a key the relay only listens on loopback, but a reverse proxy
+      // on this host would still publish it: anyone could join this account.
+      getLogger().warn('Open auth refused: no shared key and the client is not on this machine', { ip: credentials.ip });
+      return { ok: false, message: KEYLESS_OPEN_REMOTE_MESSAGE };
     }
     return {
       ok: true,
@@ -282,6 +303,10 @@ export class ThrottledAuthProvider implements AuthProvider {
     this.windowMs = windowMs;
     this.cleanupTimer = setInterval(() => this.cleanup(), windowMs * 2);
     this.cleanupTimer.unref();
+  }
+
+  isOwnSecret(token: string): boolean {
+    return this.inner.isOwnSecret?.(token) ?? false;
   }
 
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {

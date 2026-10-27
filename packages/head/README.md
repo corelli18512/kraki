@@ -41,7 +41,7 @@ npx @kraki/head
 
 By default the relay uses `open` auth, listens on `ws://127.0.0.1:4000` (this machine only) and stores user/device data in `kraki-head.db`.
 
-`open` auth without a shared key refuses to listen on a non-loopback `HOST` / `--host`, because anyone who reached it could drive your computers. To accept other machines, set `OPEN_SHARED_KEY` (computers send it from `~/.kraki/channel.key`) or use `--auth github` / `--auth apikey`. See the [self-hosting guide](../../docs/self-hosting.md#reaching-the-relay-from-other-machines).
+`open` auth without a shared key refuses to listen on a non-loopback `KRAKI_HOST` / `--host`, because anyone who reached it could drive your computers. It also refuses `open` sign-ins and pairing requests that came through a reverse proxy. To accept other machines, or to run behind a proxy, set `OPEN_SHARED_KEY` (computers send it from `~/.kraki/channel.key`) or use `--auth github` / `--auth apikey`. See the [self-hosting guide](../../docs/self-hosting.md#reaching-the-relay-from-other-machines).
 
 Enable GitHub login for the web app:
 

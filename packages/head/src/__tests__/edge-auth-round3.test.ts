@@ -108,7 +108,12 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     return { ws, messages };
   }
 
-  it.each(['verify', 'token'])('a newer token remember fences an older successful %s even with unchanged identity', async (kind) => {
+  // A client retries a slow (>= 5 s) sign-in on a new socket while the first
+  // is still at the account service. When the retry's answer lands after the
+  // first one was stored, it lost only to an answer for the same account and
+  // keys: it signs in (with that newer answer), instead of costing one more
+  // failed round.
+  it.each(['verify', 'token'])('a newer answer for the same identity does not fail an older successful %s', async (kind) => {
     await seed(); const epoch = cache.epoch('phone');
     // An account-service nonce: the held verify really succeeds, so only the epoch fence can veto it.
     const nonce = await accountNonce();
@@ -118,11 +123,54 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
       : remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     await until(() => held.length === 1); hold = undefined;
     expect(held[0].result).toMatchObject({ ok: true });
+    account.upsertDevice('laptop', 'u', 'Laptop', 'tentacle', 'desktop', exportPublicKey(generateKeyPair().publicKey), 'enc-laptop');
     const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
     expect(fresh.ok).toBe(true); expect(cache.epoch('phone')).toBeGreaterThan(epoch);
     const updated = cache.epoch('phone'); release();
-    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
+    const answer = await pending;
+    expect(answer).toMatchObject({ ok: true, deviceId: 'phone', authMethod: kind === 'verify' ? 'challenge' : 'pairing' });
+    // The newer answer's device list, never the older one's.
+    expect(answer.ok && answer.devices.map((d) => d.id)).toContain('laptop');
     expect(cache.epoch('phone')).toBe(updated); expect(cache.lookup('phone')).toBeDefined();
+  });
+
+  it('a cached remote answer mirrors internal even when its socket closed before the handshake', async () => {
+    // The account answer is cached (storeAuthoritative) but the socket that asked
+    // closed first (client auth deadline), so the handshake's mirror never ran.
+    account.setInternal('u', true);
+    edge.upsertUser('u', 'qa', 'open');
+    edge.upsertDevice('phone', 'u', 'Phone', 'app', 'ios', pub, 'enc');
+    const nonce = await accountNonce();
+    const result = await remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    expect(result.ok).toBe(true);
+    cache.claimRevalidation('phone');
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    const authOk = current.messages.find((m) => m.type === 'auth_ok') as { user: { preferences?: Record<string, unknown> } };
+    expect(authOk.user.preferences?.internal).toBe(true);
+  });
+
+  it('a newer answer with another encryption key still fences an older successful verify', async () => {
+    await seed();
+    const nonce = await accountNonce();
+    hold = '/api/auth/verify';
+    const pending = remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    await until(() => held.length === 1); hold = undefined;
+    const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, { ...device, encryptionKey: 'enc-2' });
+    expect(fresh.ok).toBe(true); release();
+    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
+  });
+
+  it('a drop between request and answer still fences it, even if the same identity was stored again', async () => {
+    await seed();
+    const nonce = await accountNonce();
+    hold = '/api/auth/verify';
+    const pending = remote.verifyChallenge('phone', nonce, signChallenge(nonce, keys.privateKey), 'enc');
+    await until(() => held.length === 1); hold = undefined;
+    remote.forgetLocalTrust('phone');
+    const fresh = await remote.authenticate({ method: 'pairing', token: local.createPairingToken('u').token }, device);
+    expect(fresh.ok).toBe(true); release();
+    expect(await pending).toMatchObject({ ok: false, code: 'service_unavailable' });
   });
 
   // Was: "a delayed old background key success cannot overwrite a newer
@@ -163,6 +211,42 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     expect.soft(cache.lookup('phone'), 'live replacement must remain covered by periodic revocation').toBeDefined();
     account.deleteDevice('phone'); await remote.pollDeviceStatus();
     expect(revocations).toContainEqual(expect.objectContaining({ deviceId: 'phone' }));
+  });
+
+  it('drops cache rows too old for local sign-in from the status poll', async () => {
+    await seed();
+    now += 25 * 3600_000;
+    expect(cache.lookup('phone')).toBeUndefined();
+    await remote.pollDeviceStatus();
+    expect(cache.deviceIds()).not.toContain('phone');
+  });
+
+  it('keeps polling an old row while its device is connected, so a removal still kicks it', async () => {
+    await seed(); cache.claimRevalidation('phone');
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    now += 25 * 3600_000;
+    await remote.pollDeviceStatus();
+    expect(cache.deviceIds()).toContain('phone');
+    account.deleteDevice('phone'); await remote.pollDeviceStatus();
+    expect(revocations).toContainEqual(expect.objectContaining({ deviceId: 'phone' }));
+  });
+
+  // `internal` (dogfood) is mirrored to the edge on every remote sign-in of
+  // the account; a sign-in from the cache must report that mirrored flag, not
+  // the one in this device's own (up to 24 h old) cached answer.
+  it.each([[true, false], [false, true]])('a local sign-in reports the edge\'s mirrored internal flag (cached %s, mirrored %s)', async (cachedInternal, mirroredInternal) => {
+    account.updatePreferences('u', { theme: 'dark' });
+    account.setInternal('u', cachedInternal);
+    await seed(); cache.claimRevalidation('phone');
+    // Another device's remote sign-in mirrored the account service's newer flag.
+    edge.setInternal('u', mirroredInternal);
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    expect(calls).not.toContain('/api/auth/verify');
+    const authOk = current.messages.find((m) => m.type === 'auth_ok') as { user: { preferences?: Record<string, unknown> } };
+    expect(authOk.user.preferences?.internal === true).toBe(mirroredInternal);
+    expect(authOk.user.preferences?.theme).toBe('dark');
   });
 
   it('invalid_signature from another socket preserves live trust and subsequent removal is polled', async () => {

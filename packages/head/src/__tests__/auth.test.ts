@@ -156,6 +156,13 @@ describe('OpenAuthProvider', () => {
   it('should have name "open"', () => {
     expect(new OpenAuthProvider().name).toBe('open');
   });
+
+  it('refuses a client on another machine or behind a proxy without a shared key', async () => {
+    const result = await new OpenAuthProvider().authenticate({ remoteClient: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain('OPEN_SHARED_KEY');
+    expect((await new OpenAuthProvider('k').authenticate({ token: 'k', remoteClient: true })).ok).toBe(true);
+  });
 });
 
 describe('ApiKeyAuthProvider', () => {
