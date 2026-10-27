@@ -121,6 +121,34 @@ exposed pre-existing timeouts/races in `message-provider.regression.test.ts`,
 They were not changed; the normal complete suite passes. These remain additional
 CI determinism risks, not concealed by retries or runner-limit changes.
 
+## Rebase onto main `8cc0ea44` — 2026-10-27
+
+Rebased from `23b3e5d6` across 211 main commits. Main had not touched
+`IOSNewSessionScenario.swift`, `NewSessionJourneyTests`, the IME `openSearch`
+helper or `e2e/replay.spec.ts`; all fixes still apply and still fail before /
+pass after on current main:
+
+- Scripted-stall and deferred-focus regressions, with main's scenario and
+  `openSearch` restored: both fail their intended assertion.
+- Replay test with main's listener ordering (load gate kept): 30s `page.goto` timeout.
+
+Only `diag-api.test.ts` conflicted (main added multi-device fixtures and a
+`deviceId` request parameter); the injected clock was merged into both.
+Main also added `rate limits by the client address the proxy forwards`, with the
+same wall-clock minute race (121 requests against a 120/minute IP bucket).
+Advancing the injected clock across `:00` mid-loop reproduces
+`expected 204 to be 429`; it now uses the fixture clock too.
+
+After the rebase (dedicated iPhone 17 Pro iOS 26.5 simulator, deleted afterward):
+`NewSessionJourneyTests` + `IOSSearchIMETests` ×10 **70/70** (including main's new
+IME test that uses the waiting `openSearch`); iOS full suite **879 executed,
+0 failures**; Mac full suite **575, 0 failures**; Playwright `replay.spec.ts` ×10
+**40 passed, 20 skipped**; both monitor rate-limit tests ×10 **10/10**; monitor 32/32;
+web 1276/1276; Head 566/566 on re-run. Head's first run failed once in
+`cli-lifecycle.test.ts` `InflightRequests > drain waits for open responses`
+(`expected +0 to be 1`: a fixed 20ms sleep before a size assertion). It is not
+changed here and is another CI determinism risk.
+
 ## Workflow / next action
 
 `.github/workflows/ci.yml` selects job groups through `scope`. `Validate` only
