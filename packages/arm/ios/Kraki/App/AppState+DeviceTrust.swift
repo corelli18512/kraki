@@ -358,6 +358,13 @@ extension AppState {
         KLog.d("🔓 device trust: \(tentacleId.prefix(12)) revoked this device")
     }
 
+    /// The name to show for an app a computer trusts: the account's current
+    /// name, so a rename shows at once (older computers list the name the app
+    /// reported when it paired).
+    func trustedDeviceName(_ entry: TrustedDeviceEntry) -> String {
+        deviceStore.devices[entry.id]?.name ?? entry.name
+    }
+
     /// The computer's signed list of the apps it trusts.
     func handleTrustedDevices(_ dict: [String: Any]) {
         guard let tentacleId = dict["deviceId"] as? String,

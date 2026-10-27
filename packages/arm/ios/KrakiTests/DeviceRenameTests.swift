@@ -89,6 +89,19 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertEqual(SessionCardProjection.make(session: stale, device: nil, preview: nil, draft: nil).machineName, "corelli-mbp")
     }
 
+    /// A computer's trusted-devices list names an app as it was at pairing;
+    /// the row shows the account's current name once the app is renamed.
+    func testTrustedDevicesShowTheAppsCurrentName() throws {
+        let paired = TrustedDeviceEntry(id: "phone", name: "Kraki iOS", via: "qr", pairedAt: "")
+        let gone = TrustedDeviceEntry(id: "gone", name: "Old iPad", via: "qr", pairedAt: "")
+        app.deviceStore.setDevices([DeviceSummary(id: "phone", name: "Kraki iOS", role: .app, online: true)])
+        XCTAssertEqual(app.trustedDeviceName(paired), "Kraki iOS")
+
+        app.messageRouter?.handleRawMessage(try json(["type": "device_renamed", "deviceId": "phone", "name": "Corelli's iPhone", "defaultName": "Kraki iOS"]))
+        XCTAssertEqual(app.trustedDeviceName(paired), "Corelli's iPhone")
+        XCTAssertEqual(app.trustedDeviceName(gone), "Old iPad", "not on the account: the computer's name")
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")

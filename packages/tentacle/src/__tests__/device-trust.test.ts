@@ -451,6 +451,25 @@ describe('device trust — administration from paired apps', () => {
     expect(lists.every((m) => m.__signed === true)).toBe(true);
   });
 
+  it('lists an app under the name the account gave it, following device_renamed', () => {
+    const { env, phone, laptop } = pairedPolicy(true);
+    const lastNames = () => {
+      const last = readable(env, phone).filter((m) => m.type === 'trusted_devices').at(-1)!.payload as { devices: Array<{ id: string; name: string }> };
+      return Object.fromEntries(last.devices.map((d) => [d.id, d.name]));
+    };
+    env.sent.length = 0;
+    env.headControl({ type: 'device_renamed', deviceId: laptop.id, name: 'Corelli\'s iPad', defaultName: laptop.id });
+    expect(lastNames()).toEqual({ [laptop.id]: 'Corelli\'s iPad', [phone.id]: phone.id });
+
+    // A device list from the Head (here device_joined) carries the current name too.
+    env.headControl({ type: 'device_joined', device: { id: phone.id, name: 'Corelli\'s iPhone', defaultName: phone.id, role: 'app', online: true, publicKey: phone.rsaCompact } });
+    env.sent.length = 0;
+    env.headControl({ type: 'device_renamed', deviceId: 'dev_unknown', name: 'Nobody' });
+    expect(readable(env, phone).filter((m) => m.type === 'trusted_devices')).toEqual([]);
+    env.headControl({ type: 'device_renamed', deviceId: laptop.id, name: laptop.id });
+    expect(lastNames()).toEqual({ [laptop.id]: laptop.id, [phone.id]: 'Corelli\'s iPhone' });
+  });
+
   it('a paired app revokes another; the revoked one loses access at once', async () => {
     const { env, phone, laptop } = pairedPolicy(true);
     env.deliver(appSend(env, phone, { type: 'revoke_device', payload: { deviceId: laptop.id } }), phone.id);

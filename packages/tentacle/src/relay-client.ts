@@ -737,6 +737,20 @@ export class RelayClient {
       return;
     }
 
+    if (msg.type === 'device_renamed') {
+      // Names are cosmetic: the trusted-devices list shows the account's
+      // current name for an app rather than the one it reported at pairing.
+      const deviceId = msg.deviceId as string;
+      const device = this.relayAppDevices.get(deviceId);
+      if (!device || typeof msg.name !== 'string') return;
+      const { defaultName: _old, ...rest } = device;
+      this.relayAppDevices.set(deviceId, typeof msg.defaultName === 'string'
+        ? { ...rest, name: msg.name, defaultName: msg.defaultName }
+        : { ...rest, name: msg.name });
+      if (this.deviceTrust?.isTrusted(deviceId)) this.broadcastTrustedDevices();
+      return;
+    }
+
     if (msg.type === 'device_removed') {
       const deviceId = msg.deviceId as string;
       // Removal only ever takes trust away, so the Head is believed here:
@@ -1788,7 +1802,7 @@ export class RelayClient {
         policyRevision: trust.store.policyRevision,
         devices: trust.store.list().map((d) => ({
           id: d.id,
-          name: d.name ?? this.relayAppDevices.get(d.id)?.name ?? d.id,
+          name: this.relayAppDevices.get(d.id)?.name ?? d.name ?? d.id,
           via: d.via,
           pairedAt: d.pairedAt,
         })),
