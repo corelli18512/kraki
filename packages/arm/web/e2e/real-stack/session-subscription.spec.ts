@@ -104,12 +104,14 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
   });
 
   test('rapid A→B→C navigation coalesces to final C', async () => {
+    // C's agent is mid-turn. (A turn that concluded is only reopened by the
+    // next user_message; agent frames alone never resurrect it.)
+    await control('/active', { sid: sessionC });
     await arm1.page.goto(`${WEB_URL}/session/${sessionA}`);
     await arm1.page.goto(`${WEB_URL}/session/${sessionB}`);
     await arm1.page.goto(`${WEB_URL}/session/${sessionC}`);
     await expect(arm1.page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
     await expectSubscribed(arm1.deviceId, sessionC);
-    await control('/active', { sid: sessionC });
     const marker = `only-c-${Date.now().toString(36)}`;
     await control('/delta', { sid: sessionC, text: marker });
     await expect(arm1.page.getByText(marker, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
@@ -155,6 +157,17 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
     await control('/tentacle/replace');
     await expectSubscribed(arm1.deviceId, sessionC);
 
+    // The harness replaces the socket with a new RelayClient, which (like a
+    // restarted process) settles C's earlier turn. Live frames of a NEW turn,
+    // started by the user here, must flow over the replaced link.
+    const prompt = `after-replace-prompt-${Date.now().toString(36)}`;
+    const input = arm1.page.getByPlaceholder('Send a message…');
+    await input.fill(prompt);
+    await input.press('Enter');
+    await expect.poll(async () => {
+      const { messages } = await control('/received');
+      return (messages as Array<{ text: string }>).some((m) => m.text === prompt);
+    }, { timeout: 15_000 }).toBe(true);
     const after = `after-tentacle-replace-${Date.now().toString(36)}`;
     await control('/delta', { sid: sessionC, text: after });
     await expect(arm1.page.getByText(after, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
@@ -173,9 +186,10 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
   });
 
   test('bulk history recovery does not block current live stream', async () => {
+    // The agent is mid-turn when the page opens and pulls the history.
+    await control('/active', { sid: 'realstack-history' });
     await openSession(arm1.page, 'realstack-history');
     await expectSubscribed(arm1.deviceId, 'realstack-history');
-    await control('/active', { sid: 'realstack-history' });
     const live = `live-during-history-${Date.now().toString(36)}`;
     await control('/delta', { sid: 'realstack-history', text: live });
     await expect(arm1.page.getByText(live, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
@@ -185,6 +199,9 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
   test('two Arms can subscribe to different sessions and receive only their own live multicast', async ({ browser }) => {
     const arm2 = await pairBrowser(browser);
     try {
+      // Both agents are mid-turn (earlier steps may have settled their turns).
+      await control('/active', { sid: sessionA });
+      await control('/active', { sid: sessionB });
       await openSession(arm1.page, sessionA);
       await openSession(arm2.page, sessionB);
       await expectSubscribed(arm1.deviceId, sessionA);

@@ -21,6 +21,12 @@ tentacle. Remove a legacy path only when **both** conditions in its row hold.
 
 A peer must never send a behaviour the other side has not advertised.
 
+## Fixed wire formats
+
+| Item | Format | Why it must not change |
+|---|---|---|
+| `auth_challenge.nonce` (Head → device) | 64 lowercase hex characters (32 random bytes; `local-auth-backend.ts`, also what an edge gets from the account service) | Web, tentacle and iOS/Mac refuse to sign any other string: the same RSA key signs local-link (`kraki-local-link/…`) and diagnostics (`kraki-diag-v1…`) proofs. The signed bytes are the nonce itself, so old Heads keep working. A new nonce format needs a new auth method, not a new string |
+
 ## Deprecated, still supported
 
 | Item | Replaced by | Still produced by | Remove when |
@@ -29,6 +35,31 @@ A peer must never send a behaviour the other side has not advertised.
 | `session_replay_batch` (tentacle → app) | `session_messages_batch` | the tentacle only in answer to `request_session_replay` (import no longer broadcasts it) | together with `request_session_replay`; then drop `handleReplayBatch` in iOS/Mac |
 | `always_allow` (app → tentacle), decision `always_allow`, resolution `always_allowed` | `approve` (per request; switch the session to `auto` to stop being asked) | no current client (no app has shown the button since 2026-10); tentacle ≥ 0.38.7 treats it as `approve` for that one request | the oldest supported app build is from after 2026-10. Keep *rendering* `always_allow` / `always_allowed` in history (old spine rows) |
 | Session mode wire name `execute` | `auto` | emitters while `EMIT_LEGACY_MODE_NAMES` is `true` (protocol `sessions.ts`) | every supported tentacle, app and web build reads `auto` (all current ones do). Flip the switch to `false`; keep *reading* `execute` one more release |
+
+## Sender binding (enforced by every receiver)
+
+Only the Head names a payload's sender: it stamps `src` on device payloads it
+forwards and drops one that already has `from` or `src`; its own control is
+`{from:'@head', msg}`. No client puts `from`/`src` in a payload.
+
+- A payload reassembled from fragments is credited to the `src` stamped on its
+  parts; fragment sets are kept per (sender, id). A reassembled payload with its
+  own `from` or `src` is dropped (the Head never fragments its control).
+  Tentacle, web/Windows and iOS/Mac since 2026-10.
+- `{from:'@head', msg}` is acted on only when it arrives whole through the Head
+  (never over the local link) and `msg.type` is in `HEAD_CONTROL_TYPES`;
+  anything else in it (auth frames, relay envelopes, consumer messages) is
+  dropped. Tentacle and iOS/Mac already did; web/Windows since 2026-10.
+- A `wrong_region` redirect is followed only to a trusted relay
+  (`isAcceptableRegionRedirect`: from an official relay only to another
+  `wss://*.kraki.chat`). Tentacle and web/Windows share that rule; iOS/Mac
+  follows official relays only.
+- A decrypted message whose `deviceId` is not its stamped `src` is dropped
+  (Tentacle and iOS/Mac already did; web/Windows since 2026-10).
+- The Head forwards a Pulse `broadcast` only from a tentacle (to the account's
+  online apps). An app's broadcast still rides its own stream (control frames,
+  data acked) but goes nowhere: apps encrypt broadcasts to tentacles only, and
+  no feature sends app→app. Head since 2026-10.
 
 ## How to remove a legacy path
 

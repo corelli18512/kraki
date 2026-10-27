@@ -31,12 +31,12 @@ import { DELEGATE_ANSWER, modeChangeSignal, type SessionMode } from './permissio
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 import { cloneFile } from '../fs-clone.js';
-import { handleEvent, krakiAnswerEnvelope, PI_CONFIRM_CHOICES } from './pi-events.js';
+import { handleEvent, krakiAnswerEnvelope, logErrorFields, PI_CONFIRM_CHOICES } from './pi-events.js';
 import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEfforts } from './pi-models.js';
 import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
 import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
 import { PiRpcProcess } from './pi-rpc.js';
-import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
+import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, type PiSubagentHoldEnd, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, TURN_STALL_WARN_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
 export { effortToThinking, type PiListModelsError, summarizeCrash, runPiListModels, type PiCatalogModel, FALLBACK_EFFORTS, piThinkingLevelsFor, defaultEffortFor, queryPiCatalog } from './pi-catalog.js';
 export { piToolKind, shouldAutoApprove, parsePiPermission } from './pi-permissions.js';
 export { type PiRpcEvent, type PiRpcOptions } from './pi-rpc.js';
@@ -198,7 +198,7 @@ export class PiAdapter extends AgentAdapter {
     clearModelRetry(this);
     if (this.evictTimer) clearInterval(this.evictTimer);
     for (const s of this.sessions.values()) {
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'adapter_stop');
       s.proc.kill();
     }
     this.sessions.clear();
@@ -218,7 +218,7 @@ export class PiAdapter extends AgentAdapter {
 
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
     const previous = this.sessions.get(sessionId);
-    if (previous) this.stopAwaitingSubagents(previous);
+    if (previous) this.stopAwaitingSubagents(previous, 'respawn');
     const [provider, modelId] = this.resolveModelId(model);
     // Export the meta sidecar path so the extension's kraki_get_mode reads the
     // live permission mode (the adapter, via persistMeta, is the source of truth).
@@ -256,6 +256,13 @@ export class PiAdapter extends AgentAdapter {
     proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
     proc.start();
     this.sessions.set(sessionId, sess);
+    logger.info({
+      sessionId,
+      pid: proc.pid,
+      model,
+      resume: !!sessionFile && existsSync(sessionFile),
+      livePiProcesses: this.liveProcessCount(),
+    }, 'pi process started');
     // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
     // (kraki_get_mode reads it) before the first turn runs.
     this.persistMeta(sessionId, sess);
@@ -268,7 +275,8 @@ export class PiAdapter extends AgentAdapter {
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
-    this.stopAwaitingSubagents(sess);
+    logger.info({ sessionId, ...sess.turn.event(), code, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
+    this.stopAwaitingSubagents(sess, 'process_exit');
     if (this.sessions.get(sessionId) !== sess) {
       // A replacement process already owns the session: this late exit must
       // not cancel its cards, evict it, or announce anything for it.
@@ -337,7 +345,10 @@ export class PiAdapter extends AgentAdapter {
 
   touch(id: string) {
     const s = this.sessions.get(id);
-    if (s) s.lastActivity = Date.now();
+    if (s) {
+      s.lastActivity = Date.now();
+      s.stallWarned = false;
+    }
   }
 
   setCompacting(
@@ -391,7 +402,18 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  stopAwaitingSubagents(s: PiSession): void {
+  /** End the background-subagent hold. `reason` names how it ended for the
+   *  hold-end log line (only written when a hold was actually open). */
+  stopAwaitingSubagents(s: PiSession, reason: PiSubagentHoldEnd): void {
+    if (s.awaitingSubagents) {
+      logger.info({
+        sessionId: s.turn.sessionId,
+        ...s.turn.event(),
+        reason,
+        heldMs: s.subagentHoldSince === undefined ? undefined : Date.now() - s.subagentHoldSince,
+      }, 'pi background-subagent hold ended');
+    }
+    s.subagentHoldSince = undefined;
     s.awaitingSubagents = false;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = undefined;
@@ -399,15 +421,15 @@ export class PiAdapter extends AgentAdapter {
     s.subagentHoldTimer = undefined;
   }
 
-  /** (Re)start the hold's inactivity bound: background runs that report
-   *  nothing for SUBAGENT_HOLD_IDLE_MS are given up on and the turn settles. */
+  /** (Re)start the hold's inactivity bound: background runs that make no
+   *  progress for SUBAGENT_HOLD_IDLE_MS are given up on and the turn settles. */
   private armSubagentHoldTimer(sessionId: string, s: PiSession): void {
     if (s.subagentHoldTimer) clearTimeout(s.subagentHoldTimer);
     s.subagentHoldTimer = setTimeout(() => {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
-      logger.warn({ sessionId }, 'pi background subagents reported nothing for too long; settling');
+      logger.warn({ sessionId, ...s.turn.event(), idleMs: PiAdapter.SUBAGENT_HOLD_IDLE_MS }, 'pi background subagents made no progress for too long; settling');
       this.emitSubagentSteps(sessionId, s, this.subagentTrackers.get(sessionId)?.retirePending() ?? []);
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'no_progress_timeout');
       s.turn.finish();
     }, PiAdapter.SUBAGENT_HOLD_IDLE_MS);
   }
@@ -420,21 +442,26 @@ export class PiAdapter extends AgentAdapter {
     // Prose so far ("started…") is an intermediate step, not the reply.
     s.turn.holdOpen();
     s.awaitingSubagents = true;
+    s.subagentHoldSince = Date.now();
     this.armSubagentHoldTimer(sessionId, s);
-    logger.info({ sessionId, running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
+    logger.info({ sessionId, ...s.turn.event(), running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
     return true;
   }
 
-  /** Background runs may have finished: if no wake run follows, settle. */
-  checkSubagentsDone(sessionId: string, s: PiSession): void {
+  /** Background runs may have finished: if no wake run follows, settle.
+   *  `progressed` is false for a status snapshot identical to the previous
+   *  one: pi-subagents re-renders its widget every second while a run is
+   *  listed, so such a repaint is not activity and must not keep postponing
+   *  the hold's inactivity bound (a hung run would hold the turn forever). */
+  checkSubagentsDone(sessionId: string, s: PiSession, progressed = true): void {
     if (!s.awaitingSubagents) return;
-    this.armSubagentHoldTimer(sessionId, s);
+    if (progressed) this.armSubagentHoldTimer(sessionId, s);
     if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = setTimeout(() => {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
       logger.info({ sessionId }, 'pi background subagents finished without a wake run; settling');
-      this.stopAwaitingSubagents(s);
+      this.stopAwaitingSubagents(s, 'finished_without_wake');
       s.turn.finish();
     }, PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
   }
@@ -473,8 +500,10 @@ export class PiAdapter extends AgentAdapter {
 
   /** A new logical turn (prompt, follow-up, or a steer after the last settled). */
   private resetTurnTracking(s: PiSession): void {
-    this.stopAwaitingSubagents(s);
+    this.stopAwaitingSubagents(s, 'new_turn');
     s.turn.beginTurn();
+    s.turnStartedAt = Date.now();
+    s.retryAttempt = undefined;
     s.lastStopReason = undefined;
     s.pendingMaintenanceIdle = false;
     s.aborting = false;
@@ -669,7 +698,8 @@ export class PiAdapter extends AgentAdapter {
     // If the session was idle-evicted (proc killed but map entry retained) or
     // the daemon restarted, resume before sending — the proc's stdin is gone.
     const existing = this.sessions.get(sessionId);
-    const s = existing?.proc.alive
+    const resumed = !existing?.proc.alive;
+    const s = !resumed
       ? existing
       : (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
@@ -700,10 +730,12 @@ export class PiAdapter extends AgentAdapter {
           this.failSubmission(sessionId, s, err as Error);
           throw err;
         }
+        this.logPromptAccepted(sessionId, s, 'steer_as_prompt', resumed);
       } else {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
         await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        logger.info({ sessionId, turnId: s.turn.relayTurnId }, 'pi steer accepted');
         // The run settled while Pi was accepting the steer: Pi runs the steer
         // as a new run. Reopen the turn so that run's reply and idle are
         // reported (a stopped turn stays closed).
@@ -724,6 +756,7 @@ export class PiAdapter extends AgentAdapter {
         this.failSubmission(sessionId, s, err as Error);
         throw err;
       }
+      this.logPromptAccepted(sessionId, s, 'follow_up', resumed);
       return;
     }
 
@@ -735,8 +768,10 @@ export class PiAdapter extends AgentAdapter {
     // slow ACK into a false error/idle or duplicate prompt.
     try {
       await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
+      this.logPromptAccepted(sessionId, s, 'prompt', resumed);
     } catch (err) {
       let failure = err as Error;
+      let afterStuckAbort = false;
       const message = failure.message;
       // pi can get into a state where the adapter has emitted idle (agent_end
       // was received) but pi's internal RPC layer still thinks it's processing.
@@ -748,7 +783,16 @@ export class PiAdapter extends AgentAdapter {
         if (s.pendingQuestions.size > 0 || s.pendingPerms.size > 0) {
           throw new Error('Pi is waiting for a human response; the message was not sent as a new prompt.');
         }
-        logger.warn({ sessionId }, 'pi stuck in processing state — awaiting abort before retry');
+        // Record what the abort interrupts: a run pi started on its own (e.g.
+        // a background-subagent wake run) loses its in-flight progress.
+        logger.warn({
+          sessionId,
+          turnId: s.turn.relayTurnId,
+          previousTurnId: s.turn.eventTurnId,
+          awaitingSubagents: s.awaitingSubagents === true,
+          backgroundRuns: this.subagentTrackers.get(sessionId)?.activeAsyncRuns() ?? 0,
+        }, 'pi stuck in processing state — awaiting abort before retry');
+        afterStuckAbort = true;
         try {
           s.aborting = true;
           try {
@@ -763,12 +807,13 @@ export class PiAdapter extends AgentAdapter {
           // The explicit rejection proves the first prompt was NOT accepted. Only
           // this path may retry, after authoritative abort + idle reconciliation.
           await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
+          this.logPromptAccepted(sessionId, s, 'prompt_after_stuck_abort', resumed);
           return;
         } catch (retryErr) {
           failure = retryErr as Error;
         }
       }
-      logger.warn({ sessionId, err: failure.message }, 'pi prompt request failed');
+      logger.warn({ sessionId, turnId: s.turn.relayTurnId, err: failure.message, afterStuckAbort }, 'pi prompt request failed');
       this.failSubmission(sessionId, s, failure);
       if (failure instanceof PromptWatchdogError && s.proc.alive) {
         // The prompt is still pending inside pi and could run later, after the
@@ -782,6 +827,18 @@ export class PiAdapter extends AgentAdapter {
       // unacknowledged adapter request into a falsely delivered input.
       throw failure;
     }
+  }
+
+  /** Turn start, at info: the relay turn id correlates with relay-client logs. */
+  private logPromptAccepted(sessionId: string, s: PiSession, delivery: string, resumed: boolean): void {
+    logger.info({
+      sessionId,
+      turnId: s.turn.relayTurnId,
+      delivery,
+      resumed,
+      ackMs: s.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
+      model: s.model,
+    }, 'pi prompt accepted');
   }
 
   /** A submission that opened a new logical turn failed before pi started it:
@@ -810,7 +867,7 @@ export class PiAdapter extends AgentAdapter {
     // would wake the agent into a turn nobody is listening to.
     const tracker = this.subagentTrackers.get(sessionId);
     const backgroundRuns = tracker?.pendingAsyncRunIds() ?? [];
-    this.stopAwaitingSubagents(s);
+    this.stopAwaitingSubagents(s, 'abort');
     // They will not report back into this turn: stop counting them as active,
     // or every later turn would be held for them.
     this.emitSubagentSteps(sessionId, s, tracker?.retirePending() ?? []);
@@ -854,6 +911,14 @@ export class PiAdapter extends AgentAdapter {
       // active tool process group and waitForIdle() has completed. Relay-client
       // must not announce `idle` before that acknowledgement arrives.
       await s.proc.request('abort');
+      logger.info({
+        sessionId,
+        ...s.turn.event(),
+        elapsedMs: s.turnStartedAt === undefined ? undefined : Date.now() - s.turnStartedAt,
+        turnWasOpen: !s.turn.isSettled,
+        backgroundRunsStopped: backgroundRuns.length,
+        preflightRetired: !!s.promptAcceptanceAbort,
+      }, 'pi turn aborted');
       // RelayClient owns the visible aborted idle boundary, but the adapter must
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.
@@ -900,7 +965,9 @@ export class PiAdapter extends AgentAdapter {
       return 'session_gone';
     }
     if (!s.pendingQuestions.has(questionId)) {
-      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
+      // Usual after a daemon restart / pi process loss; RelayClient logs the
+      // recovery prompt it sends instead.
+      logger.debug({ sessionId, questionId }, 'respondToQuestion: no pending question');
       return 'not_found';
     }
     if (!s.proc.alive) return 'session_gone';
@@ -932,7 +999,7 @@ export class PiAdapter extends AgentAdapter {
     this.clearPendingQuestions(sessionId);
     this.pendingModeSignals.delete(sessionId);
     const killed = this.sessions.get(sessionId);
-    if (killed) this.stopAwaitingSubagents(killed);
+    if (killed) this.stopAwaitingSubagents(killed, 'killed');
     this.subagentTrackers.delete(sessionId);
     killed?.proc.kill();
     this.sessions.delete(sessionId);
@@ -1113,8 +1180,8 @@ export class PiAdapter extends AgentAdapter {
   cachedEfforts: Map<string, ReasoningEffort[]> | null = null;
 
   async listModelDetails(): Promise<ModelDetail[]> {
-    await ensureRawModels(this);
-    const byModel = await fetchEfforts(this);
+    // Two independent pi processes: run them side by side (startup latency).
+    const [, byModel] = await Promise.all([ensureRawModels(this), fetchEfforts(this)]);
     return fetchModels(this).map(m => {
       const id = `${m.provider}/${m.model}`;
       const efforts = byModel.get(id) ?? (m.reasoning ? FALLBACK_EFFORTS : []);
@@ -1136,6 +1203,7 @@ export class PiAdapter extends AgentAdapter {
   private sweepIdle(): void {
     const now = Date.now();
     for (const [id, s] of this.sessions) {
+      this.warnIfStalled(id, s, now);
       if (
         s.proc.alive
         && s.turn.isSettled
@@ -1145,10 +1213,42 @@ export class PiAdapter extends AgentAdapter {
         && !s.aborting
         && now - s.lastActivity > IDLE_TTL_MS
       ) {
-        logger.info({ id }, 'Evicting idle pi session');
+        logger.info({ id, idleMs: now - s.lastActivity, livePiProcesses: this.liveProcessCount() - 1 }, 'Evicting idle pi session');
         s.proc.kill();
         this.onSessionEvicted?.(id);
       }
     }
+  }
+
+  private liveProcessCount(): number {
+    let live = 0;
+    for (const s of this.sessions.values()) if (s.proc.alive) live++;
+    return live;
+  }
+
+  /** A turn that is open (not held for background subagents, not waiting on
+   *  the human) yet hears nothing from pi for TURN_STALL_WARN_MS is logged
+   *  once with what is known: pi's retry attempt and the held error. */
+  private warnIfStalled(sessionId: string, s: PiSession, now: number): void {
+    if (
+      s.stallWarned
+      || !s.proc.alive
+      || s.turn.isSettled
+      || s.awaitingSubagents
+      || s.pendingQuestions.size > 0
+      || s.pendingPerms.size > 0
+      || now - s.lastActivity < TURN_STALL_WARN_MS
+    ) return;
+    s.stallWarned = true;
+    logger.warn({
+      sessionId,
+      ...s.turn.event(),
+      silentMs: now - s.lastActivity,
+      elapsedMs: s.turnStartedAt === undefined ? undefined : now - s.turnStartedAt,
+      compacting: this.compactingSessions.has(sessionId),
+      stopReason: s.lastStopReason,
+      ...(s.retryAttempt !== undefined && { retryAttempt: s.retryAttempt }),
+      ...logErrorFields(s.turn.pendingError),
+    }, 'pi turn has had no events for a long time');
   }
 }

@@ -63,12 +63,22 @@ export class PushManager {
     }
 
     metrics().inc('push.attempted');
+    const startedAt = performance.now();
     const result = await provider.send(
       storedToken.token,
       { blob: pushPreview.blob, key: deviceKey },
       { environment: storedToken.environment ?? undefined, bundleId: storedToken.bundleId ?? undefined },
     );
 
+    const outcome = {
+      deviceId: storedToken.deviceId,
+      provider: storedToken.provider,
+      ms: Math.round(performance.now() - startedAt),
+      ...(result.id && { id: result.id }),
+      ...(result.retried && { retried: true }),
+    };
+    if (result.success) logger.info('Push sent', outcome);
+    else if (!result.gone) logger.warn('Push failed', { ...outcome, error: result.error });
     if (result.success) metrics().inc('push.sent');
     else if (result.gone) metrics().inc('push.gone');
     else {

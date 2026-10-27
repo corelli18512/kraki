@@ -90,8 +90,9 @@ test.describe.serial('real-stack: renaming a device syncs to every device', () =
     for (const [current, page] of [['Work laptop', a], ['Build box', a]] as const) {
       try { if (await deviceCard(page, current).count()) await rename(page, current, ''); } catch { /* best effort */ }
     }
-    await a?.close();
-    await b?.close();
+    // Cleanup is best effort: never fail a passed spec on closing pages.
+    await a?.close().catch(() => {});
+    await b?.close().catch(() => {});
   });
 
   test('1. renaming an online computer shows on the other browser and reaches both computers', async () => {

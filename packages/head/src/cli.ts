@@ -9,6 +9,9 @@
  *
  * Environment variables:
  *   PORT         Server port (default: 4000)
+ *   HOST         Listen address (default: 127.0.0.1 for open auth without
+ *                OPEN_SHARED_KEY, otherwise all interfaces)
+ *   OPEN_SHARED_KEY       Shared secret required by open auth (optional)
  *   DB_PATH      SQLite database path (default: kraki-head.db)
  *   AUTH_MODE    Auth mode: open | github | apikey (default: open)
  *   API_KEY               API key for apikey auth mode
@@ -27,7 +30,8 @@ import { fileURLToPath } from 'url';
 
 // Load .env from the head package directory (works regardless of cwd)
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenvConfig({ path: resolve(__dirname, '..', '.env') });
+// quiet: dotenv 17 otherwise prints an "injected env" line with an ad.
+dotenvConfig({ path: resolve(__dirname, '..', '.env'), quiet: true });
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
 const VERSION: string = pkg.version;
@@ -39,14 +43,20 @@ import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuth
 import type { AuthProvider } from './auth.js';
 import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 import { validateVoiceConfig } from './voice-config.js';
-import { handleVoiceSettlement } from './voice-settlement.js';
+import { handleVoiceSettlement, logVoiceSettlement } from './voice-settlement.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
 import type { AuthBackend } from './auth-backend.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
 import { RemoteAuthBackend } from './remote-auth-backend.js';
+import { EdgeAuthCache } from './edge-auth-cache.js';
 import { AccountApi } from './account-api.js';
+import { InflightRequests } from './http-drain.js';
+
+/** Shutdown waits this long for HTTP requests still being answered. */
+const SHUTDOWN_DRAIN_MS = 2_000;
+import { resolveListenHost } from './listen-host.js';
 
 // --- CLI flags / subcommands ---
 const rawArgs = process.argv.slice(2);
@@ -78,8 +88,15 @@ if (args.includes('--help') || args.includes('-h')) {
 
   Options:
     --port <n>        Server port (default: 4000, env: PORT)
+    --host <addr>     Listen address (env: HOST). Default: 127.0.0.1 when auth
+                      is open without a shared key, otherwise all interfaces.
+                      Open auth without a shared key refuses a non-loopback host.
     --db <path>       SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>     Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
+    --open-shared-key <key>
+                      Secret every open-auth connection and pairing request must
+                      send (prefer env OPEN_SHARED_KEY: argv is visible in ps).
+                      Computers send it from ~/.kraki/channel.key.
     --admin-key <key> Enable GET /admin/stats endpoint (prefer env ADMIN_KEY: argv is visible in ps)
     --push <type>     Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
     --log <level>     Log level: debug | info | warn | error (default: info)
@@ -152,6 +169,8 @@ if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
 }
 const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
+const HOST = flag('host', process.env.HOST || '');
+const OPEN_SHARED_KEY = flag('open-shared-key', process.env.OPEN_SHARED_KEY || '');
 const API_KEY = process.env.API_KEY;
 const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
@@ -178,6 +197,12 @@ if (REGION_URLS_RAW) {
   }
 }
 const IS_CONNECTED_MODE = MODE === 'edge' ? true : MODE === 'main' ? false : !!ACCOUNT_URL;
+const LISTEN = resolveListenHost({
+  host: HOST,
+  authModes: AUTH_MODES,
+  openSharedKey: OPEN_SHARED_KEY,
+  connectedMode: IS_CONNECTED_MODE,
+});
 
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, '');
@@ -339,15 +364,19 @@ if (IS_CONNECTED_MODE && !ACCOUNT_URL) {
   process.exit(1);
 }
 
+if (!LISTEN.ok) {
+  console.error(`Error: ${LISTEN.error}`);
+  process.exit(1);
+}
+const LISTEN_HOST = LISTEN.host;
+
 async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
   const providers = new Map<string, AuthProvider>();
   for (const mode of AUTH_MODES) {
     switch (mode) {
       case 'github': {
         if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
-          console.warn('  ⚠ GitHub OAuth: GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set.');
-          console.warn('    Web "Sign in with GitHub" will be disabled. Add them to .env or environment.');
-          console.warn('    Token auth (gh auth token) and QR pairing still work.');
+          logger.warn('GitHub OAuth: GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set; web "Sign in with GitHub" disabled (token auth and QR pairing still work)');
         }
         const ghProvider = new GitHubAuthProvider({
           clientId: GITHUB_CLIENT_ID,
@@ -355,7 +384,7 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
         });
         providers.set('github', new ThrottledAuthProvider(ghProvider));
         if (GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) {
-          console.log('  GitHub OAuth configured (web login enabled)');
+          logger.info('GitHub OAuth configured (web login enabled)');
         }
         break;
       }
@@ -367,7 +396,9 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
         providers.set('apikey', new ThrottledAuthProvider(new ApiKeyAuthProvider(API_KEY)));
         break;
       case 'open':
-        providers.set('open', new OpenAuthProvider());
+        providers.set('open', OPEN_SHARED_KEY
+          ? new ThrottledAuthProvider(new OpenAuthProvider(OPEN_SHARED_KEY))
+          : new OpenAuthProvider());
         break;
       default:
         console.error(`Error: Unknown auth mode '${mode}'. Use: github, apikey, open`);
@@ -384,7 +415,13 @@ const logger = new Logger({
 });
 setGlobalLogger(logger);
 
-logger.info('Kraki Head starting...', { mode: IS_CONNECTED_MODE ? 'connected' : 'standalone', region: REGION || '(none)' });
+logger.info('Kraki Head starting...', {
+  version: VERSION,
+  node: process.version,
+  pid: process.pid,
+  mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
+  region: REGION || '(none)',
+});
 
 // --- Auth backend setup ---
 let authBackend: AuthBackend | undefined;
@@ -462,6 +499,13 @@ if (IS_CONNECTED_MODE) {
 
   // Connected mode still needs local storage for devices, pending, push tokens
   if (!storage) storage = new Storage(DB_PATH);
+
+  // Known devices sign in against this edge's copy of the account service's
+  // last answer (EdgeAuthCache); only active once the account service answers
+  // device status polls. KRAKI_EDGE_LOCAL_AUTH=0 keeps every auth remote.
+  if (process.env.KRAKI_EDGE_LOCAL_AUTH !== '0') {
+    void remoteBackend.enableLocalChallenge(new EdgeAuthCache(storage.rawDb), REGION || undefined);
+  }
 } else {
   // Standalone mode: local auth + expose account API
   const authProviders = await createAuthProviders();
@@ -548,7 +592,10 @@ const readinessContext: ReadinessContext = {
   gauges: () => head.getGauges(),
 };
 
+const inflightRequests = new InflightRequests();
+
 const httpServer = createServer(async (req, res) => {
+  inflightRequests.track(res);
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (handleObservability(req, res, readinessContext)) return;
@@ -583,11 +630,13 @@ const httpServer = createServer(async (req, res) => {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token || !safeEqual(token, VOICE_SETTLEMENT_KEY)) {
+      logger.warn('Voice settlement rejected', { httpStatus: 401, error: 'unauthorized' });
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
     if (req.method !== 'POST') {
+      logger.warn('Voice settlement rejected', { httpStatus: 405, error: 'method_not_allowed' });
       res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'method_not_allowed' }));
       return;
@@ -603,21 +652,17 @@ const httpServer = createServer(async (req, res) => {
     });
     req.on('end', () => {
       if (tooLarge) {
+        logger.warn('Voice settlement rejected', { httpStatus: 413, error: 'payload_too_large' });
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'payload_too_large' }));
         return;
       }
+      const body = Buffer.concat(chunks).toString('utf8');
       const result = handleVoiceSettlement(storage!, VOICE_SETTLEMENT_KEY, {
         authorization: req.headers.authorization,
-        body: Buffer.concat(chunks).toString('utf8'),
+        body,
       }, { dailyCapSec: VOICE_DAILY_QUOTA_SEC });
-      if (result.status === 200) {
-        logger.info('Voice lease accounting updated', {
-          action: result.body.activationStatus ? 'activate' : 'settle',
-          usedSeconds: result.body.usedSeconds,
-          status: result.body.activationStatus ?? result.body.settlementStatus,
-        });
-      }
+      logVoiceSettlement(storage!, body, result);
       res.writeHead(result.status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result.body));
     });
@@ -665,8 +710,10 @@ const httpServer = createServer(async (req, res) => {
 
 head.attach(httpServer);
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, LISTEN_HOST, () => {
   logger.info(`Kraki Head listening on port ${PORT}`, {
+    version: VERSION,
+    host: LISTEN_HOST ?? '(all interfaces)',
     ws: `ws://localhost:${PORT}`,
     mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
     auth: IS_CONNECTED_MODE ? '(delegated)' : AUTH_MODES.join(', '),
@@ -678,17 +725,31 @@ httpServer.listen(PORT, () => {
   });
 });
 
-async function shutdown() {
-  logger.info('Shutting down...');
+let shuttingDown = false;
+/** Stop accepting, close sockets, let HTTP requests in flight (account API,
+ *  voice settlement) finish, then close the database. */
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('Shutting down...', {
+    signal,
+    version: VERSION,
+    upSec: Math.floor((Date.now() - startedAt) / 1000),
+    conns: head.connections.size,
+    inflightHttp: inflightRequests.size,
+  });
+  httpServer.close();
+  httpServer.closeIdleConnections();
   head.close();
+  const dropped = await inflightRequests.drain(SHUTDOWN_DRAIN_MS);
+  if (dropped > 0) logger.warn('Shutdown cut off HTTP requests still in flight', { dropped, waitedMs: SHUTDOWN_DRAIN_MS });
   storage?.close();
   logger.close();
-  httpServer.close();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', (signal) => { void shutdown(signal); });
+process.on('SIGTERM', (signal) => { void shutdown(signal); });
 
 // A stray rejection is logged and survives; an uncaught exception leaves the
 // process in an unknown state, so it is logged and the relay exits for the

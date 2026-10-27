@@ -40,6 +40,7 @@ import {
   readSync,
   closeSync,
 } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ContentRef } from '@kraki/protocol';
@@ -165,6 +166,12 @@ export class AttachmentStore {
    *  source session meanwhile (SessionManager.attachmentsFallback). */
   private fallback: ((sessionId: string) => string | undefined) | null = null;
 
+  /** `<sessionId>/<id>` of every put() while a prune is running: the prune
+   *  awaits the filesystem between reading a sidecar and deleting, and must
+   *  not delete what put() (re)wrote or handed out meanwhile. */
+  private putDuringPrune: Set<string> | null = null;
+  private pruneRuns = 0;
+
   constructor(sessionsDir: string) {
     this.sessionsDir = sessionsDir;
   }
@@ -215,6 +222,7 @@ export class AttachmentStore {
 
     const dataPath = this.filePath(sessionId, id, ext);
     const metaPath = this.metaPath(sessionId, id);
+    this.putDuringPrune?.add(`${sessionId}/${id}`);
 
     let meta: AttachmentMetaSidecar | null = null;
     if (existsSync(metaPath)) {
@@ -329,33 +337,58 @@ export class AttachmentStore {
    * Delete tool-call payload attachments (offloaded `<tool>.args.json` /
    * `<tool>.result.txt`) older than `maxAgeMs`, across every session. Images
    * and reports the user was shown are kept. Old Steps then show their
-   * headline without the expandable body. Returns the number of payloads
+   * headline without the expandable body. Resolves to the number of payloads
    * removed.
+   *
+   * Asynchronous: the daily scan visits every sidecar of every session, and
+   * done with sync fs calls it blocked the daemon's event loop (WebSocket,
+   * Pulse, local link) for 2.8-3.8 s (log audit 2026-10-22).
    */
-  pruneToolPayloads(maxAgeMs: number, now = Date.now()): number {
+  async pruneToolPayloads(maxAgeMs: number, now = Date.now()): Promise<number> {
+    const startedAt = Date.now();
+    this.pruneRuns++;
+    this.putDuringPrune ??= new Set();
+    try {
+      return await this.prunePayloadsScan(maxAgeMs, now, startedAt);
+    } finally {
+      if (--this.pruneRuns === 0) this.putDuringPrune = null;
+    }
+  }
+
+  private async prunePayloadsScan(maxAgeMs: number, now: number, startedAt: number): Promise<number> {
     let removed = 0;
+    let scanned = 0;
+    let bytesFreed = 0;
     let sessions: string[];
-    try { sessions = readdirSync(this.sessionsDir); } catch { return 0; }
+    try { sessions = await readdir(this.sessionsDir); } catch { return 0; }
     for (const sessionId of sessions) {
       if (!isSafeId(sessionId)) continue;
       const dir = join(this.sessionsDir, sessionId, 'attachments');
       let names: string[];
-      try { names = readdirSync(dir); } catch { continue; }
+      try { names = await readdir(dir); } catch { continue; }
       for (const name of names) {
         if (!name.endsWith('.json')) continue;
+        scanned++;
         const sidecar = join(dir, name);
         let meta: AttachmentMetaSidecar;
         try {
-          if (now - statSync(sidecar).mtimeMs < maxAgeMs) continue;
-          meta = JSON.parse(readFileSync(sidecar, 'utf8')) as AttachmentMetaSidecar;
+          if (now - (await stat(sidecar)).mtimeMs < maxAgeMs) continue;
+          meta = JSON.parse(await readFile(sidecar, 'utf8')) as AttachmentMetaSidecar;
         } catch { continue; }
         if (!meta.name || !/\.(?:args\.json|result\.txt)$/.test(meta.name)) continue;
         const id = name.slice(0, -'.json'.length);
-        try { unlinkSync(join(dir, `${id}.${extForMime(meta.mimeType)}`)); } catch { /* already gone */ }
+        // The data file and sidecar go together, synchronously: put() is
+        // synchronous, so it can no longer run between the two deletions,
+        // and one it ran during this scan keeps its attachment.
+        if (this.putDuringPrune?.has(`${sessionId}/${id}`)) continue;
+        try { unlinkSync(join(dir, `${id}.${extForMime(meta.mimeType)}`)); bytesFreed += meta.size ?? 0; } catch { /* already gone */ }
         try { unlinkSync(sidecar); removed++; } catch { /* ignore */ }
       }
     }
-    if (removed > 0) logger.info({ removed, maxAgeDays: Math.round(maxAgeMs / 86_400_000) }, 'pruned old tool payload attachments');
+    logger[removed > 0 ? 'info' : 'debug']({
+      removed, scanned, bytesFreed, sessions: sessions.length,
+      durationMs: Date.now() - startedAt, maxAgeDays: Math.round(maxAgeMs / 86_400_000),
+    }, 'pruned old tool payload attachments');
     return removed;
   }
 }

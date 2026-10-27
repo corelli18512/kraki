@@ -120,3 +120,55 @@ describe('HeadServer: routing-rejected DATA frames', () => {
     expect(app.received.some((p) => p.includes('"second"'))).toBe(true);
   });
 });
+
+describe('HeadServer: pulse broadcast sender role', () => {
+  const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+  /** A Pulse endpoint for `peer` that sends every frame as `broadcast` unless a unicast target is given. */
+  function pulseFor(peer: Peer, epoch: string) {
+    const endpoint = new Endpoint({ epoch, random: () => 0.5 });
+    const transmit = (effects: Effect[], to?: string) => {
+      for (const e of effects) {
+        if (e.t !== 'transmit') continue;
+        peer.ws.send(JSON.stringify(to === undefined
+          ? { type: 'broadcast', pulse: b64(e.bytes), blob: '', keys: {} }
+          : { type: 'unicast', to, pulse: b64(e.bytes), blob: '', keys: {} }));
+      }
+    };
+    transmit(endpoint.onConnected(Date.now()));
+    return { send: (text: string, to?: string) => transmit(endpoint.send(new TextEncoder().encode(text)).effects, to) };
+  }
+
+  it('forwards an app broadcast to no one, still consuming it on the app stream', async () => {
+    const port = await startHead();
+    const tentacle = await connectPeer(port, 'tentacle', 'tentacle-1');
+    const app = await connectPeer(port, 'app', 'app-1');
+    const sibling = await connectPeer(port, 'app', 'app-2');
+    pulseFor(sibling, 'bcast-sibling');
+    const fromApp = pulseFor(app, 'bcast-app');
+    await sleep(50);
+
+    fromApp.send('{"n":"app-broadcast"}');
+    fromApp.send('{"n":"after"}', tentacle.deviceId);
+    await sleep(200);
+
+    expect(sibling.received.some((p) => p.includes('"app-broadcast"'))).toBe(false);
+    expect(tentacle.received.some((p) => p.includes('"app-broadcast"'))).toBe(false);
+    // The broadcast seq was consumed: the next frame on the stream still arrives.
+    expect(tentacle.received.some((p) => p.includes('"after"'))).toBe(true);
+    expect(app.errors).toEqual([]);
+  });
+
+  it('still fans a tentacle broadcast out to the apps', async () => {
+    const port = await startHead();
+    const tentacle = await connectPeer(port, 'tentacle', 'tentacle-1');
+    const app = await connectPeer(port, 'app', 'app-1');
+    pulseFor(app, 'bcast-app-2');
+    const fromTentacle = pulseFor(tentacle, 'bcast-tentacle');
+    await sleep(50);
+
+    fromTentacle.send('{"n":"tentacle-broadcast"}');
+    await sleep(200);
+
+    expect(app.received.some((p) => p.includes('"tentacle-broadcast"'))).toBe(true);
+  });
+});

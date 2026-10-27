@@ -73,6 +73,10 @@ extension AppState: PulseHost {
 
     func onAcked(seqUpTo: UInt64) {
         commandSender?.resolvePulseAcked(seqUpTo: seqUpTo)
+        if let pulseManager, let generation = pulseManager.liveGeneration {
+            sendMetrics.pulseAcked(seqUpTo: seqUpTo, lastSentSeq: pulseManager.lastSentLiveSeq,
+                                   uploadQueueEmpty: !pulseManager.hasQueuedUpload, generation: generation)
+        }
     }
 
     func onResetInbound(fromSeq: UInt64, epoch: String) {

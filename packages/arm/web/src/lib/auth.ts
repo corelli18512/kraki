@@ -1,6 +1,6 @@
 import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
-import type { AuthOkMessage } from '@kraki/protocol';
+import { isAcceptableRegionRedirect, type AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
 import { createLogger, setDebugLogging } from './logger';
 import { getStore } from './store-adapter';
@@ -90,6 +90,16 @@ export async function sendAuth(
   return usedToken;
 }
 
+/**
+ * Every Head issues `randomBytes(32).toString('hex')` as its challenge nonce
+ * (head local-auth-backend.ts; edges get it from the account service). The
+ * same RSA key signs local-link and diagnostics proofs, so any other string
+ * is refused rather than signed for whoever sent it.
+ */
+export function isHeadAuthNonce(nonce: unknown): nonce is string {
+  return typeof nonce === 'string' && /^[0-9a-f]{64}$/.test(nonce);
+}
+
 /** Sign and respond to an auth challenge from the head. */
 export async function handleAuthChallenge(
   nonce: string,
@@ -97,6 +107,11 @@ export async function handleAuthChallenge(
   storedDeviceId: string | undefined,
   send: (msg: Record<string, unknown>) => void,
 ): Promise<void> {
+  if (!isHeadAuthNonce(nonce)) {
+    // No reply: the Head's auth deadline closes the socket and we reconnect.
+    logger.warn('Refusing to sign an auth challenge that is not a Head nonce');
+    return;
+  }
   if (!keyStore.isReady()) {
     await keyStore.init();
   }
@@ -164,11 +179,19 @@ export function processAuthError(
     disconnect: () => void;
     connect: () => void;
     redirectToRelay: (url: string) => void;
+    /** The relay that sent this error. */
+    currentRelay: string;
   },
 ): void {
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
-  if (authError.code === 'wrong_region' && authError.redirect) {
+  // The redirect is saved and then signed into with this device's key, so it
+  // is followed only to a trusted relay (same rule as the Tentacle). An
+  // untrusted one is handled like any other non-fatal auth error.
+  if (authError.code === 'wrong_region' && authError.redirect
+    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect)) {
+    logger.warn('Ignoring region redirect to an untrusted relay', authError.redirect);
+  } else if (authError.code === 'wrong_region' && authError.redirect) {
     // Save new relay URL so the page reload connects to the correct region
     const deviceId = authError.deviceId ?? storedDeviceId;
     if (deviceId) {

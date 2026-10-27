@@ -1172,3 +1172,14 @@ private extension RandomAccessCollection {
         return lo
     }
 }
+
+// MARK: - Caught-up mark (same file: writes the class's private(set) state)
+
+extension MessageStore {
+    /// The Tentacle now reports a lower head than this device counted itself
+    /// caught up to (restored from a backup): forget the caught-up mark.
+    func lowerCaughtUp(_ sessionId: String, to seq: Int) {
+        guard let head = persistedHeads[sessionId], head > seq else { return }
+        persistedHeads.removeValue(forKey: sessionId)
+    }
+}

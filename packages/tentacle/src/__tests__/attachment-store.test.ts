@@ -154,12 +154,37 @@ describe('pruneToolPayloads (release review F1)', () => {
     const old = new Date(Date.now() - 20 * 86_400_000);
     for (const ref of [oldArgs, oldResult, image]) utimesSync(join(root, 's1', 'attachments', `${ref.id}.json`), old, old);
 
-    expect(store.pruneToolPayloads(14 * 86_400_000)).toBe(2);
+    expect(await store.pruneToolPayloads(14 * 86_400_000)).toBe(2);
     expect(store.has('s1', oldArgs.id)).toBe(false);
     expect(store.has('s1', oldResult.id)).toBe(false);
     expect(store.has('s1', image.id)).toBe(true);
     expect(store.has('s1', fresh.id)).toBe(true);
     expect(readdirSync(join(root, 's1', 'attachments')).some((n) => n.startsWith(oldArgs.id))).toBe(false);
     expect(existsSync(root)).toBe(true);
+  });
+
+  it('does not block the event loop while it scans (2.8-3.8 s stalls, log audit 2026-10-22)', async () => {
+    const { mkdtempSync, utimesSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { AttachmentStore } = await import('../attachment-store.js');
+    const root = mkdtempSync(join(tmpdir(), 'kraki-prune-async-'));
+    const store = new AttachmentStore(root);
+    const old = new Date(Date.now() - 20 * 86_400_000);
+    for (let i = 0; i < 200; i++) {
+      const ref = store.put(`s${i % 10}`, Buffer.from(`{"n":${i}}`), 'application/json', { name: 'bash.args.json' });
+      utimesSync(join(root, `s${i % 10}`, 'attachments', `${ref.id}.json`), old, old);
+    }
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 0);
+    try {
+      const pruning = store.pruneToolPayloads(14 * 86_400_000);
+      expect(pruning).toBeInstanceOf(Promise);
+      expect(await pruning).toBe(200);
+    } finally {
+      clearInterval(timer);
+    }
+    // Timers ran while the scan was in progress.
+    expect(ticks).toBeGreaterThan(0);
   });
 });

@@ -34,6 +34,14 @@ final class StabilityTracker {
         var outcome: Outcome = .ready
         /// Cold only: how the previous process ended ("clean", "unclean", "first").
         var previousExit: String?
+        /// Warm only: the signed-in socket survived the background (grace
+        /// period), so nothing had to reconnect.
+        var kept = false
+        /// How the last connection lost during this opening ended
+        /// (WebSocketClient recover reason). A drop before the opening is
+        /// ready is part of it, not an `outage.summary` — and iOS reconnects
+        /// on every return, so without this its drops had no reason at all.
+        var failure: String?
     }
 
     /// Tapping a conversation while online: how long until its latest
@@ -45,6 +53,9 @@ final class StabilityTracker {
         /// Messages missing locally when it was opened.
         var gap = 0
         var outcome: Outcome = .current
+        /// Opened while (re)connecting: the wait includes signing in. Kept
+        /// separate so the online-open numbers stay comparable.
+        var reconnecting = false
     }
 
     struct Outage: Equatable {
@@ -75,7 +86,12 @@ final class StabilityTracker {
     static let readyTimeout: TimeInterval = 30
     static let outageGiveUp: TimeInterval = 600
 
-    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// Keeps counting while the device sleeps (`backgroundMs` of a warm
+    /// opening, the sleep of a `wake` one): `systemUptime` stops, and 48 of
+    /// 261 warm iPhone openings under-reported the background by > 60 s.
+    /// Records end when the app hides or the Mac sleeps, so no other duration
+    /// spans a sleep.
+    var now: () -> TimeInterval = { Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1e9 }
     var onReady: ((Ready) -> Void)?
     var onOutage: ((Outage) -> Void)?
     var onOpen: ((Open) -> Void)?
@@ -111,12 +127,15 @@ final class StabilityTracker {
     private var awaitingList = false
     private var target: (sessionId: String, seq: Int)?
     private var generation = 0
+    /// Separate from `generation`: an open during a reconnect must not cancel
+    /// the opening/outage deadlines (and vice versa).
+    private var openGeneration = 0
 
     // MARK: - Lifecycle
 
     /// The app is on screen. Starts a `cold` (first time in this process) or
     /// `warm` (back from the background) opening; no-op while visible.
-    func appVisible(hasCachedContent: Bool, viewing: Bool) {
+    func appVisible(hasCachedContent: Bool, viewing: Bool, keptConnection: Bool = false) {
         if let asleep = asleepAt {
             asleepAt = nil
             lastWake = now()
@@ -129,6 +148,15 @@ final class StabilityTracker {
         } else if let hidden = hiddenAt {
             hiddenAt = nil
             begin(.warm, since: hidden, hasCachedContent: true, viewing: viewing)
+            if keptConnection {
+                // Still signed in and receiving: current the moment it shows.
+                ready?.kept = true
+                ready?.wsOpenMs = 0
+                ready?.authedMs = 0
+                ready?.listFreshMs = 0
+                ready?.viewCurrentMs = 0
+                finishReady(.ready)
+            }
         }
     }
 
@@ -153,6 +181,10 @@ final class StabilityTracker {
         guard newPath != path else { return }
         if path != "unknown" { lastPathChange = now() }
         path = newPath
+        // The path monitor answers asynchronously: a record that started
+        // before its first answer (every cold opening) takes that answer.
+        if ready?.path == "unknown" { ready?.path = newPath }
+        if outage?.path == "unknown" { outage?.path = newPath }
     }
 
     // MARK: - Connection
@@ -175,6 +207,7 @@ final class StabilityTracker {
     /// The transport gave up on its connection (WebSocketClient.recover).
     /// `quietFor` is the time since the last inbound frame.
     func transportLost(reason: String, code: Int?, quietFor: TimeInterval?) {
+        if ready != nil, hiddenAt == nil, asleepAt == nil { ready?.failure = reason }
         guard hiddenAt == nil, asleepAt == nil, everAuthenticated, ready == nil else { return }
         if outage != nil {
             if outageReauthed != nil {
@@ -237,17 +270,22 @@ final class StabilityTracker {
     /// otherwise callers skip the (database) lookups entirely.
     var wantsConversationUpdates: Bool { ready != nil || target != nil || opening != nil }
 
-    /// The user opened a conversation. Recorded only while online and not
-    /// inside an opening/outage record (those already cover the wait).
+    /// The user opened a conversation. A tap while (re)connecting is recorded
+    /// too, flagged `reconnecting` (the most common slow case: "reconnected,
+    /// opened the chat, Syncing…" — previously not measured at all).
     func conversationOpened(sessionId: String, lastSeq: Int, localSeq: Int, online: Bool) {
         finishOpen(.left)
-        guard online, ready == nil, outage == nil, hiddenAt == nil, asleepAt == nil else { return }
+        let reconnecting = ready != nil || outage != nil
+        // Offline with no reconnect in progress: nothing to wait for.
+        guard online || reconnecting, hiddenAt == nil, asleepAt == nil else { return }
         let t = now()
-        opening = (sessionId, t, lastSeq, Open(gap: max(0, lastSeq - localSeq)))
-        generation += 1
-        let token = generation
+        var open = Open(gap: max(0, lastSeq - localSeq))
+        open.reconnecting = reconnecting
+        opening = (sessionId, t, lastSeq, open)
+        openGeneration += 1
+        let token = openGeneration
         schedule(Self.readyTimeout) { [weak self] in
-            guard let self, self.generation == token else { return }
+            guard let self, self.openGeneration == token else { return }
             self.finishOpen(.timeout)
         }
     }

@@ -464,9 +464,7 @@ final class AuthManager {
 
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
-        // A relay that acknowledges inbound data promptly lets Pulse pace large
-        // uploads by acks; an older one only acks on idle heartbeats.
-        appState.pulseManager?.acksPromptly = (message["pulseAckBytes"] as? Int ?? 0) > 0
+        appState.applyRelayCapabilities(message)
         let voiceCapability = (message["voice"] as? [String: Any]).flatMap(VoiceCapability.init(json:))
 
         if usesEphemeralOpenAuth {
@@ -919,6 +917,16 @@ final class AuthManager {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let string = String(data: data, encoding: .utf8) else { return }
         appState?.wsClient?.sendRaw(string)
+    }
+}
+
+extension AuthManager {
+    /// Every Head issues `randomBytes(32).toString('hex')` as its challenge
+    /// nonce (head local-auth-backend.ts; edges get it from the account
+    /// service). The same RSA key signs local-link proofs, so MessageRouter
+    /// refuses any other string rather than sign it for whoever sent it.
+    static func isHeadAuthNonce(_ nonce: String) -> Bool {
+        nonce.utf8.count == 64 && nonce.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 }
 

@@ -42,8 +42,12 @@ async function pair(browser: Browser) {
 async function sidebarCardFor(page: Page, marker: string): Promise<string | null> {
   // Session cards are <button> containing the preview text.
   return await page.evaluate((m) => {
-    const btn = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes(m));
-    return btn ? (btn.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 400) : null;
+    const btn = [...document.querySelectorAll('button.ksr')].find((b) => (b.textContent ?? '').includes(m));
+    if (!btn) return null;
+    // The status is a glyph now: append it as a word ("waiting", …).
+    const status = btn.querySelector('.ksr-status-slot')?.getAttribute('data-status');
+    const text = (btn.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    return status ? `${text} [${status}]` : text;
   }, marker).catch(() => null);
 }
 
@@ -80,7 +84,7 @@ test.describe.serial('reproduce: open question invisible after restart (sidebar 
     await new Promise((r) => setTimeout(r, 1200));
     console.log(`FRESH-CHAT url=${arm.page.url()}`);
     await expect(arm.page.getByText(QTEXT, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(arm.page.getByRole('button', { name: 'alpha' })).toBeVisible({ timeout: 15_000 });
+    await expect(arm.page.getByRole('button', { name: 'Answer: alpha', exact: true })).toBeVisible({ timeout: 15_000 });
   });
 
   test('after restart: open question still surfaces pending despite idle transport state', async () => {
@@ -114,6 +118,6 @@ test.describe.serial('reproduce: open question invisible after restart (sidebar 
     await new Promise((r) => setTimeout(r, 1200));
     console.log(`RESTART-CHAT url=${arm.page.url()}`);
     await expect(arm.page.getByText(QTEXT, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(arm.page.getByRole('button', { name: 'alpha' })).toBeVisible({ timeout: 15_000 });
+    await expect(arm.page.getByRole('button', { name: 'Answer: alpha', exact: true })).toBeVisible({ timeout: 15_000 });
   });
 });

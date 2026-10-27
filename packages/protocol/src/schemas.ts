@@ -91,7 +91,7 @@ export const consumerMessageSchema = z.discriminatedUnion('type', [
   message('mark_read', z.looseObject({ seq: num })),
   message('mark_unread', empty),
   message('request_session_replay', z.looseObject({ sessionId: str, afterSeq: seqBound, limit: optNum })),
-  message('request_session_messages', z.looseObject({ sessionId: str, beforeSeq: seqBound.optional() })),
+  message('request_session_messages', z.looseObject({ sessionId: str, beforeSeq: seqBound.optional(), afterSeq: seqBound.optional() })),
   message('request_session_messages_range', z.looseObject({ sessionId: str, fromSeq: seqBound, toSeq: seqBound })),
   message('request_turn_trace', z.looseObject({ sessionId: str, bubbleSeq: seqBound })),
   message('request_card', z.looseObject({ sessionId: str })),
@@ -119,6 +119,9 @@ export const consumerMessageSchema = z.discriminatedUnion('type', [
   message('request_usage_history', z.looseObject({ since: optNum }).optional()),
   message('refresh_account_usage', z.looseObject({ requestId: optStr }).optional()),
   message('update_device', z.looseObject({ requestId: optStr, when: optStr }).optional()),
+  // The handler stringifies and bounds every entry field itself, so only the
+  // array shape is checked; a batch with an odd entry still gets written.
+  message('client_log', z.looseObject({ entries: z.array(z.looseObject({})).optional() }).optional()),
 ]);
 
 /** Every app → tentacle message type this protocol version knows. */

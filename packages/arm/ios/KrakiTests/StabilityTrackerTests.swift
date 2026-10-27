@@ -261,3 +261,139 @@ final class StabilityTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.readies.map(\.previousExit), ["unclean", nil])
     }
 }
+
+// MARK: - Reconnect latency (diag review 2026-10-21)
+
+extension StabilityTrackerTests {
+    func testAKeptSocketMakesTheReturnCurrentAtOnce() throws {
+        coldOpenAndAuthenticate(viewing: true)
+        tracker.sessionListApplied(viewed: nil)
+        tracker.appHidden()
+        advance(12)
+        tracker.appVisible(hasCachedContent: true, viewing: true, keptConnection: true)
+        let ready = try XCTUnwrap(tracker.readies.last)
+        XCTAssertEqual(ready.kind, .warm)
+        XCTAssertEqual(ready.outcome, .ready)
+        XCTAssertTrue(ready.kept)
+        XCTAssertEqual(ready.viewCurrentMs, 0)
+        XCTAssertEqual(try XCTUnwrap(ready.backgroundMs), 12_000, accuracy: 1)
+    }
+
+    func testOpeningAChatDuringTheReconnectIsMeasuredAndFlagged() throws {
+        coldOpenAndAuthenticate(viewing: false)
+        tracker.sessionListApplied(viewed: nil)
+        tracker.appHidden()
+        advance(60)
+        tracker.appVisible(hasCachedContent: true, viewing: false)
+        tracker.connecting()
+        advance(0.1)
+        tracker.conversationOpened(sessionId: "s1", lastSeq: 10, localSeq: 8, online: false)
+        advance(0.2); tracker.socketOpen()
+        advance(0.6); tracker.authenticated()
+        advance(0.1); tracker.sessionListApplied(viewed: (sessionId: "s1", lastSeq: 10, localSeq: 8))
+        advance(0.3); tracker.conversationRendered(sessionId: "s1", localSeq: 10, lastSeq: 10, hasContent: true)
+        let open = try XCTUnwrap(tracker.opens.last)
+        XCTAssertTrue(open.reconnecting)
+        XCTAssertEqual(open.outcome, .current)
+        XCTAssertEqual(try XCTUnwrap(open.currentMs), 1200, accuracy: 1)
+    }
+
+    func testAnOpenDuringAReconnectDoesNotCancelTheOpeningTimeout() throws {
+        tracker.appVisible(hasCachedContent: true, viewing: false)
+        tracker.connecting()
+        advance(1)
+        tracker.conversationOpened(sessionId: "s1", lastSeq: 5, localSeq: 3, online: false)
+        advance(StabilityTracker.readyTimeout)
+        XCTAssertEqual(tracker.readies.last?.outcome, .timeout, "the reconnect never finished: still reported")
+        XCTAssertEqual(tracker.opens.last?.outcome, .timeout)
+    }
+
+    // MARK: - Log audit 2026-10-22
+
+    func testColdOpeningTakesTheFirstNetworkPathThatArrivesAfterItStarted() throws {
+        let fresh = StabilityTracker()
+        fresh.now = { [unowned self] in clock }
+        fresh.schedule = { _, _ in }
+        fresh.appVisible(hasCachedContent: true, viewing: false)
+        fresh.connecting()
+        advance(0.05); fresh.pathChanged(to: "cellular") // NWPathMonitor answers asynchronously
+        advance(0.5); fresh.authenticated()
+        fresh.sessionListApplied(viewed: nil)
+        XCTAssertEqual(try XCTUnwrap(fresh.readies.first).path, "cellular", "was always 'unknown' on cold openings")
+    }
+
+    func testAConnectionLostDuringTheOpeningIsReportedWithIt() throws {
+        coldOpenAndAuthenticate(viewing: false)
+        tracker.sessionListApplied(viewed: nil)
+        tracker.appHidden()
+        advance(30)
+        tracker.appVisible(hasCachedContent: true, viewing: false)
+        tracker.connecting()
+        advance(15); tracker.transportLost(reason: "peer_closed", code: 1006, quietFor: 15)
+        tracker.connecting()
+        advance(1); tracker.socketOpen()
+        advance(1); tracker.authenticated()
+        tracker.sessionListApplied(viewed: nil)
+        let warm = try XCTUnwrap(tracker.readies.last)
+        XCTAssertEqual(warm.failure, "peer_closed", "iOS reconnects on every return: its drops happen inside openings")
+        XCTAssertEqual(warm.attempts, 1)
+        XCTAssertTrue(tracker.outages.isEmpty, "still one record for the opening, not an outage too")
+        XCTAssertNil(tracker.readies.first?.failure)
+    }
+
+    func testTheDefaultClockKeepsCountingWhileTheDeviceSleeps() {
+        // CLOCK_MONOTONIC_RAW includes sleep; systemUptime does not (backgroundMs
+        // under-reported 48 of 261 warm iPhone openings by > 60 s).
+        let uptime = ProcessInfo.processInfo.systemUptime
+        XCTAssertGreaterThanOrEqual(StabilityTracker().now(), uptime - 0.001)
+    }
+}
+
+/// AppState wiring of the summaries (log audit 2026-10-22).
+@MainActor
+final class DiagnosticsSummaryWiringTests: XCTestCase {
+    private var root: URL!
+    override func setUp() {
+        super.setUp()
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-summary-wiring-\(UUID())")
+    }
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+        super.tearDown()
+    }
+    private func makeApp() throws -> AppState {
+        AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+    }
+
+    func testVoiceSentIntoANewSessionOnAnOnlineTentacleIsNotOffline() throws {
+        let app = try makeApp()
+        let sender = try XCTUnwrap(app.commandSender)
+        app.connectionStatus = .connected
+        app.deviceStore.devices["dev"] = DeviceSummary(id: "dev", name: "Mac", role: .tentacle, kind: .desktop,
+                                                       publicKey: nil, encryptionKey: nil, online: true,
+                                                       lastSeen: nil, createdAt: nil)
+        let request = sender.createSession(targetDeviceId: "dev", agentId: "pi", model: "m", voice: true)
+        let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[request])
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: placeholder, text: "start the build"))
+        app.sendMetrics.finished(clientId, .delivered)
+        XCTAssertEqual(app.sendMetrics.summaries.last?.offlineAtSend, false, "reported offline=true while online")
+
+        app.deviceStore.devices["dev"]?.online = false
+        let offlineRequest = sender.createSession(targetDeviceId: "dev", agentId: "pi", model: "m", voice: true)
+        let offlinePlaceholder = try XCTUnwrap(sender.pendingPlaceholderIds[offlineRequest])
+        let offlineClient = try XCTUnwrap(sender.stageInput(sessionId: offlinePlaceholder, text: "later"))
+        app.sendMetrics.finished(offlineClient, .delivered)
+        XCTAssertEqual(app.sendMetrics.summaries.last?.offlineAtSend, true, "its Tentacle is offline")
+    }
+
+    func testColdOpeningBeforeTheFirstConnectionKnowsHowThePreviousRunEnded() throws {
+        // The Mac becomes active (handleForegroundRehydrate → noteVisible)
+        // before it first connects; the cold record had no previousExit.
+        let app = try makeApp()
+        app.noteVisible()
+        app.stability.appHidden()
+        let cold = try XCTUnwrap(app.stability.readies.first)
+        XCTAssertEqual(cold.kind, .cold)
+        XCTAssertNotNil(cold.previousExit)
+    }
+}

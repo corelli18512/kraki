@@ -11,14 +11,34 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { LocalAuthBackend } from './local-auth-backend.js';
 import { normalizeDeviceName } from '@kraki/protocol';
 import { safeEqual } from './auth.js';
-import { getLogger } from './logger.js';
+import { getLogger, LogThrottle } from './logger.js';
 import { clientIp } from './client-ip.js';
+import { metrics } from './metrics.js';
+import { REQUEST_ID_HEADER, requestIdFrom } from './request-id.js';
+
+/** What the request log line reports about one account API request. */
+interface RequestLogContext {
+  /** `admin`, `edge:<region>` or `public` */
+  caller?: string;
+  /** The device the request is about (body `deviceId` / `device.deviceId`). */
+  deviceId?: string;
+  /** Error code of a failed answer. */
+  code?: string;
+}
+
+const requestLogContexts = new WeakMap<IncomingMessage, RequestLogContext>();
+
+/** Successful answers to these are polled or read by every client: debug. */
+const ROUTINE_ROUTES = new Set(['/api/devices/status', '/api/config', '/api/regions']);
 
 export interface AccountApiOptions {
   authBackend: LocalAuthBackend;
   serviceKey?: string;
   /** Requests per minute per IP on the public routes. Default 60. */
   publicRateLimit?: number;
+  /** Caps the info lines of unauthorized / rate-limited requests (an outsider
+   *  can send them at will). Default: 5 per IP and 60 in total per minute. */
+  rejectedRequestLog?: LogThrottle;
 }
 
 type ServiceCaller = { admin: true } | { admin: false; region: string };
@@ -27,8 +47,10 @@ export class AccountApi {
   private backend: LocalAuthBackend;
   private serviceKey?: string;
   private publicLimiter: IpRateLimiter;
+  private rejectedRequestLog: LogThrottle;
 
   constructor(options: AccountApiOptions) {
+    this.rejectedRequestLog = options.rejectedRequestLog ?? new LogThrottle();
     this.backend = options.authBackend;
     this.serviceKey = options.serviceKey;
     this.publicLimiter = new IpRateLimiter(options.publicRateLimit ?? 60);
@@ -43,6 +65,8 @@ export class AccountApi {
     const path = url.pathname;
 
     if (!path.startsWith('/api/')) return false;
+
+    this.trackRequest(req, res, path);
 
     // CORS for all API routes
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -68,6 +92,8 @@ export class AccountApi {
       caller = this.checkServiceKey(req, res);
       if (!caller) return true;
     }
+    const logContext = requestLogContexts.get(req);
+    if (logContext) logContext.caller = !caller ? 'public' : caller.admin ? 'admin' : `edge:${caller.region}`;
     if (publicRoute && !this.publicLimiter.take(clientIp(req))) {
       res.setHeader('Retry-After', '60');
       this.json(res, 429, { ok: false, code: 'rate_limited', message: 'Too many requests' });
@@ -102,6 +128,9 @@ export class AccountApi {
           break;
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
+          break;
+        case '/api/devices/status':
+          if (req.method === 'POST') return await this.handleDeviceStatus(req, res, caller!);
           break;
         case '/api/devices/remove':
           if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
@@ -238,6 +267,29 @@ export class AccountApi {
     } else {
       this.json(res, 200, result);
     }
+    return true;
+  }
+
+  /** Service-key route: an edge asks which of the devices it accepts locally
+   *  may still sign in there (EdgeAuthCache revocation poll). A region-scoped
+   *  edge is always checked against its own region. */
+  private async handleDeviceStatus(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    // `devices` (id + the account and key the edge trusts) is what current
+    // edges send; bare `deviceIds` only checks existence and region.
+    const rawDevices = Array.isArray(body?.devices)
+      ? body.devices
+      : Array.isArray(body?.deviceIds) ? (body.deviceIds as unknown[]).map((id) => ({ id })) : undefined;
+    const valid = rawDevices !== undefined && rawDevices.length <= 1000 && rawDevices.every((d) =>
+      typeof d === 'object' && d !== null && typeof (d as { id?: unknown }).id === 'string'
+      && ['userId', 'keyFingerprint'].every((k) => (d as Record<string, unknown>)[k] === undefined || typeof (d as Record<string, unknown>)[k] === 'string'));
+    if (!valid) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'devices ({id, userId?, keyFingerprint?}[] up to 1000) required' });
+      return true;
+    }
+    const region = caller.admin ? (typeof body?.headRegion === 'string' ? body.headRegion : undefined) : caller.region;
+    const { statuses, redirects } = this.backend.deviceStatuses(rawDevices as Array<{ id: string; userId?: string; keyFingerprint?: string }>, region);
+    this.json(res, 200, { ok: true, statuses, redirects });
     return true;
   }
 
@@ -425,6 +477,43 @@ export class AccountApi {
 
   // ── Helpers ───────────────────────────────────────────
 
+  /** One log line per request once its response is done (or the caller
+   *  went away first: `aborted`), under the caller's request id. */
+  private trackRequest(req: IncomingMessage, res: ServerResponse, path: string): void {
+    const startedAt = performance.now();
+    const reqId = requestIdFrom(req.headers[REQUEST_ID_HEADER.toLowerCase()]);
+    res.setHeader(REQUEST_ID_HEADER, reqId);
+    const context: RequestLogContext = {};
+    requestLogContexts.set(req, context);
+    res.once('close', () => {
+      const ms = Math.round(performance.now() - startedAt);
+      const aborted = !res.writableFinished;
+      const status = res.statusCode;
+      metrics().inc('api.requests');
+      if (status >= 500 || aborted) metrics().inc('api.errors');
+      metrics().accountApi.observe(ms);
+      const ip = clientIp(req);
+      let throttle: { suppressed?: number } | null = {};
+      if (status === 401 || status === 429) {
+        throttle = this.rejectedRequestLog.take(ip ?? 'unknown');
+        if (!throttle) return;
+      }
+      const fields = {
+        reqId, method: req.method, path, status, ms,
+        ...(context.code && { code: context.code }),
+        ...(context.caller && { caller: context.caller }),
+        ...(context.deviceId && { deviceId: context.deviceId }),
+        ip,
+        ...(aborted && { aborted: true }),
+        ...throttle,
+      };
+      const logger = getLogger();
+      if (status >= 500 || aborted) logger.warn('Account API request', fields);
+      else if (req.method === 'OPTIONS' || (status < 400 && ROUTINE_ROUTES.has(path))) logger.debug('Account API request', fields);
+      else logger.info('Account API request', fields);
+    });
+  }
+
   /** The admin key, or the region of a registered edge; null when invalid. */
   private checkServiceKey(req: IncomingMessage, res: ServerResponse): ServiceCaller | null {
     const authHeader = req.headers.authorization ?? '';
@@ -457,6 +546,9 @@ export class AccountApi {
     if (res.headersSent) return;
     // An identity-provider outage is not a rejected credential (G4).
     if (status === 401 && (data as { code?: string } | null)?.code === 'service_unavailable') status = 503;
+    const code = (data as { code?: unknown } | null)?.code;
+    const context = requestLogContexts.get(res.req);
+    if (context && status >= 400 && typeof code === 'string') context.code = code;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));
   }
@@ -496,13 +588,23 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown> | null>
       done = true;
       try {
         const text = Buffer.concat(chunks).toString();
-        resolve(text ? JSON.parse(text) : null);
+        const body = text ? JSON.parse(text) : null;
+        noteRequestDevice(req, body);
+        resolve(body);
       } catch {
         resolve(null);
       }
     });
     req.on('error', () => { if (!done) { done = true; resolve(null); } });
   });
+}
+
+function noteRequestDevice(req: IncomingMessage, body: unknown): void {
+  const context = requestLogContexts.get(req);
+  if (!context || typeof body !== 'object' || body === null) return;
+  const { deviceId, device } = body as { deviceId?: unknown; device?: { deviceId?: unknown } };
+  const id = typeof deviceId === 'string' ? deviceId : typeof device?.deviceId === 'string' ? device.deviceId : undefined;
+  if (id) context.deviceId = id.slice(0, 64);
 }
 
 /**

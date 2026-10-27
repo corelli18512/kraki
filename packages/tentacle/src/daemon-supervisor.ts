@@ -106,8 +106,13 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       child.on('error', (err) => log(`spawn error: ${err.message}`));
       child.on('exit', (code, signal) => {
         child = null;
+        const uptime = `${Math.round((Date.now() - startedAt) / 100) / 10}s`;
         if (stopping || isCleanExit(code, signal)) {
-          log(`worker exited cleanly (code=${code} signal=${signal})`);
+          // A worker killed by the signal never ran its shutdown (no cleanup,
+          // no log): do not call that clean.
+          log(isCleanExit(code, signal)
+            ? `worker exited cleanly (code=${code} signal=${signal} uptime=${uptime})`
+            : `worker stopped without a clean exit (code=${code} signal=${signal} uptime=${uptime})`);
           finish(0);
           return;
         }
@@ -119,7 +124,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         failures = Date.now() - startedAt >= HEALTHY_UPTIME_MS ? 1 : failures + 1;
         if (opts.maxStarts !== undefined && starts >= opts.maxStarts) { finish(1); return; }
         const wait = delay(failures);
-        log(`worker died (code=${code} signal=${signal}); restarting in ${wait}ms`);
+        log(`worker died (code=${code} signal=${signal} uptime=${uptime}); restarting in ${wait}ms`);
         timer = setTimeout(start, wait);
       });
     };

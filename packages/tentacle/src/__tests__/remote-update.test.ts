@@ -166,6 +166,26 @@ describe('RemoteUpdater', () => {
     await u.request('r1', 'now');
     expect(launch).toHaveBeenCalledOnce();
   });
+  it('now: logs who asked and which running sessions the restart interrupts (log audit 2026-10-22)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { getLogsDir } = await import('../config.js');
+    const launch = vi.fn();
+    const u = new RemoteUpdater({
+      install: { method: 'binary', target: '/x' },
+      currentVersion: '0.35.12',
+      status: () => ({ installedVia: 'binary', current: '0.35.12', latest: '0.36.0', latestTentacle: '0.36.0', remote: true }),
+      runningSessions: () => 1,
+      runningSessionIds: () => ['mvcnjn5r-cqbihcmx'],
+      emit: () => {},
+      stage: vi.fn(async () => ({ requestId: 'r', method: 'binary' as const, target: '/x', staged: '/x.new', cli: ['/x'], from: '0.35.12', to: '0.36.0', deadlineSeconds: 1 })),
+      launch,
+    });
+    await u.request('req-now', 'now', 'dev_f5dde724-7e4');
+    const log = readFileSync(join(getLogsDir(), 'remote-update.log'), 'utf8');
+    expect(log).toContain('request req-now from dev_f5dde724-7e4: 0.35.12 → 0.36.0 (now, 1 running)');
+    expect(log).toContain('request req-now: restarting interrupts 1 running session(s): mvcnjn5r-cqbihcmx');
+  });
   it('idle: waits until no session runs', async () => {
     const { u, events, launch, setRunning } = updater({}, 1);
     const done = u.request('r1', 'idle');

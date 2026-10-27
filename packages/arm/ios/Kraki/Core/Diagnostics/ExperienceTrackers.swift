@@ -30,6 +30,14 @@ final class SendTracker {
         var offlineAtSend = false
         var attachments = 0
         var textLength = 0
+        /// Attachment sends only (diag 10-12→10-21: 2.8–8.6 s to confirm, no
+        /// breakdown). Synchronous serialize + encrypt + frame on the main thread.
+        var handoffMs: Double?
+        /// Created → the Relay acknowledged the last Pulse part carrying it
+        /// (nil: not over Pulse, e.g. the local link, or the connection changed
+        /// first). Only an ACK of the connection it was handed to counts. The rest of
+        /// `confirmMs` is Head → Tentacle → echo.
+        var uploadMs: Double?
         /// Shown as a problem, yet delivered without the user retrying.
         var falseAlarm: Bool { shown != .none && outcome == .delivered && manualRetries == 0 }
     }
@@ -44,20 +52,67 @@ final class SendTracker {
         var summary: Summary
         var createdAt: Date
         var shownSince: Date?
+        /// An attachment send handed to Pulse whose upload is not acknowledged yet.
+        var awaitingUpload = false
+        /// The Pulse connection generation it was handed to.
+        var uploadGeneration: Int?
+        /// The Pulse seq whose acknowledgement covers its last part, once known.
+        var uploadThroughSeq: UInt64?
     }
     private var entries: [String: Entry] = [:]
 
-    func created(_ clientId: String, kind: Summary.Kind, textLength: Int, attachments: Int, pathUp: Bool) {
-        entries[clientId] = Entry(
+    /// `pulseGeneration`: the connected Pulse generation the send was handed
+    /// to; nil when it went another way (local link) or Pulse was not connected.
+    func created(_ clientId: String, kind: Summary.Kind, textLength: Int, attachments: Int, pathUp: Bool,
+                 handoffMs: Double? = nil, pulseGeneration: Int? = nil) {
+        var entry = Entry(
             summary: Summary(kind: kind, offlineAtSend: !pathUp, attachments: attachments, textLength: textLength),
             createdAt: now()
         )
+        if attachments > 0, let handoffMs {
+            entry.summary.handoffMs = handoffMs
+            entry.awaitingUpload = pulseGeneration != nil
+            entry.uploadGeneration = pulseGeneration
+        }
+        entries[clientId] = entry
     }
 
-    /// Restored from the persisted outbox after a relaunch.
-    func restored(_ clientId: String, kind: Summary.Kind, createdAt: Date?, failed: Bool) {
+    /// The Relay acknowledged Pulse data through `seqUpTo` on connection
+    /// `generation`. `lastSentSeq` is the newest seq handed to Pulse so far;
+    /// with nothing still queued for upload it covers every attachment send
+    /// handed off before now. A send of another generation is not measured.
+    func pulseAcked(seqUpTo: UInt64, lastSentSeq: UInt64, uploadQueueEmpty: Bool, generation: Int) {
+        for (clientId, entry) in entries where entry.awaitingUpload {
+            var entry = entry
+            guard entry.uploadGeneration == generation else {
+                entry.awaitingUpload = false
+                entries[clientId] = entry
+                continue
+            }
+            if entry.uploadThroughSeq == nil, uploadQueueEmpty { entry.uploadThroughSeq = lastSentSeq }
+            if let through = entry.uploadThroughSeq, through <= seqUpTo {
+                entry.awaitingUpload = false
+                entry.summary.uploadMs = now().timeIntervalSince(entry.createdAt) * 1000
+            }
+            entries[clientId] = entry
+        }
+    }
+
+    /// The Pulse connection ended: no pending upload can be measured any more.
+    func pulseDisconnected() {
+        for (clientId, entry) in entries where entry.awaitingUpload {
+            entries[clientId]?.awaitingUpload = false
+        }
+    }
+
+    /// Restored from the persisted outbox after a relaunch. `kind`, length and
+    /// attachments come from the durable copy (diag 10-14: a restored voice
+    /// input used to report `typed`, `textLength=0`).
+    func restored(_ clientId: String, kind: Summary.Kind, createdAt: Date?, failed: Bool,
+                  textLength: Int = 0, attachments: Int = 0) {
         guard entries[clientId] == nil else { return }
-        var entry = Entry(summary: Summary(kind: kind, restored: true), createdAt: createdAt ?? now())
+        var entry = Entry(summary: Summary(kind: kind, restored: true, attachments: attachments, textLength: textLength),
+                          createdAt: createdAt ?? now())
         if failed {
             entry.summary.shown = .failed
             entry.shownSince = now()
@@ -107,7 +162,24 @@ final class SendTracker {
     }
 
     var inFlight: Int { entries.count }
+
+    /// What the input was (persisted with the outbox so a relaunch keeps it).
+    func kind(of clientId: String) -> Summary.Kind? { entries[clientId]?.summary.kind }
 }
+
+#if KRAKI_DIAG
+extension SendTracker.Summary {
+    /// The timings that were measured for this input.
+    var diagTimings: [DiagField: DiagValue] {
+        var fields: [DiagField: DiagValue] = [:]
+        if let v = confirmMs { fields[.confirmMs] = .number(v) }
+        if let v = correctionMs { fields[.correctionMs] = .number(v) }
+        if let v = handoffMs { fields[.handoffMs] = .number(v) }
+        if let v = uploadMs { fields[.uploadMs] = .number(v) }
+        return fields
+    }
+}
+#endif
 
 /// One `voice.summary` per recording attempt: where it ended, why it failed
 /// (a coarse cause tag, never the message), and how long each step took.
@@ -194,6 +266,9 @@ final class VoiceTracker {
         guard current != nil else { return }
         current?.textLength = textLength
         current?.correctionConfirmed = correctionConfirmed
+        // A final with no text is not a success (a 50 s recording ended
+        // like this and counted as one); flagged, outcome unchanged.
+        if textLength == 0, current?.cause == nil { current?.cause = "empty_transcript" }
         pendingOutcome = .final
     }
 

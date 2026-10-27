@@ -36,7 +36,7 @@ async function pairBrowser(page: Page): Promise<string> {
 }
 
 async function openSessionChat(page: Page, sessionId: string): Promise<void> {
-  await expect(page.getByRole('button', { name: /Mock-agent/ }).first())
+  await expect(page.locator('button.ksr').first())
     .toBeVisible({ timeout: 15_000 });
   await page.goto(`${WEB_URL}/session/${sessionId}`);
   await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
@@ -49,6 +49,13 @@ async function sendPrompt(page: Page, text: string): Promise<void> {
   await input.press('Enter');
   await expect(page.locator('[data-chat-scroll]').getByText(text)).toBeVisible({ timeout: 10_000 });
 }
+
+/** An agent row whose bubble froze as stopped / failed. Web 0.17 renders a
+ *  turn's terminal status as an outcome slot in its agent bubble (the old
+ *  [data-terminal-card] card is gone): "Stopped" or "Turn failed". */
+const ABORTED_ROW = '.krow-agent:has(.kslot-outcome:not(.is-failed))';
+const FAILED_ROW = '.krow-agent:has(.kslot-outcome.is-failed)';
+const FAILURE = '524 status code (no body)';
 
 test.describe.serial('real-stack terminal status cards', () => {
   let sessionId: string;
@@ -76,14 +83,14 @@ test.describe.serial('real-stack terminal status cards', () => {
     await control('/toolStart', { sid: sessionId, tool: 'read_file', cmd: 'src/auth.ts' });
 
     // The Stop button is only interactive while the session is active (not idle).
-    const stopBtn = page.locator('button[aria-label="Stop"]');
+    const stopBtn = page.getByRole('button', { name: 'Stop agent', exact: true });
     await expect(stopBtn).toBeVisible({ timeout: 10_000 });
     await stopBtn.click();
 
     // turn_status with user_abort arrives over pulse and renders as a terminal card.
-    const abortCard = page.locator('[data-terminal-card="user_abort"]');
+    const abortCard = page.locator(ABORTED_ROW);
     await expect(abortCard).toBeVisible({ timeout: 10_000 });
-    await expect(abortCard.getByText('User aborted')).toBeVisible();
+    await expect(abortCard.getByText('Stopped', { exact: true })).toBeVisible();
     // The streaming draft is preserved inside the frozen card.
     await expect(abortCard.getByText('Analyzing the auth module structure')).toBeVisible();
 
@@ -104,9 +111,9 @@ test.describe.serial('real-stack terminal status cards', () => {
   test('user_abort card survives a full browser refresh', async () => {
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
-    const abortCard = page.locator('[data-terminal-card="user_abort"]');
+    const abortCard = page.locator(ABORTED_ROW);
     await expect(abortCard).toBeVisible({ timeout: 10_000 });
-    await expect(abortCard.getByText('User aborted')).toBeVisible();
+    await expect(abortCard.getByText('Stopped', { exact: true })).toBeVisible();
     await expect(abortCard.getByText('Analyzing the auth module structure')).toBeVisible();
 
     await page.screenshot({ path: '/tmp/kraki-terminal-abort-refreshed.png', fullPage: false });
@@ -116,10 +123,10 @@ test.describe.serial('real-stack terminal status cards', () => {
     const legacyDraft = 'Legacy interrupted history uses the shared bubble';
     await control('/legacyInterrupted', { sid: sessionId, draft: legacyDraft });
 
-    const legacyCard = page.locator('[data-terminal-card="user_abort"]')
+    const legacyCard = page.locator(ABORTED_ROW)
       .filter({ hasText: legacyDraft });
     await expect(legacyCard).toBeVisible({ timeout: 10_000 });
-    await expect(legacyCard.getByText('User aborted')).toBeVisible();
+    await expect(legacyCard.getByText('Stopped', { exact: true })).toBeVisible();
     await expect(legacyCard.getByText('npm test')).toHaveCount(0);
     // "Turn aborted" must not leak into the CHAT rendering of the legacy card
     // (it normalizes to the frozen "User aborted" bubble). Aborted sessions may
@@ -132,10 +139,10 @@ test.describe.serial('real-stack terminal status cards', () => {
     // Legacy storage must keep using the shared renderer after a full replay.
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
-    const replayedLegacyCard = page.locator('[data-terminal-card="user_abort"]')
+    const replayedLegacyCard = page.locator(ABORTED_ROW)
       .filter({ hasText: legacyDraft });
     await expect(replayedLegacyCard).toBeVisible({ timeout: 10_000 });
-    await expect(replayedLegacyCard.getByText('User aborted')).toBeVisible();
+    await expect(replayedLegacyCard.getByText('Stopped', { exact: true })).toBeVisible();
     await expect(page.locator('[data-chat-scroll]').getByText('Turn aborted', { exact: true })).toHaveCount(0);
 
     const lostDraft = 'Legacy process loss uses the shared failed bubble';
@@ -144,125 +151,107 @@ test.describe.serial('real-stack terminal status cards', () => {
       draft: lostDraft,
       reason: 'process_lost',
     });
-    const lostCard = page.locator('[data-terminal-card="failed"]')
+    const lostCard = page.locator(FAILED_ROW)
       .filter({ hasText: lostDraft });
     await expect(lostCard).toBeVisible({ timeout: 10_000 });
-    await expect(lostCard.getByText('Turn failed')).toBeVisible();
+    await expect(lostCard.getByText('Turn failed', { exact: true })).toBeVisible();
     await expect(lostCard.getByText('Agent process was lost')).toBeVisible();
     await expect(page.locator('[data-chat-scroll]').getByText('Turn aborted', { exact: true })).toHaveCount(0);
 
     await page.screenshot({ path: '/tmp/kraki-terminal-legacy-process-lost.png', fullPage: false });
   });
 
-  test('backend errors and final reply collapse into one permanent failed bubble', async () => {
+  test('backend errors with no final reply freeze one permanent failed bubble', async () => {
     await control('/idle', { sid: sessionId });
     await sendPrompt(page, 'Run the full test suite');
 
     await control('/toolStart', { sid: sessionId, tool: 'bash', cmd: 'npm test' });
-
-    // Reproduce mrhuha8u-tcpn1tz8: repeated backend errors, then a final Pi
-    // reply, then idle freezes the terminal status with an empty card draft.
-    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
-    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
-    await control('/msg', { sid: sessionId, text: 'Restarted successfully after the backend errors' });
+    // Repeated backend errors, then the agent goes idle without a reply.
+    await control('/error', { sid: sessionId, message: FAILURE });
+    await control('/error', { sid: sessionId, message: FAILURE });
     await control('/idle', { sid: sessionId });
 
-    const failedCard = page.locator('[data-terminal-card="failed"]')
-      .filter({ hasText: 'Restarted successfully after the backend errors' });
+    const failedCard = page.locator(FAILED_ROW).filter({ hasText: FAILURE });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('[data-terminal-card="failed"]')
-      .filter({ hasText: 'Restarted successfully after the backend errors' })).toHaveCount(1);
-    await expect(failedCard.getByText('Turn failed')).toBeVisible();
-    await expect(failedCard.getByText('524 status code (no body)')).toBeVisible();
-    await expect(failedCard.getByText('Restarted successfully after the backend errors')).toBeVisible();
+    await expect(failedCard).toHaveCount(1);
+    await expect(failedCard.getByText('Turn failed', { exact: true })).toBeVisible();
+    // The error is the bubble's outcome detail, shown once.
+    await expect(failedCard.getByText(FAILURE, { exact: true })).toHaveCount(1);
     // Error wire records are turn details, never top-level chat bubbles.
-    await expect(page.getByText('Error', { exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-chat-scroll]').getByText('Error', { exact: true })).toHaveCount(0);
 
     await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble.png', fullPage: false });
 
     // Both backend errors remain available inside Steps.
-    await failedCard.getByRole('button', { name: 'Open steps' }).click();
+    await failedCard.getByRole('button', { name: 'Show steps' }).click();
     const dialog = page.getByRole('dialog').filter({ visible: true }).last();
-    await expect(dialog.getByText('Error', { exact: true })).toHaveCount(2);
-    await expect(dialog.getByText('524 status code (no body)', { exact: true })).toHaveCount(2);
+    // Each error is a warning row in Steps, showing its message.
+    await expect(dialog.getByText(FAILURE, { exact: true })).toHaveCount(2);
     await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble-steps.png', fullPage: false });
     await dialog.click({ position: { x: 4, y: 4 } });
     await expect(dialog).toHaveCount(0);
   });
 
-  test('two consecutive failed turns each render exactly one bubble (mrhuha8u-tcpn1tz8 replay)', async () => {
-    // Real-session tail replay: TWO failed turns back-to-back.
-    // mrhuha8u-tcpn1tz8 seq 70-80: two turns each shaped user -> error ->
-    // agent_reply -> turn_status(failed) -> idle. Each terminal turn must be
-    // its own single bubble; backend errors never appear as standalone bubbles.
+  test('a final reply after backend errors recovers the turn (mrhuha8u-tcpn1tz8 replay)', async () => {
+    // Real-session tail: turns shaped user -> error(s) -> agent_reply -> idle.
+    // A genuine final reply is authoritative (tentacle ed5a7c73): the turn is
+    // not failed, the reply is one plain bubble, the errors stay in Steps and
+    // never surface as standalone chat bubbles.
     await control('/idle', { sid: sessionId });
 
-    // --- turn 1 ---
     const prompt1 = 'Run the full suite again';
     const reply1 = '\u5DF2\u91CD\u7F6E\u5E76\u91CD\u65B0\u542F\u52A8\uFF0C\u5F00\u5C4F\u52A8\u753B\u548C\u6A21\u5F0F\u9009\u62E9\u6B63\u5728\u4ECE\u5934\u64AD\u653E';
     await sendPrompt(page, prompt1);
-    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
-    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
+    await control('/error', { sid: sessionId, message: FAILURE });
+    await control('/error', { sid: sessionId, message: FAILURE });
     await control('/msg', { sid: sessionId, text: reply1 });
     await control('/idle', { sid: sessionId });
 
-    const card1 = page.locator('[data-terminal-card="failed"]').filter({ hasText: reply1 });
-    await expect(card1).toBeVisible({ timeout: 10_000 });
-    await expect(card1).toHaveCount(1);
-    await expect(card1.getByText('Turn failed')).toBeVisible();
-
-    // --- turn 2 ---
     const prompt2 = '\u56DE\u5230\u539F\u6765\u7684\u5361\u7247\u5927\u5C0F \u53EA\u4FDD\u7559\u5361\u7247\u5185\u5BB9';
     const reply2 = '\u5DF2\u7ECF\u6309\u4F60\u7684\u8981\u6C42\u8C03\u6574\uFF1A\u5361\u7247\u6062\u590D\u5230\u4E4B\u524D\u7684\u5C3A\u5BF8';
     await sendPrompt(page, prompt2);
-    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
+    await control('/error', { sid: sessionId, message: FAILURE });
     await control('/msg', { sid: sessionId, text: reply2 });
     await control('/idle', { sid: sessionId });
 
-    const card2 = page.locator('[data-terminal-card="failed"]').filter({ hasText: reply2 });
-    await expect(card2).toBeVisible({ timeout: 10_000 });
-    await expect(card2).toHaveCount(1);
-    await expect(card2.getByText('Turn failed')).toBeVisible();
-    await expect(card2.getByText(reply2)).toBeVisible();
+    for (const reply of [reply1, reply2]) {
+      const row = page.locator('.krow-agent').filter({ hasText: reply });
+      await expect(row).toHaveCount(1, { timeout: 10_000 });
+      await expect(row.locator('.kslot-outcome')).toHaveCount(0);
+      await expect(row.getByText(FAILURE)).toHaveCount(0);
+    }
+    // The only failed bubble is the earlier genuinely failed turn.
+    await expect(page.locator(FAILED_ROW).filter({ hasText: FAILURE })).toHaveCount(1);
+    await expect(page.locator('[data-chat-scroll]').getByText('Error', { exact: true })).toHaveCount(0);
 
-    // Both failed turns coexist as distinct single bubbles; the reply of turn 1
-    // is still visible (not absorbed into turn 2).
-    await expect(card1.getByText(reply1)).toBeVisible();
+    // Turn 1's errors are still in its Steps.
+    await page.locator('.krow-agent').filter({ hasText: reply1 }).getByRole('button', { name: 'Show steps' }).click();
+    const dialog = page.getByRole('dialog').filter({ visible: true }).last();
+    await expect(dialog.getByText(FAILURE, { exact: true })).toHaveCount(2);
+    await dialog.click({ position: { x: 4, y: 4 } });
+    await expect(dialog).toHaveCount(0);
 
-    // Backend errors never escape as standalone top-level chat bubbles: each
-    // failed card surfaces its 524 message exactly once in the action slot.
-    await expect(card1.getByText('524 status code (no body)')).toHaveCount(1);
-    await expect(card2.getByText('524 status code (no body)')).toHaveCount(1);
-
-    // --- turn 3: a SUCCESSFUL turn right after the failures ---
-    // mrhuha8u-tcpn1tz8 seq 81-83: user -> agent_message -> idle (no error,
-    // no turn_status). It must render as a normal agent bubble, NOT a terminal
-    // card, and must not absorb the preceding failed turn.
+    // A successful turn right after renders as a normal reply.
     const prompt3 = '\u4E0D\u662F\u6211\u662F\u8BF4\u52A0\u5165\u68CB\u76D8\u4E4B\u524D\u7684\u90A3\u4E2A\u5C3A\u5BF8';
     const reply3 = '\u5DF2\u6309\u4F60\u521A\u624D\u7684\u51C6\u786E\u610F\u601D\u4FEE\u6539\uFF1A\u5361\u7247\u6062\u590D\u5230\u4E4B\u524D\u7684\u5927\u5C0F';
     await sendPrompt(page, prompt3);
     await control('/msg', { sid: sessionId, text: reply3 });
     await control('/idle', { sid: sessionId });
+    const row3 = page.locator('.krow-agent').filter({ hasText: reply3 });
+    await expect(row3).toHaveCount(1, { timeout: 10_000 });
+    await expect(row3.locator('.kslot-outcome')).toHaveCount(0);
 
-    await expect(page.getByText(reply3).first()).toBeVisible({ timeout: 10_000 });
-    // The successful turn is a plain agent reply, never a terminal card.
-    await expect(page.locator('[data-terminal-card]').filter({ hasText: reply3 })).toHaveCount(0);
-    // The two failed cards are untouched.
-    await expect(card1).toHaveCount(1);
-    await expect(card2).toHaveCount(1);
-
-    await page.screenshot({ path: '/tmp/kraki-terminal-two-failed-turns.png', fullPage: false });
+    await page.screenshot({ path: '/tmp/kraki-terminal-recovered-turns.png', fullPage: false });
   });
 
   test('failed card survives a full browser refresh', async () => {
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
-    const failedCard = page.locator('[data-terminal-card="failed"]')
-      .filter({ hasText: 'Restarted successfully after the backend errors' });
+    const failedCard = page.locator(FAILED_ROW).filter({ hasText: FAILURE });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
     await expect(failedCard).toHaveCount(1);
-    await expect(failedCard.getByText('Turn failed')).toBeVisible();
-    await expect(page.getByText('Error', { exact: true })).toHaveCount(0);
+    await expect(failedCard.getByText('Turn failed', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-chat-scroll]').getByText('Error', { exact: true })).toHaveCount(0);
 
     await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble-refreshed.png', fullPage: false });
   });

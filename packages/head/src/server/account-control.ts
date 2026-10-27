@@ -6,6 +6,7 @@ import type { BlobPayload } from '@kraki/protocol';
 import { ACCOUNT_DELETED_CLOSE_CODE, normalizeDeviceName } from '@kraki/protocol';
 import { parseVoiceWordOps, type VoiceWord } from '../voice-vocabulary.js';
 import { getLogger } from '../logger.js';
+import { parseWebPushSubscription } from '../push/web-push.js';
 import { trace } from '../trace.js';
 import type { HeadServer } from '../server.js';
 import { broadcastDeviceRemoved, broadcastDeviceRenamed } from './presence.js';
@@ -22,6 +23,10 @@ export function handleControlMessage(server: HeadServer, ws: WebSocket, state: C
     case 'delete_account':        void handleDeleteAccount(server, ws, state); return true;
     case 'register_push_token':   handleRegisterPushToken(server, ws, state, msg); return true;
     case 'unregister_push_token': handleUnregisterPushToken(server, ws, state, msg); return true;
+    case 'app_visibility':
+      // Connection-scoped: a new socket starts visible again.
+      state.hidden = msg.visible === false;
+      return true;
     case 'dispatch_push': {
       const sender = state.deviceId ? server.storage.getDevice(state.deviceId) : undefined;
       const payload = msg.payload as { preview?: BlobPayload } | undefined;
@@ -39,7 +44,10 @@ export function handleUpdatePreferences(server: HeadServer, ws: WebSocket, state
   if (!state.userId) return;
   const prefs = msg.preferences as Record<string, unknown> | undefined;
   if (!prefs || typeof prefs !== 'object') return;
-  server.storage.updatePreferences(state.userId, prefs);
+  if (!server.storage.updatePreferences(state.userId, prefs)) {
+    getLogger().warn('Preferences update not stored (unknown user or over the size limit)', { userId: state.userId });
+    return;
+  }
   // Read back the full merged preferences
   const fullUser = server.storage.getUser(state.userId);
   const merged = publicPreferences(fullUser?.preferences ?? prefs);
@@ -111,7 +119,10 @@ export function firePushPreview(server: HeadServer, state: ClientState, pushPrev
   let offlineCount = 0;
   for (const device of server.storage.getDevicesByUser(senderUserId)) {
     if (device.id === senderDeviceId) continue;
-    if (server.connections.get(device.id)) onlineDeviceIds.push(device.id);
+    // A hidden app keeps its socket for a short grace period after leaving
+    // the screen; the user still has to be notified.
+    const ws = server.connections.get(device.id);
+    if (ws && !server.clients.get(ws)?.hidden) onlineDeviceIds.push(device.id);
     else offlineCount++;
   }
   trace('PUSH-FIRE', { sender: senderDeviceId, onlineCount: onlineDeviceIds.length, offlineCount, previewKeys: Object.keys(pushPreview.keys) });
@@ -201,6 +212,7 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
   }
 
   server.storage.deleteDevice(targetDeviceId);
+  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(targetDeviceId);
   server.deviceRenamedAt.delete(targetDeviceId);
   server.storage.deletePushTokensForDevice(targetDeviceId);
   // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
@@ -255,9 +267,12 @@ export async function handleDeleteAccount(server: HeadServer, ws: WebSocket, sta
     // This relay's own rows (the edge mirror; already gone when the
     // account store is this relay's storage).
     for (const id of server.storage.deleteUser(userId)) deviceIds.add(id);
+    // Including ids this edge never mirrored (e.g. a first pairing in flight).
+    server.storage.tombstoneDevices([...deviceIds]);
     logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
 
     for (const id of deviceIds) {
+      if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(id);
       const socket = server.connections.get(id);
       if (socket) {
         // Detach before closing so the close handler doesn't announce
@@ -291,6 +306,10 @@ export function handleRegisterPushToken(server: HeadServer, ws: WebSocket, state
   const payload = msg.payload as Record<string, unknown> | undefined;
   if (!payload || typeof payload.token !== 'string' || typeof payload.provider !== 'string') {
     server.sendError(ws, 'Invalid push token: payload.token and payload.provider required');
+    return;
+  }
+  if (payload.provider === 'web_push' && !parseWebPushSubscription(payload.token)) {
+    server.sendError(ws, 'Invalid push token: unsupported Web Push subscription');
     return;
   }
 

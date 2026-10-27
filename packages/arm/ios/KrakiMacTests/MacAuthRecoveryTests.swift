@@ -12,6 +12,8 @@ private final class FakeRelay {
     private let listener: NWListener
     private var connections: [NWConnection] = []
     var challengeMode: ChallengeMode = .fatal
+    /// Token auths to leave unanswered (an open socket whose reply never comes).
+    var unansweredTokenAuths = 0
     private(set) var methods: [String] = []
     private(set) var port: UInt16 = 0
 
@@ -74,6 +76,7 @@ private final class FakeRelay {
                     send(["type": "auth_error", "code": "device_not_found", "message": "Unknown device"], on: connection)
                 }
             case "github_token":
+                if unansweredTokenAuths > 0 { unansweredTokenAuths -= 1; return }
                 let token = (message["auth"] as? [String: Any])?["token"] as? String
                 if token == "tok-ok" {
                     send(["type": "auth_ok", "deviceId": "dev_recovered",
@@ -248,6 +251,26 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertTrue(used)
         try await waitUntil(5, "signed in") { app.connectionStatus == .connected }
         XCTAssertEqual(relay.methods, ["challenge", "github_token"])
+    }
+
+    /// Diag 10-19 (27.9 s) / 10-18 (15.9 s): an open socket that never
+    /// answers the sign-in was only replaced by the 22 s liveness ping. Now a
+    /// retryable auth gets a fresh socket after `authReplyTimeout`.
+    func testUnansweredSignInIsRetriedOnAFreshSocketWithinSeconds() async throws {
+        relay.unansweredTokenAuths = 1
+        AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
+        app = try makeApp()
+        app.authManager?.debugSetStoredDeviceId(nil)
+        app.authWatchdogInterval = 60
+        let started = Date()
+        _ = await app.attemptCLILogin()
+        try await waitUntil(12, "signed in") { app.connectionStatus == .connected }
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(relay.methods, ["github_token", "github_token"])
+        XCTAssertTrue(app.wsClient?.recoveryReasons.contains("auth_reply_timeout") == true)
+        XCTAssertGreaterThanOrEqual(elapsed, WebSocketClient.authReplyTimeout - 0.5)
+        XCTAssertLessThan(elapsed, WebSocketClient.authReplyTimeout + 3, "not the 22 s liveness ping")
+        XCTAssertEqual(app.wsClient?.consecutiveAuthReplyTimeouts, 0, "reset once signed in")
     }
 
     /// While the first sign-in is pending the window says so; it never says

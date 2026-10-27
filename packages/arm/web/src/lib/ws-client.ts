@@ -6,7 +6,7 @@ import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -460,8 +460,10 @@ export class KrakiWSClient {
    *  - `{from:'@head', msg}` — PLAINTEXT head-originated control (presence,
    *    preferences_updated, voice). Head↔device has no E2E, so dispatch `msg`
    *    directly, no decrypt.
-   *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch. */
-  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', fragmentSender?: string, streamId = 0) {
+   *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch.
+   *  `reassembled` is set for a payload rebuilt from fragments: its sender is
+   *  the one stamped on its parts, never a field of its own. */
+  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', reassembled?: { sender: string | undefined }, streamId = 0) {
     this.lastDeliveryAt = Date.now();
     let parsed: { from?: string; src?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
     try {
@@ -469,12 +471,29 @@ export class KrakiWSClient {
     } catch {
       return;
     }
-    if (isPayloadFragment(parsed)) {
-      const whole = this.assembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole, route, (parsed as { src?: string }).src, streamId);
+    if (reassembled && (reassembledPayloadNamesSender(parsed) || isPayloadFragment(parsed))) {
+      logger.warn('Dropped reassembled payload that names its own sender', { src: reassembled.sender });
       return;
     }
-    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
+    if (isPayloadFragment(parsed)) {
+      // Each part carries the sender the Head (or the local link) stamped on
+      // it; parts are grouped by that sender and the whole is credited to it.
+      const stamp = (parsed as { src?: unknown }).src;
+      const sender = typeof stamp === 'string' ? stamp : undefined;
+      const whole = this.assembler.accept(parsed, sender);
+      if (whole !== null) this.handlePulseDelivered(whole, route, { sender }, streamId);
+      return;
+    }
+    // Head-originated plaintext control. Only the Head's own control types are
+    // accepted from this wrapper, and only from a whole payload the Head
+    // delivered (a reassembled one is dropped above; the local link never
+    // carries it): auth frames and consumer messages arriving this way are forged.
+    if (parsed.from === HEAD_PULSE_TARGET) {
+      const type = (parsed.msg as { type?: unknown } | undefined)?.type;
+      if (route !== 'head' || !parsed.msg || typeof type !== 'string' || !HEAD_CONTROL_TYPES.has(type)) {
+        logger.warn('Dropped non-control message in head pulse wrapper', { type, route });
+        return;
+      }
       const inner = parsed.msg as unknown as Message;
       traceEvent({ comp: 'arm', evt: 'APP-HEAD-CONTROL', type: (inner as { type?: string }).type });
       this.handleMessage(inner);
@@ -486,12 +505,20 @@ export class KrakiWSClient {
       // Through the Head from a Tentacle this App is linked to: sent before the
       // switch. Its live, connection-scoped state would land after the link's
       // fresh snapshot and duplicate or revert it; the rest still applies.
-      const sender = parsed.src ?? fragmentSender;
+      const sender = reassembled ? reassembled.sender : parsed.src;
       const valid = this.cryptoGuard(sender, route);
       const routeEpoch = sender ? this.routeEpochs.get(sender) : this.routeChanges;
       const domain = `${route}:${JSON.stringify(sender ?? null)}:${streamId}:${routeEpoch ?? 0}`;
       this.inboundCrypto.run(domain, () => this.encryption.decryptBlob(parsed.blob!, parsed.keys!), (inner) => {
         if (!inner || !valid(inner.deviceId)) return;
+        // The Head stamps the authenticated sender (`src`); the deviceId inside
+        // the ciphertext is the sender's own claim, so it must agree (as on the
+        // Tentacle and iOS/Mac).
+        const claimed: unknown = inner.deviceId;
+        if (sender !== undefined && typeof claimed === 'string' && claimed !== '' && claimed !== sender) {
+          logger.warn('Dropped message whose deviceId does not match its sender', { src: sender, claimed, type: inner.type });
+          return;
+        }
         const changedRoute = routeEpoch !== (sender ? this.routeEpochs.get(sender) : this.routeChanges);
         const staleRoute = changedRoute || (route === 'head' && this.localLink?.isLinked(sender ?? inner.deviceId) === true);
         if (staleRoute && STALE_ROUTE_DROPPED.has(inner.type)) {
@@ -1097,7 +1124,7 @@ export class KrakiWSClient {
       for (const ts of sessions) {
         if (ts.lastSeq <= 0) continue;
         const fromSeq = Math.max(1, ts.lastSeq - WARMUP_PER_SESSION + 1);
-        messageProvider.fetchRange(ts.id, fromSeq, ts.lastSeq, { initial: true });
+        messageProvider.warmRange(ts.id, fromSeq, ts.lastSeq);
       }
       logger.info('warm-up: no preview timestamps, loading all', { sessions: sessions.filter(s => s.lastSeq > 0).length });
       return;
@@ -1131,7 +1158,7 @@ export class KrakiWSClient {
     let used = 0;
     for (const s of eager) {
       const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
-      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      messageProvider.warmRange(s.id, fromSeq, s.lastSeq);
       used += Math.min(s.lastSeq, WARMUP_PER_SESSION);
     }
 
@@ -1141,7 +1168,7 @@ export class KrakiWSClient {
       const cost = Math.min(s.lastSeq, WARMUP_PER_SESSION);
       if (used + cost > WARMUP_BUDGET) break;
       const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
-      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      messageProvider.warmRange(s.id, fromSeq, s.lastSeq);
       used += cost;
       budgetFilled++;
     }
@@ -1318,6 +1345,7 @@ export class KrakiWSClient {
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
           redirectToRelay: (url: string) => this.transport.redirectToRelay(url),
+          currentRelay: this.transport.url,
         });
         break;
 

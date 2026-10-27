@@ -5,6 +5,7 @@
 
 import { randomBytes } from 'crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
+import { keyFingerprint } from './edge-auth-cache.js';
 import { v4 as uuid } from 'uuid';
 import type { AuthMethod, DeviceInfo, DeviceSummary } from '@kraki/protocol';
 import { deviceSummary } from './device-summary.js';
@@ -13,7 +14,7 @@ import type { AuthProvider, AuthUser } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
-import { getLogger } from './logger.js';
+import { authLogField, getLogger } from './logger.js';
 import { suggestRegionForIp } from './ip-geo.js';
 
 export interface LocalAuthBackendOptions {
@@ -58,6 +59,17 @@ export type EdgeJoinOutcome =
   | { ok: true; region: string; relayUrl: string; displayName?: string; serviceKey: string }
   | { ok: false; code: string; message: string };
 
+/** How long a challenge nonce from startChallenge may be answered. Head
+ *  closes a socket that has not authenticated after 15 s, so this is ample. */
+const CHALLENGE_NONCE_TTL_MS = 60_000;
+/** Outstanding challenges per device (parallel reconnects, several edges);
+ *  the oldest is dropped beyond this. */
+const MAX_CHALLENGE_NONCES_PER_DEVICE = 4;
+
+/** Unused pairing tokens a user may hold at once. Each is one `kraki pair`
+ *  (or setup) QR code; creating another beyond this voids the oldest. */
+const MAX_PAIRING_TOKENS_PER_USER = 5;
+
 /** Auth answer for a device of a deleted account: clients sign out and stop
  *  reconnecting instead of re-creating the account. */
 const ACCOUNT_DELETED = {
@@ -75,6 +87,9 @@ export class LocalAuthBackend implements AuthBackend {
   private region?: string;
   private regionUrls: Record<string, string>;
   private pairingTokens = new Map<string, { userId: string; expiresAt: number }>();
+  /** Challenge nonces issued by startChallenge and not yet answered, per
+   *  device: verifyChallenge only accepts one of these, once. */
+  private challengeNonces = new Map<string, Array<{ nonce: string; expiresAt: number }>>();
 
   constructor(options: LocalAuthBackendOptions) {
     this.storage = options.storage;
@@ -106,7 +121,7 @@ export class LocalAuthBackend implements AuthBackend {
 
     const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) {
-      logger.warn('Auth rejected', { method: auth.method, ip: clientIp, reason: resolved.message });
+      logger.warn('Auth rejected', { method: authLogField(auth.method), ip: authLogField(clientIp), reason: authLogField(resolved.message) });
       return resolved;
     }
 
@@ -129,6 +144,10 @@ export class LocalAuthBackend implements AuthBackend {
     if (regionCheck) return regionCheck;
 
     const nonce = randomBytes(32).toString('hex');
+    const now = Date.now();
+    const issued = (this.challengeNonces.get(deviceId) ?? []).filter((c) => c.expiresAt >= now);
+    issued.push({ nonce, expiresAt: now + CHALLENGE_NONCE_TTL_MS });
+    this.challengeNonces.set(deviceId, issued.slice(-MAX_CHALLENGE_NONCES_PER_DEVICE));
     return { ok: true, nonce, userId: device.userId, deviceId };
   }
 
@@ -146,10 +165,29 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'device_not_found', message: 'Device not found' };
     }
 
+    if (!this.consumeChallengeNonce(deviceId, nonce)) {
+      // Not issued here, already used or expired. Retryable on purpose:
+      // clients wipe their pairing on `invalid_signature`, and a nonce lost
+      // to a restart of this process must only cost a reconnect.
+      logger.warn('Challenge-response auth with an unknown nonce', { deviceId });
+      return { ok: false, code: 'service_unavailable', message: 'Challenge expired, please retry' };
+    }
+
     const publicKeyPem = importPublicKey(device.publicKey);
     const valid = verifyChallengeSignature(nonce, signature, publicKeyPem);
     if (!valid) {
-      logger.warn('Challenge-response auth failed', { deviceId });
+      // Which keys were involved, without the keys: a client that signed with
+      // a different key than it registered (e.g. process-local keys swapped
+      // in mid-handshake) shows a presented encryption key differing too.
+      logger.warn('Challenge-response auth failed', {
+        deviceId,
+        signingKeyFp: keyFingerprint(device.publicKey),
+        storedEncryptionKeyFp: device.encryptionKey ? keyFingerprint(device.encryptionKey) : undefined,
+        presentedEncryptionKeyFp: encryptionKey ? keyFingerprint(encryptionKey) : undefined,
+        nonceFp: keyFingerprint(nonce).slice(0, 12),
+        signatureLength: signature.length,
+        headRegion,
+      });
       return { ok: false, code: 'invalid_signature', message: 'Invalid signature' };
     }
 
@@ -190,6 +228,12 @@ export class LocalAuthBackend implements AuthBackend {
   }
 
   createPairingToken(userId: string): { token: string; expiresIn: number } {
+    // Keep at most MAX_PAIRING_TOKENS_PER_USER outstanding: drop the oldest
+    // (the Map keeps insertion order).
+    const outstanding = [...this.pairingTokens].filter(([, data]) => data.userId === userId);
+    for (const [old] of outstanding.slice(0, Math.max(0, outstanding.length - MAX_PAIRING_TOKENS_PER_USER + 1))) {
+      this.pairingTokens.delete(old);
+    }
     const token = `pt_${randomBytes(32).toString('hex')}`;
     this.pairingTokens.set(token, {
       userId,
@@ -207,6 +251,41 @@ export class LocalAuthBackend implements AuthBackend {
     const device = this.storage.getDevice(deviceId);
     if (!device || device.userId !== userId) return false;
     return this.storage.setDeviceDisplayName(deviceId, displayName);
+  }
+
+  /**
+   * Whether each device may still sign in at `headRegion`: `ok`,
+   * `unknown_device` (removed, or no signing key), `account_deleted`,
+   * `wrong_region` (with `redirects[id]`), or `key_changed` (the edge holds
+   * another account or signing key for it than this service). Edges that
+   * accept known devices locally (EdgeAuthCache) poll this for revocations.
+   * Null-prototype maps: device ids are caller-supplied.
+   */
+  deviceStatuses(
+    devices: Array<{ id: string; userId?: string; keyFingerprint?: string }>,
+    headRegion?: string,
+  ): { statuses: Record<string, string>; redirects: Record<string, string> } {
+    const statuses: Record<string, string> = Object.create(null);
+    const redirects: Record<string, string> = Object.create(null);
+    for (const { id, userId, keyFingerprint: fingerprint } of devices) {
+      if (this.storage.isDeletedDevice(id)) { statuses[id] = 'account_deleted'; continue; }
+      const device = this.storage.getDevice(id);
+      if (!device || !device.publicKey) { statuses[id] = 'unknown_device'; continue; }
+      // Same id, another account: for the edge's copy this device is gone.
+      if (userId !== undefined && userId !== device.userId) { statuses[id] = 'unknown_device'; continue; }
+      if (fingerprint !== undefined && fingerprint !== keyFingerprint(device.publicKey)) {
+        statuses[id] = 'key_changed';
+        continue;
+      }
+      const region = this.checkRegion(device.userId, headRegion);
+      if (region) {
+        statuses[id] = 'wrong_region';
+        if (region.redirect) redirects[id] = region.redirect;
+        continue;
+      }
+      statuses[id] = 'ok';
+    }
+    return { statuses, redirects };
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
@@ -398,12 +477,27 @@ export class LocalAuthBackend implements AuthBackend {
     return { ok: true, region: normalizedRegion, relayUrl: trimmedRelayUrl };
   }
 
-  /** Sweep expired pairing tokens. Called periodically by HeadServer. */
+  /** Sweep expired pairing tokens and challenge nonces. Called periodically by HeadServer. */
   sweepPairingTokens(): void {
     const now = Date.now();
     for (const [token, data] of this.pairingTokens) {
       if (now > data.expiresAt) this.pairingTokens.delete(token);
     }
+    for (const [deviceId, issued] of this.challengeNonces) {
+      const live = issued.filter((c) => c.expiresAt >= now);
+      if (live.length) this.challengeNonces.set(deviceId, live);
+      else this.challengeNonces.delete(deviceId);
+    }
+  }
+
+  /** Remove `nonce` from the device's issued challenges; whether it was there and unexpired. */
+  private consumeChallengeNonce(deviceId: string, nonce: string): boolean {
+    const issued = this.challengeNonces.get(deviceId);
+    const index = issued?.findIndex((c) => c.nonce === nonce) ?? -1;
+    if (!issued || index < 0) return false;
+    const [challenge] = issued.splice(index, 1);
+    if (!issued.length) this.challengeNonces.delete(deviceId);
+    return challenge.expiresAt >= Date.now();
   }
 
   // ── Private helpers ───────────────────────────────────

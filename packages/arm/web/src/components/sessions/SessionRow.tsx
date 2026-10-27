@@ -125,7 +125,7 @@ export const SessionRow = memo(function SessionRow({
           {session.model && <span className="ksr-model">{modelDisplayName(session.model, deviceAgents, session.agent)}</span>}
         </span> : <SessionCardMetadata machine={machine} model={session.model ? modelDisplayName(session.model, deviceAgents, session.agent) : undefined} effort={session.reasoningEffort ? t(`row.effort.${session.reasoningEffort}`, { defaultValue: session.reasoningEffort }) : undefined} />}
         <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
-          <span className="ksr-status-slot"><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
+          <span className="ksr-status-slot" data-status={pending?.status ?? status}><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText
             ? <span className="ksr-preview">{previewText}</span>
             : <span className="ksr-preview is-empty">{t('row.created')}</span>}

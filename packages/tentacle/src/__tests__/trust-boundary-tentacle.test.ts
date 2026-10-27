@@ -52,7 +52,7 @@ interface Sent { payload: Record<string, unknown>; target?: string | string[] }
 interface PrivateClient {
   ws: unknown;
   handleMessage(msg: Record<string, unknown>): void;
-  handlePulseDelivered(json: string, sender?: string, route?: 'head' | 'link'): void;
+  handlePulseDelivered(json: string, reassembled?: { sender: string | undefined }, route?: 'head' | 'link'): void;
   onLocalDelivered(id: string, json: string): void;
   ensureLocalLink(): void;
   updateConsumerKeys(devices: unknown[]): void;
@@ -282,6 +282,33 @@ describe('Tentacle command acceptance at every inbound route', () => {
     if (route === 'direct') env.control({ type: 'unicast', ...payload }); else env.deliver(payload);
     await flush();
     expect(env.adapter.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('Fragment sender binding (Head route)', () => {
+  it('a fragmented Head wrapper from a device is not Head control', () => {
+    const { env, phone } = paired();
+    // Each part has no `from`, so the Head stamps and forwards it.
+    for (const part of fragments({ from: '@head', msg: { type: 'device_removed', deviceId: phone.id } })) env.deliver(part, 'dev_rogue');
+    expect(env.client.deviceTrust!.isTrusted(phone.id)).toBe(true);
+  });
+
+  it('a reassembled payload cannot claim another sender with its own src', async () => {
+    const { env, phone } = paired();
+    // A signed command of the phone, fragmented by another device that names
+    // the phone as `src` inside: the Head stamped the parts with the rogue.
+    for (const part of fragments({ ...wire(env, signed(env, phone, evil)), src: phone.id })) env.deliver(part, 'dev_rogue');
+    await flush();
+    expect(env.adapter.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('parts stamped by another sender never complete a set with the same id', async () => {
+    const { env, phone } = paired();
+    const parts = fragments(wire(env, signed(env, phone, evil)));
+    // A rogue device pre-fills every part but the first under the same id.
+    for (const part of parts.slice(1)) env.deliver({ ...part, d: 'x'.repeat(part.d.length) }, 'dev_rogue');
+    for (const part of parts) env.deliver(part, phone.id);
+    await vi.waitFor(() => expect(env.adapter.sendMessage).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -81,6 +81,18 @@ final class VoiceTrackerTests: XCTestCase {
         return t
     }
 
+    func testAFinalWithNoTextIsFlagged() throws {
+        // Log audit 2026-10-22: a 50 s recording ended "final" with no text.
+        let t = tracker()
+        t.begin(warm: true)
+        t.stateChanged("recording")
+        clock += 50; t.stateChanged("finishing")
+        clock += 0.2; t.finalReceived(textLength: 0, correctionConfirmed: false); t.stateChanged("idle")
+        let s = try XCTUnwrap(t.summaries.first)
+        XCTAssertEqual(s.outcome, .final)
+        XCTAssertEqual(s.cause, "empty_transcript")
+    }
+
     func testSuccessfulRecordingTimesEachStep() throws {
         let t = tracker()
         t.begin(warm: false)

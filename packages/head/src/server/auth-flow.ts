@@ -5,15 +5,28 @@ import { metrics } from '../metrics.js';
 import type { AuthMessage, AuthErrorCode, DeviceSummary } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
-import { getLogger } from '../logger.js';
+import { authLogField, getLogger } from '../logger.js';
 import { trace } from '../trace.js';
-import type { AuthBackend, AuthOutcome } from '../auth-backend.js';
+import type { AuthBackend, AuthOutcome, AuthResult } from '../auth-backend.js';
 import type { HeadServer } from '../server.js';
+import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { broadcastDeviceJoined, getDeviceSummaries } from './presence.js';
-import { publicPreferences, type ClientState } from './shared.js';
+import { CHALLENGE_TTL_MS, HEAD_FEATURES, publicPreferences, type ClientState } from './shared.js';
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
   metrics().authFailed(code);
+  const state = server.clients.get(ws);
+  const throttle = server.authFailureLog.take(state?.ip ?? 'unknown');
+  if (throttle) {
+    getLogger().info('Auth failed', {
+      code,
+      ip: authLogField(state?.ip),
+      method: authLogField(state?.authMethod),
+      deviceId: authLogField(deviceId ?? state?.deviceId ?? state?.authDeviceId),
+      reason: authLogField(message),
+      ...throttle,
+    });
+  }
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
   }
@@ -28,18 +41,25 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
   if (state.authInFlight || state.pendingNonce) {
     // Ignored rather than answered with auth_error: clients treat auth
     // errors as credential failures, and this one is just a duplicate.
-    logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
+    logger.warn('Ignoring duplicate auth while one is in progress', { ip: authLogField(state.ip) });
     return;
   }
   state.authInFlight = true;
+  state.authTiming = { startedAt: Date.now() };
+  state.authMethod = auth.method;
+  state.authDeviceId = auth.method === 'challenge' ? auth.deviceId : msg.device.deviceId;
   try {
     if (auth.method === 'challenge') {
       // Challenge is multi-step — start here, verify in handleChallengeResponse
+      const challengeStart = performance.now();
       const result = await server.authBackend.startChallenge(
         auth.deviceId,
         msg.device.encryptionKey,
         server.options.region,
+        msg.device.publicKey,
       );
+      state.authTiming.challengeMs = Math.round(performance.now() - challengeStart);
+      metrics().authStages.challenge.observe(state.authTiming.challengeMs);
       if (!socketStillAuthenticating(server, ws, state)) return;
       if (!result.ok) {
         sendAuthError(server, ws, result.code as AuthErrorCode, result.message,
@@ -47,16 +67,21 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
         return;
       }
       state.pendingNonce = result.nonce;
+      state.pendingNonceAt = Date.now();
       state.pendingDeviceId = result.deviceId;
       state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
       state.pendingAuthMethod = 'challenge';
-      logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
+      logger.debug('Issuing auth challenge', { deviceId: authLogField(auth.deviceId) });
       ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
+      state.authTiming.challengeSentAt = Date.now();
       return;
     }
 
     const renameClock = server.renameClock;
+    const tokenStart = performance.now();
     const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
+    state.authTiming.tokenMs = Math.round(performance.now() - tokenStart);
+    metrics().authStages.token.observe(state.authTiming.tokenMs);
     if (!socketStillAuthenticating(server, ws, state)) return;
     handleBackendAuthResult(server, ws, state, result, renameClock);
   } finally {
@@ -76,8 +101,10 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
   const deviceId = state.pendingDeviceId;
   const nonce = state.pendingNonce;
   const pendingInfo = state.pendingDeviceInfo;
+  const issuedAt = state.pendingNonceAt;
 
   state.pendingNonce = undefined;
+  state.pendingNonceAt = undefined;
   state.pendingDeviceId = undefined;
   state.pendingDeviceInfo = undefined;
 
@@ -85,14 +112,25 @@ export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state
     sendAuthError(server, ws, 'no_pending_challenge', 'No pending challenge');
     return;
   }
+  // A socket kept alive on the login screen must not answer an old
+  // challenge. Retryable: the client signs in again with a fresh one.
+  if (issuedAt !== undefined && Date.now() - issuedAt > CHALLENGE_TTL_MS) {
+    sendAuthError(server, ws, 'service_unavailable', 'Challenge expired, sign in again');
+    return;
+  }
 
   state.authInFlight = true;
   const renameClock = server.renameClock;
+  if (state.authTiming?.challengeSentAt) state.authTiming.signMs = Date.now() - state.authTiming.challengeSentAt;
+  const verifyStart = performance.now();
   server.authBackend.verifyChallenge(
     deviceId, nonce, msg.signature,
     pendingInfo?.encryptionKey,
     server.options.region,
   ).then(result => {
+    const verifyMs = Math.round(performance.now() - verifyStart);
+    metrics().authStages.verify.observe(verifyMs);
+    if (state.authTiming) state.authTiming.verifyMs = verifyMs;
     if (!socketStillAuthenticating(server, ws, state)) return;
     handleBackendAuthResult(server, ws, state, result, renameClock);
   }).catch(err => {
@@ -130,6 +168,19 @@ export function handleBackendAuthResult(
     return;
   }
 
+  // An account deleted through this edge tombstones its devices: an
+  // account-service answer that was already on its way must not bring one
+  // back (e.g. a first pairing completing right after the deletion).
+  if (server.storage.isDeletedDevice(result.deviceId)) {
+    sendAuthError(server, ws, 'account_deleted', 'This Kraki account was deleted.');
+    return;
+  }
+  // The account service now says this device id belongs to another account
+  // (removed and registered again elsewhere). This edge's mirror and Pulse
+  // state are the old account's: retire them before the new owner is
+  // registered, or routing would still treat it as the old account's device.
+  retireForeignMirror(server, result.deviceId, result.userId);
+
   // Register connection
   state.authenticated = true;
   state.authenticatedAt = Date.now();
@@ -142,16 +193,67 @@ export function handleBackendAuthResult(
   trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
   metrics().inc('auth.ok');
 
+  const timing = state.authTiming;
+  const totalMs = timing ? Date.now() - timing.startedAt : undefined;
+  if (totalMs !== undefined) metrics().authStages.total.observe(totalMs);
+  const summary = result.devices?.find((d) => d.id === result.deviceId);
+  const device = summary ?? server.storage.getDevice(result.deviceId);
   logger.info('Device authenticated (via backend)', {
     deviceId: result.deviceId,
+    ...(device && { role: device.role, ...(device.kind && { kind: device.kind }) }),
     user: result.user.login,
     method: result.authMethod,
     ip: state.ip,
+    ...(result.local && { local: true }),
+    // Where the auth time went: backend steps vs the client's signing round trip.
+    ...(timing && { ms: { total: totalMs, challenge: timing.challengeMs, sign: timing.signMs, verify: timing.verifyMs, token: timing.tokenMs } }),
   });
+  state.authTiming = undefined;
 
-  // Mirror user + devices into local storage so edge-local operations
-  // (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth
-  // is delegated to a remote backend.
+  // Accepted from this edge's own copy: the local mirror is already what the
+  // account service said at the last remote sign-in; re-mirroring the
+  // cached list could revert a rename made here since.
+  if (!result.local) mirrorAuthResult(server, result, renameClockAtStart);
+
+  completeAuthHandshake(server, ws, {
+    deviceId: result.deviceId,
+    userId: result.userId,
+    user: result.user,
+    authMethod: result.authMethod,
+    devices: result.local ? undefined : result.devices,
+    githubClientId: result.githubClientId,
+    vapidPublicKey: result.vapidPublicKey,
+  });
+}
+
+/** See handleBackendAuthResult: a mirrored device now owned by another account. */
+export function retireForeignMirror(server: HeadServer, deviceId: string, userId: string): void {
+  const local = server.storage.getDevice(deviceId);
+  if (!local || local.userId === userId) return;
+  getLogger().warn('Device moved to another account; retiring the old mirror', { deviceId });
+  const previous = server.connections.get(deviceId);
+  if (previous) {
+    // A socket still signed in as the old owner: close it outright.
+    server.connections.delete(deviceId);
+    server.userByDevice.delete(deviceId);
+    server.clients.delete(previous);
+    try { previous.terminate(); } catch { /* gone */ }
+  }
+  server.storage.deleteDevice(deviceId);
+  server.storage.deletePushTokensForDevice(deviceId);
+  server.pulseHub.forgetDevice(deviceId);
+  server.deviceRenamedAt.delete(deviceId);
+  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrustUnlessOwnedBy(deviceId, userId);
+}
+
+/**
+ * Mirror user + devices into local storage so edge-local operations
+ * (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth is
+ * delegated to a remote backend. May rewrite `result.devices` entries renamed
+ * here after `renameClockAtStart`.
+ */
+export function mirrorAuthResult(server: HeadServer, result: AuthResult, renameClockAtStart: number): void {
+  const logger = getLogger();
   try {
     server.storage.upsertUser(
       result.user.id, result.user.login, result.user.provider, result.user.email,
@@ -193,16 +295,6 @@ export function handleBackendAuthResult(
   } catch (err) {
     logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
   }
-
-  completeAuthHandshake(server, ws, {
-    deviceId: result.deviceId,
-    userId: result.userId,
-    user: result.user,
-    authMethod: result.authMethod,
-    devices: result.devices,
-    githubClientId: result.githubClientId,
-    vapidPublicKey: result.vapidPublicKey,
-  });
 }
 
 /**
@@ -300,6 +392,7 @@ export function completeAuthHandshake(
     vapidPublicKey: params.vapidPublicKey ?? server.getVapidPublicKey(),
     relayVersion: server.options.version,
     pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+    features: HEAD_FEATURES,
     // Apps only: a tentacle has no use for the user's word list.
     ...(deviceRole === 'app' && { voiceVocabulary: server.storage.getVoiceVocabulary(params.userId) }),
     ...(server.getVoiceCapability() && { voice: server.getVoiceCapability() }),

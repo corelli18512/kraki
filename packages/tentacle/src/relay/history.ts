@@ -15,7 +15,6 @@ export function handleSessionReplay(client: RelayClient, requesterDeviceId: stri
   }
 
   const logged = client.sessionManager.getMessagesAfterSeq(sessionId, afterSeq, limit);
-  logger.info({ requesterDeviceId, sessionId, afterSeq, limit, count: logged.length }, 'Replaying session messages (batch)');
 
   // Parse logged messages into ProducerMessage objects.
   // Filter out transient types that may exist in older logs — they don't
@@ -47,13 +46,14 @@ export function handleSessionReplay(client: RelayClient, requesterDeviceId: stri
       totalLastSeq: meta?.lastSeq ?? replayedLastSeq,
     },
   };
-  client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  const bytes = client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  logger.info({ requesterDeviceId, sessionId, afterSeq, limit, count: logged.length, bytes, transport: client.transportTo(requesterDeviceId) }, 'Replaying session messages (batch)');
 }
 
 /**
  * Handle a turn-aware session messages request.
  */
-export function handleSessionMessages(client: RelayClient, requesterDeviceId: string, sessionId: string, beforeSeq: number | undefined): void {
+export function handleSessionMessages(client: RelayClient, requesterDeviceId: string, sessionId: string, beforeSeq: number | undefined, afterSeq?: number): void {
   const requesterKey = client.consumerKeys.get(requesterDeviceId);
   if (!requesterKey) {
     logger.warn({ requesterDeviceId }, 'Session messages requested but no encryption key for requester');
@@ -92,6 +92,12 @@ export function handleSessionMessages(client: RelayClient, requesterDeviceId: st
   if (endSeqExclusive - startSeq > HARD_CAP) {
     startSeq = endSeqExclusive - HARD_CAP;
   }
+  // A head request from a device that already has everything through
+  // `afterSeq`: only what it is missing (a reconnect typically misses 1–2
+  // messages, while the latest turn is ~100).
+  const delta = beforeSeq === undefined && typeof afterSeq === 'number' && Number.isInteger(afterSeq)
+    && afterSeq >= 0 && afterSeq + 1 > startSeq;
+  if (delta) startSeq = Math.min(afterSeq + 1, endSeqExclusive);
 
   const endSeqInclusive = endSeqExclusive - 1;
   const logged = client.sessionManager
@@ -119,15 +125,18 @@ export function handleSessionMessages(client: RelayClient, requesterDeviceId: st
       sessionId,
       messages: parsed,
       firstSeq: parsed.length > 0 ? parsed[0].seq as number : startSeq,
-      lastSeq: parsed.length > 0 ? (parsed.at(-1) as Record<string, unknown>).seq as number : startSeq - 1,
+      // Nothing new (or only seqs clients never store): report the head so
+      // the requester counts itself caught up.
+      lastSeq: parsed.length > 0 ? (parsed.at(-1) as Record<string, unknown>).seq as number
+        : (delta ? endSeqInclusive : startSeq - 1),
       containsHead: endSeqInclusive >= headSeq,
     },
   };
+  const bytes = client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   logger.info(
-    { requesterDeviceId, sessionId, beforeSeq, startSeq, endSeqInclusive, count: parsed.length },
+    { requesterDeviceId, sessionId, beforeSeq, afterSeq, startSeq, endSeqInclusive, count: parsed.length, bytes, transport: client.transportTo(requesterDeviceId) },
     'Replied to turn-aware session messages request',
   );
-  client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
 }
 
 /**
@@ -227,11 +236,11 @@ export function handleSessionMessagesRange(
       truncated,
     },
   };
+  const bytes = client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   logger.info(
-    { requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq, count: parsed.length, truncated },
+    { requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq, count: parsed.length, truncated, bytes, transport: client.transportTo(requesterDeviceId) },
     'Replied to range session messages request',
   );
-  client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
 }
 
 /**
@@ -267,8 +276,8 @@ export function handleTurnTrace(
     timestamp: new Date().toISOString(),
     payload: { sessionId, bubbleSeq, entries, complete },
   };
-  logger.info({ requesterDeviceId, sessionId, bubbleSeq, count: entries.length, complete }, 'Replied to turn trace request');
-  client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  const bytes = client.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  logger.info({ requesterDeviceId, sessionId, bubbleSeq, count: entries.length, complete, bytes, transport: client.transportTo(requesterDeviceId) }, 'Replied to turn trace request');
 }
 
 export function handleSetSessionSubscription(client: RelayClient, requesterDeviceId: string, sessionId: string | null, requestId?: string): void {

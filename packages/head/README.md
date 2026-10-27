@@ -39,7 +39,9 @@ Start a local relay:
 npx @kraki/head
 ```
 
-By default the relay listens on `ws://localhost:4000` and stores user/device data in `kraki-head.db`.
+By default the relay uses `open` auth, listens on `ws://127.0.0.1:4000` (this machine only) and stores user/device data in `kraki-head.db`.
+
+`open` auth without a shared key refuses to listen on a non-loopback `HOST` / `--host`, because anyone who reached it could drive your computers. To accept other machines, set `OPEN_SHARED_KEY` (computers send it from `~/.kraki/channel.key`) or use `--auth github` / `--auth apikey`. See the [self-hosting guide](../../docs/self-hosting.md#reaching-the-relay-from-other-machines).
 
 Enable GitHub login for the web app:
 
@@ -77,17 +79,24 @@ deployments do not require a Head restart. See Monitor's migration instructions.
   naming the failed check. Point uptime monitors here.
 - `GET /internal/metrics` — counters and timings for independently managed
   host monitoring: connections, auth ok/failed by code,
-  pulse frames and bytes in/out, forwarded messages, push sent/failed, and how long
-  the relay takes to handle one frame (histogram). Counts only: no device, user, IP
+  pulse frames and bytes in/out, forwarded messages, push sent/failed, account API
+  requests, and how long the relay takes to handle one frame (histogram). Counts only: no device, user, IP
   or payload data. Answers **direct loopback requests only**; anything that came
   through a reverse proxy (any forwarding header) or from another address gets 404.
-- The log carries a `health` line every 30 s (connections, memory, durable rows,
-  event-loop delay `evlLagMs` p99 / `evlMaxMs`).
+- The log carries a `health` line (connections, memory, durable rows, event-loop
+  delay `evlLagMs` p99 / `evlMaxMs` beyond the 20 ms sampling interval, `upSec`, and
+  on the account service `apiReq` / `apiErr` since the previous line). It is sampled
+  every 30 s and logged when connections, endpoints, durable rows or RSS (±10 MB)
+  change or the loop stalled ≥ 100 ms, otherwise every 5 minutes.
+- The account service logs one `Account API request` line per request (status,
+  `ms`, caller, device) under the `X-Kraki-Request-Id` an edge sends and logs with
+  its own outcome.
 
 ## Useful options
 
 ```bash
 kraki-relay --port 8080
+OPEN_SHARED_KEY=<secret> kraki-relay --host 0.0.0.0
 kraki-relay --db /path/to/kraki-head.db
 kraki-relay --auth open
 kraki-relay --auth github

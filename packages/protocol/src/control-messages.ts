@@ -43,6 +43,18 @@ export interface AuthOkMessage {
    * pace large uploads by acknowledgements. Absent on older relays.
    */
   pulseAckBytes?: number;
+  /**
+   * Optional Head capabilities. `app_visibility`: the Head accepts
+   * `{ type: 'app_visibility', visible }` and notifies a hidden app through
+   * push even while its socket is still open. Absent on older relays.
+   */
+  features?: readonly string[];
+}
+
+/** App → Head: the app left (or returned to) the screen but keeps its socket. */
+export interface AppVisibilityMessage {
+  type: 'app_visibility';
+  visible: boolean;
 }
 
 export type AuthErrorCode =
@@ -68,6 +80,25 @@ export interface AuthErrorMessage {
   message: string;
   /** When code is 'wrong_region', the correct relay URL to connect to */
   redirect?: string;
+}
+
+/**
+ * Whether to follow a relay's `wrong_region` redirect. From an official
+ * relay only to another official one (`wss://kraki.chat` or a subdomain); a
+ * self-hosted relay may send its users elsewhere, but only over TLS (plain
+ * `ws://` only to this machine). The device authenticates at the redirect
+ * target, so a hostile redirect would hand its connection to anyone.
+ */
+export function isAcceptableRegionRedirect(current: string, redirect: string): boolean {
+  let to: URL;
+  let from: URL | null = null;
+  try { to = new URL(redirect); } catch { return false; }
+  try { from = new URL(current); } catch { /* unknown current relay */ }
+  const official = (u: URL) => u.hostname === 'kraki.chat' || u.hostname.endsWith('.kraki.chat');
+  const loopback = (u: URL) => ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
+  if (to.protocol !== 'wss:' && !(to.protocol === 'ws:' && loopback(to))) return false;
+  if (from && official(from)) return to.protocol === 'wss:' && official(to);
+  return true;
 }
 
 export interface AuthChallengeMessage {

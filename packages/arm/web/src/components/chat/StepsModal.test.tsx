@@ -12,6 +12,10 @@ vi.mock('../../hooks/useAttachment', () => ({
   useAttachmentText: () => attachment.result ?? ({ status: 'ready', text: 'First report line\nMEDIA-SUB\nLast report line', error: null }),
 }));
 
+const toolAction = (toolCallId: string) => ({
+  type: 'tool_start', payload: { toolName: 'bash', headline: toolCallId, toolCallId },
+}) as never;
+
 const message = { type: 'agent_message', seq: 2, sessionId: 's', deviceId: 'd', timestamp: '', payload: { content: 'Done' } } as ChatMessage;
 
 beforeEach(() => {
@@ -59,6 +63,7 @@ describe('StepsModal — turn identity', () => {
         useStore.getState().appendMessage('s', { ...message, type: 'idle', seq: 6, payload: {} } as ChatMessage);
         useStore.getState().appendMessage('s', { ...prompt, seq: 7, payload: { content: 'B' } } as ChatMessage);
         useStore.getState().appendMessage('s', { ...narration, seq: 7.5, payload: { content: 'B steps' } } as ChatMessage);
+        useStore.getState().setCardAction('s', toolAction('t-b'));
         vi.advanceTimersByTime(2500);
       });
       expect(screen.getByText('Hydrated A steps')).toBeInTheDocument();
@@ -97,7 +102,10 @@ describe('StepsModal — turn identity', () => {
       expect(screen.getByText('A steps')).toBeInTheDocument();
       expect(screen.getByText('More A steps')).toBeInTheDocument();
       expect(screen.queryByText('B steps')).not.toBeInTheDocument();
-      act(() => vi.advanceTimersByTime(2500));
+      act(() => {
+        useStore.getState().setCardAction('s', toolAction('t-b'));
+        vi.advanceTimersByTime(2500);
+      });
       expect(request.mock.calls).toEqual([['s', 1], ['s', 1]]);
 
       act(() => messageProvider.handleTurnTraceBatch('s', 1, [
@@ -111,6 +119,62 @@ describe('StepsModal — turn identity', () => {
       expect(screen.queryByText('A refreshed steps')).not.toBeInTheDocument();
       expect(request).toHaveBeenLastCalledWith('s', 4);
       reopened.unmount();
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      vi.useRealTimers();
+      await vi.dynamicImportSettled();
+    }
+  });
+});
+
+describe('StepsModal — live refresh (log audit: unchanged trace re-pulled every 2.5 s)', () => {
+  const prompt = { ...message, type: 'user_message', seq: 1, payload: { content: 'A' } } as ChatMessage;
+  const narration = { ...message, type: 'agent_narration', seq: 1.5, payload: { content: 'A steps' } } as ChatMessage;
+
+  it('does not re-pull while the turn shows no new activity', async () => {
+    vi.useFakeTimers();
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    useStore.setState({ messages: new Map([['s', [prompt, narration]]]) });
+    act(() => useStore.getState().setCardAction('s', toolAction('t-1')));
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(request.mock.calls).toEqual([['s', 1]]);
+      // The card's draft text streaming is not trace activity either.
+      act(() => {
+        useStore.getState().applyCardMessage('s', 'still thinking', false);
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(request.mock.calls).toEqual([['s', 1]]);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      vi.useRealTimers();
+      await vi.dynamicImportSettled();
+    }
+  });
+
+  it('re-pulls on new tool activity, coalescing a burst to one pull per 2.5 s', async () => {
+    vi.useFakeTimers();
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    useStore.setState({ messages: new Map([['s', [prompt, narration]]]) });
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      act(() => vi.advanceTimersByTime(3_000));
+      act(() => useStore.getState().setCardAction('s', toolAction('t-1')));
+      expect(request).toHaveBeenCalledTimes(2); // open + immediate refresh
+      act(() => {
+        useStore.getState().setCardAction('s', toolAction('t-2'));
+        useStore.getState().setCardAction('s', toolAction('t-3'));
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+      act(() => vi.advanceTimersByTime(1_500));
+      expect(request).toHaveBeenCalledTimes(3); // one trailing pull for the burst
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls.every(([sid, seq]) => sid === 's' && seq === 1)).toBe(true);
     } finally {
       view.unmount();
       request.mockRestore();

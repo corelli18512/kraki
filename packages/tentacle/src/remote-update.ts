@@ -532,6 +532,8 @@ export interface RemoteUpdaterOptions {
   refresh?: () => Promise<void>;
   /** Sessions with a turn running right now. */
   runningSessions: () => number;
+  /** Their ids, for the log of an update that interrupts them. */
+  runningSessionIds?: () => string[];
   emit: (p: UpdateProgress) => void;
   stage?: typeof stageUpdate;
   launch?: typeof launchApplier;
@@ -546,7 +548,7 @@ export class RemoteUpdater {
 
   get inProgress(): boolean { return this.busy; }
 
-  async request(requestId: string, when?: 'now' | 'idle'): Promise<void> {
+  async request(requestId: string, when?: 'now' | 'idle', fromDeviceId?: string): Promise<void> {
     // The periodic check may be hours old: install the newest release, not
     // whatever was newest then (a 0.2.75 answer installed 0.2.75 after 0.2.77
     // was out). A failed check keeps the previous answer.
@@ -557,7 +559,8 @@ export class RemoteUpdater {
     if (!s?.remote) { fail('This computer can’t be updated remotely.'); return; }
     if (!s.latest) { fail('Already up to date.'); return; }
     const running = this.o.runningSessions();
-    log(`request ${requestId}: ${s.current} → ${s.latest} (${when ?? 'ask'}, ${running} running)`);
+    // Any app device of the account may ask: record which one.
+    log(`request ${requestId} from ${fromDeviceId ?? 'unknown device'}: ${s.current} → ${s.latest} (${when ?? 'ask'}, ${running} running)`);
     if (running > 0 && !when) { this.o.emit({ phase: 'busy', requestId, runningSessions: running, from: s.current, to: s.latest }); return; }
     this.busy = true;
     try {
@@ -581,6 +584,9 @@ export class RemoteUpdater {
       });
       this.o.emit({ phase: 'installing', requestId, from: s.current, to: s.latest });
       log(`staged ${plan.method} ${plan.from} → ${plan.to}`);
+      // 'now' with turns running: the restart ends them. Say which.
+      const interrupted = this.o.runningSessionIds?.() ?? [];
+      if (interrupted.length > 0) log(`request ${requestId}: restarting interrupts ${interrupted.length} running session(s): ${interrupted.join(', ')}`);
       (this.o.launch ?? launchApplier)(plan);
       // The applier stops this daemon shortly; stay busy until then.
     } catch (err) {

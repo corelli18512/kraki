@@ -11,7 +11,7 @@ import { WebSocket } from 'ws';
 import { ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
 import type { AgentCapabilities, ProducerMessage, DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod, BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
-import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
@@ -37,8 +37,32 @@ import { dispatchPushPreview } from './relay/push-preview.js';
 import { latestOpenAttention, restorePendingHumanActions } from './relay/questions.js';
 import { initEventsWatcher, maybeAutoArchive } from './relay/session-commands.js';
 import { resumeDisconnectedSessions } from './relay/session-resume.js';
-import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
+import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect, isHeadAuthNonce } from './relay/shared.js';
 export { SessionResumeError, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
+
+type LocalLinkStatsSnapshot = ReturnType<LocalLinkServer['getStats']> & { head: { frames: number; bytes: number; framesToLinkedApps: number } };
+
+/** Unchanged-peer counters are summarised at most this often. */
+export const LOCAL_LINK_STATS_SUMMARY_MS = 5 * 60_000;
+
+/**
+ * Whether a 'Local link stats' line is worth writing. Logged every 5 s whenever
+ * a counter moved — and heartbeats move them every tick — it was 97 % of
+ * relay-client.log and cut its retention to ~10 days (log audit 2026-10-22).
+ * Now: at once when the linked Apps change or a frame for a linked App went
+ * through the Head, otherwise a summary every 5 minutes if anything moved.
+ */
+export function localLinkStatsLogReason(
+  prev: LocalLinkStatsSnapshot | null,
+  next: LocalLinkStatsSnapshot,
+  msSincePrev: number,
+): 'first' | 'peers' | 'head-to-linked' | 'summary' | null {
+  if (!prev) return 'first';
+  if ([...prev.peers].sort().join() !== [...next.peers].sort().join()) return 'peers';
+  if (next.head.framesToLinkedApps !== prev.head.framesToLinkedApps) return 'head-to-linked';
+  if (msSincePrev < LOCAL_LINK_STATS_SUMMARY_MS) return null;
+  return JSON.stringify(prev) === JSON.stringify(next) ? null : 'summary';
+}
 
 export class RelayClient {
   private ws: WebSocket | null = null;
@@ -50,6 +74,10 @@ export class RelayClient {
   /** Set after the first auth_ok of this process (see resumeDisconnectedSessions). */
   startupSessionsNormalised = false;
   private reconnectAttempts = 0;
+  /** Connection timeline (ms epoch) for the 'Relay connected' / 'WS closed'
+   *  lines: without it reconnect latency was invisible at info level (log
+   *  audit 2026-10-22, PR #577). */
+  private timeline = { connectAt: 0, openAt: 0, authenticatedAt: 0, closedAt: 0, authMethod: '' };
   /** Inputs (session + clientId) this process has admitted. Bounded by the
    *  process lifetime's input count (small strings). */
   admittedInputs = new Set<string>();
@@ -155,6 +183,8 @@ export class RelayClient {
    *  notice or terminal status). Reset with the step counter per user turn. */
   turnHasOutcome = new Set<string>();
   legacyReplayWarned = new Set<string>();
+  /** `type|deviceId` of unknown app message types already warned about. */
+  unknownAppMessageWarned = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
   private reRegisteredKey = false;
@@ -350,6 +380,9 @@ export class RelayClient {
   connect(): void {
     if (this.ws) return;
     this.intentionalDisconnect = false;
+    this.timeline.connectAt = Date.now();
+    this.timeline.openAt = 0;
+    this.timeline.authenticatedAt = 0;
     this.setState('connecting');
 
     // Bound the TCP/TLS/upgrade phase: a black-holed connect (Wi-Fi switch,
@@ -358,6 +391,7 @@ export class RelayClient {
     this.ws = ws;
 
     ws.on('open', () => {
+      this.timeline.openAt = Date.now();
       this.setState('authenticating');
       this.lastActivityAt = Date.now();
       this.startStaleCheck();
@@ -383,6 +417,7 @@ export class RelayClient {
         this.disconnect();
         return;
       }
+      this.timeline.authMethod = auth.method;
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
@@ -424,7 +459,16 @@ export class RelayClient {
       const reasonStr = reason?.toString?.() || '';
       this.stopStaleCheck();
       this.ws = null;
-      logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
+      const t = this.timeline;
+      const closedAt = Date.now();
+      logger.info({
+        code, reason: reasonStr, intentional: this.intentionalDisconnect,
+        // How far this connection got, and for how long.
+        phase: t.authenticatedAt ? 'connected' : t.openAt ? 'authenticating' : 'connecting',
+        ...(t.authenticatedAt ? { connectedForMs: closedAt - t.authenticatedAt } : { attemptMs: closedAt - t.connectAt }),
+        lastActivityAgoMs: closedAt - this.lastActivityAt,
+      }, 'WS closed');
+      if (t.authenticatedAt) t.closedAt = closedAt;
       this.setState('disconnected');
       this.pulse.onDisconnected();
       if (code === ACCOUNT_DELETED_CLOSE_CODE) {
@@ -524,6 +568,8 @@ export class RelayClient {
 
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
+      const authOkAt = Date.now();
+      const attempt = this.reconnectAttempts;
       this.authInfo = msg as unknown as AuthOkMessage;
       this.preferChallengeAuth = true;
       this.reconnectAttempts = 0;
@@ -546,6 +592,7 @@ export class RelayClient {
       this.runAutoArchive();
       this.lastAutoArchiveAt = Date.now();
       this.broadcastSessionList();
+      this.logConnected(authOkAt, attempt);
       return;
     }
 
@@ -607,9 +654,14 @@ export class RelayClient {
     }
 
     if (msg.type === 'auth_challenge') {
+      if (!isHeadAuthNonce(msg.nonce)) {
+        // No reply: the Head's auth deadline closes the socket and we reconnect.
+        logger.warn('Refusing to sign an auth challenge that is not a Head nonce');
+        return;
+      }
       if (this.keyManager && this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
-          const signature = signChallenge(msg.nonce as string, this.keyManager.getKeyPair().privateKey);
+          const signature = signChallenge(msg.nonce, this.keyManager.getKeyPair().privateKey);
           this.ws.send(JSON.stringify({ type: 'auth_response', signature }));
         } catch (err) {
           logger.error({ err }, 'Failed to sign auth challenge');
@@ -939,7 +991,7 @@ export class RelayClient {
   /** Frames this Tentacle put on the Head socket; `framesToLinkedApps` counts
    *  frames addressed to an App that was on the local link at the time. */
   private headTx = { frames: 0, bytes: 0, framesToLinkedApps: 0 };
-  private lastStatsLine = '';
+  private lastStatsLogged: { stats: LocalLinkStatsSnapshot; at: number } | null = null;
 
   /** Local-link counters (for diagnostics/tests); null when not running. */
   getLocalLinkStats(): (ReturnType<LocalLinkServer['getStats']> & { head: { frames: number; bytes: number; framesToLinkedApps: number } }) | null {
@@ -947,13 +999,34 @@ export class RelayClient {
     return stats ? { ...stats, head: { ...this.headTx } } : null;
   }
 
-  private logLocalLinkStats(): void {
+  /** One line per authenticated connection: where the time went. */
+  private logConnected(authOkAt: number, attempt: number): void {
+    const t = this.timeline;
+    const now = Date.now();
+    const devices = this.authInfo?.devices ?? [];
+    logger.info({
+      attempt,
+      authMethod: t.authMethod,
+      connectMs: t.openAt ? t.openAt - t.connectAt : undefined,
+      authMs: t.openAt ? authOkAt - t.openAt : undefined,
+      // Greeting, resume and session_list fan-out after auth_ok.
+      bootstrapMs: now - authOkAt,
+      totalMs: now - t.connectAt,
+      ...(t.closedAt && { downMs: now - t.closedAt }),
+      apps: devices.filter((d) => d.role === 'app').length,
+      appsOnline: devices.filter((d) => d.role === 'app' && d.online).length,
+    }, 'Relay connected');
+    t.authenticatedAt = authOkAt;
+  }
+
+  private logLocalLinkStats(now = Date.now()): void {
     const stats = this.getLocalLinkStats();
     if (!stats) return;
-    const line = JSON.stringify(stats);
-    if (line === this.lastStatsLine) return;
-    this.lastStatsLine = line;
-    logger.info({ localLink: stats }, 'Local link stats');
+    const prev = this.lastStatsLogged;
+    const reason = localLinkStatsLogReason(prev?.stats ?? null, stats, prev ? now - prev.at : Infinity);
+    if (!reason) return;
+    this.lastStatsLogged = { stats, at: now };
+    logger.info({ localLink: stats, reason, ...(prev && { sinceMs: now - prev.at }) }, 'Local link stats');
   }
 
   private ensureLocalLink(): void {
@@ -1309,7 +1382,9 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string, fragmentSender: string | undefined, route: 'head' | 'link'): void {
+  /** `reassembled` is set for a payload rebuilt from fragments: its sender is
+   *  the one stamped on its parts, never a field of its own. */
+  private handlePulseDelivered(payloadJson: string, reassembled: { sender: string | undefined } | undefined, route: 'head' | 'link'): void {
     if (!this.keyManager || !this.authInfo) return;
     let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
@@ -1318,11 +1393,17 @@ export class RelayClient {
       logger.error({ err }, 'Pulse delivered payload parse failed');
       return;
     }
+    if (reassembled && (reassembledPayloadNamesSender(parsed) || isPayloadFragment(parsed))) {
+      logger.warn({ src: reassembled.sender }, 'Dropped reassembled payload that names its own sender');
+      return;
+    }
     if (isPayloadFragment(parsed)) {
-      const whole = this.payloadAssembler.accept(parsed);
-      // Every part of a set is stamped by the head with the same sender; carry
-      // it to the reassembled payload, which itself has no `src`.
-      if (whole !== null) this.handlePulseDelivered(whole, parsed.src, route);
+      // Each part carries the sender the Head (or the local link) stamped on
+      // it; parts are grouped by that sender and the whole is credited to it.
+      const stamp = (parsed as { src?: unknown }).src;
+      const sender = typeof stamp === 'string' ? stamp : undefined;
+      const whole = this.payloadAssembler.accept(parsed, sender);
+      if (whole !== null) this.handlePulseDelivered(whole, { sender }, route);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
@@ -1332,7 +1413,7 @@ export class RelayClient {
     // frames and consumer messages arriving this way are forged and dropped.
     // Head control never arrives over the local link, whole or reassembled.
     if (route === 'link' && parsed.from !== undefined) {
-      logger.warn({ src: fragmentSender }, 'Dropped Head-control wrapper received on the local link');
+      logger.warn({ src: parsed.src }, 'Dropped Head-control wrapper received on the local link');
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET) {
@@ -1344,7 +1425,7 @@ export class RelayClient {
       }
       return;
     }
-    const sender = parsed.src ?? fragmentSender;
+    const sender = reassembled ? reassembled.sender : parsed.src;
     try {
       const decryptStart = process.hrtime.bigint();
       // Decrypt and authenticate. With device trust the signature (checked
@@ -1404,17 +1485,25 @@ export class RelayClient {
     compactPubKey: string,
     msg: Record<string, unknown>,
     durable = false,
-  ): void {
-    if (!this.keyManager) return;
-    if (!this.relayOpen() && !this.localLink?.has(targetDeviceId)) return;
+  ): number {
+    if (!this.keyManager) return 0;
+    if (!this.relayOpen() && !this.localLink?.has(targetDeviceId)) return 0;
 
     try {
-      for (const sealed of this.deviceTrust!.seal(JSON.stringify(msg), [targetDeviceId], () => compactPubKey)) {
+      const plaintext = JSON.stringify(msg);
+      for (const sealed of this.deviceTrust!.seal(plaintext, [targetDeviceId], () => compactPubKey)) {
         this.sendPayload(sealed.payload, targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
       }
+      return Buffer.byteLength(plaintext);
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
+      return 0;
     }
+  }
+
+  /** Which hop a unicast to `deviceId` takes right now (for logs). */
+  transportTo(deviceId: string): 'link' | 'head' {
+    return this.localLink?.has(deviceId) ? 'link' : 'head';
   }
 
   // ── Subscription account usage ───────────────────────
@@ -1447,7 +1536,7 @@ export class RelayClient {
   }
 
   /** Set by the daemon when remote update is wired (remote-update.ts). */
-  onUpdateRequest: ((requestId: string, when?: 'now' | 'idle') => Promise<void>) | null = null;
+  onUpdateRequest: ((requestId: string, when: 'now' | 'idle' | undefined, fromDeviceId: string) => Promise<void>) | null = null;
 
   /** Progress/outcome of a remote update, to every online app. */
   sendUpdateStatus(payload: { phase: DeviceUpdatePhase; requestId?: string; from?: string; to?: string; progress?: number; runningSessions?: number; error?: string }): void {
@@ -1468,8 +1557,12 @@ export class RelayClient {
    *  the session, as it does for a session whose agent already stopped. A
    *  waiting permission does count — it is not persisted. */
   runningSessionCount(): number {
+    return this.runningSessionIds().length;
+  }
+
+  runningSessionIds(): string[] {
     return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active'
-      && !(this.openQuestions.get(s.id)?.size && !this.openPermissions.get(s.id)?.size)).length;
+      && !(this.openQuestions.get(s.id)?.size && !this.openPermissions.get(s.id)?.size)).map((s) => s.id);
   }
 
   private updateInfo: DeviceUpdateInfo | null = null;

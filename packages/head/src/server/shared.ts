@@ -21,19 +21,30 @@ export interface ClientState {
   authenticated: boolean;
   ip?: string;
   isAlive: boolean;
+  /** When the socket opened (ms epoch). */
+  connectedAt?: number;
+  /** The last `auth` attempt's method and device, for failure logs. */
+  authMethod?: string;
+  authDeviceId?: string;
   authenticatedAt?: number;
   /** At most one daily activity write per authenticated app socket/day. */
   foregroundDay?: string;
   pendingNonce?: string;
+  /** When the pending challenge was issued (ms epoch). */
+  pendingNonceAt?: number;
   /** An `auth` / `auth_response` is awaiting its backend. */
   authInFlight?: boolean;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+  /** Auth step timings (ms epoch / durations) for the authenticated log line. */
+  authTiming?: { startedAt: number; challengeMs?: number; challengeSentAt?: number; signMs?: number; verifyMs?: number; tokenMs?: number };
   /** Replaced by a newer socket of the same device: closing, inert. */
   evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
   authTimer?: ReturnType<typeof setTimeout>;
+  /** The auth deadline was already extended once for a backend call. */
+  authDeadlineExtended?: boolean;
 
   // ── Liveness uncertainty (device_pending broadcast) ──
   /** Timestamp when pong grace period expires (null = no pending ping). */
@@ -50,7 +61,14 @@ export interface ClientState {
   bufferedAtPing?: number;
   /** Declared at auth: this client's Pulse accepts progress heartbeats. */
   pulseProgressAck?: boolean;
+  /** An app reported it left the screen but kept its socket for a short
+   *  grace period (`app_visibility`). Still online for delivery, but
+   *  notifications go out as if it were offline. */
+  hidden?: boolean;
 }
+
+/** Capabilities advertised in `auth_ok.features`. */
+export const HEAD_FEATURES = ['app_visibility'] as const;
 
 export interface HeadServerOptions {
   authProviders?: Map<string, AuthProvider>;
@@ -101,6 +119,8 @@ export const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 export const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 export const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
+/** A challenge must be answered within this, whoever issued the nonce. */
+export const CHALLENGE_TTL_MS = 5 * 60_000;
 export const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 export const MAX_MULTICAST_TARGETS = 64;
 /** Send-buffer ceiling per socket before a stalled client is disconnected. */
@@ -120,10 +140,20 @@ export function isValidMessage(msg: unknown): msg is { type: string; [key: strin
   return typeof obj.type === 'string' && obj.type.length > 0;
 }
 
+/** Ceilings for the device fields of an `auth` message, far above real
+ *  values: names are host or model names (renames allow MAX_DEVICE_NAME_LENGTH
+ *  = 64), keys are RSA-4096 SPKI base64 (736 characters, 800 as PEM). */
+export const MAX_AUTH_DEVICE_NAME_LENGTH = 1024;
+export const MAX_AUTH_DEVICE_KEY_LENGTH = 8192;
+
 export function isValidAuth(msg: Record<string, unknown>): boolean {
   if (!msg.device || typeof msg.device !== 'object') return false;
   const dev = msg.device as Record<string, unknown>;
   if (typeof dev.name !== 'string' || typeof dev.role !== 'string') return false;
+  if (dev.name.length > MAX_AUTH_DEVICE_NAME_LENGTH) return false;
+  for (const key of [dev.publicKey, dev.encryptionKey]) {
+    if (typeof key === 'string' && key.length > MAX_AUTH_DEVICE_KEY_LENGTH) return false;
+  }
   if (dev.role !== 'tentacle' && dev.role !== 'app') return false;
   if (!msg.auth || typeof msg.auth !== 'object') return false;
   const auth = msg.auth as Record<string, unknown>;

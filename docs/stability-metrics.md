@@ -23,14 +23,16 @@ Principles:
 - **Other fields**:
   - `attempt`: number of failed retries
   - `gap`: how many messages the current conversation was missing on open
-  - `backgroundMs`: how long the app was in the background (or asleep)
-  - `path`: wifi / cellular / wired / other / none
+  - `backgroundMs`: how long the app was in the background (or asleep), including device sleep (before the 2026-10 audit fix it stopped while the device slept)
+  - `path`: wifi / cellular / wired / other / none; the first answer of the path monitor if the opening started before it (cold openings were always `unknown`)
+  - `cause`: how the last connection lost during this opening ended (same tags as `outage.summary.source`). A drop before the opening is ready belongs to the opening, not to an outage, so on iOS (which reconnects on every return) this is where drops show up
   - `previousExit`: cold only. `unclean` means the previous process died in the foreground — a crash, a hang killed by the system, or a force quit
+  - `kept`: warm only. The signed-in socket survived the background (iOS keeps it about 25 s, see `BackgroundSocketGrace`), so nothing reconnected and every milestone is 0
 - **outcome**: `ready`; `abandoned` (left before ready); `timeout` (not ready after 30 s).
 
 ### `outage.summary`: foreground outage
 Counts only outages while signed in, in the foreground, and not during an "open" process; deliberate background disconnects and sleep do not count.
-- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, etc.
+- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, `auth_reply_timeout` (a sent sign-in got no answer within 5 s, doubling to 20 s), etc. The same tags appear in `ws.state.source`.
 - Durations:
   - `detectMs`: last data received → outage detected (long for half-open connections)
   - `reconnectMs`: detected → re-authenticated
@@ -71,6 +73,7 @@ Counts only outages while signed in, in the foreground, and not during an "open"
   - Service and network: `unavailable`, `offline`, `timeout`, `network`, `gateway`
   - Quota and lease: `quota`, `lease_timeout`, `lease_busy`, `lease_rejected`, `lease_denied_<reason>`
   - Other: `identity_changed`, `config`
+  - `empty_transcript`: with outcome `final` — the recording ended with no text (not a success)
 - Durations:
   - `startMs`: press → capture started, including permission, lease and connection waits
   - `recordMs`: recording length
@@ -92,9 +95,14 @@ Starts when this device's own message comes back from the agent's computer (the 
 "Reply feels slow" splits into: `send.summary.confirmMs` (Kraki round trip) + `reply.summary.firstTextMs` (agent + one hop); stalls point at streaming.
 
 ### `open.summary`: opening a conversation
-Recorded only while online and not during an app-open or outage process.
-- Fields: `firstContentMs`, `viewCurrentMs`, `gap`
+Recorded while online, and also while an app-open or outage record is in progress (then `reconnecting: true`: the wait includes signing in again — "reconnected, opened the chat, Syncing…"). Not recorded offline with no reconnect running.
+- Fields: `firstContentMs`, `viewCurrentMs`, `gap`, `reconnecting`
 - outcome: `current` (caught up), `left` (left midway), `timeout`
+
+### `history.batch`: a catch-up (head) reply arrived
+- `durationMs`: the head request left this device → its reply was handled on the main thread. Compare with the Tentacle's `Replied to turn-aware session messages request` log line to split the Tentacle's share from the network / Head / decrypt queue.
+- `count`: messages in the reply (with `afterSeq` a reconnect usually gets 1–2, not a whole turn).
+- `viewing`: it was the conversation on screen. `attempt`: 0 for the first request, then timeout retries.
 
 ## Proposed targets (first draft; finalize after a week of data)
 
@@ -123,7 +131,7 @@ Produces `/tmp/stability/stability-report.html`, summarized in five sections, wi
 
 ## Release order (important)
 
-Monitor validates against an allowlist: if a batch contains any event, field or value it does not know, it rejects the **whole batch** with 400, and the client deletes a batch that got a 400. Therefore:
+Monitor validates against an allowlist. An event or field it does not know is dropped; a known field (or `sid`) with a value outside its format is dropped from its event and logged by name (`diag dropped invalid values … fields=voice.action.sid`), never by value. Only a malformed batch envelope still gets 400, and the client deletes a batch that got a 400. (Until the 2026-10 audit any bad value rejected the whole batch: 9 batches were lost to the new-session voice draft id as `sid`.) New data is still lost until Monitor knows it, so:
 
 1. **Deploy Monitor first** (`packages/monitor`).
 2. Then release diagnostics clients that emit these events.

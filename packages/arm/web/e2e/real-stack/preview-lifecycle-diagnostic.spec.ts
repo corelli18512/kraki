@@ -41,9 +41,17 @@ function digest(d: Debug, sid: string, enriched = true) {
 }
 
 async function cardText(page: Page, marker: string): Promise<string | null> {
-  const button = page.getByRole('button').filter({ hasText: marker }).first();
-  if (await button.count() === 0) return null;
-  return (await button.innerText()).replace(/\s+/g, ' ').trim();
+  // The session card (sidebar row) whose text has the marker. Its status is
+  // a glyph now, so append it as a word ("waiting", "approval", …) from the
+  // row's data-status. Read in one step: the row re-renders while the
+  // preview changes, and a second lookup could wait for a row that is gone.
+  return page.evaluate((m) => {
+    const row = [...document.querySelectorAll('button.ksr')].find((b) => (b.textContent ?? '').includes(m));
+    if (!row) return null;
+    const text = ((row as HTMLElement).innerText ?? row.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const status = row.querySelector('.ksr-status-slot')?.getAttribute('data-status');
+    return status ? `${text} [${status}]` : text;
+  }, marker);
 }
 
 async function snapshot(page: Page, sid: string, marker: string, label: string) {
@@ -77,15 +85,18 @@ test('preview lifecycle matrix: question, permission, resolution, failure cleanu
     if (state.enriched?.preview?.type !== 'question') failures.push('question open: Tentacle digest is not question');
     if (!state.uiCard?.includes('waiting')) failures.push('question open: sidebar is not waiting');
 
-    // Agent auto-cancels it while this Arm is not subscribed. The enriched
-    // digest has no preview, so Web must remove the old question preview.
+    // Agent auto-cancels it while this Arm is not subscribed. The question
+    // stays on the session's spine as an agent line (6180ce03/8789a89f), so
+    // the digest previews it as one: Web must show it as such, not waiting.
     await control('/questionAutoResolved', { sid: qSid, id: 'q-auto' });
     await expect.poll(async () => (await debug()).openQuestions[qSid]?.length ?? 0).toBe(0);
     await arm.page.waitForTimeout(800);
     state = await snapshot(arm.page, qSid, qText, 'question-auto-resolved-unsubscribed');
     if (state.enriched?.preview?.type === 'question') failures.push('question auto-resolve: Tentacle still reports question');
     if (state.uiCard?.includes('waiting')) failures.push('question auto-resolve: Web retains false waiting');
-    if (state.markerCount > 0) failures.push('question auto-resolve: Web retains stale question text');
+    if (state.enriched?.preview?.type !== 'agent') failures.push('question auto-resolve: digest is not the agent line');
+    // The turn goes on (status "active"); the card shows the line, no attention.
+    if (!state.uiCard?.includes(qText) || /\[(waiting|approval)\]/.test(state.uiCard)) failures.push('question auto-resolve: Web card is not the plain line');
 
     // Refresh must not resurrect stale persisted question preview.
     await arm.page.reload();
@@ -93,7 +104,7 @@ test('preview lifecycle matrix: question, permission, resolution, failure cleanu
     await arm.page.waitForTimeout(800);
     state = await snapshot(arm.page, qSid, qText, 'question-resolved-after-refresh');
     if (state.uiCard?.includes('waiting')) failures.push('question refresh: false waiting resurrected');
-    if (state.markerCount > 0) failures.push('question refresh: stale question text resurrected');
+    if (!state.uiCard?.includes(qText) || /\[(waiting|approval)\]/.test(state.uiCard)) failures.push('question refresh: card is not the plain line');
 
     // 2. Current-session question answered through the real UI. Optimistic
     // answer preview should clear waiting immediately, and authoritative digest
@@ -105,9 +116,9 @@ test('preview lifecycle matrix: question, permission, resolution, failure cleanu
     await arm.page.goto(`${WEB}/session/${answerSid}`);
     await expect.poll(async () => (await debug()).subscriptions[arm.deviceId], { timeout: 15_000 }).toBe(answerSid);
     await control('/question', { sid: answerSid, id: 'q-click', text: answerQuestion, choices: 'choice-one|choice-two' });
-    await expect(arm.page.getByRole('button', { name: 'choice-one' })).toBeVisible({ timeout: 15_000 });
-    await arm.page.getByRole('button', { name: 'choice-one' }).click();
-    await expect.poll(async () => (await control('/answers').then((x) => x.answers as Array<{ answer: string }>)).some((x) => x.answer === 'choice-one')).toBe(true);
+    await expect(arm.page.getByRole('button', { name: 'Answer: choice-one', exact: true })).toBeVisible({ timeout: 15_000 });
+    await arm.page.getByRole('button', { name: 'Answer: choice-one', exact: true }).click();
+    await expect.poll(async () => (await control('/answers').then((x) => x.answers as Array<{ sid: string; answer: string }>)).some((x) => x.sid === answerSid && x.answer === 'choice-one')).toBe(true);
     await arm.page.waitForTimeout(500);
     state = await snapshot(arm.page, answerSid, 'choice-one', 'question-user-answered');
     if (state.enriched?.preview?.type === 'question') failures.push('question answer: Tentacle still reports question');

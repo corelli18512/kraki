@@ -36,6 +36,7 @@ const { WebSocket } = createRequire(new URL('../packages/tentacle/package.json',
 // node resolves it cleanly from the built output (verified). dist is rebuilt in
 // main() before this matters.
 import { RelayClient, SessionManager, AgentAdapter, KeyManager, AttachmentStore } from '../packages/tentacle/dist/index.js';
+import { beginAdapterTurn } from '../packages/tentacle/dist/relay/turns.js';
 import type {
   CreateSessionConfig, SessionInfo, SessionContext, PermissionDecision,
 } from '../packages/tentacle/dist/index.js';
@@ -50,6 +51,11 @@ const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
 const SEED_SESSION_ID = 'realstack-1';
 /** The first tentacle's device id (kept across reconnects and restarts). */
 const TENTACLE1_ID = 'realstack-tentacle-1';
+/** What each mock computer advertises in its device_greeting. Without agents
+ *  the apps show the computer as still "connecting" and gate the composer. */
+const MOCK_CAPABILITIES = {
+  agents: [{ type: 'code' as const, id: 'copilot' as const, models: ['mock-v1'], modelDetails: [{ id: 'mock-v1', name: 'mock-v1', supportsReasoningEffort: false }] }],
+};
 /** Pre-seeded session with >50 messages (for the range-backfill test). */
 const HISTORY_SESSION_ID = 'realstack-history';
 
@@ -100,11 +106,24 @@ class MockAdapter extends AgentAdapter {
   async listModels(): Promise<string[]> { return ['mock-v1']; }
 
   // Simulation helpers (control plane calls these to drive the agent side)
+  /** Agent activity happens inside a turn. A real one is opened by the
+   *  user's input; scripted activity without one opens its own, so the
+   *  agent's later idle ends THAT turn (an idle for a turn already settled is
+   *  ignored as a duplicate, which left questions/permissions open). */
+  private ensureTurn(sid: string) {
+    const client = relay as unknown as { activeInputTurnIds: Map<string, string>; settledAdapterTurnIds: Map<string, string> } | null;
+    if (!client) return;
+    const active = client.activeInputTurnIds.get(sid);
+    if (active === undefined || client.settledAdapterTurnIds.get(sid) === active) {
+      beginAdapterTurn(relay as never, sid);
+    }
+  }
   active(sid: string) {
+    this.ensureTurn(sid);
     sessionManagerForControl?.markActive(sid);
     (relay as unknown as { send: (msg: Record<string, unknown>) => void }).send({ type: 'active', sessionId: sid, payload: {} });
   }
-  msg(sid: string, content: string) { this.onMessage?.(sid, { content }); }
+  msg(sid: string, content: string) { this.ensureTurn(sid); this.onMessage?.(sid, { content }); }
   delta(sid: string, content: string) { this.active(sid); this.onMessageDelta?.(sid, { content }); }
   perm(sid: string, id: string, tool: string, desc: string) {
     this.active(sid);
@@ -149,6 +168,15 @@ function recordHeadControl(client: RelayClient, into: Array<Record<string, unkno
   const original = target.handleMessage.bind(client);
   target.handleMessage = (msg) => { into.push(msg); original(msg); };
 }
+/** Hand a decrypted app message to the tentacle exactly as one arriving
+ *  from an app would be (RelayClient.dispatchAppMessage). `handleMessage` only
+ *  sees relay-level frames; app messages injected there were silently
+ *  ignored, so /armAbort, /armKill, … did nothing. */
+function injectAppMessage(inner: Record<string, unknown>): void {
+  (relay as unknown as { dispatchAppMessage(m: Record<string, unknown>, signed: boolean, toAll?: boolean): void })
+    .dispatchAppMessage(inner, false, false);
+}
+
 /** The head child + its DB path, so `/head/restart` can bring it back on the same DB. */
 let headProcess: ChildProcess | null = null;
 let headDbPath = '';
@@ -246,7 +274,7 @@ async function connectTentacle2(): Promise<void> {
       // Stable deviceId so reconnects reuse the SAME device row (open-auth honors
       // a supplied deviceId, server.ts:1228). Without this, each reconnect mints a
       // fresh dev_<random> and the browser accumulates stale offline duplicates.
-      device: { deviceId: 'realstack-tentacle-2', name: 'RealStack Tentacle 2', role: 'tentacle', kind: 'desktop' },
+      device: { deviceId: 'realstack-tentacle-2', name: 'RealStack Tentacle 2', role: 'tentacle', kind: 'desktop', capabilities: MOCK_CAPABILITIES },
     }, km2);
     recordHeadControl(relay2, headControl.t2);
   }
@@ -296,26 +324,42 @@ async function main(): Promise<void> {
   let dropNextAttachmentRequestId: string | null = null;
   let droppedAttachmentRequests = 0;
   const installAttachmentDropHook = (client: RelayClient): void => {
+    // App messages, request_attachment included, enter through
+    // dispatchAppMessage after decryption.
     const internal = client as unknown as {
-      handleRequestAttachment: (msg: Record<string, unknown>) => Promise<void>;
+      dispatchAppMessage: (msg: Record<string, unknown>, signed: boolean, toAll?: boolean) => void;
     };
-    // Gone from newer tentacles (attachment requests moved out of
-    // RelayClient): only the drop-one-request hook is lost then.
-    if (typeof internal.handleRequestAttachment !== 'function') return;
-    const originalHandleRequest = internal.handleRequestAttachment.bind(client);
-    internal.handleRequestAttachment = async (msg: Record<string, unknown>) => {
+    const original = internal.dispatchAppMessage.bind(client);
+    internal.dispatchAppMessage = (msg, signed, toAll) => {
       const payload = msg.payload as { id?: string } | undefined;
-      if (payload?.id === dropNextAttachmentRequestId) {
+      if (msg.type === 'request_attachment' && dropNextAttachmentRequestId !== null && payload?.id === dropNextAttachmentRequestId) {
         dropNextAttachmentRequestId = null;
         droppedAttachmentRequests += 1;
         return;
       }
-      await originalHandleRequest(msg);
+      original(msg, signed, toAll);
     };
   };
+  // Every chunk the tentacle reads to answer a request (paced requests read
+  // one range each; legacy whole-file requests read it all).
   const origRead = attachmentStore.read.bind(attachmentStore);
   attachmentStore.read = (sid: string, id: string) => {
     const r = origRead(sid, id);
+    if (r) attachmentReads.push({ ts: Date.now(), id });
+    return r;
+  };
+  // Ids stored while a control route runs (the tentacle offloads large tool
+  // results itself), so a spec can count reads of ITS attachment only.
+  let putIds: string[] | null = null;
+  const origPut = attachmentStore.put.bind(attachmentStore);
+  attachmentStore.put = ((...args: Parameters<typeof origPut>) => {
+    const ref = origPut(...args);
+    if (ref && putIds) putIds.push(ref.id);
+    return ref;
+  }) as typeof attachmentStore.put;
+  const origReadRange = attachmentStore.readRange.bind(attachmentStore);
+  attachmentStore.readRange = (sid: string, id: string, offset: number, length: number) => {
+    const r = origReadRange(sid, id, offset, length);
     if (r) attachmentReads.push({ ts: Date.now(), id });
     return r;
   };
@@ -324,7 +368,7 @@ async function main(): Promise<void> {
     // A stable id, like a real computer's saved one: after a head restart it
     // signs in as the same device instead of a new one.
     authMethod: 'open',
-    device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+    device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop', capabilities: MOCK_CAPABILITIES },
   }, keyManager, attachmentStore);
   installAttachmentDropHook(relay);
   recordHeadControl(relay, headControl.t1);
@@ -418,7 +462,7 @@ async function main(): Promise<void> {
         // purgeSessionToolState exactly as production.
         case '/armSetModel': {
           const sid = q.get('sid')!;
-          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+          injectAppMessage({
             type: 'set_session_model', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
             timestamp: new Date().toISOString(), payload: { model: q.get('model') ?? 'mock-v2' },
           });
@@ -426,7 +470,7 @@ async function main(): Promise<void> {
         }
         case '/armAbort': {
           const sid = q.get('sid')!;
-          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+          injectAppMessage({
             type: 'abort_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
             timestamp: new Date().toISOString(), payload: {},
           });
@@ -434,7 +478,7 @@ async function main(): Promise<void> {
         }
         case '/armKill': {
           const sid = q.get('sid')!;
-          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+          injectAppMessage({
             type: 'kill_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
             timestamp: new Date().toISOString(), payload: {},
           });
@@ -442,7 +486,7 @@ async function main(): Promise<void> {
         }
         case '/armDelete': {
           const sid = q.get('sid')!;
-          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+          injectAppMessage({
             type: 'delete_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
             timestamp: new Date().toISOString(), payload: {},
           });
@@ -506,7 +550,7 @@ async function main(): Promise<void> {
           (previous as unknown as { intentionalDisconnect: boolean }).intentionalDisconnect = true;
           const replacement = new RelayClient(adapter as unknown as AgentAdapter, sm, {
             relayUrl: RELAY_URL,
-            device: { deviceId, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+            device: { deviceId, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop', capabilities: MOCK_CAPABILITIES },
           }, keyManager, attachmentStore);
           installAttachmentDropHook(replacement);
           await new Promise<void>((resolve, reject) => {
@@ -531,7 +575,7 @@ async function main(): Promise<void> {
           relay = new RelayClient(adapter2 as unknown as AgentAdapter, sm2, {
             relayUrl: RELAY_URL,
             authMethod: 'open',
-            device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+            device: { deviceId: TENTACLE1_ID, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop', capabilities: MOCK_CAPABILITIES },
           }, keyManager, attachmentStore);
           installAttachmentDropHook(relay);
           recordHeadControl(relay, headControl.t1);
@@ -624,13 +668,16 @@ async function main(): Promise<void> {
           const body = `${marker}\n${'x'.repeat(sizeKb * 1024)}`;
           const tcid = `tc-big-${sid}-${marker}`;
           attachmentReads.length = 0;
+          putIds = [];
           adapter.toolStart(sid, q.get('tool') ?? 'bash', { command: 'cat big.bin' }, tcid);
           adapter.toolComplete(sid, q.get('tool') ?? 'bash', body, tcid);
+          const ids = putIds;
+          putIds = null;
           // Concluding agent_message anchors the turn so its tool step renders as
           // a chip on reload (the trace is keyed to the concluding bubble).
           adapter.msg(sid, q.get('reply') ?? 'Done — open the step to see the result.');
           adapter.idle(sid);
-          return json(200, { ok: true, marker, sizeKb, chunkCount: Math.ceil((body.length) / (256 * 1024)) });
+          return json(200, { ok: true, marker, sizeKb, ids, chunkCount: Math.ceil((body.length) / RelayClient.ATTACHMENT_CHUNK_BYTES) });
         }
         case '/attachmentReads': return json(200, { reads: attachmentReads, dropped: droppedAttachmentRequests });
         case '/dropNextAttachmentRequest': {
@@ -697,7 +744,7 @@ async function main(): Promise<void> {
           adapter.toolComplete(sid, 'show_image', '', tcid, [ref]);
           adapter.msg(sid, q.get('reply') ?? 'Here is the generated image.');
           adapter.idle(sid);
-          return json(200, { ok: true, id: ref.id, size: png.length, mimeType: ref.mimeType, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / (256 * 1024)) });
+          return json(200, { ok: true, id: ref.id, size: png.length, mimeType: ref.mimeType, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / RelayClient.ATTACHMENT_CHUNK_BYTES) });
         }
         case '/shutdown': json(200, { ok: true }); cleanup(); process.exit(0); return;
         default: return json(404, { error: 'unknown control endpoint' });

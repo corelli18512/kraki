@@ -29,6 +29,9 @@ export interface AuthResult {
   devices: DeviceSummary[];
   githubClientId?: string;
   vapidPublicKey?: string;
+  /** Accepted by the edge from its own copy of the account service's last
+   *  answer (EdgeAuthCache), not by a round trip. */
+  local?: boolean;
 }
 
 export interface AuthChallengeResult {
@@ -78,6 +81,8 @@ export interface AuthBackend {
     deviceId: string,
     encryptionKey?: string,
     headRegion?: string,
+    /** The signing key the device announced with this auth (if any). */
+    signingKey?: string,
   ): Promise<ChallengeOutcome>;
 
   /**

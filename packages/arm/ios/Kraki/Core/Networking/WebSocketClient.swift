@@ -121,8 +121,29 @@ final class WebSocketClient: NSObject {
     private var intentionalClose = false
     private var generation = 0
     private var phaseDeadline: DispatchWorkItem?
-    static let connectTimeout: TimeInterval = 30
+    /// A TCP/TLS/WebSocket handshake that has not opened within this long is
+    /// replaced (doubling per consecutive miss, up to `connectMaxTimeout`).
+    /// Mac diag 10-20: the first connect after a reboot hung the full 30 s
+    /// while the retry opened in 1.1 s; the slowest open seen is 3.8 s.
+    static let connectTimeout: TimeInterval = 10
+    static let connectMaxTimeout: TimeInterval = 30
+    private(set) var consecutiveConnectTimeouts = 0
+    var currentConnectTimeout: TimeInterval {
+        min(Self.connectTimeout * pow(2, Double(consecutiveConnectTimeouts)), Self.connectMaxTimeout)
+    }
     static let authenticationTimeout: TimeInterval = 90
+    /// A sent challenge/token auth frame must get an answer within this long
+    /// (doubling per consecutive miss, up to `authReplyMaxTimeout`) or the
+    /// socket is replaced. An open socket that never answers (half-open
+    /// link, auth_ok stuck behind TCP retransmission) otherwise waited for
+    /// the 22 s liveness ping: diag 10-19 27.9 s, 10-18 15.9 s; a fresh
+    /// socket authenticated in under a second both times. The doubling keeps
+    /// a slow-but-working backend (each retry re-asks it) from looping.
+    /// Single-use credentials (OAuth code, pairing token) are never retried.
+    static let authReplyTimeout: TimeInterval = 5
+    static let authReplyMaxTimeout: TimeInterval = 20
+    private var authReplyDeadline: DispatchWorkItem?
+    private(set) var consecutiveAuthReplyTimeouts = 0
 
     // MARK: Outbound retry queue
     //
@@ -209,7 +230,7 @@ final class WebSocketClient: NSObject {
         // as an absolute upper bound.
         task?.maximumMessageSize = 16 * 1024 * 1024
         task?.resume()
-        armPhaseDeadline(after: Self.connectTimeout, reason: "connect_timeout")
+        armPhaseDeadline(after: currentConnectTimeout, reason: "connect_timeout")
     }
 
     func disconnect() {
@@ -314,6 +335,63 @@ final class WebSocketClient: NSObject {
         }
         KLog.d("📤 ws frame type=\(Self.frameType(string)) bytes=\(string.utf8.count)")
         writeString(string, retryOnSendError: queueOnFailure)
+        if !isAuthenticated, Self.isRetryableAuthFrame(string) { armAuthReplyDeadline() }
+    }
+
+    /// `auth` with a reusable credential (stored-device challenge, CLI token)
+    /// or the challenge's `auth_response`: safe to repeat on a fresh socket.
+    static func isRetryableAuthFrame(_ string: String) -> Bool {
+        guard string.contains("\"auth"),
+              let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else { return false }
+        if type == "auth_response" { return true }
+        guard type == "auth", let method = (object["auth"] as? [String: Any])?["method"] as? String else { return false }
+        return method == "challenge" || method == "github_token"
+    }
+
+    #if DEBUG
+    func debugSetConsecutiveAuthReplyTimeouts(_ count: Int) { consecutiveAuthReplyTimeouts = count }
+    func debugSetConsecutiveConnectTimeouts(_ count: Int) { consecutiveConnectTimeouts = count }
+    #endif
+
+    var currentAuthReplyTimeout: TimeInterval {
+        min(Self.authReplyTimeout * pow(2, Double(consecutiveAuthReplyTimeouts)), Self.authReplyMaxTimeout)
+    }
+
+    private func armAuthReplyDeadline() {
+        authReplyDeadline?.cancel()
+        let epoch = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == epoch, !self.isAuthenticated, self.state == .connected else { return }
+            self.consecutiveAuthReplyTimeouts += 1
+            KLog.d("⚠️ No auth reply within \(self.currentAuthReplyTimeout)s — replacing socket")
+            self.recover(reason: "auth_reply_timeout")
+        }
+        authReplyDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + currentAuthReplyTimeout, execute: work)
+    }
+
+    /// The pending sign-in got its answer (challenge, ok or error). Other
+    /// frames (a pong, a presence frame) do not satisfy it.
+    private func noteInboundDuringAuth(_ message: URLSessionWebSocketTask.Message) {
+        guard authReplyDeadline != nil else { return }
+        let text: String?
+        switch message {
+        case .string(let value): text = value
+        case .data(let data): text = String(data: data, encoding: .utf8)
+        @unknown default: text = nil
+        }
+        guard let text, Self.isAuthReplyFrame(text) else { return }
+        authReplyDeadline?.cancel(); authReplyDeadline = nil
+    }
+
+    static func isAuthReplyFrame(_ string: String) -> Bool {
+        guard string.contains("\"auth_"),
+              let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else { return false }
+        return type == "auth_challenge" || type == "auth_ok" || type == "auth_error" || type == "auth_info_response"
     }
 
     func setAuthenticated(_ value: Bool) {
@@ -322,6 +400,8 @@ final class WebSocketClient: NSObject {
         stableConnectionWorkItem = nil
         if value {
             phaseDeadline?.cancel(); phaseDeadline = nil
+            authReplyDeadline?.cancel(); authReplyDeadline = nil
+            consecutiveAuthReplyTimeouts = 0
             flushOutboundQueue()
             scheduleStableConnectionReset()
         }
@@ -438,6 +518,7 @@ final class WebSocketClient: NSObject {
                 switch result {
                 case .success(let message):
                     self.recordInboundActivity()
+                    self.noteInboundDuringAuth(message)
                     switch message {
                     case .string(let text):
                         if let data = text.data(using: .utf8) { self.onMessage?(data) }
@@ -551,6 +632,7 @@ final class WebSocketClient: NSObject {
         let epoch = generation
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.generation == epoch, !self.isAuthenticated else { return }
+            if reason == "connect_timeout" { self.consecutiveConnectTimeouts += 1 }
             self.recover(reason: reason)
         }
         phaseDeadline = work
@@ -625,6 +707,7 @@ final class WebSocketClient: NSObject {
         pendingWrites = 0
         lastWriteCompletedAt = nil
         phaseDeadline?.cancel(); phaseDeadline = nil
+        authReplyDeadline?.cancel(); authReplyDeadline = nil
         isAuthenticated = false
         stopPing()
         stopLivenessMonitoring()
@@ -648,6 +731,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
             return
         }
         KLog.d("✅ WebSocket opened")
+        consecutiveConnectTimeouts = 0
         // Opening the TCP/WebSocket handshake is not enough to call a
         // connection stable. Proxies can accept and reset it a few seconds
         // later; resetting here traps us in a 1-second reconnect loop. Keep the

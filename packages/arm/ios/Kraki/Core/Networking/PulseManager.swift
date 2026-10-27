@@ -143,6 +143,7 @@ final class PulseManager {
         replayable: Bool = false
     ) {
         guard let payload = try? JSONSerialization.data(withJSONObject: object) else { return }
+        payloadsHandedOff += 1
         // Large payloads to a Tentacle that reassembles go as small ordered
         // parts so a slow uplink keeps showing progress. Connection-scoped
         // commands stay whole: a purge on disconnect must not leave a partial.
@@ -234,6 +235,14 @@ final class PulseManager {
     /// would stall for a heartbeat interval per window, so parts go at once.
     var acksPromptly = false
     private var inflight: [(seq: UInt64, bytes: Int, sentAt: Date)] = []
+    /// Newest live seq handed to Pulse, and whether parts still wait to go
+    /// (send.summary `uploadMs`).
+    private(set) var lastSentLiveSeq: UInt64 = 0
+    var hasQueuedUpload: Bool { !outQueue.isEmpty }
+    /// E2E payloads handed to this Pulse, and the connection generation while
+    /// authenticated (send.summary `uploadMs` is measured on that one only).
+    private(set) var payloadsHandedOff = 0
+    var liveGeneration: Int? { authenticated ? generation : nil }
 
     #if DEBUG
     var queuedForTesting: Int { outQueue.count }
@@ -282,6 +291,7 @@ final class PulseManager {
         connectionScoped: Bool
     ) -> UInt64 {
         let (seq, effects) = live.send([UInt8](payload), durable: false, coalesceKey: nil)
+        lastSentLiveSeq = seq
         if let target {
             targetByStream[Self.liveStream, default: [:]][seq] = target
         }
@@ -378,7 +388,11 @@ final class PulseManager {
                 if isFragment {
                     // The Head stamps the sender on every part; carry it to the
                     // reassembled payload so sender checks still apply.
-                    if let whole { host?.onDelivered(json: Self.stampSender(whole, from: payload)) }
+                    if let whole, let stamped = Self.stampSender(whole, from: payload) {
+                        host?.onDelivered(json: stamped)
+                    } else if whole != nil {
+                        KLog.d("⚠️ Dropped reassembled payload that names its own sender")
+                    }
                 } else {
                     host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
                 }
@@ -427,15 +441,19 @@ final class PulseManager {
         }
     }
 
-    static func stampSender(_ whole: String, from part: [UInt8]) -> String {
-        guard let partObject = try? JSONSerialization.jsonObject(with: Data(part)) as? [String: Any],
-              let src = partObject["src"] as? String,
-              let data = whole.data(using: .utf8),
+    /// The reassembled `whole`, credited to the sender the Head stamped on its
+    /// parts. Nil when it names a sender itself (`from` or `src`): only the Head
+    /// sets those, on whole payloads, and it never fragments its own control,
+    /// so such a payload is forged. Also nil when it is not a JSON object.
+    static func stampSender(_ whole: String, from part: [UInt8]) -> String? {
+        guard let data = whole.data(using: .utf8),
               var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["src"] == nil else { return whole }
+              object["from"] == nil, object["src"] == nil else { return nil }
+        guard let partObject = try? JSONSerialization.jsonObject(with: Data(part)) as? [String: Any],
+              let src = partObject["src"] as? String else { return whole }
         object["src"] = src
         guard let stamped = try? JSONSerialization.data(withJSONObject: object),
-              let string = String(data: stamped, encoding: .utf8) else { return whole }
+              let string = String(data: stamped, encoding: .utf8) else { return nil }
         return string
     }
 

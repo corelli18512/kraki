@@ -63,30 +63,38 @@ export interface DecodedFrame {
 
 // ── Encoder ──────────────────────────────────────────────────────────────────
 
+/** Frame builder. Header fields collect as bytes; a payload blob is kept by
+ *  reference and copied once in {@link done} (copying it byte by byte into a
+ *  number[] made every relayed 32 KB fragment cost ~0.3 MB of heap and most
+ *  of the Head's CPU during a catch-up burst; log audit 2026-10-22). */
 class Writer {
-  private parts: number[] = [];
+  private chunks: Uint8Array[] = [];
+  private pending: number[] = [];
+  private length = 0;
   u8(n: number): void {
-    this.parts.push(n & 0xff);
+    this.pending.push(n & 0xff);
   }
   u32(n: number): void {
-    this.parts.push((n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff);
+    this.pending.push((n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff);
   }
   u64(n: Seq): void {
     if (n < 0n || n > U64_MAX) throw new RangeError(`u64 out of range: ${n}`);
     for (let shift = 56n; shift >= 0n; shift -= 8n) {
-      this.parts.push(Number((n >> shift) & 0xffn));
+      this.pending.push(Number((n >> shift) & 0xffn));
     }
   }
   str(s: string): void {
     const b = new TextEncoder().encode(s);
     if (b.length > 255) throw new RangeError(`str too long: ${b.length} bytes (max 255)`);
     this.u8(b.length);
-    for (const x of b) this.parts.push(x);
+    for (const x of b) this.pending.push(x);
   }
   blob(b: Uint8Array): void {
     if (b.length > 0xffff_ffff) throw new RangeError('blob too long');
     this.u32(b.length);
-    for (const x of b) this.parts.push(x);
+    this.flushPending();
+    this.chunks.push(b);
+    this.length += b.length;
   }
   /** Write the header. v2 (with streamId) is used for any non-default stream;
    *  streamId=0 is encoded as v1 so single-stream peers stay byte-identical to
@@ -103,7 +111,20 @@ class Writer {
     }
   }
   done(): Uint8Array {
-    return new Uint8Array(this.parts);
+    this.flushPending();
+    const out = new Uint8Array(this.length);
+    let at = 0;
+    for (const chunk of this.chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
+  }
+  private flushPending(): void {
+    if (this.pending.length === 0) return;
+    this.chunks.push(Uint8Array.from(this.pending));
+    this.length += this.pending.length;
+    this.pending = [];
   }
 }
 

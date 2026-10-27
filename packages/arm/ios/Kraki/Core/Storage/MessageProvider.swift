@@ -54,10 +54,8 @@ final class MessageProvider {
     /// overlapping background reads.
     private var loadingOlderDB: Set<String> = []
 
-    /// Per-turn trace pulls already issued (dedup), keyed `sid:bubbleSeq`.
-    /// Turn traces requested, with when. A trace the store has since evicted
-    /// is requested again once the earlier request has had time to answer.
-    private var tracePulled: [String: Date] = [:]
+    /// Per-turn trace pulls already issued or in flight (dedup).
+    private var traceRequests = TurnTraceRequestLedger()
     /// Sessions whose live card snapshot has been requested (dedup).
     private var cardRequested: Set<String> = []
 
@@ -69,6 +67,11 @@ final class MessageProvider {
     /// Bumped by `resetSession`: an off-main read started before a reset
     /// (e.g. device trust dropping unauthenticated history) must not land.
     private var sessionGeneration: [String: Int] = [:]
+    /// When each outstanding head request left (diag `history.batch`: how long
+    /// catch-up waited on the network/Head/decrypt vs the Tentacle's reply).
+    private var headRequestedAt: [String: (at: TimeInterval, attempt: Int)] = [:]
+    /// Sessions whose Tentacle head went down while a head request was out.
+    private var headDropped: Set<String> = []
 
     private weak var appState: AppState?
 
@@ -173,9 +176,11 @@ final class MessageProvider {
                 KLog.d("🧹 setTentacleInfo(\(sessionId.prefix(12))): store=\(storeLastSeq) > tentacle=\(lastSeq) — purging stale tail")
                 appState.messageStore.dropMessagesAboveSeq(sessionId, seq: lastSeq)
             }
+            appState.messageStore.lowerCaughtUp(sessionId, to: lastSeq)
         }
         let oldLastSeq = tentacleLastSeq[sessionId]
         if oldLastSeq != lastSeq { tentacleLastSeq[sessionId] = lastSeq } // no-op writes notify observers
+        if let oldLastSeq, lastSeq < oldLastSeq { retireHeadRequest(sessionId) }
         if let oldLastSeq, oldLastSeq != lastSeq {
             KLog.d("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=\(oldLastSeq)→\(lastSeq) device=\(deviceId.prefix(12))")
         } else if oldLastSeq == nil {
@@ -225,29 +230,6 @@ final class MessageProvider {
     /// request.
     func isLoadingOlder(_ sessionId: String) -> Bool {
         hasSlot(sessionId) { if case .before = $0 { return true }; return false }
-    }
-
-    /// True while a DB-first older-history page load is in flight for
-    /// this session (`ensureOlderLoadedAsync`). Lets the scroll trigger
-    /// serialise continuous loads via single-flight instead of a time
-    /// cooldown — the read is async, so this flag is actually held for
-    /// the duration (unlike the synchronous legacy path).
-    func isLoadingOlderDB(_ sessionId: String) -> Bool {
-        loadingOlderDB.contains(sessionId)
-    }
-
-    /// True if a head fetch (`requestLatest` / `ensureLoaded`) is in
-    /// flight for this session.
-    func isLoadingHead(_ sessionId: String) -> Bool {
-        hasSlot(sessionId) { if case .head = $0 { return true }; return false }
-    }
-
-    /// Read-only access to the last seq we believe tentacle has for
-    /// the session (set by `setTentacleInfo` and bumped by
-    /// `observeLiveMessageSeq`). Diagnostics-only; production code
-    /// should prefer `atHead(_:)`.
-    func tentacleLastKnownSeq(_ sessionId: String) -> Int? {
-        tentacleLastSeq[sessionId]
     }
 
     /// True iff the loaded window has walked back to seq 1 — UI
@@ -348,7 +330,9 @@ final class MessageProvider {
         }
         guard let appState else { return false }
 
-        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
+        // The acknowledged head (a caught-up reply may end in seqs clients
+        // never store), not SQLite's highest row: else every self-heal asks again.
+        let storeLastSeq = appState.messageStore.persistedHead(sessionId)
         KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq) reason=\(reason)")
 
         // No-op if our cache is already at head — nothing to fetch.
@@ -380,7 +364,7 @@ final class MessageProvider {
             return
         }
 
-        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
+        let storeLastSeq = appState.messageStore.persistedHead(sessionId)
         let totalLastSeq = tentacleLastSeq[sessionId] ?? 0
         if totalLastSeq > 0 && storeLastSeq >= totalLastSeq {
             KLog.d("✅ [2/history ensureLoaded] session=\(sessionId.prefix(12)) skip=atHead store=\(storeLastSeq) tentacle=\(totalLastSeq) reason=\(reason) — no WS fetch")
@@ -709,6 +693,27 @@ final class MessageProvider {
         containsHead: Bool?
     ) {
         guard let appState else { return }
+        // A reply describing the old (higher) history after a head drop must
+        // not consume the replacement request's slot.
+        if isObsoleteHeadReply(sessionId, max(totalLastSeq, messages.map(\.seq).max() ?? 0)) { return }
+
+        // Identify the exact turn-aligned request answered by this batch.
+        // `messages` contains only persistent spine rows, while legacy session
+        // logs may have filtered tool/narration seqs near the upper boundary;
+        // therefore the final persistent seq can legitimately be several
+        // integers below `beforeSeq - 1`.
+        let removedKind = removeTurnAlignedSlot(
+            sessionId,
+            containsHead: containsHead,
+            lastPersistentSeq: messages.last?.seq ?? lastSeq
+        )
+        // A reply to a retired head request (the Tentacle's head went down
+        // meanwhile) may describe the old history: keep nothing above the
+        // head the Tentacle reports now, before anything is stored.
+        let messages = rowsWithinKnownHead(sessionId, messages, answeredHead: removedKind == .head)
+        // Only the replacement head reply ends the after-drop window, not an
+        // unrelated older page.
+        if removedKind == .head { headDropped.remove(sessionId) }
 
         // Detect a hole between this batch and what we already have
         // on disk. If batch starts at seq B and DB contains B-1 we're
@@ -730,8 +735,14 @@ final class MessageProvider {
         // Update both history and SessionStore heads. The SessionStore head
         // drives the iOS card's authoritative unread boolean; without this a
         // replay can populate SQLite while the card still shows old cursors.
-        let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
-        if containsHead == true {
+        // A reply that answers no outstanding head request (its slot was
+        // retired by a lower session_list head) may not raise the head above
+        // what the Tentacle last reported.
+        let rawHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
+        let batchHead = acceptedHead(sessionId, rawHead, answeredHead: removedKind == .head)
+        // A reply to a retired request that describes a higher (older
+        // incarnation's) head proves nothing about the current one.
+        if containsHead == true, batchHead == rawHead || removedKind != nil {
             appState.messageStore.markCaughtUp(sessionId, through: batchHead)
         }
         if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
@@ -740,18 +751,6 @@ final class MessageProvider {
         if batchHead > 0 {
             appState.sessionStore.observeLastSeq(sessionId, seq: batchHead)
         }
-
-        // Identify the exact turn-aligned request answered by this batch.
-        // `messages` contains only persistent spine rows, while legacy session
-        // logs may have filtered tool/narration seqs near the upper boundary;
-        // therefore the final persistent seq can legitimately be several
-        // integers below `beforeSeq - 1`.
-        let lastPersistentSeq = messages.last?.seq ?? lastSeq
-        let removedKind = removeTurnAlignedSlot(
-            sessionId,
-            containsHead: containsHead,
-            lastPersistentSeq: lastPersistentSeq
-        )
         if case .before(let requestedBefore) = removedKind,
            appState.messageStore.windowState(sessionId)?.topSeq == requestedBefore {
             appState.messageStore.prependOlderPage(sessionId, messages)
@@ -765,6 +764,7 @@ final class MessageProvider {
             if case .head = removedKind { return true }
             return false
         }()
+        if wasHeadRequest { noteHeadReply(sessionId, count: messages.count) }
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
@@ -820,25 +820,6 @@ final class MessageProvider {
     }
 
     // MARK: - Push-Gap Recovery
-
-    /// Single funnel for every live persistent push that
-    /// `MessageRouter` previously sent straight to
-    /// `messageStore.append`. Buffers the message and runs the drain
-    /// loop — anything contiguous with the store's tail commits
-    /// immediately; anything that opens a gap waits in the buffer
-    /// while we fetch the missing range from tentacle.
-    ///
-    /// Replaces 13 call sites in `MessageRouter`. The store's
-    /// `append` contract changes accordingly: the gap branch is now
-    /// a DEBUG assertion (see `MessageStore.append`).
-    func ingestTailCandidate(_ sessionId: String, json: Data) {
-        #if KRAKI_DIAG
-        let diagWork = KrakiDiag.beginWork()
-        defer { KrakiDiag.endWork(diagWork, source: "provider.ingest_json", session: sessionId) }
-        #endif
-        guard let msg = ProducerMessageDecoder.decode(json) else { return }
-        ingestTailCandidate(sessionId, [msg])
-    }
 
     /// Multi-message overload used by `handleRangeBatch`.
     func ingestTailCandidate(_ sessionId: String, _ messages: [ChatMessage]) {
@@ -1005,18 +986,6 @@ final class MessageProvider {
         drainPendingTail(sessionId)
     }
 
-    /// Whether the chat tail is currently being filled in the
-    /// background. UI binds a bottom spinner to this. True iff the
-    /// buffer has unresolved entries (waiting on a range fetch) or
-    /// a request is in flight.
-    func isFillingTail(_ sessionId: String) -> Bool {
-        if hasSlot(sessionId, where: { if case .range = $0 { return true }; return false }) {
-            return true
-        }
-        if let buf = pendingTail[sessionId], !buf.isEmpty { return true }
-        return false
-    }
-
     // MARK: - Preview
 
     // MARK: - Private
@@ -1031,6 +1000,7 @@ final class MessageProvider {
         guard let appState else { return }
         guard let tentacleDeviceId = appState.sessionStore.sessions[sessionId]?.deviceId,
               !tentacleDeviceId.isEmpty else { return }
+        guard signedInForRequest(sessionId, reason: reason) else { return }
 
         let slotKind: OutstandingKind = beforeSeq.map { .before($0) } ?? .head
         let kind = beforeSeq == nil ? "head" : "before=\(beforeSeq!)"
@@ -1059,10 +1029,10 @@ final class MessageProvider {
             appState?.sessionStore.markLoadFailed(sessionId)
         }
         addSlot(sessionId, RequestSlot(kind: slotKind, timeout: work))
+        if beforeSeq == nil { headRequestedAt[sessionId] = (ProcessInfo.processInfo.systemUptime, attempt) }
 
         appState.commandSender?.requestSessionMessages(
-            sessionId: sessionId,
-            beforeSeq: beforeSeq
+            sessionId: sessionId, beforeSeq: beforeSeq, afterSeq: beforeSeq == nil ? appState.messageStore.dbLastSeq(sessionId) : nil
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + (beforeSeq == nil ? Self.headRequestTimeout : 10), execute: work)
@@ -1072,44 +1042,41 @@ final class MessageProvider {
 
     /// Pull one turn's TRACE steps for the "Steps" popup (deduped). The reply
     /// (`turn_trace_batch`) lands in `handleTurnTraceBatch`.
-    func requestTurnTrace(sessionId: String, bubbleSeq: Int) {
-        guard bubbleSeq > 0 else { return }
-        let key = "\(sessionId):\(bubbleSeq)"
-        if let requestedAt = tracePulled[key] {
-            let cached = appState?.messageStore.turnSteps(sessionId, bubbleSeq: bubbleSeq) != nil
-            guard !cached, Date().timeIntervalSince(requestedAt) > 10 else { return }
-        }
-        guard appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
-        // Only a recent request dedupes; forget old ones so a long-lived
-        // process doesn't keep one entry per turn ever opened.
-        if tracePulled.count > 500 {
-            let cutoff = Date().addingTimeInterval(-60)
-            tracePulled = tracePulled.filter { $0.value > cutoff }
-        }
-        tracePulled[key] = Date()
+    func requestTurnTrace(sessionId: String, bubbleSeq: Int, turnEnded: Bool = false) {
+        guard bubbleSeq > 0, appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
+        let cached = appState?.messageStore.turnSteps(sessionId, bubbleSeq: bubbleSeq) != nil
+        guard traceRequests.shouldRequest("\(sessionId):\(bubbleSeq)", cached: cached, repullIfInFlight: turnEnded) else { return }
         appState?.commandSender?.requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
     }
 
     /// Force a re-pull of a turn's trace on the next request (e.g. a live turn).
     func invalidateTurnTrace(sessionId: String, bubbleSeq: Int) {
-        tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)")
+        traceRequests.invalidate("\(sessionId):\(bubbleSeq)")
     }
 
     /// Inject a pulled trace into the store. A still-running turn
     /// (`complete == false`) is left re-pullable so idle can reconcile.
     func handleTurnTraceBatch(sessionId: String, bubbleSeq: Int, entries: [ChatMessage], complete: Bool) {
         appState?.messageStore.setTurnSteps(sessionId, bubbleSeq: bubbleSeq, entries)
-        if !complete { tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)") }
+        if traceRequests.replied("\(sessionId):\(bubbleSeq)", complete: complete) {
+            requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
+        }
     }
 
     /// On idle: find the just-concluded bubble (agent_message / system_message)
-    /// and pull its authoritative trace once.
+    /// and pull its authoritative trace once. A trace still unfinished under
+    /// another key (a live Steps sheet reads the prompt's seq) is pulled once
+    /// more as well, or its final steps would be missing until reopened.
     func pullLatestTurnTrace(_ sessionId: String) {
         guard let appState else { return }
         for m in appState.messageStore.recentFromDB(sessionId, limit: 30).reversed() {
             if m.type == "agent_message" || m.type == "system_message" {
                 invalidateTurnTrace(sessionId: sessionId, bubbleSeq: m.seq)
-                requestTurnTrace(sessionId: sessionId, bubbleSeq: m.seq)
+                requestTurnTrace(sessionId: sessionId, bubbleSeq: m.seq, turnEnded: true)
+                for seq in traceRequests.unfinishedSeqs(sessionId) where seq != m.seq {
+                    invalidateTurnTrace(sessionId: sessionId, bubbleSeq: seq)
+                    requestTurnTrace(sessionId: sessionId, bubbleSeq: seq, turnEnded: true)
+                }
                 return
             }
             if m.type == "user_message" { return }
@@ -1154,22 +1121,25 @@ final class MessageProvider {
             for slot in slots { slot.timeout.cancel() }
         }
         outstanding.removeAll()
+        headRequestedAt.removeAll()
+        headDropped.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
-        tracePulled.removeAll()
+        traceRequests.clear()
         cardRequested.removeAll()
         appState?.sessionStore.loadingSessions.removeAll()
         KLog.chat("🧹 [2/history disconnect] clearedSlots=\(slotCount) preservedWindows=1")
     }
 
     func clear() {
+        headDropped.removeAll()
         for (_, slots) in outstanding {
             for s in slots { s.timeout.cancel() }
         }
         outstanding.removeAll()
         tentacleLastSeq.removeAll()
         pendingTail.removeAll()
-        tracePulled.removeAll()
+        traceRequests.clear()
         cardRequested.removeAll()
         appState?.sessionStore.loadingSessions.removeAll()
     }
@@ -1189,14 +1159,120 @@ extension MessageProvider {
     /// against until the next `session_list` envelope arrives.
     func resetSession(_ sessionId: String) {
         sessionGeneration[sessionId, default: 0] += 1
+        headDropped.remove(sessionId)
         if let slots = outstanding[sessionId] {
             for s in slots { s.timeout.cancel() }
         }
         outstanding.removeValue(forKey: sessionId)
         pendingTail.removeValue(forKey: sessionId)
-        tracePulled = tracePulled.filter { !$0.key.hasPrefix("\(sessionId):") }
+        traceRequests.forgetSession(sessionId)
         cardRequested.remove(sessionId)
         appState?.sessionStore.setLoading(sessionId, false)
+    }
+}
+
+// MARK: - Reconnect catch-up (same file: shares the class's private state)
+
+extension MessageProvider {
+    /// True while a DB-first older-history page load is in flight for
+    /// this session (`ensureOlderLoadedAsync`). Lets the scroll trigger
+    /// serialise continuous loads via single-flight instead of a time
+    /// cooldown — the read is async, so this flag is actually held for
+    /// the duration (unlike the synchronous legacy path).
+    func isLoadingOlderDB(_ sessionId: String) -> Bool {
+        loadingOlderDB.contains(sessionId)
+    }
+
+    /// True if a head fetch (`requestLatest` / `ensureLoaded`) is in
+    /// flight for this session.
+    func isLoadingHead(_ sessionId: String) -> Bool {
+        hasSlot(sessionId) { if case .head = $0 { return true }; return false }
+    }
+
+    /// Read-only access to the last seq we believe tentacle has for
+    /// the session (set by `setTentacleInfo` and bumped by
+    /// `observeLiveMessageSeq`). Diagnostics-only; production code
+    /// should prefer `atHead(_:)`.
+    func tentacleLastKnownSeq(_ sessionId: String) -> Int? {
+        tentacleLastSeq[sessionId]
+    }
+
+    /// Whether the chat tail is currently being filled in the
+    /// background. UI binds a bottom spinner to this. True iff the
+    /// buffer has unresolved entries (waiting on a range fetch) or
+    /// a request is in flight.
+    func isFillingTail(_ sessionId: String) -> Bool {
+        if hasSlot(sessionId, where: { if case .range = $0 { return true }; return false }) {
+            return true
+        }
+        if let buf = pendingTail[sessionId], !buf.isEmpty { return true }
+        return false
+    }
+
+    /// Before auth_ok a history request cannot reach the Tentacle (the
+    /// transport drops unauthenticated sends), yet its slot used to stay
+    /// reserved: the post-auth session_list self-heal then saw
+    /// `isLoadingHead` and skipped, so a Chat opened during a reconnect waited
+    /// out the full head timeout (diag: catch-up exactly 5.0 s after the tap).
+    /// Leave the slot free; the session_list self-heal asks once signed in.
+    fileprivate func signedInForRequest(_ sessionId: String, reason: String) -> Bool {
+        guard appState?.connectionStatus == .connected else {
+            KLog.d("⏭️ [2/history request] session=\(sessionId.prefix(12)) skip=notAuthenticated reason=\(reason)")
+            return false
+        }
+        return true
+    }
+
+    /// The Tentacle's head went DOWN (restored from a backup): a head reply
+    /// still on its way describes the old history. Retire its slot so that
+    /// reply cannot restore the old head and a fresh request can go out.
+    fileprivate func retireHeadRequest(_ sessionId: String) {
+        guard hasSlot(sessionId, where: { $0 == .head }) else { return }
+        removeFirstSlot(sessionId) { $0 == .head }
+        headRequestedAt.removeValue(forKey: sessionId)
+        headDropped.insert(sessionId)
+    }
+
+    /// After a head drop, a reply claiming more than the Tentacle's current
+    /// head is the retired request's: drop it (rows, slot and head alike).
+    /// The first reply consistent with the current head ends the window.
+    fileprivate func isObsoleteHeadReply(_ sessionId: String, _ batchHead: Int) -> Bool {
+        guard headDropped.contains(sessionId) else { return false }
+        if let known = tentacleLastSeq[sessionId], batchHead > known {
+            KLog.d("🧹 [2/history obsolete head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
+            return true
+        }
+        return false
+    }
+
+    /// A reply that answers no outstanding head request (its slot was retired
+    /// by a lower session_list head) may not raise the head above what the
+    /// Tentacle last reported.
+    fileprivate func acceptedHead(_ sessionId: String, _ batchHead: Int, answeredHead: Bool) -> Int {
+        guard !answeredHead, let known = tentacleLastSeq[sessionId], batchHead > known else { return batchHead }
+        KLog.d("🧹 [2/history stale head reply] session=\(sessionId.prefix(12)) batchHead=\(batchHead) known=\(known)")
+        return known
+    }
+
+    fileprivate func rowsWithinKnownHead(_ sessionId: String, _ messages: [ChatMessage], answeredHead: Bool) -> [ChatMessage] {
+        guard !answeredHead, let known = tentacleLastSeq[sessionId], messages.contains(where: { $0.seq > known }) else { return messages }
+        return messages.filter { $0.seq <= known }
+    }
+
+    /// Diag `history.batch`: head request → reply handled here, to split the
+    /// Tentacle's share of a slow catch-up from network / Head / decrypt.
+    fileprivate func noteHeadReply(_ sessionId: String, count: Int) {
+        guard let requested = headRequestedAt.removeValue(forKey: sessionId) else { return }
+        #if KRAKI_DIAG
+        let waitMs = (ProcessInfo.processInfo.systemUptime - requested.at) * 1000
+        let viewing = appState?.sessionSubscriptionController.desiredSessionId == sessionId
+        KrakiDiag.record(.history, session: sessionId, [
+            .kind: .tag("head"), .count: .int(count), .durationMs: .number(waitMs),
+            .viewing: .bool(viewing), .attempt: .int(requested.attempt),
+        ])
+        #else
+        _ = requested
+        #endif
     }
 }
 
@@ -1206,3 +1282,30 @@ enum MessageProviderDebug {
     nonisolated(unsafe) static var olderPageDelayMs: UInt64 = 0
 }
 #endif
+
+extension MessageProvider {
+    /// Single funnel for every live persistent push that
+    /// `MessageRouter` previously sent straight to
+    /// `messageStore.append`. Buffers the message and runs the drain
+    /// loop — anything contiguous with the store's tail commits
+    /// immediately; anything that opens a gap waits in the buffer
+    /// while we fetch the missing range from tentacle.
+    ///
+    /// Replaces 13 call sites in `MessageRouter`. The store's
+    /// `append` contract changes accordingly: the gap branch is now
+    /// a DEBUG assertion (see `MessageStore.append`).
+    func ingestTailCandidate(_ sessionId: String, json: Data) {
+        #if KRAKI_DIAG
+        // Decoding only: the ingest itself is timed by the `[ChatMessage]`
+        // overload (`provider.ingest_messages`). Timing both counted it twice
+        // (`provider.ingest_json` wrapped it; 59 of 68 pairs identical).
+        let diagWork = KrakiDiag.beginWork()
+        let msg = ProducerMessageDecoder.decode(json)
+        KrakiDiag.endWork(diagWork, source: "provider.decode_json", session: sessionId)
+        #else
+        let msg = ProducerMessageDecoder.decode(json)
+        #endif
+        guard let msg else { return }
+        ingestTailCandidate(sessionId, [msg])
+    }
+}

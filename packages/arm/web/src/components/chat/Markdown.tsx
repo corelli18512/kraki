@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useMemo, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -55,14 +55,62 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   );
 });
 
+/** How often a streaming draft re-renders at most (and at least, while it
+ *  changes). */
+export const STREAMING_RENDER_MS = 80;
+
+/**
+ * `value`, but committed at most every `ms` — and at least that often while
+ * it keeps changing: the trailing value always lands. `useDeferredValue` did
+ * not: each new token abandoned the pending low-priority render, so when one
+ * markdown parse took longer than the gap between tokens (slow devices, heavy
+ * code blocks) the draft froze for the whole stream and appeared only at the
+ * end.
+ */
+export function useThrottledValue<T>(value: T, ms: number): T {
+  const [shown, setShown] = useState(value);
+  const lastAt = useRef(0);
+  const latest = useRef(value);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerMs = useRef(ms);
+  latest.current = value;
+  useEffect(() => {
+    const cancel = () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = null;
+    };
+    // Back to what is shown: nothing left to commit.
+    if (Object.is(value, shown)) { cancel(); return; }
+    // A new interval reschedules the pending commit.
+    if (timer.current !== null && timerMs.current !== ms) cancel();
+    const wait = ms - (performance.now() - lastAt.current);
+    if (wait <= 0) {
+      cancel();
+      lastAt.current = performance.now();
+      setShown(value);
+      return;
+    }
+    if (timer.current === null) {
+      timerMs.current = ms;
+      timer.current = setTimeout(() => {
+        timer.current = null;
+        lastAt.current = performance.now();
+        setShown(latest.current);
+      }, wait);
+    }
+  }, [value, shown, ms]);
+  useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current); }, []);
+  return shown;
+}
+
 /**
  * A streaming draft: `remend` closes unterminated markers so partial text
- * never flashes raw syntax, and `useDeferredValue` lets a token arrival
- * render at once while the heavier re-parse runs at lower priority.
+ * never flashes raw syntax, and the re-parse is throttled so a fast token
+ * stream costs a bounded number of renders yet keeps visibly updating.
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }) {
-  const deferred = useDeferredValue(text);
-  const repaired = useMemo(() => remend(deferred), [deferred]);
+  const shown = useThrottledValue(text, STREAMING_RENDER_MS);
+  const repaired = useMemo(() => remend(shown), [shown]);
   return <Markdown text={repaired} />;
 });
 

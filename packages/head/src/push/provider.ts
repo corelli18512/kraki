@@ -17,6 +17,10 @@ export interface PushResult {
   error?: string;
   /** True if the token is permanently invalid (e.g. APNs 410 Gone) — caller should delete it */
   gone?: boolean;
+  /** The push service's id for a sent notification (APNs `apns-id`), for logs. */
+  id?: string;
+  /** Sent on a retry after a connection error on the first attempt. */
+  retried?: boolean;
 }
 
 /** Abstract push notification provider. Implement for each push service. */

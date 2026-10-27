@@ -206,6 +206,11 @@ export async function startOAuthFlow(clientId: string): Promise<void> {
   window.location.href = `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
 
+/** Host only: a relay URL may carry credentials in its path or query. */
+function relayHost(url: string): string {
+  try { return new URL(url).host; } catch { return 'invalid'; }
+}
+
 export class KrakiTransport {
   private ws: WebSocket | null = null;
   private _url: string;
@@ -230,6 +235,9 @@ export class KrakiTransport {
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeListenersInstalled = false;
+  /** Current attempt's start and socket-open times, for the reconnect log. */
+  private attemptStartedAt = 0;
+  private attemptOpenedAt = 0;
 
   /** Milliseconds since the last frame from the relay (Infinity if none). */
   msSinceLastRx(now = Date.now()): number {
@@ -301,6 +309,11 @@ export class KrakiTransport {
     }
     this.intentionalClose = false;
     this.installWakeListeners();
+    this.attemptStartedAt = Date.now();
+    this.attemptOpenedAt = 0;
+    if (this.reconnectAttempts > 0) {
+      logger.info('Reconnecting', { attempt: this.reconnectAttempts, host: relayHost(this._url), outageMs: this.outageMs() });
+    }
     diag.stability.connecting();
     diag.record('ws.state', undefined, { state: 'connecting', attempt: this.reconnectAttempts });
 
@@ -328,6 +341,7 @@ export class KrakiTransport {
       // Backoff resets on successful auth, not on open: a relay that accepts
       // and drops connections must not be hammered every 0.5 s.
       this.lastRxAt = Date.now();
+      this.attemptOpenedAt = this.lastRxAt;
       diag.stability.socketOpen();
       await this.callbacks.onOpen();
       this.startPing();
@@ -368,6 +382,7 @@ export class KrakiTransport {
       // A failed handshake is followed by onclose, which reconnects. Keep a
       // previously working session in "disconnected" (reconnecting), not
       // "error" (which reads as a first-connect failure).
+      logger.info('WebSocket error', { attempt: this.reconnectAttempts, open: ws.readyState === WebSocket.OPEN });
       if (this.outageStartedAt === null && this.reconnectAttempts === 0 && !this.authenticated) {
         getStore().setStatus('error');
       }
@@ -377,7 +392,12 @@ export class KrakiTransport {
   private handleClosed(reason: string, code?: number) {
     // Performance data (native outage.summary): how it dropped and how long
     // the link had been quiet. Never the close reason text.
-    diag.stability.transportLost(reason, code, this.lastRxAt ? Date.now() - this.lastRxAt : undefined);
+    const quietMs = this.lastRxAt ? Date.now() - this.lastRxAt : undefined;
+    logger.info('WebSocket closed', {
+      reason, code, quietMs, attempt: this.reconnectAttempts, wasAuthenticated: this.authenticated,
+      outageMs: this.outageMs(), intentional: this.intentionalClose,
+    });
+    diag.stability.transportLost(reason, code, quietMs);
     diag.record('ws.state', undefined, { state: 'disconnected', source: reason, attempt: this.reconnectAttempts });
     this.cleanup();
     this.callbacks.onClose?.();
@@ -499,6 +519,15 @@ export class KrakiTransport {
 
   setAuthenticated(value: boolean) {
     this.authenticated = value;
+    if (value && this.outageStartedAt !== null) {
+      const now = Date.now();
+      logger.info('Reconnected', {
+        outageMs: now - this.outageStartedAt,
+        attempts: this.reconnectAttempts,
+        openMs: this.attemptOpenedAt ? this.attemptOpenedAt - this.attemptStartedAt : undefined,
+        authMs: this.attemptOpenedAt ? now - this.attemptOpenedAt : undefined,
+      });
+    }
     if (value) {
       this.reconnectDelay = RECONNECT_BASE;
       this.reconnectAttempts = 0;
@@ -535,12 +564,17 @@ export class KrakiTransport {
     this.outageStartedAt ??= now;
     const delayMs = KrakiTransport.reconnectDelayFor(this.reconnectDelay, now - this.outageStartedAt);
     this.reconnectAttempts += 1;
+    logger.info('Reconnect scheduled', { attempt: this.reconnectAttempts, delayMs, outageMs: now - this.outageStartedAt });
     getStore().setReconnectState(this.reconnectAttempts, delayMs);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, delayMs);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX);
+  }
+
+  private outageMs(now = Date.now()): number | undefined {
+    return this.outageStartedAt === null ? undefined : now - this.outageStartedAt;
   }
 
   private cleanup() {
