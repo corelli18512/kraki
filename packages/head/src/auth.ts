@@ -50,6 +50,9 @@ export interface AuthProvider {
   readonly name: string;
   /** Validate credentials and return user info */
   authenticate(credentials: AuthCredentials): Promise<AuthOutcome>;
+  /** The token is this provider's own secret (the open shared key): no other
+   *  provider may be shown it. */
+  isOwnSecret?(token: string): boolean;
 }
 
 /** Credentials a device can send */
@@ -233,6 +236,10 @@ export class OpenAuthProvider implements AuthProvider {
     this.sharedKey = sharedKey;
   }
 
+  isOwnSecret(token: string): boolean {
+    return !!this.sharedKey && safeEqual(token, this.sharedKey);
+  }
+
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {
     if (this.sharedKey) {
       if (!credentials.token || !safeEqual(credentials.token, this.sharedKey)) {
@@ -296,6 +303,10 @@ export class ThrottledAuthProvider implements AuthProvider {
     this.windowMs = windowMs;
     this.cleanupTimer = setInterval(() => this.cleanup(), windowMs * 2);
     this.cleanupTimer.unref();
+  }
+
+  isOwnSecret(token: string): boolean {
+    return this.inner.isOwnSecret?.(token) ?? false;
   }
 
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {

@@ -299,9 +299,11 @@ export class LocalAuthBackend implements AuthBackend {
     ip?: string,
     remoteClient?: boolean,
   ): Promise<{ ok: true; userId: string; pairingToken: string; expiresIn: number } | { ok: false; code: string; message: string }> {
-    // Try all providers
+    // Try all providers; but the open shared key (sent by `kraki pair` on an
+    // open computer) only to the open provider, never to GitHub.
+    const owner = [...this.authProviders.values()].find((provider) => provider.isOwnSecret?.(token));
     let unavailable: string | undefined;
-    for (const provider of this.authProviders.values()) {
+    for (const provider of owner ? [owner] : this.authProviders.values()) {
       const result = await provider.authenticate({ token, ip, remoteClient });
       if (!result.ok && result.retryable) unavailable = result.message;
       if (result.ok) {
