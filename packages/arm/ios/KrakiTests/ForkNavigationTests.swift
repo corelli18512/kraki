@@ -32,7 +32,12 @@ final class ForkNavigationTests: XCTestCase {
         let app = makeApp()
         app.commandSender?.forkSession(sessionId: "src")
         let rid = try requestId(app)
-        try await Task.sleep(for: .milliseconds(700))
+        // The placeholder appears after the product's 450 ms delay: poll for it
+        // (a fixed sleep missed it on a slow CI runner).
+        let deadline = Date().addingTimeInterval(5)
+        while app.sessionStore.navigateToSession == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let placeholder = try XCTUnwrap(app.sessionStore.navigateToSession)
         XCTAssertEqual(app.sessionStore.pendingSessionTitles[placeholder], "Fork of Plan")
         app.sessionStore.navigateToSession = nil

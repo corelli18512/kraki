@@ -12,6 +12,13 @@ import UIKit
     private let device = "voice-test-device"
 
     private func drain(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    /// Busy CI runners: wait for the real state instead of a fixed delay.
+    @discardableResult
+    private func drain(until condition: () -> Bool, timeout: Double = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { drain(0.02) }
+        return condition()
+    }
     private func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
     private func editor(_ host: UIViewController) -> UITextView? {
         all(host.view).compactMap { $0 as? UITextView }.first(where: \.isEditable)
@@ -70,6 +77,66 @@ import UIKit
         XCTAssertTrue(app.iosVoiceComposer.isRecording(in: sid), "going offline must not end dictation")
         setOnline(app, true)
         XCTAssertTrue(app.iosVoiceComposer.isRecording(in: sid), "a presence blip must not end dictation")
+    }
+
+    func testQuestionReturnWaitsForStagedVoiceSend() throws {
+        try assertStructuredReturnWaitsForVoice(answering: true)
+    }
+
+    func testPermissionReturnWaitsForStagedVoiceSend() throws {
+        try assertStructuredReturnWaitsForVoice(answering: false)
+    }
+
+    private func assertStructuredReturnWaitsForVoice(answering: Bool) throws {
+        try requireForegroundUITests()
+        let driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false, automaticPartials: false)
+        let app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
+        var sent: [String] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            sent.append(message["type"] as? String ?? "")
+            return true
+        }
+        self.app = app
+        let voice = app.iosVoiceComposer
+        voice.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        // The mic must really be open (lease + connection), or ↑ before that
+        // correctly returns the words to the box and nothing is staged.
+        let controller = app.voiceInputController
+        XCTAssertTrue(drain(until: { controller.isRecording && controller.activeSessionID == self.sid }),
+                      "voice never started recording; controller=\(controller.state)")
+        driver.emit(.partial("voice first"))
+        XCTAssertTrue(drain(until: { voice.rawText == "voice first" }))
+        XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt))
+        XCTAssertTrue(voice.isFinishing(in: sid), "the voice message is staged while it is corrected")
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: MessageInputView(
+            sessionId: sid,
+            pendingPermission: answering ? nil : PendingPermission(id: "p", sessionId: sid, description: "Run?", toolName: "Bash", args: nil, timestamp: Date()),
+            pendingQuestion: answering ? PendingQuestion(id: "q", sessionId: sid, question: "Which?", choices: nil, timestamp: Date()) : nil
+        ).environment(app))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        drain(until: { self.editor(host) != nil })
+        let field = try XCTUnwrap(editor(host))
+        field.becomeFirstResponder()
+        field.insertText("typed second")
+        XCTAssertTrue(drain(until: { app.sessionStore.drafts[self.sid] == "typed second" }))
+        XCTAssertTrue(voice.isFinishing(in: sid), "still correcting when Return is pressed")
+        field.insertText("\n")
+        drain(0.1)
+        XCTAssertTrue(sent.isEmpty, "a keyboard structured response cannot overtake correcting voice")
+        XCTAssertEqual(app.sessionStore.drafts[sid], "typed second", "blocked submission retains the draft")
+
+        driver.emit(.final("voice first corrected", rawText: "voice first"))
+        drain(until: { sent.count >= 1 })
+        XCTAssertEqual(sent, ["send_input"])
+        field.insertText("\n")
+        drain(until: { sent.count >= 2 })
+        XCTAssertEqual(sent, ["send_input", answering ? "send_input" : "deny"])
+        XCTAssertEqual(app.sessionStore.drafts[sid] ?? "", "")
     }
 
     func testOfflineSendGoesToTheOutbox() throws {
