@@ -49,22 +49,40 @@ enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     #if os(macOS)
     private static let overrideKey = "AppleLanguages"
     /// Whether the user picked a fixed language in-app (nil = follow system).
-    static var override: AppLanguage? {
-        // Read only our own domain: UserDefaults.standard also sees the
-        // global AppleLanguages, which is the system list, not an override.
-        guard let list = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?[overrideKey] as? [String],
-              let first = list.first else { return nil }
-        return AppLanguage(rawValue: first)
+    static var override: AppLanguage? { override(in: .standard, domain: Bundle.main.bundleIdentifier ?? "") }
+
+    /// The language an app-domain `AppleLanguages` list forces. Values written
+    /// outside the picker (`zh-Hans-CN`, `en-GB`, System Settings) resolve the
+    /// way the bundle does, so the picker shows what the app actually uses.
+    static func override(in defaults: UserDefaults, domain: String) -> AppLanguage? {
+        guard let list = storedOverride(in: defaults, domain: domain), !list.isEmpty else { return nil }
+        let resolved = Bundle.preferredLocalizations(from: allCases.map(\.rawValue), forPreferences: list).first
+        return resolved.flatMap(AppLanguage.init(rawValue:))
+    }
+
+    /// Read only our own domain: UserDefaults.standard also sees the global
+    /// AppleLanguages, which is the system list, not an override.
+    private static func storedOverride(in defaults: UserDefaults, domain: String) -> [String]? {
+        defaults.persistentDomain(forName: domain)?[overrideKey] as? [String]
     }
 
     /// Takes effect at the next launch. Returns true if it changed.
     @discardableResult
     static func setOverride(_ language: AppLanguage?) -> Bool {
-        guard language != override else { return false }
+        setOverride(language, in: .standard, domain: Bundle.main.bundleIdentifier ?? "")
+    }
+
+    @discardableResult
+    static func setOverride(_ language: AppLanguage?, in defaults: UserDefaults, domain: String) -> Bool {
+        let stored = storedOverride(in: defaults, domain: domain)
         if let language {
-            UserDefaults.standard.set([language.rawValue], forKey: overrideKey)
+            guard stored != [language.rawValue] else { return false }
+            defaults.set([language.rawValue], forKey: overrideKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: overrideKey)
+            // System Default clears any stored list, including one the picker
+            // can't name.
+            guard stored != nil else { return false }
+            defaults.removeObject(forKey: overrideKey)
         }
         return true
     }
