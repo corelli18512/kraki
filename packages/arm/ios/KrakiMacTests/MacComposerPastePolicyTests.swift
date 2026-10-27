@@ -28,15 +28,19 @@ final class MacComposerPastePolicyTests: XCTestCase {
 
     private let png = NSPasteboard.PasteboardType(UTType.png.identifier)
 
-    private func tiffData() throws -> Data {
-        try XCTUnwrap(NSImage(size: NSSize(width: 6, height: 4), flipped: false) { rect in
+    /// 6×4 unless sized: the stand-in for Finder's icon and clipboard data.
+    private func tiffData(_ size: NSSize = NSSize(width: 6, height: 4)) throws -> Data {
+        try XCTUnwrap(NSImage(size: size, flipped: false) { rect in
             NSColor.systemRed.setFill(); rect.fill(); return true
         }.tiffRepresentation)
     }
 
-    private func pngData() throws -> Data {
-        try XCTUnwrap(NSBitmapImageRep(data: try tiffData())?.representation(using: .png, properties: [:]))
+    private func pngData(_ size: NSSize = NSSize(width: 6, height: 4)) throws -> Data {
+        try XCTUnwrap(NSBitmapImageRep(data: try tiffData(size))?.representation(using: .png, properties: [:]))
     }
+
+    /// The copied file's own size, distinct from the icon's 6×4.
+    private let fileSize = NSSize(width: 10, height: 10)
 
     /// One pasteboard item carrying every given representation, as an app's copy does.
     private func put(_ representations: [NSPasteboard.PasteboardType: Data]) {
@@ -129,18 +133,40 @@ final class MacComposerPastePolicyTests: XCTestCase {
     }
 
     func testImageFileURLAttachesImage() throws {
-        let url = try file("shot.png", try pngData())
+        let url = try file("shot.png", try pngData(fileSize))
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.writeObjects([fileItem(url, name: "shot.png", icon: try tiffData())]))
         assertAttachesImage("Finder copy of an image file (URL + file name + icon)")
+        XCTAssertEqual(MacComposerPastePolicy.image(from: pasteboard)?.size, fileSize, "the file, not Finder's icon")
     }
 
     func testSeveralFileURLsAttachTheFirstImageFile() throws {
         let text = try file("notes.txt", Data("hello".utf8))
-        let image = try file("photo.png", try pngData())
+        let image = try file("photo.png", try pngData(fileSize))
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.writeObjects([fileItem(text), fileItem(image)]))
+        XCTAssertTrue(pasteboard.writeObjects([fileItem(text, name: "notes.txt", icon: try tiffData()),
+                                               fileItem(image, name: "photo.png", icon: try tiffData())]))
         assertAttachesImage("text file + image file")
+        XCTAssertEqual(MacComposerPastePolicy.image(from: pasteboard)?.size, fileSize, "the image file, not an icon")
+    }
+
+    func testUnreadableImageFileFallsBackToClipboardImageData() throws {
+        let missing = directory.appendingPathComponent("gone.png")
+        pasteboard.clearContents()
+        let item = fileItem(missing)
+        item.setData(try pngData(), forType: png)
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+        assertAttachesImage("an unreadable image file URL still attaches the image data beside it")
+        XCTAssertEqual(MacComposerPastePolicy.image(from: pasteboard)?.size, NSSize(width: 6, height: 4))
+    }
+
+    func testRichTextImageOnlyCopyAttachesImage() throws {
+        let rtf = try XCTUnwrap(NSAttributedString(string: "\u{FFFC}").rtf(
+            from: NSRange(location: 0, length: 1), documentAttributes: [:]))
+        put([.rtf: rtf, .string: Data("\u{FFFC}".utf8), .tiff: try tiffData()])
+        assertAttachesImage("TextEdit/Notes image-only copy: the string is only the attachment placeholder")
+        put([.rtf: rtf, .string: Data(" \u{FFFC}\n".utf8), png: try pngData()])
+        assertAttachesImage("placeholder with whitespace")
     }
 
     func testNonImageFileURLPastesNormally() throws {

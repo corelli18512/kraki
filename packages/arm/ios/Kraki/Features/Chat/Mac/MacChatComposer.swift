@@ -455,7 +455,7 @@ struct MacChatComposer: View {
                         || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
                 })
             },
-            perform: loadPastedImage
+            perform: pasteClipboardImage
         )
     }
 
@@ -823,36 +823,11 @@ struct MacChatComposer: View {
         attachImage(image)
     }
 
-    private func loadPastedImage(_ provider: NSItemProvider) {
-        if let imageType = provider.registeredTypeIdentifiers.first(where: { identifier in
-            UTType(identifier)?.conforms(to: .image) == true
-        }) {
-            provider.loadDataRepresentation(forTypeIdentifier: imageType) { data, _ in
-                Task { @MainActor in
-                    guard let data, let image = NSImage(data: data) else {
-                        imageAttachError = String(localized: "The clipboard image couldn't be read.")
-                        return
-                    }
-                    attachImage(image)
-                    isFocused = true
-                }
-            }
-            return
-        }
-
-        provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-            Task { @MainActor in
-                guard let data,
-                      let string = String(data: data, encoding: .utf8),
-                      let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
-                      url.isFileURL else {
-                    imageAttachError = String(localized: "The clipboard doesn't contain a readable image.")
-                    return
-                }
-                loadImage(url)
-                isFocused = true
-            }
-        }
+    /// Edit ▸ Paste that reaches SwiftUI: the same decision as the ⌘V probe.
+    private func pasteClipboardImage(_: NSItemProvider) {
+        guard let image = MacComposerPastePolicy.image(from: .general) else { return }
+        attachImage(image)
+        isFocused = true
     }
 
     private func attachImage(_ image: NSImage) {

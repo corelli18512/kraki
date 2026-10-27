@@ -930,7 +930,7 @@ final class SessionStore {
         if drafts != nextDrafts { drafts = nextDrafts }
         if autoReadSuppressedSessions != nextAutoReadSuppressed { autoReadSuppressedSessions = nextAutoReadSuppressed }
         scheduleSave()
-        return removedIDs
+        return discardingStagedImages(of: removedIDs)
     }
 
     func removeSession(_ id: String) {

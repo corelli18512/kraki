@@ -6,12 +6,15 @@ import UniformTypeIdentifiers
 ///
 /// The rule, in order:
 /// 1. File URLs decide alone: a copied image file is attached; any other file
-///    pastes as usual (Finder's file-name text, never the file's icon).
+///    pastes as usual (Finder's file-name text, never the file's icon). If no
+///    image file can be read, the clipboard's own image data is attached.
 /// 2. Text wins over an image: spreadsheet, Office and Keynote copies carry
-///    the text and a picture of it. Text is a plain string or RTF. A string
-///    that is only one web address (http, https or data, no whitespace) is
-///    the image's own source from a browser's Copy Image, so the image is
-///    attached. HTML alone is not text (browser image copies carry `<img>`).
+///    the text and a picture of it. The plain string decides; RTF counts only
+///    without one. Attachment placeholders (U+FFFC, a rich-text editor's
+///    image-only copy) are not text. A string that is only one web address
+///    (http, https or data, no whitespace) is the image's own source from a
+///    browser's Copy Image, so the image is attached. HTML alone is not text
+///    (browser image copies carry `<img>`).
 /// 3. Otherwise image data (PNG, TIFF, JPEG, PDF…) is attached.
 enum MacComposerPastePolicy {
     static func attachesImage(_ pasteboard: NSPasteboard) -> Bool {
@@ -25,9 +28,11 @@ enum MacComposerPastePolicy {
     static func image(from pasteboard: NSPasteboard) -> NSImage? {
         guard attachesImage(pasteboard) else { return nil }
         let files = fileURLs(pasteboard)
-        if !files.isEmpty {
-            return files.lazy.filter(isImageFile).compactMap { NSImage(contentsOf: $0) }.first
+        if let image = files.lazy.filter(isImageFile).compactMap({ NSImage(contentsOf: $0) }).first {
+            return image
         }
+        // Only reached for image files that cannot be read (attachesImage is
+        // false for other files, so Finder's icon of a document never comes here).
         guard let type = imageDataType(pasteboard), let data = pasteboard.data(forType: type) else { return nil }
         return NSImage(data: data)
     }
@@ -45,10 +50,12 @@ enum MacComposerPastePolicy {
     }
 
     private static func hasText(_ pasteboard: NSPasteboard) -> Bool {
-        if pasteboard.availableType(from: [.rtf]) != nil { return true }
-        guard let string = pasteboard.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !string.isEmpty else { return false }
-        return !isSingleWebAddress(string)
+        guard let raw = pasteboard.string(forType: .string) else {
+            return pasteboard.availableType(from: [.rtf]) != nil
+        }
+        let string = raw.replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !string.isEmpty && !isSingleWebAddress(string)
     }
 
     private static func isSingleWebAddress(_ string: String) -> Bool {

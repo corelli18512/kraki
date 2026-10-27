@@ -180,6 +180,24 @@ final class SessionStoreStagedImageTests: XCTestCase {
         XCTAssertTrue(store.stagedImages.isEmpty, "sign-out/reset drops staged images")
     }
 
+    func testSessionListWithoutTheSessionDropsItsStagedImage() {
+        let store = SessionStore(persistenceEnabled: false)
+        func digest(_ id: String) -> SessionDigest {
+            SessionDigest(id: id, agent: "pi", state: .idle, mode: .auto, lastSeq: 1, readSeq: 1,
+                          messageCount: 1, createdAt: "2026-01-01T00:00:00Z")
+        }
+        store.reconcileSessionList([digest("a"), digest("b")], deviceId: "dev", deviceName: "Mac")
+        let image = StagedComposerImage(data: Data([1, 2, 3]), mimeType: "image/png")
+        store.setStagedImage("a", image)
+        store.setStagedImage("b", image)
+        store.setDraft("a", "draft")
+        let removed = store.reconcileSessionList([digest("b")], deviceId: "dev", deviceName: "Mac")
+        XCTAssertEqual(removed, ["a"])
+        XCTAssertNil(store.drafts["a"])
+        XCTAssertNil(store.stagedImages["a"], "removed with its draft")
+        XCTAssertEqual(store.stagedImages["b"], image, "a Session still listed keeps its image")
+    }
+
     func testEachStagedImageHasItsOwnIdentity() {
         let data = Data([1, 2, 3])
         XCTAssertNotEqual(StagedComposerImage(data: data, mimeType: "image/png"),
