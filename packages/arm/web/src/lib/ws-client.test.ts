@@ -2012,6 +2012,32 @@ describe('KrakiWSClient', () => {
       }
     });
 
+    it('an input refused for lack of a target key raises the banner once, not on every queued re-dispatch', async () => {
+      vi.useFakeTimers();
+      try {
+        const { outbox, checkDeadlines } = await import('./chat/outbox');
+        outbox.reset();
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+        const encryption = (client as unknown as { encryption: { encryptForTarget: (m: Record<string, unknown>) => Promise<unknown> } }).encryption;
+        const encrypt = vi.spyOn(encryption, 'encryptForTarget').mockResolvedValue(null);
+        client.sendInput('sess-1', 'hi');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(useStore.getState().lastError).not.toBeNull();
+        useStore.getState().setLastError(null); // the user dismisses it
+        const ws = socketOf(client)!;
+        // Drive the outbox tick directly: its interval may predate the fake clock.
+        for (let i = 0; i < 5; i++) { await vi.advanceTimersByTimeAsync(1_000); ws._receive({ type: 'pong' }); checkDeadlines(); }
+        expect(encrypt.mock.calls.length).toBeGreaterThan(2); // still re-dispatched every tick (Mac parity)
+        expect(useStore.getState().lastError).toBeNull();
+        outbox.reset();
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('a silent authenticated socket is abandoned after 22 s and replaced', async () => {
       vi.useFakeTimers();
       try {

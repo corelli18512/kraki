@@ -170,7 +170,7 @@ export class KrakiWSClient {
       connected: () => getStore().status === 'connected',
     });
     outbox.configure({
-      send: (msg) => this.transmit(msg),
+      send: (msg, opts) => this.transmit(msg, opts?.quiet === true),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
       isLinkBusy: () => Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS,
       acceptsResend: (sessionId) => this.acceptsResend(sessionId),
@@ -388,8 +388,9 @@ export class KrakiWSClient {
 
   /** Encrypt a consumer message to its target tentacle and send it over pulse.
    *  `onSeq`, if given, receives the pulse send seq (for optimistic-rollback
-   *  tracking), or null when the target/key could not be resolved. */
-  sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
+   *  tracking), or null when the target/key could not be resolved. `quiet`
+   *  skips the error banner for a retry whose refusal was already reported. */
+  sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void, quiet = false) {
     // The Tentacle only learns the sender from inside the E2E payload (Head
     // forwards it opaque). Without it, it cannot address replies such as the
     // re-echo of a duplicate input, which then stays unconfirmed forever.
@@ -405,7 +406,7 @@ export class KrakiWSClient {
     this.encryptOrdered(msg, this.targetFor(msg), () => this.encryption.encryptForTarget(msg), (enc) => {
       if (!enc) {
         traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-FAIL', type: msg.type as string, clientId });
-        getStore().setLastError(t('app:errors.noTarget'));
+        if (!quiet) getStore().setLastError(t('app:errors.noTarget'));
         onSeq?.(null);
         return;
       }
@@ -615,8 +616,8 @@ export class KrakiWSClient {
 
   /** Hand a consumer message to transport; resolves false if it could not be
    *  encrypted/routed. */
-  private transmit(msg: Record<string, unknown>): Promise<boolean> {
-    return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null)));
+  private transmit(msg: Record<string, unknown>, quiet: boolean): Promise<boolean> {
+    return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null), quiet));
   }
 
   /** Relay connected and live (not silent past a ping round), and the
