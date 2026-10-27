@@ -478,9 +478,10 @@ appIpc.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(pa
 appIpc.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
   if (builtIn.marker()) throw new Error(i18n.t('error.builtInManagesPC'));
-  // The CLI's own output (path, English stderr) is not shown in This PC.
+  // Never Node's "Command failed: <path> …"; like the Mac, our sentence plus
+  // the last line the CLI printed (e.g. "kraki: daemon is not installed").
   try { await settings.exec(pref('externalCliPath') || builtIn.bin, [action]); }
-  catch { throw new Error(i18n.t(`error.external.${action}`)); }
+  catch (error) { throw new Error(settings.withCliDetail(i18n.t(`error.external.${action}`), error)); }
 }));
 appIpc.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
 appIpc.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
@@ -549,7 +550,7 @@ appIpc.handle('kraki:settings-recheck-cli', safely(async () => {
 appIpc.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
   if (!readConfig()) throw new Error(i18n.t('error.setupFirst'));
   try { await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']); }
-  catch { throw new Error(i18n.t('error.updatePolicy')); }
+  catch (error) { throw new Error(settings.withCliDetail(i18n.t('error.updatePolicy'), error)); }
   if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error(i18n.t('error.updatePolicy'));
 }));
 

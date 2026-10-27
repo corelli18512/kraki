@@ -195,7 +195,7 @@ test('sign-in window opens https links only; built-in sign-in callback is unchan
   assert.equal(await result, 'kraki://auth/callback?code=1&state=2');
 });
 
-test('This PC: a failing CLI command shows localized copy, never the raw child_process error', { skip: process.platform === 'win32' }, async () => {
+test('This PC: a failing CLI command shows localized copy plus the CLI\'s last line (Mac parity), never the raw child_process error', { skip: process.platform === 'win32' }, async () => {
   const env = loadMain();
   const home = mkdtempSync(path.join(tmpdir(), 'kraki-main-'));
   try {
@@ -205,10 +205,13 @@ test('This PC: a failing CLI command shows localized copy, never the raw child_p
     env.context.__builtIn = { bin, marker: () => null, home: () => home };
     vm.runInContext('builtIn = __builtIn', env.context);
     const event = { sender: env.main.webContents, senderFrame: env.main.webContents.mainFrame };
+    const detail = ' kraki: daemon is not installed';
     for (const [action, error] of [['start', "Couldn't start the command-line Kraki."], ['stop', "Couldn't stop the command-line Kraki."], ['restart', "Couldn't restart the command-line Kraki."]]) {
-      assert.deepEqual({ ...await env.handlers.get('kraki:builtin-external-presence').fn(event, action) }, { ok: false, error });
+      const result = { ...await env.handlers.get('kraki:builtin-external-presence').fn(event, action) };
+      assert.deepEqual(result, { ok: false, error: error + detail });
+      assert.doesNotMatch(result.error, /Command failed|\//);
     }
-    assert.deepEqual({ ...await env.handlers.get('kraki:settings-remote-updates').fn(event, false) }, { ok: false, error: 'Kraki could not change its update policy.' });
+    assert.deepEqual({ ...await env.handlers.get('kraki:settings-remote-updates').fn(event, false) }, { ok: false, error: 'Kraki could not change its update policy.' + detail });
   } finally { rmSync(home, { recursive: true }); }
 });
 
