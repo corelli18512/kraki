@@ -87,3 +87,9 @@ it('keeps USD notation and precision in Chinese for ordinary costs', async () =>
     expect(screen.getByText('$0.042')).toBeInTheDocument();
   } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
 });
+
+it('shows an effort level it has no copy for as the agent reported it, not as a translation key', () => {
+  const unknown: ModelDetail[] = [{ ...details[0], supportedReasoningEfforts: ['minimal' as never, 'low'] }];
+  render(<SessionInfoPanel session={session} usage={usage} models={['m1']} modelDetails={unknown} onClose={close} />);
+  expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['minimal', 'Low']);
+});

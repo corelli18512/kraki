@@ -208,7 +208,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                       );
                     }}
                   >
-                    {t(`sessionInfo.effort.${e}`)}
+                    {t(`sessionInfo.effort.${e}`, { defaultValue: e })}
                   </button>
                 ))}
               </div>
