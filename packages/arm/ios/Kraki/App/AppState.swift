@@ -221,6 +221,15 @@ final class AppState {
         self.connectionStatus = .disconnected
         bindStores()
     }
+
+    #if os(macOS)
+    /// Tests: a local link (no socket) that claims to serve `tentacleId`.
+    func linkLocallyForTesting(_ tentacleId: String?) {
+        let link = localLink ?? LocalLinkClient(appState: self)
+        link.debugSetLinked(tentacleId)
+        localLink = link
+    }
+    #endif
     #endif
 
     // MARK: - Connection
