@@ -51,12 +51,12 @@ struct SessionSplitPlaceholder: View {
                 .interpolation(.high)
                 .frame(width: 56, height: 56)
                 .opacity(0.9)
-            Text(appState.sessionStore.sessions.isEmpty ? "No sessions yet" : "Select a session")
+            let empty = appState.sessionStore.sessions.isEmpty
+            Text(empty ? String(localized: "No sessions yet") : String(localized: "Select a session"))
                 .font(.headline)
                 .foregroundStyle(Color.textPrimary)
-            Text(appState.sessionStore.sessions.isEmpty
-                 ? "Tap + to start a session on one of your computers."
-                 : "Choose a session from the list to continue the conversation.")
+            Text(empty ? String(localized: "Tap + to start a session on one of your computers.")
+                       : String(localized: "Choose a session from the list to continue the conversation."))
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
