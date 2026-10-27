@@ -121,6 +121,11 @@ final class MacComposerTextView: NSTextView {
         return resigned
     }
 
+    /// The click that activates an inactive window lands in the composer
+    /// (NSTextView ignores it by default). The composer used to take focus
+    /// back on the activation re-render instead, from whichever field had it.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     // MARK: Undo / Redo
     //
     // Edit ▸ Undo/Redo and ⌘Z/⇧⌘Z send undo:/redo: up the responder chain.

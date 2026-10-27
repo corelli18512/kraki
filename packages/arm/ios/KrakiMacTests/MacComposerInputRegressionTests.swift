@@ -101,6 +101,8 @@ final class MacComposerInputRegressionTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(editor)); drain(50)
         rerenderComposer(app)
         XCTAssertTrue(window.firstResponder === editor, "clicking back into the composer did not stick")
+        // The click that activates an inactive window reaches the editor.
+        XCTAssertTrue(editor.acceptsFirstMouse(for: nil))
     }
 
     @Observable final class InputState {
