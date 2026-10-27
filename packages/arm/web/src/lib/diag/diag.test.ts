@@ -179,6 +179,18 @@ describe('StabilityTracker (port)', () => {
       { open: expect.objectContaining({ outcome: 'timeout', reconnecting: true }) },
     ]);
   });
+  it('sleep: the next visibility is a wake opening, even when the window was also hidden; later outages count from the wake', () => {
+    const { t, out, go } = tracker();
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;
+    t.systemWillSleep(); t.appHidden(); go(60_000);
+    t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null);
+    go(1000); t.transportLost('peer_closed', 1006, 120_000);
+    t.connecting(); go(100); t.authenticated(); t.sessionListApplied(null);
+    expect(out).toEqual([
+      { ready: expect.objectContaining({ kind: 'wake', backgroundMs: 60_000, outcome: 'ready' }) },
+      { outage: expect.objectContaining({ afterWake: true, detectMs: 1000, outcome: 'recovered' }) },
+    ]);
+  });
   it('offline with no reconnect running, an opening is not recorded', () => {
     const { t, out, go } = tracker();
     t.appVisible(true, false); t.authenticated(); t.sessionListApplied(null); out.length = 0;

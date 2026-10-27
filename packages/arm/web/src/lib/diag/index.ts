@@ -81,10 +81,22 @@ export class Diag {
     window.addEventListener('online', () => this.stability.pathChanged(path()));
     window.addEventListener('offline', () => this.stability.pathChanged(path()));
     const visible = () => document.visibilityState === 'visible';
+    const viewing = () => location.pathname.startsWith('/session/');
     document.addEventListener('visibilitychange', () => {
       this.phase(visible() ? 'active' : 'background');
-      if (visible()) this.stability.appVisible(true, location.pathname.startsWith('/session/'));
+      if (visible()) this.stability.appVisible(true, viewing());
       else this.stability.appHidden();
+    });
+    // Windows sleep/wake (Mac willSleep): the next visibility is a `wake`
+    // opening. A window that stayed visible gets no visibilitychange.
+    desktop?.onPower?.((event) => {
+      if (event === 'suspend') {
+        this.phase('background');
+        this.stability.systemWillSleep();
+      } else if (visible()) {
+        this.phase('active');
+        this.stability.appVisible(true, viewing());
+      }
     });
     this.client.start();
     this.record('app.launch');

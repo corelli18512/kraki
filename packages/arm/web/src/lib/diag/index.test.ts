@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiagRecorder } from './recorder';
 
-const { recorders } = vi.hoisted(() => ({ recorders: [] as DiagRecorder[] }));
+const { recorders, power } = vi.hoisted(() => ({ recorders: [] as DiagRecorder[], power: { handler: null as ((event: 'suspend' | 'resume') => void) | null } }));
+vi.mock('../desktop', () => ({ desktop: { onPower: (handler: (event: 'suspend' | 'resume') => void) => { power.handler = handler; return () => {}; } } }));
 vi.mock('./client', async (importOriginal) => ({
   ...await importOriginal<typeof import('./client')>(),
   DiagClient: class {
@@ -60,6 +61,17 @@ describe('Diag experience summary wiring', () => {
     expect(recorder.drain().events.filter((e) => e.ev === 'open.summary').map(({ sid, d }) => ({ sid, d }))).toEqual([
       { sid: undefined, d: { outcome: 'current', gap: 2, firstContentMs: 120, viewCurrentMs: 120, reconnecting: true } },
     ]);
+  });
+  it('desktop sleep finishes records and goes background; resume while visible is a wake opening (Mac willSleep)', () => {
+    const { d, recorder } = harness();
+    let now = 0;
+    d.stability.now = () => now;
+    d.stability.authenticated(); d.stability.sessionListApplied(null); recorder.drain();
+    now = 1000; power.handler!('suspend');
+    now = 61_000; power.handler!('resume');
+    d.stability.authenticated(); d.stability.sessionListApplied(null);
+    expect(recorder.drain().events.map(({ ev, d }) => ev === 'app.phase' ? d.phase : ev === 'ready.summary' ? `${d.kind}:${d.backgroundMs}` : ev))
+      .toEqual(['background', 'active', 'wake:60000']);
   });
   it('wires longtask completion into ui.busy and suppresses background observations', () => {
     let observed!: PerformanceObserverCallback;

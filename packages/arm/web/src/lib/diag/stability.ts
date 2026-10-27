@@ -97,6 +97,8 @@ export class StabilityTracker {
     if (this.asleepAt !== null) {
       const asleep = this.asleepAt;
       this.asleepAt = null;
+      // Hidden during the sleep too: this wake opening covers it.
+      this.hiddenAt = null;
       this.lastWake = this.now();
       this.begin('wake', asleep, true, viewing);
       return;
