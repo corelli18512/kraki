@@ -11,34 +11,47 @@ struct SessionCardView: View {
     @Environment(AppState.self) private var appState
     let sessionId: String
 
+    /// Reads exactly the store inputs the card shows (so it refreshes exactly
+    /// when it did before), computes the projection once, and hands plain
+    /// values to an Equatable body: rows whose content didn't change skip
+    /// render and layout when another Session updates (Time Profiler: every
+    /// visible card re-rendered on each reorder, building its projection
+    /// ~10 times per pass).
     var body: some View {
         if let session = appState.sessionStore.sessions[sessionId]
             ?? appState.sessionStore.archivedSessionInfo(sessionId) {
-            SessionCardBody(session: session)
-                .environment(appState)
+            SessionCardBody(
+                session: session,
+                projection: SessionCardProjection.make(
+                    session: session,
+                    device: appState.deviceStore.devices[session.deviceId],
+                    preview: appState.sessionStore.sessionPreviews[session.id]
+                        ?? appState.sessionStore.archivedPreview(session.id),
+                    draft: appState.sessionStore.drafts[session.id],
+                    isCompacting: {
+                        if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
+                        return false
+                    }(),
+                    pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
+                    isDeliveryOnline: appState.isFullyOnline,
+                    modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
+                ),
+                isAwaitingGreeting: appState.deviceStore.pendingGreetingIds.contains(session.deviceId)
+            )
+            .equatable()
         }
     }
 }
 
-private struct SessionCardBody: View {
-    @Environment(AppState.self) private var appState
+/// Pure function of its values: no store reads below this point.
+private struct SessionCardBody: View, Equatable {
     let session: SessionInfo
+    let projection: SessionCardProjection
+    let isAwaitingGreeting: Bool
 
-    private var projection: SessionCardProjection {
-        SessionCardProjection.make(
-            session: session,
-            device: appState.deviceStore.devices[session.deviceId],
-            preview: appState.sessionStore.sessionPreviews[session.id]
-                ?? appState.sessionStore.archivedPreview(session.id),
-            draft: appState.sessionStore.drafts[session.id],
-            isCompacting: {
-                if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
-                return false
-            }(),
-            pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
-            isDeliveryOnline: appState.isFullyOnline,
-            modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
-        )
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.session == rhs.session && lhs.projection == rhs.projection
+            && lhs.isAwaitingGreeting == rhs.isAwaitingGreeting
     }
 
     /// Row heights that grow with the text size setting (Dynamic Type) and
@@ -48,7 +61,7 @@ private struct SessionCardBody: View {
 
     private var deviceStatusColor: Color {
         guard projection.deviceOnline == true else { return .gray }
-        if appState.deviceStore.pendingGreetingIds.contains(session.deviceId) {
+        if isAwaitingGreeting {
             return Color(hex: 0xFBBF24)
         }
         return Color(hex: 0x34D399)

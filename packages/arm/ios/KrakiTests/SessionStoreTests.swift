@@ -791,3 +791,35 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(app.sessionStore.sessionListRevealId)
     }
 }
+
+extension SessionStoreTests {
+    /// `unreadSessionIDs` is stored (so the tab badge isn't re-derived on
+    /// every Session change); every way `sessions` changes must keep it equal
+    /// to the definition: readSeq < lastSeq.
+    func testUnreadSetFollowsEveryKindOfSessionMutation() throws {
+        func expected() -> Set<String> {
+            Set(store.sessions.values.filter { $0.readSeq < $0.lastSeq }.map(\.id))
+        }
+        store.upsertSession(makeDigest(id: "a", lastSeq: 3, readSeq: 3), deviceId: "d", deviceName: "n")
+        store.upsertSession(makeDigest(id: "b", lastSeq: 5, readSeq: 2), deviceId: "d", deviceName: "n")
+        XCTAssertEqual(store.unreadSessionIDs, ["b"])
+        store.sessions["a"]?.lastSeq = 4                     // in-place field write
+        XCTAssertEqual(store.unreadSessionIDs, ["a", "b"])
+        store.sessions["b"]?.readSeq = 5
+        XCTAssertEqual(store.unreadSessionIDs, ["a"])
+        store.upsertSession(makeDigest(id: "c", lastSeq: 9, readSeq: 1), deviceId: "d", deviceName: "n")
+        let c = try XCTUnwrap(store.sessions["c"])
+        store.sessions.removeValue(forKey: "c")
+        XCTAssertEqual(store.unreadSessionIDs, ["a"])
+        store.sessions["c"] = c                              // subscript insert
+        XCTAssertEqual(store.unreadSessionIDs, ["a", "c"])
+        store.sessions.removeValue(forKey: "a")              // removal
+        XCTAssertEqual(store.unreadSessionIDs, ["c"])
+        store.sessions = [:]                                 // whole replace
+        XCTAssertEqual(store.unreadSessionIDs, [])
+        store.upsertSession(makeDigest(id: "z", lastSeq: 2, readSeq: 0), deviceId: "d", deviceName: "n")
+        store.incrementUnread("z")
+        XCTAssertEqual(store.unreadSessionIDs, expected())
+        XCTAssertEqual(store.totalUnread, expected().count)
+    }
+}

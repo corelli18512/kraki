@@ -79,6 +79,12 @@ final class TentacleCLIManager {
     private(set) var fdaStatus: String?
     /// Relay connection state reported by the daemon.
     private(set) var relayState: String?
+    /// When the daemon last stopped reporting a live relay connection.
+    private(set) var relayDownSince: Date?
+    /// Stored (not derived from the clock at read time) so the menu bar is
+    /// invalidated when the grace period runs out: every poll re-evaluates it
+    /// and Observation notifies only when it flips.
+    private(set) var relayReachable = true
     /// Version of the running daemon binary (may lag the app after an update).
     private(set) var runningDaemonVersion: String?
 
@@ -305,7 +311,7 @@ final class TentacleCLIManager {
         let running = daemon?["running"] as? Bool ?? false
         let pid = daemon?["pid"] as? Int
         fdaStatus = daemon?["fda"] as? String
-        relayState = daemon?["relayState"] as? String
+        applyRelayState(daemon?["relayState"] as? String)
         runningDaemonVersion = daemon?["daemonVersion"] as? String
 
         if mode == .builtIn {
@@ -792,6 +798,40 @@ extension TentacleCLIManager {
             if actual != expected, actual.contains(Self.sparkleInstallationComponent) { return "pid \(pid): \(path)" }
         }
         return nil
+    }
+}
+
+// MARK: - Relay reachability (menu bar "reconnecting")
+
+extension TentacleCLIManager {
+    /// A reconnect shorter than this (relay deploy, Wi-Fi roam) never shows.
+    static let relayDownGrace: TimeInterval = 10
+
+    /// Daemons before status.json had relayState report nothing: trust them.
+    static func relayStateIsUp(_ state: String?) -> Bool {
+        state == nil || state == "connected"
+    }
+
+    /// False once the running daemon has been off the relay past the grace
+    /// period, so the menu bar stops claiming this Mac is online.
+    static func relayReachable(downSince: Date?, now: Date = Date()) -> Bool {
+        guard let downSince else { return true }
+        return now.timeIntervalSince(downSince) < relayDownGrace
+    }
+
+    /// Called on every status poll. Down-time counts from the first poll that
+    /// saw the relay not connected (a reconnect between two polls that the
+    /// polls never observe keeps counting; the poll is every 3 s in front,
+    /// 15 s in the background).
+    func applyRelayState(_ state: String?, now: Date = Date()) {
+        if relayState != state { relayState = state }
+        if Self.relayStateIsUp(state) {
+            if relayDownSince != nil { relayDownSince = nil }
+        } else if relayDownSince == nil {
+            relayDownSince = now
+        }
+        let reachable = Self.relayReachable(downSince: relayDownSince, now: now)
+        if relayReachable != reachable { relayReachable = reachable }
     }
 }
 

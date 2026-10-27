@@ -9,6 +9,7 @@ const { sockets, MockSocket } = vi.hoisted(() => {
     on: (event: string, cb: (...args: unknown[]) => void) => void;
     send: (data: string) => void;
     close: () => void;
+    terminate: () => void;
     emit: (event: string, ...args: unknown[]) => void;
   }> = [];
 
@@ -36,6 +37,11 @@ const { sockets, MockSocket } = vi.hoisted(() => {
     close(): void {
       this.readyState = 3;
       this.emit('close');
+    }
+
+    terminate(): void {
+      this.readyState = 3;
+      this.emit('close', 1006, Buffer.from(''));
     }
 
     emit(event: string, ...args: unknown[]): void {
@@ -361,6 +367,25 @@ describe('RelayClient auth negotiation', () => {
     // Still challenge auth: the device identity is kept for the retry.
     sockets.at(-1)!.emit('open');
     expect(JSON.parse(sockets.at(-1)!.sent[0]).auth).toEqual({ method: 'challenge', deviceId: 'dev_123' });
+  });
+
+  it('drops a stale connection at once when the network is gone (no close handshake)', async () => {
+    const client = new RelayClient(createAdapter(), createSessionManager(), {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' }, reconnectDelay: 10,
+    }, createKeyManager());
+    const states: string[] = [];
+    client.onStateChange = (state) => { states.push(state); };
+    client.connect();
+    const dead = sockets[0];
+    dead.emit('open');
+    // A dead network never answers a graceful close.
+    dead.close = () => {};
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(states).toContain('disconnected');
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    client.disconnect();
+    vi.clearAllTimers();
   });
 
   it('stays fatal on a deterministic auth rejection', async () => {

@@ -2014,7 +2014,10 @@ export class RelayClient {
       }
       if (elapsed > RelayClient.STALE_THRESHOLD) {
         logger.warn(`No activity for ${Math.round(elapsed / 1000)}s — connection stale, reconnecting`);
-        this.ws?.close();
+        // terminate, not close: a graceful close waits ~30 s for the peer's
+        // close frame, which a dead network never delivers, and the daemon
+        // keeps reporting "connected" (status.json, menu bar) the whole time.
+        this.ws?.terminate();
       }
     }, RelayClient.STALE_CHECK_INTERVAL);
   }

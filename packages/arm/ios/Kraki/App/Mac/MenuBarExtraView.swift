@@ -118,7 +118,7 @@ struct MenuBarExtraView: View {
     static func statusDot(_ status: MacOnlineStatus) -> NSImage {
         let color: NSColor = switch status {
         case .online: .systemGreen
-        case .goingOnline, .goingOffline: .systemYellow
+        case .goingOnline, .goingOffline, .reconnecting: .systemYellow
         case .needsLoginItems, .problem: .systemRed
         case .offline, .checking, .controlsOthersOnly: .tertiaryLabelColor
         }
@@ -151,6 +151,7 @@ struct MenuBarIconLabel: View {
             let status: MacOnlineStatus = switch preview {
             case "offline": .offline
             case "starting": .goingOnline
+            case "reconnecting": .reconnecting
             case "problem": .needsLoginItems
             default: .online
             }
