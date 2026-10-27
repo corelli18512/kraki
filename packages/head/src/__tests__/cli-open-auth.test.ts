@@ -46,7 +46,7 @@ async function startHead(args: string[], env: Record<string, string> = {}): Prom
   const dir = mkdtempSync(join(tmpdir(), 'kraki-head-cli-'));
   tmpDirs.push(dir);
   const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of ['HOST', 'OPEN_SHARED_KEY', 'AUTH_MODE', 'API_KEY', 'HEAD_MODE', 'MODE', 'ACCOUNT_URL', 'SERVICE_KEY', 'PUSH_PROVIDERS', 'VOICE_LEASE_ENABLED', 'REGION', 'PUBLIC_RELAY_URL']) {
+  for (const key of ['HOST', 'KRAKI_HOST', 'OPEN_SHARED_KEY', 'AUTH_MODE', 'API_KEY', 'HEAD_MODE', 'MODE', 'ACCOUNT_URL', 'SERVICE_KEY', 'PUSH_PROVIDERS', 'VOICE_LEASE_ENABLED', 'REGION', 'PUBLIC_RELAY_URL']) {
     // Empty rather than deleted: cli.ts loads packages/head/.env, and dotenv fills only unset keys.
     cleanEnv[key] = '';
   }
@@ -156,12 +156,18 @@ describe('kraki-relay bind and open auth (cli.ts)', () => {
 
   it.each([
     ['--host flag', ['--host', '0.0.0.0'], {}],
-    ['HOST env', [], { HOST: '0.0.0.0' }],
+    ['KRAKI_HOST env', [], { KRAKI_HOST: '0.0.0.0' }],
   ])('refuses a non-loopback host in open mode without a shared key (%s)', async (_label, args, env) => {
     const head = await startHead(args as string[], env as Record<string, string>);
     expect(await head.exited).toBe(1);
     expect(head.output()).toContain('Refusing to listen on 0.0.0.0');
     expect(head.output()).toContain('OPEN_SHARED_KEY');
+  }, 30_000);
+
+  it('ignores the shell\'s HOST variable (tcsh exports HOST=<hostname>)', async () => {
+    const head = await startHead([], { HOST: '0.0.0.0' });
+    const line = await waitForListening(head);
+    expect(line).toContain('127.0.0.1');
   }, 30_000);
 
   it('enforces OPEN_SHARED_KEY on open auth and on pairing requests', async () => {
