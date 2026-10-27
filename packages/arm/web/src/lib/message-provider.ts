@@ -255,17 +255,20 @@ class MessageProvider {
     return this.memoryWindow(sessionId, from, to) !== null;
   }
 
-  /** The held spine rows of [from, to] when the window is fully covered. */
-  private memoryWindow(sessionId: string, from: number, to: number): ChatMessage[] | null {
+  /** The held spine rows of [from, to] when the window is fully covered.
+   *  `tombstones: false` counts only rows actually held: loadRange's own
+   *  request below ignores tombstones too (an earlier page's absence must not
+   *  stop a foreground tail reconcile from asking the Tentacle). */
+  private memoryWindow(sessionId: string, from: number, to: number, { tombstones = true } = {}): ChatMessage[] | null {
     const memory = getStore().messages.get(sessionId);
     if (!memory?.length) return null;
     const spine = memory.filter((message) => isSpineCacheMessage(message)
       && 'sessionId' in message && message.sessionId === sessionId
       && (message as { seq: number }).seq >= from && (message as { seq: number }).seq <= to);
-    const gaps = (this.rangeTombstones.get(sessionId) ?? []).reduce(
-      (remaining, [lo, hi]) => excludeInterval(remaining, lo, hi),
-      missingIntervals(spine, from, to),
-    );
+    const holes = missingIntervals(spine, from, to);
+    const gaps = tombstones
+      ? (this.rangeTombstones.get(sessionId) ?? []).reduce((remaining, [lo, hi]) => excludeInterval(remaining, lo, hi), holes)
+      : holes;
     return gaps.length === 0 ? spine : null;
   }
 
@@ -368,7 +371,7 @@ class MessageProvider {
     // request, so an IDB read could only re-deliver what is already shown (a
     // chat open's route reconcile followed by its subscription snapshot at the
     // same seq; a closing idle followed by the session_list digest).
-    const held = this.memoryWindow(sessionId, from, to);
+    const held = this.memoryWindow(sessionId, from, to, { tombstones: false });
     if (held) {
       this.confirmEchoedOutbox(sessionId, held);
       return true;

@@ -83,6 +83,20 @@ describe('tail reconciliation of a held window', () => {
     }
   });
 
+  it('an earlier page that found seqs absent does not stop a later tail reconcile from asking the Tentacle', async () => {
+    db.lastSeq = 48; // 49..50 are not cached
+    messageProvider.ensureLoaded(SID);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    // Authoritative answer without 49..50 (they are recorded as tombstones).
+    messageProvider.handleRangeBatch(SID, [], 0, 0, false);
+    await idle();
+    expect(useStore.getState().messages.get(SID)).toHaveLength(48);
+    // The foreground tail reconcile (chat open / session_list at seq 50) must
+    // still ask, as it did before held windows were skipped.
+    messageProvider.reconcileTail(SID, 50);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+  });
+
   it('still reads when the authoritative tail moved past memory', async () => {
     messageProvider.ensureLoaded(SID);
     await idle();
