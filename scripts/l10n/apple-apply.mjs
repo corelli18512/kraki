@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Apply Simplified Chinese translations from scripts/l10n/zh-Hans/*.json to
-// the iOS/Mac String Catalogs.
+// the iOS/Mac String Catalog Localizable.xcstrings (not InfoPlist.xcstrings).
 //
 // Each JSON file: {
 //   "translations": { "<catalog key>": "<zh-Hans>", ... },
@@ -14,19 +14,17 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { formatXcstrings } from './catalog.mjs';
+import { formatXcstrings, specifiers } from './catalog.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
 const catalogFile = path.join(root, 'packages/arm/ios/Kraki/Resources/Localization/Localizable.xcstrings');
-const infoFile = path.join(root, 'packages/arm/ios/Kraki/Resources/Localization/InfoPlist.xcstrings');
 const argv = process.argv.slice(2);
 const check = argv.includes('--check');
 const files = argv.filter((a) => !a.startsWith('--'));
 const sources = files.length ? files.map((f) => path.resolve(f)) : readdirSync(path.join(here, 'zh-Hans')).filter((f) => f.endsWith('.json')).map((f) => path.join(here, 'zh-Hans', f));
 
 const catalog = JSON.parse(readFileSync(catalogFile, 'utf8'));
-const specifiers = (s) => (s.match(/%(\d+\$)?(lld|ld|llu|lu|d|u|@|f|\.\d+f)/g) ?? []).map((x) => x.replace(/^%\d+\$/, '%')).sort().join();
 let applied = 0;
 const missing = [];
 const mismatched = [];
@@ -50,7 +48,6 @@ for (const file of sources) {
   }
 }
 if (!check) writeFileSync(catalogFile, formatXcstrings(catalog));
-void infoFile;
 console.log(`${check ? 'checked' : 'applied'} ${applied || ''} translations from ${sources.length} file(s)`);
 if (missing.length) console.log(`\n${missing.length} key(s) not in the catalog (wrong key form, or run pnpm l10n:extract:apple):\n  ${missing.join('\n  ')}`);
 if (mismatched.length) console.log(`\n${mismatched.length} format specifier mismatch(es):\n  ${mismatched.join('\n  ')}`);
