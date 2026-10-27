@@ -217,8 +217,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // requestId the app sent. Show it instead of failing silently.
   if (msg.type === 'error' && !msg.sessionId) {
     const reqId = (msg.payload as { requestId?: string }).requestId;
-    if (reqId && ctx.cmdState.pendingCreateRequests.delete(reqId)) {
-      ctx.cmdState.pendingPrompts.delete(reqId);
+    if (reqId && ctx.cmdState.pendingCreateRequests.has(reqId)) {
+      ctx.cmdState.clearRequest(reqId);
       store.setLastError(msg.payload.message);
     }
     return;

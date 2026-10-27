@@ -35,6 +35,29 @@ describe('create/fork failures (release review A5)', () => {
     expect(cmdState.pendingCreateRequests.has('req_1')).toBe(false);
   });
 
+  it('returns the typed first message to the New Session draft when create fails (iOS/Mac parity)', () => {
+    const cmdState = new CommandState();
+    cmdState.pendingCreateRequests.add('req_2');
+    cmdState.pendingPrompts.set('req_2', 'Fix the flaky test');
+    useStore.getState().setDraft('kraki.new-session-draft', 'half typed');
+    handleDataMessage({
+      type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',
+      payload: { message: 'model not available', requestId: 'req_2' },
+    } as unknown as InnerMessage, { cmdState, messageProvider } as never);
+    expect(useStore.getState().drafts.get('kraki.new-session-draft')).toBe('half typed\nFix the flaky test');
+    expect(cmdState.pendingPrompts.has('req_2')).toBe(false);
+  });
+
+  it('server_error for a create also returns its typed first message to the draft', () => {
+    const cmdState = new CommandState();
+    cmdState.pendingCreateRequests.add('req_3');
+    cmdState.pendingPrompts.set('req_3', 'Hello');
+    cmdState.clearRequest('req_3');
+    expect(useStore.getState().drafts.get('kraki.new-session-draft')).toBe('Hello');
+    cmdState.clearRequest('req_3'); // a second clear does not duplicate it
+    expect(useStore.getState().drafts.get('kraki.new-session-draft')).toBe('Hello');
+  });
+
   it('ignores a session-less error for a request this app did not make', () => {
     handleDataMessage({
       type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',
