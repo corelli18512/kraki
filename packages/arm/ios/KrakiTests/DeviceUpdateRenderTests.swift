@@ -115,6 +115,23 @@ final class DeviceUpdateRenderTests: XCTestCase {
         XCTAssertFalse(DeviceUpdateSection.blocksRemoval(nil, now: Date()))
     }
 
+    /// A slow install never went offline, and the computer reports what it
+    /// runs: the timeout copy must not claim it came "back online" or name a
+    /// version other than the one it reports.
+    func testInstallTimeoutReportsTheComputersCurrentVersion() throws {
+        let late = Date().addingTimeInterval(-(DeviceUpdateSection.installTimeout + 20))
+        let reported = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let progress = DeviceUpdateProgress(phase: .installing, from: "0.38.8", to: "0.38.10", at: late)
+        let app = try store(online: true, reported, progress)
+        let shown = DeviceUpdateSection.presentation(device: device(), store: app.deviceStore, now: Date())
+        XCTAssertEqual(shown?.title, "The update didn’t finish")
+        XCTAssertEqual(shown?.detail, "Mac mini still runs Kraki 0.38.9.")
+
+        let unknown = try store(online: true, nil, DeviceUpdateProgress(phase: .installing, to: "0.38.10", at: late))
+        XCTAssertEqual(DeviceUpdateSection.presentation(device: device(), store: unknown.deviceStore, now: Date())?.detail,
+                       "Kraki 0.38.10 wasn’t installed on Mac mini.")
+    }
+
     /// Renders every state (catches crashes); waits for a settled frame and
     /// writes PNGs only when KRAKI_UPDATE_RENDER_DIR is set.
     func testRenderUpdateStates() throws {

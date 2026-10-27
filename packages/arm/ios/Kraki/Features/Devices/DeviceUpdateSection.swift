@@ -159,9 +159,12 @@ struct DeviceUpdateSection: View {
         case .downloading:
             return Presentation(icon: .spinner, title: String(localized: "Downloading \(target)…"), progress: p.progress)
         case .installing where isStalled(p, now: now):
+            // A slow install may never have gone offline; name what the
+            // computer itself reports running.
+            let current = store.deviceUpdates[device.id]?.current ?? p.from
             return Presentation(icon: warning, title: String(localized: "The update didn’t finish"),
-                                detail: p.from.map { String(localized: "\(device.name) is back online but still runs Kraki \($0).") }
-                                    ?? String(localized: "\(device.name) is back online, but \(target) wasn’t installed."),
+                                detail: current.map { String(localized: "\(device.name) still runs Kraki \($0).") }
+                                    ?? String(localized: "\(target) wasn’t installed on \(device.name)."),
                                 actions: [.retry, .dismiss])
         case .installing:
             return Presentation(icon: .spinner, title: String(localized: "Installing \(target)…"),
