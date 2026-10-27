@@ -28,7 +28,9 @@ const FORWARDING_HEADERS = ['x-forwarded-for', 'x-real-ip', 'forwarded', 'x-forw
 export function isDirectLoopback(req: IncomingMessage): boolean {
   if (FORWARDING_HEADERS.some((h) => req.headers[h] !== undefined)) return false;
   const addr = req.socket.remoteAddress ?? '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+  // All of 127.0.0.0/8, like listen-host's isLoopbackHost (a relay bound to
+  // 127.0.0.2 sees its local clients from that address).
+  return addr === '::1' || /^(::ffff:)?127\./.test(addr);
 }
 
 export function isTrustedProxy(address: string, trustedProxies: ReadonlySet<string>): boolean {
