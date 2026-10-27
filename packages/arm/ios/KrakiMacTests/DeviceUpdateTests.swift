@@ -111,19 +111,21 @@ final class DeviceUpdateTests: XCTestCase {
     }
 
     /// Finished outcomes clear themselves, so nothing lingers in an empty
-    /// section; a newer status is never cleared by an older timer.
+    /// section; a newer status is never cleared by an older timer. Awaits the
+    /// scheduled expiries instead of racing a sleep against them.
     func testFinishedOutcomesExpire() async throws {
-        let saved = (DeviceStore.updatedOutcomeLifetime, DeviceStore.problemOutcomeLifetime)
-        DeviceStore.updatedOutcomeLifetime = .milliseconds(50)
-        DeviceStore.problemOutcomeLifetime = .milliseconds(50)
-        defer { (DeviceStore.updatedOutcomeLifetime, DeviceStore.problemOutcomeLifetime) = saved }
         let store = DeviceStore(persistenceEnabled: false)
+        store.updatedOutcomeLifetime = .zero
+        store.problemOutcomeLifetime = .zero
         store.devices["a"] = tentacle("a")
         store.setUpdateProgress("a", DeviceUpdateProgress(phase: .updated, to: "0.38.10"))
         store.setUpdateProgress("b", DeviceUpdateProgress(phase: .failed, error: "x"))
         store.setUpdateProgress("c", DeviceUpdateProgress(phase: .failed, error: "x"))
         store.setUpdateProgress("c", DeviceUpdateProgress(phase: .requested))
-        try await Task.sleep(for: .milliseconds(200))
+        for id in ["a", "b", "c"] {
+            let expiry = try XCTUnwrap(store.outcomeExpiry[id])
+            await expiry.value
+        }
         XCTAssertNil(store.updateProgress["a"])
         XCTAssertNil(store.updateProgress["b"])
         XCTAssertEqual(store.updateProgress["c"]?.phase, .requested, "an active update is not cleared")
