@@ -96,6 +96,16 @@ describe('DiagClient (native DiagClient protocol)', () => {
     expect(gone.recorder.isEnabled).toBe(false);
   });
 
+  it('overlapping ticks send one request at a time and count the daily bytes once (native single task)', async () => {
+    const h = harness();
+    await h.configure(); h.recorder.record('app.launch', undefined);
+    h.advance(5_000); await Promise.all([h.client.tick(), h.client.tick()]);
+    expect(h.calls.map((c) => c.path)).toEqual(['config']);
+    h.advance(15_000); await Promise.all([h.client.tick(), h.client.tick(), h.client.tick()]);
+    expect(h.calls.map((c) => c.path)).toEqual(['config', 'batch']);
+    expect(Number(h.storage.m.get('kraki.diag.bytes'))).toBe(h.calls[1]!.body!.byteLength);
+  });
+
   it('a transient failure keeps the identical batch for a backed-off retry', async () => {
     const h = harness({ batch: { status: 503 } });
     await h.configure(); h.recorder.record('app.launch', undefined);
