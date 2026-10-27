@@ -47,6 +47,19 @@ struct DeviceUpdateSection: View {
     /// Installing for this long with no outcome means something went wrong.
     static let installTimeout: TimeInterval = 180
 
+    /// An update with no new status for `installTimeout` is not expected to
+    /// finish by itself (e.g. the computer never came back).
+    static func isStalled(_ p: DeviceUpdateProgress, now: Date) -> Bool {
+        p.isActive && now.timeIntervalSince(p.at) > installTimeout
+    }
+
+    /// Offline in the middle of an update is a restart, not a dead computer,
+    /// so Remove Device waits, but only until the update stalls.
+    static func blocksRemoval(_ p: DeviceUpdateProgress?, now: Date) -> Bool {
+        guard let p else { return false }
+        return p.isActive && !isStalled(p, now: now)
+    }
+
     @ViewBuilder
     private func content(now: Date) -> some View {
         if let p = Self.presentation(device: device, store: store, now: now) {
@@ -129,6 +142,11 @@ struct DeviceUpdateSection: View {
                                  now: Date) -> Presentation {
         let target = version(p.to)
         let warning = Presentation.Icon.symbol("exclamationmark.triangle.fill", .orange)
+        if !device.online, isStalled(p, now: now) {
+            return Presentation(icon: warning, title: String(localized: "\(device.name) isn’t back online yet"),
+                                detail: String(localized: "If it doesn’t return, open Kraki on that computer."),
+                                actions: [.dismiss])
+        }
         switch p.phase {
         case .requested:
             return Presentation(icon: .spinner, title: String(localized: "Asking \(device.name) to update…"))
@@ -140,15 +158,11 @@ struct DeviceUpdateSection: View {
                                 detail: String(localized: "\(target) installs as soon as nothing is running on \(device.name)."))
         case .downloading:
             return Presentation(icon: .spinner, title: String(localized: "Downloading \(target)…"), progress: p.progress)
-        case .installing where now.timeIntervalSince(p.at) > installTimeout:
-            if device.online {
-                return Presentation(icon: warning, title: String(localized: "The update didn’t finish"),
-                                    detail: p.from.map { String(localized: "\(device.name) is back online but still runs Kraki \($0).") }
-                                        ?? String(localized: "\(device.name) is back online, but \(target) wasn’t installed."),
-                                    actions: [.retry, .dismiss])
-            }
-            return Presentation(icon: warning, title: String(localized: "\(device.name) isn’t back online yet"),
-                                detail: String(localized: "If it doesn’t return, open Kraki on that computer."))
+        case .installing where isStalled(p, now: now):
+            return Presentation(icon: warning, title: String(localized: "The update didn’t finish"),
+                                detail: p.from.map { String(localized: "\(device.name) is back online but still runs Kraki \($0).") }
+                                    ?? String(localized: "\(device.name) is back online, but \(target) wasn’t installed."),
+                                actions: [.retry, .dismiss])
         case .installing:
             return Presentation(icon: .spinner, title: String(localized: "Installing \(target)…"),
                                 detail: device.online ? nil : String(localized: "Kraki is restarting on \(device.name)."))

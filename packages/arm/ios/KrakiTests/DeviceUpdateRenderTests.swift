@@ -92,6 +92,29 @@ final class DeviceUpdateRenderTests: XCTestCase {
         }
     }
 
+    /// A computer that never comes back from an update (or goes offline
+    /// before answering) must not leave the section stuck without Dismiss,
+    /// nor keep Remove Device hidden until the app relaunches.
+    func testStalledUpdateOfflineOffersDismissAndAllowsRemoval() throws {
+        let available = DeviceUpdateInfo(installedVia: "binary", current: "0.38.9", latest: "0.38.10", remote: true)
+        let late = Date().addingTimeInterval(-(DeviceUpdateSection.installTimeout + 20))
+        for phase in [DeviceUpdateProgress.Phase.requested, .waiting_idle, .downloading, .installing] {
+            let progress = DeviceUpdateProgress(phase: phase, from: "0.38.9", to: "0.38.10", at: late)
+            let app = try store(online: false, available, progress)
+            let shown = DeviceUpdateSection.presentation(device: device(online: false), store: app.deviceStore, now: Date())
+            XCTAssertEqual(shown?.title, "Mac mini isn’t back online yet", "\(phase)")
+            XCTAssertEqual(shown?.actions, [.dismiss], "\(phase)")
+            XCTAssertFalse(DeviceUpdateSection.blocksRemoval(progress, now: Date()), "\(phase)")
+        }
+        let fresh = DeviceUpdateProgress(phase: .installing, from: "0.38.9", to: "0.38.10")
+        XCTAssertTrue(DeviceUpdateSection.blocksRemoval(fresh, now: Date()), "offline mid-update is a restart")
+        let shown = DeviceUpdateSection.presentation(device: device(online: false),
+                                                     store: try store(online: false, available, fresh).deviceStore, now: Date())
+        XCTAssertEqual(shown?.title, "Installing Kraki 0.38.10…")
+        XCTAssertFalse(DeviceUpdateSection.blocksRemoval(DeviceUpdateProgress(phase: .failed), now: Date()))
+        XCTAssertFalse(DeviceUpdateSection.blocksRemoval(nil, now: Date()))
+    }
+
     /// Renders every state (catches crashes); waits for a settled frame and
     /// writes PNGs only when KRAKI_UPDATE_RENDER_DIR is set.
     func testRenderUpdateStates() throws {
