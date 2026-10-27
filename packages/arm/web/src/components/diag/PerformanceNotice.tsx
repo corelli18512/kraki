@@ -43,7 +43,7 @@ export function PerformanceNoticeHost({ settleMs = 1500 }: { settleMs?: number }
       <p className="kperf-hint">{copy.settingsHint}</p>
       <div className="kperf-actions">
         <button type="button" className="kperf-secondary" onClick={() => choose(false)}>{t('performanceNotice.decline')}</button>
-        <button type="button" className="kperf-primary" autoFocus onClick={() => choose(true)}>{t('performanceNotice.ok')}</button>
+        <button type="button" className="kperf-primary" onClick={() => choose(true)}>{t('performanceNotice.ok')}</button>
       </div>
     </section>
   );

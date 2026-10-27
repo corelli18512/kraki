@@ -6,10 +6,10 @@
  * so every edge shows it.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
-import { MAX_DEVICE_NAME_LENGTH } from '@kraki/protocol';
+import { MAX_DEVICE_NAME_LENGTH, normalizeDeviceName } from '@kraki/protocol';
 import { exportPublicKey, generateKeyPair, signChallenge } from '@kraki/crypto';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
@@ -52,6 +52,21 @@ function next(device: MockDevice, type: string) {
   return device.waitFor(type).then(({ _consumed: _, ...msg }) => msg);
 }
 
+/** The relay's name rule. Swift `DeviceName.normalize` checks the same
+ *  vectors (KrakiTests/DeviceRenameTests.swift): keep both lists identical. */
+describe('normalizeDeviceName vectors (shared with Swift)', () => {
+  const becomesSpace = [0x00, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1f, 0x20, 0x7f, 0x85, 0x9f, 0xa0, 0x1680,
+    0x2000, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff];
+  const kept = [0x180e, 0x200b, 0x200c, 0x200d, 0x2060, 0xfffe];
+
+  it('turns control and white-space code points into one space and keeps the rest', () => {
+    for (const cp of becomesSpace) expect(normalizeDeviceName(`a${String.fromCodePoint(cp)}b`), cp.toString(16)).toBe('a b');
+    for (const cp of kept) expect(normalizeDeviceName(`a${String.fromCodePoint(cp)}b`), cp.toString(16)).toBe(`a${String.fromCodePoint(cp)}b`);
+    expect(normalizeDeviceName('  Work \n\t laptop ')).toBe('Work laptop');
+    expect(normalizeDeviceName('\ufeff\u3000')).toBe('');
+  });
+});
+
 describe('rename_device', () => {
   let storage: Storage;
   let head: Awaited<ReturnType<typeof startHead>>;
@@ -84,6 +99,22 @@ describe('rename_device', () => {
       expect(msg).toEqual({ type: 'device_renamed', deviceId: laptop.deviceId, name: 'Work laptop', defaultName: 'corelli-mbp' });
     }
     expect(storage.getDevice(laptop.deviceId)).toMatchObject({ name: 'Work laptop', reportedName: 'corelli-mbp', displayName: 'Work laptop' });
+  });
+
+  it('is sent as presence, so a reconnect\'s auth_ok list supersedes an unacked older name', async () => {
+    const phone = await connect('Kraki iOS', 'app');
+    const laptop = await connect('corelli-mbp', 'tentacle');
+    const presence = vi.spyOn(head.server.pulseHub, 'sendPresenceToDevice');
+    const control = vi.spyOn(head.server.pulseHub, 'sendToDevice');
+
+    const heard = next(phone, 'device_renamed');
+    phone.send({ type: 'rename_device', deviceId: laptop.deviceId, name: 'Work laptop' });
+    await heard;
+    const renamedFrames = (spy: typeof presence) => spy.mock.calls
+      .filter(([, payload]) => JSON.parse(Buffer.from(payload).toString('utf8')).msg?.type === 'device_renamed')
+      .map(([dest]) => dest);
+    expect(renamedFrames(presence).sort()).toEqual([phone.deviceId, laptop.deviceId].sort());
+    expect(renamedFrames(control)).toEqual([]);
   });
 
   it('keeps the custom name when the device signs in again with its own name', async () => {

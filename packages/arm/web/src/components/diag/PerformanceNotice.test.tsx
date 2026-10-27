@@ -42,6 +42,16 @@ describe('Performance data notice (Mac PerformanceNotice)', () => {
     expect(screen.queryByTestId('performance-notice')).not.toBeInTheDocument();
   });
 
+  it('appearing does not take focus from what the user is typing in (Mac does not either)', () => {
+    vi.spyOn(diag, 'active', 'get').mockReturnValue(true);
+    render(<><textarea aria-label="Message" /><PerformanceNoticeHost /></>);
+    const composer = screen.getByRole('textbox', { name: 'Message' });
+    composer.focus();
+    act(() => vi.advanceTimersByTime(1500));
+    expect(screen.getByTestId('performance-notice')).toBeInTheDocument();
+    expect(composer).toHaveFocus();
+  });
+
   it('OK keeps sharing on and marks it seen', () => {
     vi.spyOn(diag, 'active', 'get').mockReturnValue(true);
     const set = vi.spyOn(diag, 'setEnabled').mockResolvedValue();

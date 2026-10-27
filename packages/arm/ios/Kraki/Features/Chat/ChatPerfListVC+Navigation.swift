@@ -268,6 +268,7 @@ extension ChatPerfListVC {
             return
         }
         scrollPolicy.beginLatestMessageStartNavigation()
+        widthAnchorGeneration += 1  // a pending re-layout anchor restore must not undo it
         let target = landingOffset(forRowStart: frame.minY)
         let distance = abs(collectionView.contentOffset.y - target)
         updateJumpButtonVisibility()
@@ -364,6 +365,7 @@ extension ChatPerfListVC {
             offset: collectionView.contentOffset.y,
             distanceToBottom: distanceToBottom()
         )
+        widthAnchorGeneration += 1  // a pending re-layout anchor restore must not undo it
         // Suppress edge paging for the duration of the glide: right after the
         // reanchor's reloadData the offset is 0 (tail window's TOP), and any
         // scroll callback there would fire an older-fetch that drags the window

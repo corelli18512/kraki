@@ -1000,7 +1000,7 @@ final class MessageProvider {
         guard let appState else { return }
         guard let tentacleDeviceId = appState.sessionStore.sessions[sessionId]?.deviceId,
               !tentacleDeviceId.isEmpty else { return }
-        guard signedInForRequest(sessionId, reason: reason) else { return }
+        guard canReachTentacle(tentacleDeviceId, sessionId: sessionId, reason: reason) else { return }
 
         let slotKind: OutstandingKind = beforeSeq.map { .before($0) } ?? .head
         let kind = beforeSeq == nil ? "head" : "before=\(beforeSeq!)"
@@ -1215,8 +1215,11 @@ extension MessageProvider {
     /// `isLoadingHead` and skipped, so a Chat opened during a reconnect waited
     /// out the full head timeout (diag: catch-up exactly 5.0 s after the tap).
     /// Leave the slot free; the session_list self-heal asks once signed in.
-    fileprivate func signedInForRequest(_ sessionId: String, reason: String) -> Bool {
-        guard appState?.connectionStatus == .connected else {
+    /// On a Mac the local link to this Mac's Tentacle carries the request by
+    /// itself and outlives a Head drop, so it counts as a route too.
+    fileprivate func canReachTentacle(_ tentacleId: String, sessionId: String, reason: String) -> Bool {
+        guard let appState else { return false }
+        guard appState.connectionStatus == .connected || appState.tentacleRouteIsIndependent(tentacleId) else {
             KLog.d("⏭️ [2/history request] session=\(sessionId.prefix(12)) skip=notAuthenticated reason=\(reason)")
             return false
         }

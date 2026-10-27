@@ -378,6 +378,8 @@ final class LocalLinkClient: NSObject, PulseHost {
 
     #if DEBUG
     func debugDrop() { fail("debug drop") }
+    /// Tests: claim the link serves `tentacleId` without a socket.
+    func debugSetLinked(_ tentacleId: String?) { linkedTentacleId = tentacleId }
     #endif
 
     // MARK: - Outbound

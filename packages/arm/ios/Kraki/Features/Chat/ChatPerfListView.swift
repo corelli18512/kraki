@@ -313,8 +313,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// noticed, UIKit has already resized the list, so it can't be read then.
     var lastReadingAnchor: ReadingAnchor?
     var widthRelayoutScheduled = false
-    /// Bumped on a re-layout and on every user scroll: late anchor
-    /// corrections stop as soon as the user takes over.
+    /// Bumped on a re-layout, on every user scroll and on ↑/↓ navigation:
+    /// late anchor corrections stop as soon as the user takes over.
     var widthAnchorGeneration = 0
     var codeHighlightSettleWork: DispatchWorkItem?
     var pendingCodeHighlightRefresh = false

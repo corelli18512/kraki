@@ -69,6 +69,11 @@ export function providerLabel(provider: string | null | undefined): string {
   return provider.split(/(\s+)/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
 }
 
+/** Own errors keep their key so the text follows a language switch; shell
+ *  errors arrive as text. */
+type SettingsErrorKey = 'identifyPC' | 'readPreferences' | 'savePreference' | 'shortcut' | 'disablePush' | 'blockedNotifications' | 'updatePush' | 'copyDiagnostics';
+type SettingsError = { key: SettingsErrorKey } | { message: string };
+
 export function SettingsPanel({
   open,
   onClose,
@@ -91,7 +96,8 @@ export function SettingsPanel({
   const [builtInId, setBuiltInId] = useState<string | null>(null);
   const [builtInKnown, setBuiltInKnown] = useState(!desktop?.builtIn);
   const [os, setOs] = useState<DesktopSettingsState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SettingsError | null>(null);
+  const errorText = error && ('key' in error ? t(`errors.${error.key}`) : error.message);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(readNotificationsEnabled);
@@ -133,14 +139,14 @@ export function SettingsPanel({
   useEffect(() => {
     if (!open) return;
     if (isPushSupported()) void isPushSubscribed().then(setPushEnabled);
-    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError(t('errors.identifyPC')));
+    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError({ key: 'identifyPC' }));
     void bridge
       ?.state()
       .then((s) => {
         setOs(s);
         setUsageShortcut(s.usageShortcut, s.usageShortcutEnabled);
       })
-      .catch(() => setError(t('errors.readPreferences')));
+      .catch(() => setError({ key: 'readPreferences' }));
   }, [open, bridge]);
   useEffect(() => {
     if (!open || inline) return;
@@ -164,10 +170,10 @@ export function SettingsPanel({
     if (!fn) return;
     try {
       const result = await fn();
-      setError(result.ok ? null : (result.error ?? t('errors.savePreference')));
+      setError(result.ok ? null : result.error != null ? { message: result.error } : { key: 'savePreference' });
       if (result.ok && bridge) setOs(await bridge.state());
     } catch {
-      setError(t('errors.savePreference'));
+      setError({ key: 'savePreference' });
     }
   }
   async function updateShortcut(key: string, enabled: boolean) {
@@ -175,11 +181,11 @@ export function SettingsPanel({
       try {
         const result = await bridge.setUsageShortcut(key, enabled);
         if (!result.ok) {
-          setError(result.error ?? t('errors.shortcut'));
+          setError(result.error != null ? { message: result.error } : { key: 'shortcut' });
           return;
         }
       } catch {
-        setError(t('errors.shortcut'));
+        setError({ key: 'shortcut' });
         return;
       }
     }
@@ -193,7 +199,7 @@ export function SettingsPanel({
       try {
         if (!on) {
           if (pushEnabled && !(await unsubscribeFromPush())) {
-            setError(t('errors.disablePush'));
+            setError({ key: 'disablePush' });
             return;
           }
           wsClient.unregisterPushToken({ provider: 'web_push' });
@@ -201,14 +207,14 @@ export function SettingsPanel({
         } else if (state.vapidPublicKey) {
           const token = await subscribeToPush(state.vapidPublicKey);
           if (!token) {
-            setError(t('errors.blockedNotifications'));
+            setError({ key: 'blockedNotifications' });
             return;
           }
           wsClient.registerPushToken({ provider: 'web_push', token });
           setPushEnabled(true);
         }
       } catch {
-        setError(t('errors.updatePush'));
+        setError({ key: 'updatePush' });
         return;
       } finally {
         setPushLoading(false);
@@ -529,7 +535,7 @@ export function SettingsPanel({
           void navigator.clipboard
             .writeText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
             .then(() => setDiagCopied(true))
-            .catch(() => setError(t('errors.copyDiagnostics')));
+            .catch(() => setError({ key: 'copyDiagnostics' }));
         }}
       >
         {diagCopied ? t('about.copied') : t('about.copyDiagnostics')}
@@ -641,9 +647,9 @@ export function SettingsPanel({
           ) : (
             about
           )}
-          {error && (
+          {errorText && (
             <p role="alert" className="mt-2 text-xs text-red-500">
-              {error}
+              {errorText}
             </p>
           )}
           {tab === 'General' && !desktop && state.user?.preferences?.internal === true && (

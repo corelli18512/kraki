@@ -13,6 +13,7 @@ import type { AgentCapabilities, DeviceSummary, ReasoningEffort } from '@kraki/p
 import { ArrowUp, Laptop, MoonStar, Smartphone, Check, ChevronDown } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
+import { NEW_SESSION_DRAFT_ID } from '../../lib/commands';
 import { desktop } from '../../lib/desktop';
 import { AgentGlyph, agentLabel } from '../common/AgentAvatar';
 import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from '../chat/Voice';
@@ -25,7 +26,6 @@ const LAST_DEVICE_KEY = 'kraki:last-device';
 const AGENT_PREF_KEY = 'kraki:last-agent-by-device';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
-const NEW_SESSION_DRAFT_ID = 'kraki.new-session-draft';
 
 const readJson = <T,>(key: string): Record<string, T> => {
   try { return JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, T>; } catch { return {}; }

@@ -55,6 +55,9 @@ const en = {
   'error.selectionCancelled': 'Selection cancelled.',
   'error.setupFirst': 'Set up Kraki on this PC first.',
   'error.updatePolicy': 'Kraki could not change its update policy.',
+  'error.external.start': "Couldn't start the command-line Kraki.",
+  'error.external.stop': "Couldn't stop the command-line Kraki.",
+  'error.external.restart': "Couldn't restart the command-line Kraki.",
 };
 
 const zhHans = {
@@ -108,6 +111,9 @@ const zhHans = {
   'error.selectionCancelled': '已取消选择。',
   'error.setupFirst': '请先在这台电脑上设置 Kraki。',
   'error.updatePolicy': 'Kraki 无法更改更新策略。',
+  'error.external.start': '无法启动命令行版 Kraki。',
+  'error.external.stop': '无法停止命令行版 Kraki。',
+  'error.external.restart': '无法重启命令行版 Kraki。',
 };
 
 const DICTIONARIES = { en, 'zh-Hans': zhHans };

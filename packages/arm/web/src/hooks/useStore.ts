@@ -92,7 +92,6 @@ const initialState = {
   updateProgress: new Map(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
-  loadingSessions: new Set<string>(),
   pendingSessions: new Set<string>(),
   localSessions: [],
   localSessionsLoading: false,
@@ -119,6 +118,18 @@ function persistedSessions(sessions: Store['sessions']): Store['sessions'] {
     ]));
   }
   return persistedSessionsValue;
+}
+
+/** Gives the sessions of `deviceId` the device's current name. Returns the same
+ *  map when nothing changed so subscribers and persistence stay quiet. */
+function relabelSessions(sessions: Store['sessions'], deviceId: string, name: string): Store['sessions'] {
+  let next = sessions;
+  for (const [id, session] of sessions) {
+    if (session.deviceId !== deviceId || session.deviceName === name) continue;
+    if (next === sessions) next = new Map(sessions);
+    next.set(id, { ...session, deviceName: name });
+  }
+  return next;
 }
 
 /** zustand's persist serializes the whole snapshot to localStorage after every
@@ -237,14 +248,20 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
+  // The device list is authoritative for names: a computer renamed while this
+  // app was offline must relabel its persisted sessions (as Swift does).
   setDevices: (devices) =>
-    set({ devices: new Map(devices.map((d) => [d.id, d])) }),
+    set((state) => {
+      let sessions = state.sessions;
+      for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
+      return { devices: new Map(devices.map((d) => [d.id, d])), sessions };
+    }),
 
   upsertDevice: (device) =>
     set((state) => {
       const next = new Map(state.devices);
       next.set(device.id, device);
-      return { devices: next };
+      return { devices: next, sessions: relabelSessions(state.sessions, device.id, device.name) };
     }),
 
   removeDevice: (deviceId) =>
@@ -263,12 +280,7 @@ export const useStore = create<Store>()(persist((set) => ({
         devices = new Map(state.devices);
         devices.set(deviceId, defaultName ? { ...rest, name, defaultName } : { ...rest, name });
       }
-      let sessions = state.sessions;
-      for (const [id, session] of state.sessions) {
-        if (session.deviceId !== deviceId || session.deviceName === name) continue;
-        if (sessions === state.sessions) sessions = new Map(state.sessions);
-        sessions.set(id, { ...session, deviceName: name });
-      }
+      const sessions = relabelSessions(state.sessions, deviceId, name);
       return devices === state.devices && sessions === state.sessions ? state : { devices, sessions };
     }),
 
@@ -594,17 +606,6 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionUsage: next };
     }),
 
-  setSessionLoading: (sessionId, loading) =>
-    set((state) => {
-      const next = new Set(state.loadingSessions);
-      if (loading) {
-        next.add(sessionId);
-      } else {
-        next.delete(sessionId);
-      }
-      return { loadingSessions: next };
-    }),
-
   addPendingSession: (sessionId) =>
     set((state) => {
       const next = new Set(state.pendingSessions);
@@ -821,7 +822,6 @@ export const useStore = create<Store>()(persist((set) => ({
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
-    loadingSessions: new Set(),
     pendingSessions: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until the session_list
@@ -858,7 +858,6 @@ export const useStore = create<Store>()(persist((set) => ({
     usageRefreshes: new Map(),
     sessionUsage: new Map(),
     sessionPreviews: new Map(),
-    loadingSessions: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   })),

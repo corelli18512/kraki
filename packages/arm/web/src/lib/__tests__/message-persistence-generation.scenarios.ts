@@ -328,8 +328,7 @@ export async function providerRemoval() {
   const independent = messageProvider.fetchRange(other, 1, 1, { initial: true });
   await until(() => requests.length === 2, 'both real provider requests');
   useStore.getState().removeSession(session);
-  const invalidated = !messageProvider.isLoading(session) && messageProvider.getRangeStatus(session).state === 'idle'
-    && !useStore.getState().loadingSessions.has(session);
+  const invalidated = !messageProvider.isLoading(session) && messageProvider.getRangeStatus(session).state === 'idle';
   const otherLoading = messageProvider.isLoading(other);
   messageProvider.handleRangeBatch(other, [row(other, 1)], 1, 1, false);
   await Promise.all([old, independent, captureMessageGeneration(session).ready]);

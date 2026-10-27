@@ -66,6 +66,10 @@ export class KrakiWSClient {
   private headEpoch = 0;
   private routeEpochs = new Map<string, number>();
   private routeChanges = 0;
+  /** The latest Stop per session that the local link accepted, by Tentacle.
+   *  Stop is connection-scoped and never replayed through the Head, so when
+   *  that link drops it is reported refused (the UI settles its Stop latch). */
+  private linkedStops = new Map<string, { tentacleId: string; onRefused: () => void }>();
   private encryptedQueue: Array<Parameters<EncryptionHandler['handleEncrypted']>[0]> = [];
   private peerEpochs = new Map<string, number>();
   private cmdState = new CommandState();
@@ -108,7 +112,17 @@ export class KrakiWSClient {
 
   /** Pair with a scanned QR code URL. */
   pairWithToken(relay: string, token: string) {
+    this.endConnectionScope();
     this.transport.pairWithToken(relay, token);
+  }
+
+  /** The transport suppresses the close event of a socket it closes on
+   *  purpose (disconnect, pair, relay redirect), so end what belongs to that
+   *  connection here, as `onClose` does: a Stop not yet acknowledged, or still
+   *  being encrypted, never reaches the next connection. */
+  private endConnectionScope(): void {
+    this.connectionEpoch++;
+    this.pulse.onDisconnected();
   }
 
   /** Ask the relay to delete the account (relay control, not E2E). */
@@ -157,6 +171,7 @@ export class KrakiWSClient {
     const creds = desktopCredentials();
     if (!creds) return false;
     getStore().setStatus('connecting');
+    this.endConnectionScope();
     this.transport.redirectToRelay(creds.relay);
     return true;
   }
@@ -170,15 +185,18 @@ export class KrakiWSClient {
       connected: () => getStore().status === 'connected',
     });
     outbox.configure({
-      send: (msg) => this.transmit(msg),
+      send: (msg, opts) => this.transmit(msg, opts?.quiet === true),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
       isLinkBusy: () => Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS,
       acceptsResend: (sessionId) => this.acceptsResend(sessionId),
       getSpineHead: (sessionId) => (getStore().messages.get(sessionId) ?? []).reduce(
         (head, m) => Math.max(head, 'seq' in m ? m.seq ?? 0 : 0), getStore().sessions.get(sessionId)?.lastSeq ?? 0),
       placeCardAboveSteer: (sessionId, clientId) => getStore().placeCardAboveSteer(sessionId, clientId),
-      isTurnRunning: (sessionId) => getStore().sessions.get(sessionId)?.state === 'active'
-        || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting',
+      isTurnRunning: (sessionId) => {
+        const state = getStore().sessions.get(sessionId)?.state;
+        return state === 'active' || state === 'compacting'
+          || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting';
+      },
     });
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
@@ -264,6 +282,7 @@ export class KrakiWSClient {
     this.routeEpochs.clear();
     this.routeChanges = 0;
     this.clearReplayTracking();
+    this.endConnectionScope();
     this.transport.disconnect();
   }
 
@@ -388,8 +407,9 @@ export class KrakiWSClient {
 
   /** Encrypt a consumer message to its target tentacle and send it over pulse.
    *  `onSeq`, if given, receives the pulse send seq (for optimistic-rollback
-   *  tracking), or null when the target/key could not be resolved. */
-  sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
+   *  tracking), or null when the target/key could not be resolved. `quiet`
+   *  skips the error banner for a retry whose refusal was already reported. */
+  sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void, quiet = false) {
     // The Tentacle only learns the sender from inside the E2E payload (Head
     // forwards it opaque). Without it, it cannot address replies such as the
     // re-echo of a duplicate input, which then stays unconfirmed forever.
@@ -405,7 +425,7 @@ export class KrakiWSClient {
     this.encryptOrdered(msg, this.targetFor(msg), () => this.encryption.encryptForTarget(msg), (enc) => {
       if (!enc) {
         traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-FAIL', type: msg.type as string, clientId });
-        getStore().setLastError(t('app:errors.noTarget'));
+        if (!quiet) getStore().setLastError(t('app:errors.noTarget'));
         onSeq?.(null);
         return;
       }
@@ -445,6 +465,11 @@ export class KrakiWSClient {
     this.attachmentPulls.disconnect();
     this.attachmentPulls.resume();
     for (const { payload, target } of unacked) this.pulse.send(payload, target, false);
+    for (const [sessionId, stop] of this.linkedStops) {
+      if (stop.tentacleId !== tentacleId) continue;
+      this.linkedStops.delete(sessionId);
+      if (!linked) stop.onRefused();
+    }
     if (linked) getStore().setDeviceOnline(tentacleId, true);
   }
 
@@ -615,8 +640,8 @@ export class KrakiWSClient {
 
   /** Hand a consumer message to transport; resolves false if it could not be
    *  encrypted/routed. */
-  private transmit(msg: Record<string, unknown>): Promise<boolean> {
-    return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null)));
+  private transmit(msg: Record<string, unknown>, quiet: boolean): Promise<boolean> {
+    return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null), quiet));
   }
 
   /** Relay connected and live (not silent past a ping round), and the
@@ -744,7 +769,15 @@ export class KrakiWSClient {
    *  connection (no key/target, offline, or the connection dropped while it
    *  was being encrypted), so the UI can make Stop actionable again. */
   abortSession(sessionId: string, onRefused?: () => void) {
-    commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg, (seq) => { if (seq === null) onRefused?.(); }));
+    commands.abortSession(sessionId, (msg) => {
+      const tentacleId = this.targetFor(msg);
+      this.sendEncrypted(msg, (seq) => {
+        if (seq === null) { onRefused?.(); return; }
+        // route() returns 0n for the local link.
+        if (seq === 0n && onRefused && tentacleId) this.linkedStops.set(sessionId, { tentacleId, onRefused });
+        else this.linkedStops.delete(sessionId);
+      });
+    });
   }
 
   setSessionMode(sessionId: string, mode: SessionMode) {
@@ -1344,7 +1377,7 @@ export class KrakiWSClient {
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
-          redirectToRelay: (url: string) => this.transport.redirectToRelay(url),
+          redirectToRelay: (url: string) => { this.endConnectionScope(); this.transport.redirectToRelay(url); },
           currentRelay: this.transport.url,
         });
         break;

@@ -91,12 +91,17 @@ export function SessionPage() {
       // Performance data (open.summary): opened while online.
       const st = useStore.getState();
       const session = st.sessions.get(sessionId);
-      const local = (st.messages.get(sessionId) ?? []).reduce((n, m) => {
+      const messages = st.messages.get(sessionId) ?? [];
+      const local = messages.reduce((n, m) => {
         const seq = (m as { seq?: unknown }).seq;
         return typeof seq === 'number' && Number.isInteger(seq) && seq > n ? seq : n;
       }, 0);
       const online = st.status === 'connected' && !!session && st.devices.get(session.deviceId)?.online === true;
       diag.stability.conversationOpened(sessionId, session?.lastSeq ?? 0, local, online);
+      // ChatView's first render effect ran before this (child effects run
+      // first): report it now, or a conversation that is already current
+      // waits for the next data change and times out (Mac MainWindowView).
+      diag.stability.conversationRendered(sessionId, local, session?.lastSeq ?? 0, messages.length > 0);
     }
     setSelectedArtifact(null);
     setSelectedArtifactExpanded(false);

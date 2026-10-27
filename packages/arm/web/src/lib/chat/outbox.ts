@@ -48,8 +48,9 @@ export interface PendingInput {
 
 interface OutboxDeps {
   /** Hand a consumer message to transport; resolves false when it could not
-   *  be sent (no key / no target). */
-  send: (msg: Record<string, unknown>) => Promise<boolean>;
+   *  be sent (no key / no target). `quiet`: an automatic re-dispatch whose
+   *  refusal was already reported once, so transport does not raise it again. */
+  send: (msg: Record<string, unknown>, opts?: { quiet?: boolean }) => Promise<boolean>;
   /** Relay connected and live, and the session's device online: an input
    *  can go out now. */
   isDeliveryPathUp: (sessionId: string) => boolean;
@@ -78,6 +79,9 @@ let confirmationTimeoutMs = 30_000;
 const MAX_STEP_MS = 2_000;
 /** Stalled time so far per transmitted, unconfirmed input. */
 const stalls = new Map<string, { stalledMs: number; resent: boolean }>();
+/** Inputs whose hand-off to transport has not resolved yet (encryption is
+ *  async and may take longer than a tick): never dispatched twice at once. */
+const dispatching = new Set<string>();
 let lastTickAt: number | null = null;
 let ticker: ReturnType<typeof setInterval> | null = null;
 
@@ -165,7 +169,7 @@ export function checkDeadlines(now = Date.now()): void {
   for (const entry of useOutbox.getState().entries) {
     if (entry.state !== 'sending' && entry.state !== 'unconfirmed') continue;
     if (entry.needsDispatch) {
-      if (deps?.isDeliveryPathUp(entry.sessionId)) transmit(entry, true);
+      if (!dispatching.has(entry.clientId) && deps?.isDeliveryPathUp(entry.sessionId)) transmit(entry, true, true);
       continue;
     }
     if (entry.needsResend) {
@@ -197,7 +201,7 @@ export function checkDeadlines(now = Date.now()): void {
       traceEvent({ comp: 'arm', evt: 'OUTBOX-HALF-RESEND', clientId: entry.clientId });
       diag.sends.retried(entry.clientId, false);
       phase(entry, 'resend_stalled');
-      void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) });
+      void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }, { quiet: true });
     }
     if (stall.stalledMs >= confirmationTimeoutMs) {
       traceEvent({ comp: 'arm', evt: 'OUTBOX-UNCONFIRMED', clientId: entry.clientId, stalledMs: stall.stalledMs });
@@ -212,13 +216,16 @@ function clearResend(entry: PendingInput): PendingInput {
   return { ...entry, needsResend: undefined };
 }
 
-function transmit(entry: PendingInput, queueOnRefusal = false): void {
+function transmit(entry: PendingInput, queueOnRefusal = false, quiet = false): void {
   stalls.set(entry.clientId, { stalledMs: 0, resent: false });
   lastTickAt ??= Date.now();
   ensureTicker();
   const send = deps?.send;
   if (!send) { setState(entry.clientId, 'failed', 'refused'); return; }
-  void send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }).then((ok) => {
+  dispatching.add(entry.clientId);
+  const wire = { type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) };
+  void (quiet ? send(wire, { quiet }) : send(wire)).then((ok) => {
+    dispatching.delete(entry.clientId);
     traceEvent({ comp: 'arm', evt: 'OUTBOX-TRANSMIT', clientId: entry.clientId, ok });
     if (!useOutbox.getState().entries.some((e) => e.clientId === entry.clientId)) return;
     if (queueOnRefusal) {
@@ -396,6 +403,7 @@ export const outbox = {
   /** Test hook: re-read storage as a page reload would. */
   reloadForTesting(): void {
     stalls.clear();
+    dispatching.clear();
     lastTickAt = null;
     useOutbox.setState({ entries: restore() });
   },
@@ -403,6 +411,7 @@ export const outbox = {
   /** Test hook: forget everything. */
   reset(): void {
     stalls.clear();
+    dispatching.clear();
     lastTickAt = null;
     useOutbox.setState({ entries: [] });
     persist([]);

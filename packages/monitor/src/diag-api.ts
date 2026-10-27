@@ -16,8 +16,9 @@ const MAX_WIRE = 64 * 1024;
 const MAX_RAW = 256 * 1024;
 const DAILY_BYTES = 20 * 1024 * 1024;
 const RETENTION_MS = 14 * 86400_000;
-/** Uploads read at once: per device (clients upload one batch at a time),
- *  per client IP, and for the whole process (bounds buffered bodies). */
+/** Uploads in progress at once: per client IP and for the whole process
+ *  (bounds buffered bodies), and per device once its signature verified
+ *  (clients upload one batch at a time). */
 const MAX_ACTIVE_PER_DEVICE = 2;
 const MAX_ACTIVE_PER_IP = 4;
 const MAX_ACTIVE = 32;
@@ -281,11 +282,15 @@ export class DiagApi {
       const ip = diagClientIp(req);
       if (!this.allow(`ip:${ip}`, 120)) throw new HttpFailure(429);
       // Everything but the signature over the body is checked before the
-      // body is read, so unauthenticated requests hold no upload slot.
+      // body is read, so malformed or stale requests and unregistered devices
+      // hold no upload slot. The signature needs the body: until it verifies,
+      // a request holds only its IP's slot, never the device it names (anyone
+      // who knows a device id could otherwise keep that device out).
       const claimed = this.authenticateHeaders(req);
-      slots = this.takeSlots([`ip:${ip}`, `dev:${claimed.deviceId}`]);
+      slots = this.takeSlots([`ip:${ip}`]);
       const body = method === 'POST' ? await this.readBody(req) : Buffer.alloc(0);
       const device = this.verifySignature(req, path, claimed, body);
+      this.addSlot(slots, `dev:${device.id}`);
       if (!this.allow(`dev:${device.id}`, 30)) throw new HttpFailure(429);
       if (method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -323,13 +328,19 @@ export class DiagApi {
     return true;
   }
 
-  /** Reserve one upload slot per key plus one of the process; 429 when any is full. */
+  /** Reserve one upload slot per IP key plus one of the process; 429 when any is full. */
   private takeSlots(keys: string[]): string[] {
-    const limit = (key: string) => key.startsWith('dev:') ? MAX_ACTIVE_PER_DEVICE : MAX_ACTIVE_PER_IP;
-    if (this.active >= MAX_ACTIVE || keys.some(key => (this.activeByKey.get(key) ?? 0) >= limit(key))) throw new HttpFailure(429);
+    if (this.active >= MAX_ACTIVE || keys.some(key => (this.activeByKey.get(key) ?? 0) >= MAX_ACTIVE_PER_IP)) throw new HttpFailure(429);
     this.active++;
     for (const key of keys) this.activeByKey.set(key, (this.activeByKey.get(key) ?? 0) + 1);
     return keys;
+  }
+
+  /** One more per-key slot for a request that already holds its process slot. */
+  private addSlot(slots: string[], key: string): void {
+    if ((this.activeByKey.get(key) ?? 0) >= MAX_ACTIVE_PER_DEVICE) throw new HttpFailure(429);
+    this.activeByKey.set(key, (this.activeByKey.get(key) ?? 0) + 1);
+    slots.push(key);
   }
 
   private releaseSlots(keys: string[]): void {

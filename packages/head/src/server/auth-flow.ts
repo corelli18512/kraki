@@ -79,7 +79,7 @@ export async function handleAuth(server: HeadServer, ws: WebSocket, state: Clien
 
     const renameClock = server.renameClock;
     const tokenStart = performance.now();
-    const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
+    const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip, state.remoteClient);
     state.authTiming.tokenMs = Math.round(performance.now() - tokenStart);
     metrics().authStages.token.observe(state.authTiming.tokenMs);
     if (!socketStillAuthenticating(server, ws, state)) return;
@@ -218,12 +218,32 @@ export function handleBackendAuthResult(
   completeAuthHandshake(server, ws, {
     deviceId: result.deviceId,
     userId: result.userId,
-    user: result.user,
+    user: result.local ? withMirroredInternal(server, result.user) : result.user,
     authMethod: result.authMethod,
     devices: result.local ? undefined : result.devices,
     githubClientId: result.githubClientId,
     vapidPublicKey: result.vapidPublicKey,
   });
+}
+
+/**
+ * A local (cached) answer's preferences carry `internal` as it was at this
+ * device's last remote sign-in, up to a day ago. The edge's own row holds the
+ * flag mirrored from the account service's latest answer for any device of
+ * the account (mirrorAuthResult): report that one.
+ */
+function withMirroredInternal(server: HeadServer, user: AuthResult['user']): AuthResult['user'] {
+  if (!user.preferences || typeof user.preferences !== 'object') return user;
+  const { internal: _cached, ...rest } = user.preferences;
+  const internal = server.storage.getUser(user.id)?.preferences?.internal === true;
+  return { ...user, preferences: internal ? { ...rest, internal: true } : rest };
+}
+
+/** Mirror the account service's `internal` flag onto the edge's user row
+ *  (missing preferences = unknown, leave as is). */
+export function mirrorInternalFlag(server: HeadServer, result: AuthResult): void {
+  if (!result.ok || !result.user.preferences || typeof result.user.preferences !== 'object') return;
+  server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
 }
 
 /** See handleBackendAuthResult: a mirrored device now owned by another account. */
@@ -263,9 +283,7 @@ export function mirrorAuthResult(server: HeadServer, result: AuthResult, renameC
     // completeAuthHandshake and in preferences_updated: mirror the flag so an
     // internal account is not dropped to stable builds by an edge, and a
     // revoked one does not stay on dogfood. Missing preferences = unknown.
-    if (result.user.preferences && typeof result.user.preferences === 'object') {
-      server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
-    }
+    mirrorInternalFlag(server, result);
     for (const [i, d] of result.devices.entries()) {
       try {
         // The account service sends the name to show; when the user renamed
@@ -485,7 +503,7 @@ export async function handleRequestPairingToken(server: HeadServer, ws: WebSocke
     server.sendError(ws, 'Token required for pairing request');
     return;
   }
-  const result = await server.authBackend.requestPairingToken(msg.token, state.ip);
+  const result = await server.authBackend.requestPairingToken(msg.token, state.ip, state.remoteClient);
   if (ws.readyState !== WebSocket.OPEN) return;
   if (!result.ok) {
     sendAuthError(server, ws, result.code as AuthErrorCode, result.message);

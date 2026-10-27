@@ -41,8 +41,9 @@ and `pnpm l10n:check`.
   `Last online %@`. Never build sentences from fragments.
 - Counts: write `Text("\(n) sessions")` and add plural variants in the
   catalog (Xcode: "Vary by Plural").
-- Dates/relative time: `KrakiFormat.relative`, `Date.formatted()`,
-  `RelativeDateTimeFormatter`; never `"\(m)m ago"`.
+- Dates: `Date.formatted()` / `FormatStyle`. Relative times ("5m ago"):
+  `relativeTimestamp` (`Shared/Helpers.swift`); each unit is a catalog key
+  (`%lldm ago`), so don't add another formatter.
 - Names that must not be translated (agent names, device names, user
   content, code): `Text(verbatim:)`.
 - Logs, diagnostics, accessibility identifiers: plain strings, not localized.

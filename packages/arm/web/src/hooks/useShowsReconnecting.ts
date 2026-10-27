@@ -6,6 +6,11 @@ import { diag } from '../lib/diag';
  *  native apps): a flash of "Reconnecting…" on a blip only alarms the user. */
 export const RECONNECTING_DEBOUNCE_MS = 2_000;
 
+/** Mounted indicators showing "Reconnecting…" (Sidebar and SessionPage).
+ *  Performance data counts the time any of them shows it, so one that
+ *  mounts mid-outage, still debouncing, does not end that time. */
+let showing = 0;
+
 /** True while the relay link has been down (after having been up) for longer
  *  than the debounce. */
 export function useShowsReconnecting(): boolean {
@@ -16,7 +21,11 @@ export function useShowsReconnecting(): boolean {
     const timer = setTimeout(() => setShown(true), RECONNECTING_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [reconnecting]);
-  // Performance data: time "Reconnecting…" was actually on screen (idempotent).
-  useEffect(() => { diag.stability.reconnectingShown(reconnecting && shown); }, [reconnecting, shown]);
+  // Performance data: time "Reconnecting…" was actually on screen.
+  useEffect(() => {
+    if (!reconnecting || !shown) return;
+    if (++showing === 1) diag.stability.reconnectingShown(true);
+    return () => { if (--showing === 0) diag.stability.reconnectingShown(false); };
+  }, [reconnecting, shown]);
   return reconnecting && shown;
 }

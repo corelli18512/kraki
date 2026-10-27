@@ -63,6 +63,40 @@ describe('tail reconciliation of a held window', () => {
     expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loaded' });
   });
 
+  it('a range served from memory or the cache never reports loading; a Tentacle request does', async () => {
+    const states: string[] = [];
+    const unsubscribe = messageProvider.subscribeRangeStatus(() => states.push(messageProvider.getRangeStatus(SID).state));
+    try {
+      messageProvider.ensureLoaded(SID); // cache-only
+      await idle();
+      messageProvider.reconcileTail(SID, 50); // closing idle, memory-held
+      await idle();
+      expect(states).not.toContain('loading');
+      expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loaded' });
+      db.lastSeq = 50; // seq 51 is not cached: the Tentacle is asked
+      messageProvider.setTentacleInfo(SID, 51, 'dev-t1');
+      messageProvider.reconcileTail(SID, 51);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(messageProvider.getRangeStatus(SID)).toEqual({ state: 'loading' });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('an earlier page that found seqs absent does not stop a later tail reconcile from asking the Tentacle', async () => {
+    db.lastSeq = 48; // 49..50 are not cached
+    messageProvider.ensureLoaded(SID);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    // Authoritative answer without 49..50 (they are recorded as tombstones).
+    messageProvider.handleRangeBatch(SID, [], 0, 0, false);
+    await idle();
+    expect(useStore.getState().messages.get(SID)).toHaveLength(48);
+    // The foreground tail reconcile (chat open / session_list at seq 50) must
+    // still ask, as it did before held windows were skipped.
+    messageProvider.reconcileTail(SID, 50);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+  });
+
   it('still reads when the authoritative tail moved past memory', async () => {
     messageProvider.ensureLoaded(SID);
     await idle();

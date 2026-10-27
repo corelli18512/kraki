@@ -9,7 +9,9 @@ import { deviceSummary } from '../device-summary.js';
 export { deviceSummary };
 
 /** Tell every online device of the account (the renaming one included: it is
- *  its acknowledgement) the device's new name. */
+ *  its acknowledgement) the device's new name. Sent as presence: the next
+ *  `auth_ok` device list carries the current name, so an unacked older rename
+ *  must not replay after it. */
 export function broadcastDeviceRenamed(server: HeadServer, userId: string, device: StoredDevice): void {
   const msg = { type: 'device_renamed', deviceId: device.id, name: device.name,
     ...(device.displayName != null && { defaultName: device.reportedName }) };
@@ -20,7 +22,7 @@ export function broadcastDeviceRenamed(server: HeadServer, userId: string, devic
   for (const d of userDevices) {
     const ws = server.connections.get(d.id);
     if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-    server.sendControlToDevice(d.id, msg);
+    server.sendPresenceToDevice(d.id, msg);
   }
 }
 
