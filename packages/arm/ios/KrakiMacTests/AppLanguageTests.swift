@@ -58,6 +58,22 @@ final class AppLanguageTests: XCTestCase {
         XCTAssertNil(AppLanguage.override(in: defaults, domain: domain))
     }
 
+    /// "Relaunch Now" must tell the user when the new instance can't start
+    /// (this instance keeps running).
+    @MainActor
+    func testRelaunchFailureIsReported() {
+        let reported = expectation(description: "failure reported")
+        AppLanguage.relaunch(
+            open: { url, config, completion in
+                XCTAssertEqual(url, Bundle.main.bundleURL)
+                XCTAssertTrue(config.createsNewApplicationInstance)
+                completion(nil, CocoaError(.fileNoSuchFile))
+            },
+            onFailure: { reported.fulfill() }
+        )
+        wait(for: [reported], timeout: 2)
+    }
+
     /// Choosing a language replaces a foreign list even if it resolves the same.
     func testPickingALanguageNormalizesAForeignValue() {
         store(["zh-Hans-CN", "en"])

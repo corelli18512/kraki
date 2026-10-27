@@ -298,7 +298,9 @@
     "status query failed": "状态查询失败",
     "your computer": "你的电脑",
     "… (showing the end of the log)": "…（显示日志末尾）",
-    "unknown": "未知"
+    "unknown": "未知",
+    "Couldn't relaunch Kraki": "无法重新打开 Kraki",
+    "Quit Kraki and open it again to use the new language.": "请退出 Kraki 后重新打开，以使用新语言。"
   },
   "englishPlurals": {
     "Ready · %lld models": {

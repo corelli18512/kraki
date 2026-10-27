@@ -87,15 +87,25 @@ enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
         return true
     }
 
+    typealias ApplicationOpener = (URL, NSWorkspace.OpenConfiguration,
+                                   @escaping @Sendable (NSRunningApplication?, (any Error)?) -> Void) -> Void
+
     /// Relaunch the app so the new language applies everywhere.
+    /// `onFailure` runs on the main actor when the new instance can't start.
     @MainActor
-    static func relaunch() {
+    static func relaunch(
+        open: ApplicationOpener = { NSWorkspace.shared.openApplication(at: $0, configuration: $1, completionHandler: $2) },
+        onFailure: @escaping @MainActor @Sendable () -> Void
+    ) {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { application, error in
+        open(Bundle.main.bundleURL, config) { application, error in
             // Quit only once the new instance is running; if the launch
             // failed, keep this one (the choice still applies next launch).
-            guard application != nil, error == nil else { return }
+            guard application != nil, error == nil else {
+                DispatchQueue.main.async { onFailure() }
+                return
+            }
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }
