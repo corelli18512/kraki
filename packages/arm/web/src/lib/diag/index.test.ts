@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiagRecorder } from './recorder';
 
-const { recorders } = vi.hoisted(() => ({ recorders: [] as DiagRecorder[] }));
+const { recorders, power } = vi.hoisted(() => ({ recorders: [] as DiagRecorder[], power: { handler: null as ((event: 'suspend' | 'resume') => void) | null } }));
+vi.mock('../desktop', () => ({ desktop: { onPower: (handler: (event: 'suspend' | 'resume') => void) => { power.handler = handler; return () => {}; } } }));
 vi.mock('./client', async (importOriginal) => ({
   ...await importOriginal<typeof import('./client')>(),
   DiagClient: class {
@@ -49,6 +50,37 @@ describe('Diag experience summary wiring', () => {
         correctionOn: false, textLength: 15, warm: false, count: 0, startMs: 10, recordMs: 2000, finalizeMs: 300 } },
       { ev: 'reply.summary', sid: undefined, d: { kind: 'answer', outcome: 'completed', durationMs: 190,
         firstActivityMs: 90, firstTextMs: 90, deltas: 1, maxGapMs: 0, stalls: 0 } },
+    ]);
+  });
+  it('maps open.summary with the reconnecting flag, like native AppState', () => {
+    const { d, recorder } = harness();
+    let now = 0;
+    d.stability.now = () => now;
+    d.stability.conversationOpened('private-session', 4, 2, false); // the cold app opening is in progress
+    now = 120; d.stability.conversationRendered('private-session', 4, 4, true);
+    expect(recorder.drain().events.filter((e) => e.ev === 'open.summary').map(({ sid, d }) => ({ sid, d }))).toEqual([
+      { sid: undefined, d: { outcome: 'current', gap: 2, firstContentMs: 120, viewCurrentMs: 120, reconnecting: true } },
+    ]);
+  });
+  it('desktop sleep finishes records and goes background; resume while visible is a wake opening (Mac willSleep)', () => {
+    const { d, recorder } = harness();
+    let now = 0;
+    d.stability.now = () => now;
+    d.stability.authenticated(); d.stability.sessionListApplied(null); recorder.drain();
+    now = 1000; power.handler!('suspend');
+    now = 61_000; power.handler!('resume');
+    d.stability.authenticated(); d.stability.sessionListApplied(null);
+    expect(recorder.drain().events.map(({ ev, d }) => ev === 'app.phase' ? d.phase : ev === 'ready.summary' ? `${d.kind}:${d.backgroundMs}` : ev))
+      .toEqual(['background', 'active', 'wake:60000']);
+  });
+  it('keeps events recorded before start (the outbox restores at module load) and records them at start', () => {
+    const d = new Diag();
+    d.record('outbox.state', 'private-session', { clientId: 'c1', phase: 'restored' });
+    d.start(async () => ({ status: 204, body: '' }), { version: '1', build: '0' });
+    d.record('outbox.state', 'private-session', { clientId: 'c1', phase: 'sending' });
+    expect(recorders[0]!.drain().events.filter((e) => e.ev === 'outbox.state').map(({ sid, d }) => ({ sid, d }))).toEqual([
+      { sid: 'private-session', d: { clientId: 'c1', phase: 'restored' } },
+      { sid: 'private-session', d: { clientId: 'c1', phase: 'sending' } },
     ]);
   });
   it('wires longtask completion into ui.busy and suppresses background observations', () => {

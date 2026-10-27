@@ -4,7 +4,7 @@
 // a taskbar badge, single-instance behaviour, and GitHub sign-in in a window of its own.
 const {
   app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, globalShortcut, nativeImage, nativeTheme,
-  net, protocol, screen, shell,
+  net, powerMonitor, protocol, screen, shell,
 } = require('electron');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
@@ -16,6 +16,7 @@ const i18n = require('./i18n.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
 const windowsTitleBar = require('./windows-titlebar.cjs');
+const power = require('./power.cjs');
 const { appOnlyIpc } = require('./ipc-guard.cjs');
 const navigation = require('./navigation.cjs');
 const buildInfo = require('./build-info.json');
@@ -233,8 +234,8 @@ function createWindow() {
 
 // ── Tray: is this PC online (presence.cjs) ──
 const trayImages = {};
-/** Monochrome glyph matching the taskbar (white on dark, black on light),
- *  like a macOS template image. build/tray/*.ico from make-tray-icons.py. */
+/** Full-colour logo for the taskbar theme (logo-dark.png on a dark taskbar,
+ *  logo.png on a light one). build/tray/*.ico from make-tray-icons.py. */
 function trayTheme() {
   return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? 'dark' : 'light';
 }
@@ -601,6 +602,8 @@ app.whenReady().then(async () => {
   serveApp();
   createWindow();
   createTray();
+  // Main window only (send), app origin only (preload.cjs).
+  power.forwardPowerEvents(powerMonitor, send);
   if (pref('usageShortcutEnabled') === true) {
     try { registerUsageShortcut(pref('usageShortcut') ?? 'F6', true); } catch { /* state reports unavailable */ }
   }
