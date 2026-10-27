@@ -197,6 +197,23 @@ describe('PR577 round3 foreground and concurrent trust boundaries', () => {
     expect(revocations).toContainEqual(expect.objectContaining({ deviceId: 'phone' }));
   });
 
+  // `internal` (dogfood) is mirrored to the edge on every remote sign-in of
+  // the account; a sign-in from the cache must report that mirrored flag, not
+  // the one in this device's own (up to 24 h old) cached answer.
+  it.each([[true, false], [false, true]])('a local sign-in reports the edge\'s mirrored internal flag (cached %s, mirrored %s)', async (cachedInternal, mirroredInternal) => {
+    account.updatePreferences('u', { theme: 'dark' });
+    account.setInternal('u', cachedInternal);
+    await seed(); cache.claimRevalidation('phone');
+    // Another device's remote sign-in mirrored the account service's newer flag.
+    edge.setInternal('u', mirroredInternal);
+    const current = await connect({ method: 'challenge', deviceId: 'phone' });
+    await until(() => current.messages.some((m) => m.type === 'auth_ok'));
+    expect(calls).not.toContain('/api/auth/verify');
+    const authOk = current.messages.find((m) => m.type === 'auth_ok') as { user: { preferences?: Record<string, unknown> } };
+    expect(authOk.user.preferences?.internal === true).toBe(mirroredInternal);
+    expect(authOk.user.preferences?.theme).toBe('dark');
+  });
+
   it('invalid_signature from another socket preserves live trust and subsequent removal is polled', async () => {
     await seed(); cache.claimRevalidation('phone');
     const current = await connect({ method: 'challenge', deviceId: 'phone' });

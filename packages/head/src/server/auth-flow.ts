@@ -218,12 +218,25 @@ export function handleBackendAuthResult(
   completeAuthHandshake(server, ws, {
     deviceId: result.deviceId,
     userId: result.userId,
-    user: result.user,
+    user: result.local ? withMirroredInternal(server, result.user) : result.user,
     authMethod: result.authMethod,
     devices: result.local ? undefined : result.devices,
     githubClientId: result.githubClientId,
     vapidPublicKey: result.vapidPublicKey,
   });
+}
+
+/**
+ * A local (cached) answer's preferences carry `internal` as it was at this
+ * device's last remote sign-in, up to a day ago. The edge's own row holds the
+ * flag mirrored from the account service's latest answer for any device of
+ * the account (mirrorAuthResult): report that one.
+ */
+function withMirroredInternal(server: HeadServer, user: AuthResult['user']): AuthResult['user'] {
+  if (!user.preferences || typeof user.preferences !== 'object') return user;
+  const { internal: _cached, ...rest } = user.preferences;
+  const internal = server.storage.getUser(user.id)?.preferences?.internal === true;
+  return { ...user, preferences: internal ? { ...rest, internal: true } : rest };
 }
 
 /** See handleBackendAuthResult: a mirrored device now owned by another account. */
