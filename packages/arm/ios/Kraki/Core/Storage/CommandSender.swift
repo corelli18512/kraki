@@ -835,15 +835,6 @@ final class CommandSender {
         send(["type": "kill_session", "payload": [:] as [String: Any]], sessionId: sessionId)
     }
 
-    @discardableResult
-    func abortSession(sessionId: String) -> Bool {
-        send(
-            ["type": "abort_session", "payload": [:] as [String: Any]],
-            sessionId: sessionId,
-            connectionScoped: true
-        )
-    }
-
     // MARK: - Session Mode
 
     func setSessionMode(sessionId: String, mode: SessionMode) {

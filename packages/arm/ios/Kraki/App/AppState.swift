@@ -42,6 +42,13 @@ final class AppState {
     #if os(macOS)
     /// Direct loopback route to the Tentacle on this Mac (POC). Nil in tests.
     @ObservationIgnored private(set) var localLink: LocalLinkClient?
+    /// The latest Stop per session that went over the local link, by
+    /// Tentacle. Stop is connection-scoped and never replayed through the
+    /// Head, so when that link drops the Stop is lost.
+    @ObservationIgnored var stopsOverLocalLink: [String: String] = [:]
+    /// Per session, how many Stops were lost with the local link; the
+    /// composer settles its Stop latch on a change.
+    var stopsLostWithLocalLink: [String: Int] = [:]
     #endif
     var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated

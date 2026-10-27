@@ -38,6 +38,10 @@ extension AppState: SessionSubscriptionHost {
     /// barrier), re-declare features and re-send inputs still waiting.
     func localLinkDidChange(tentacleId: String, linked: Bool) {
         sessionSubscriptionController.onTentacleUnavailable(tentacleId)
+        for (sessionId, stopTentacle) in stopsOverLocalLink where stopTentacle == tentacleId {
+            stopsOverLocalLink.removeValue(forKey: sessionId)
+            if !linked { stopsLostWithLocalLink[sessionId, default: 0] += 1 }
+        }
         if let store = attachmentStore {
             if Thread.isMainThread {
                 MainActor.assumeIsolated { store.routeChanged() }
