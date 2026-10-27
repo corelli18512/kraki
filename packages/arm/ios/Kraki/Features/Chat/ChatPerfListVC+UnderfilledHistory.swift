@@ -47,9 +47,14 @@ extension ChatPerfListVC {
                 id == Self.liveCardID || (self.sizer.cached(id) != nil && self.appliedHeightIDs.contains(id))
             }) else { return }
             self.collectionView.layoutIfNeeded()
-            let first = self.items.isEmpty ? nil : self.collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))
-            let last = self.items.isEmpty ? nil : self.collectionView.layoutAttributesForItem(at: IndexPath(item: self.items.count - 1, section: 0))
-            let renderedHeight = (last?.frame.maxY ?? 0) - (first?.frame.minY ?? 0)
+            let edgeRows = self.items.isEmpty ? [] : [0, self.items.count - 1]
+            let frames = edgeRows.compactMap {
+                self.collectionView.layoutAttributesForItem(at: IndexPath(item: $0, section: 0))?.frame
+            }
+            // A row mid-update (the live card during a relayout) can report a
+            // zero frame; that is not geometry, and read as underfilled history.
+            guard frames.count == edgeRows.count, frames.allSatisfy({ $0.height > 0 }) else { return }
+            let renderedHeight = (frames.last?.maxY ?? 0) - (frames.first?.minY ?? 0)
             // Spinners, safe area and composer overlay are not rendered history.
             let availableHeight = self.collectionView.bounds.height
                 - self.collectionView.adjustedContentInset.top - self.tailAdjustedInsets.bottom
