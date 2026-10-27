@@ -2,6 +2,7 @@ import { formatNumber } from '../../i18n/format';
 import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { MicOff, Plus, Trash2 } from 'lucide-react';
+import { isImeComposing } from '../../lib/ime';
 import { editWords, useVoice, voiceSettings } from '../../lib/voice/voice';
 import { SettingsRow, SettingsSection, SettingsSwitch } from './SettingsControls';
 
@@ -32,7 +33,7 @@ function CustomWordRow({
         onChange={(e) => setTerm(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Enter' && !isImeComposing(e)) e.currentTarget.blur();
         }}
         className="w-[180px] min-w-0 rounded border border-border-primary bg-surface-primary px-2 py-1"
       />
@@ -43,7 +44,7 @@ function CustomWordRow({
         onChange={(e) => setHeard(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Enter' && !isImeComposing(e)) e.currentTarget.blur();
         }}
         className="min-w-0 flex-1 rounded border border-border-primary bg-surface-primary px-2 py-1"
       />
@@ -67,7 +68,7 @@ function NewWordRow({ onCommit, onDiscard }: { onCommit: (term: string, heard: s
   const [term, setTerm] = useState('');
   const [heard, setHeard] = useState('');
   const commit = () => { if (term.trim()) onCommit(term, heard); };
-  const enter = (e: React.KeyboardEvent) => { if (e.key === 'Enter') commit(); };
+  const enter = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !isImeComposing(e)) commit(); };
   return (
     <li
       className="kp-row"

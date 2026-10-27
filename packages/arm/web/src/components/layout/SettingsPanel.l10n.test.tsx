@@ -51,6 +51,17 @@ describe('SettingsPanel localization', () => {
     expect(text).toMatch(/^Background Service: —\nKraki Web: [^\n]+\nMy Mac: Kraki 4\.5\.6 · offline\nRelay: localhost · 1\.2\.3\nDevice ID: self$/);
     write.mockRestore();
   });
+  it('shows a raised error in the language the user switches to', async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
+    render(<SettingsPanel open onClose={vi.fn()} />);
+    await user.click(screen.getByRole('tab', { name: 'About' }));
+    await user.click(screen.getByRole('button', { name: 'Copy Diagnostics' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t copy diagnostics.');
+    await chinese();
+    expect(screen.getByRole('alert')).toHaveTextContent('无法复制诊断信息。');
+    write.mockRestore();
+  });
   it('switches an open panel, tabs and destructive confirmations without changing identities', async () => {
     render(<SettingsPanel open onClose={vi.fn()} />);
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
