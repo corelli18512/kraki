@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { readFileSync, mkdtempSync, writeFileSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
@@ -182,4 +183,21 @@ test('sign-in window opens https links only; built-in sign-in callback is unchan
   assert.equal(signIn.closed, false);
   signIn.emit('will-redirect', { preventDefault() {} }, 'https://app.kraki.chat/auth/callback/desktop?code=1&state=2');
   assert.equal(await result, 'kraki://auth/callback?code=1&state=2');
+});
+
+test('This PC: a failing CLI command shows localized copy, never the raw child_process error', { skip: process.platform === 'win32' }, async () => {
+  const env = loadMain();
+  const home = mkdtempSync(path.join(tmpdir(), 'kraki-main-'));
+  try {
+    writeFileSync(path.join(home, 'config.json'), '{}');
+    const bin = path.join(home, 'kraki');
+    writeFileSync(bin, '#!/bin/sh\necho "kraki: daemon is not installed" >&2\nexit 1\n', { mode: 0o755 });
+    env.context.__builtIn = { bin, marker: () => null, home: () => home };
+    vm.runInContext('builtIn = __builtIn', env.context);
+    const event = { sender: env.main.webContents, senderFrame: env.main.webContents.mainFrame };
+    for (const [action, error] of [['start', "Couldn't start the command-line Kraki."], ['stop', "Couldn't stop the command-line Kraki."], ['restart', "Couldn't restart the command-line Kraki."]]) {
+      assert.deepEqual({ ...await env.handlers.get('kraki:builtin-external-presence').fn(event, action) }, { ok: false, error });
+    }
+    assert.deepEqual({ ...await env.handlers.get('kraki:settings-remote-updates').fn(event, false) }, { ok: false, error: 'Kraki could not change its update policy.' });
+  } finally { rmSync(home, { recursive: true }); }
 });
