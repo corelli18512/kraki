@@ -177,8 +177,11 @@ export class KrakiWSClient {
       getSpineHead: (sessionId) => (getStore().messages.get(sessionId) ?? []).reduce(
         (head, m) => Math.max(head, 'seq' in m ? m.seq ?? 0 : 0), getStore().sessions.get(sessionId)?.lastSeq ?? 0),
       placeCardAboveSteer: (sessionId, clientId) => getStore().placeCardAboveSteer(sessionId, clientId),
-      isTurnRunning: (sessionId) => getStore().sessions.get(sessionId)?.state === 'active'
-        || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting',
+      isTurnRunning: (sessionId) => {
+        const state = getStore().sessions.get(sessionId)?.state;
+        return state === 'active' || state === 'compacting'
+          || getStore().runtimeStatuses.get(sessionId)?.status === 'compacting';
+      },
     });
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);

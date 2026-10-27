@@ -2144,6 +2144,19 @@ describe('KrakiWSClient', () => {
       }
     });
 
+    it('a prompt queued behind a session whose state is compacting is waiting behind a running turn (Mac waitsBehindRunningTurn)', async () => {
+      const { outbox } = await import('./chat/outbox');
+      new KrakiWSClient('ws://localhost:9999');
+      const running = (state: 'idle' | 'active' | 'compacting') => {
+        useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state, messageCount: 0 });
+        return outbox.depsForTesting()!.isTurnRunning!('sess-1');
+      };
+      // A subscription snapshot from an older Tentacle sets the state without a runtime status.
+      expect(running('compacting')).toBe(true);
+      expect(running('active')).toBe(true);
+      expect(running('idle')).toBe(false);
+    });
+
     it('a greeting without features keeps what the Tentacle already advertised (soak seed 2003)', async () => {
       const { outbox } = await import('./chat/outbox');
       outbox.reset();
