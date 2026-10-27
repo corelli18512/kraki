@@ -1917,6 +1917,12 @@ describe('KrakiWSClient', () => {
       return next;
     }
 
+    /** A browser fires `close` asynchronously, after close() returns (the
+     *  shared mock fires it synchronously). */
+    const browserClose = (ws: typeof lastWsInstance) => {
+      ws.close = () => { ws.readyState = 3; const fire = ws.onclose; setTimeout(() => fire?.({} as CloseEvent), 0); };
+    };
+
     /** A real Head pulse peer wired to the mock sockets, so retransmission
      *  after reconnect actually happens (the bare mock never answers hello). */
     class HeadPeer {
@@ -1977,6 +1983,65 @@ describe('KrakiWSClient', () => {
         for (let i = 0; i < 4; i++) { await vi.advanceTimersByTimeAsync(5_000); head.pump(next); }
         expect(head.delivered).toContain('send_input');
         expect(head.delivered).not.toContain('abort_session');
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('an unacknowledged Stop is not retransmitted after an explicit reconnect (pair with a new code)', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const head = new HeadPeer(() => Date.now());
+        const first = socketOf(client)!;
+        head.connect(first);
+        client.abortSession('sess-1');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(abortSends(first)).toHaveLength(1);
+        head.pump(first, (t) => t === 'abort_session'); // lost with the socket
+        head.disconnect();
+        browserClose(first);
+        client.pairWithToken('ws://localhost:9999', 'pair-token');
+        await vi.advanceTimersByTimeAsync(1);
+        const next = socketOf(client)!;
+        expect(next).not.toBe(first);
+        next._receive({
+          type: 'auth_ok', deviceId: 'dev-web-123',
+          devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        head.connect(next);
+        client.sendInput('sess-1', 'next prompt');
+        for (let i = 0; i < 4; i++) { await vi.advanceTimersByTimeAsync(5_000); head.pump(next); }
+        expect(head.delivered).toContain('send_input');
+        expect(abortSends(next)).toHaveLength(0);
+        expect(head.delivered).not.toContain('abort_session');
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a Stop whose encryption finishes after an explicit reconnect is refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const encryption = (client as unknown as { encryption: { encryptForTarget: (m: Record<string, unknown>) => Promise<unknown> } }).encryption;
+        const real = encryption.encryptForTarget.bind(encryption);
+        let release: () => void = () => {};
+        vi.spyOn(encryption, 'encryptForTarget').mockImplementationOnce((m) =>
+          new Promise((resolve) => { release = () => resolve(real(m)); }));
+        const refused = vi.fn();
+        client.abortSession('sess-1', refused);
+        browserClose(socketOf(client)!);
+        client.pairWithToken('ws://localhost:9999', 'pair-token');
+        release();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refused).toHaveBeenCalledTimes(1);
+        expect((client as unknown as { pulse: { connectionScopedCount: number } }).pulse.connectionScopedCount).toBe(0);
         client.disconnect();
       } finally {
         vi.useRealTimers();

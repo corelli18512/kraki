@@ -108,7 +108,17 @@ export class KrakiWSClient {
 
   /** Pair with a scanned QR code URL. */
   pairWithToken(relay: string, token: string) {
+    this.endConnectionScope();
     this.transport.pairWithToken(relay, token);
+  }
+
+  /** The transport suppresses the close event of a socket it closes on
+   *  purpose (disconnect, pair, relay redirect), so end what belongs to that
+   *  connection here, as `onClose` does: a Stop not yet acknowledged, or still
+   *  being encrypted, never reaches the next connection. */
+  private endConnectionScope(): void {
+    this.connectionEpoch++;
+    this.pulse.onDisconnected();
   }
 
   /** Ask the relay to delete the account (relay control, not E2E). */
@@ -157,6 +167,7 @@ export class KrakiWSClient {
     const creds = desktopCredentials();
     if (!creds) return false;
     getStore().setStatus('connecting');
+    this.endConnectionScope();
     this.transport.redirectToRelay(creds.relay);
     return true;
   }
@@ -267,6 +278,7 @@ export class KrakiWSClient {
     this.routeEpochs.clear();
     this.routeChanges = 0;
     this.clearReplayTracking();
+    this.endConnectionScope();
     this.transport.disconnect();
   }
 
@@ -1348,7 +1360,7 @@ export class KrakiWSClient {
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
-          redirectToRelay: (url: string) => this.transport.redirectToRelay(url),
+          redirectToRelay: (url: string) => { this.endConnectionScope(); this.transport.redirectToRelay(url); },
           currentRelay: this.transport.url,
         });
         break;
