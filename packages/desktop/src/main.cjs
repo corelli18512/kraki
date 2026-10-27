@@ -88,12 +88,9 @@ const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 function loadBounds() {
   try {
     const b = JSON.parse(readFileSync(stateFile(), 'utf8'));
-    const display = screen.getAllDisplays().find((d) => {
-      const a = d.workArea;
-      return b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
-    });
-    if (!display) return null;
-    const a = display.workArea;
+    // The display holding most of the window; none if the window is off-screen.
+    const a = screen.getDisplayMatching(b)?.workArea;
+    if (!a || !(b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y)) return null;
     const width = Math.min(b.width, a.width);
     const height = Math.min(b.height, a.height);
     return { ...b, width, height,
