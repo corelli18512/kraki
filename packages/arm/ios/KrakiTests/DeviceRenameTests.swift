@@ -106,10 +106,12 @@ final class DeviceRenameTests: XCTestCase {
     /// A computer's trusted-devices list names an app as it was at pairing;
     /// the row shows the account's current name once the app is renamed.
     func testTrustedDevicesShowTheAppsCurrentName() throws {
-        let paired = TrustedDeviceEntry(id: "phone", name: "Kraki iOS", via: "qr", pairedAt: "")
+        // Released apps pair with their machine name but report the product
+        // name to the Head: un-renamed, the machine name is what tells them apart.
+        let paired = TrustedDeviceEntry(id: "phone", name: "Corelli's old iPhone", via: "qr", pairedAt: "")
         let gone = TrustedDeviceEntry(id: "gone", name: "Old iPad", via: "qr", pairedAt: "")
         app.deviceStore.setDevices([DeviceSummary(id: "phone", name: "Kraki iOS", role: .app, online: true)])
-        XCTAssertEqual(app.trustedDeviceName(paired), "Kraki iOS")
+        XCTAssertEqual(app.trustedDeviceName(paired), "Corelli's old iPhone")
 
         app.messageRouter?.handleRawMessage(try json(["type": "device_renamed", "deviceId": "phone", "name": "Corelli's iPhone", "defaultName": "Kraki iOS"]))
         XCTAssertEqual(app.trustedDeviceName(paired), "Corelli's iPhone")

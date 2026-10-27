@@ -470,6 +470,20 @@ describe('device trust — administration from paired apps', () => {
     expect(lastNames()).toEqual({ [laptop.id]: laptop.id, [phone.id]: 'Corelli\'s iPhone' });
   });
 
+  it('an app the account never renamed keeps its pairing name, not the product name it reports to the Head', () => {
+    const { env, phone, laptop } = pairedPolicy(true);
+    const lastNames = () => {
+      const last = readable(env, phone).filter((m) => m.type === 'trusted_devices').at(-1)!.payload as { devices: Array<{ id: string; name: string }> };
+      return Object.fromEntries(last.devices.map((d) => [d.id, d.name]));
+    };
+    // Released apps sign in as "Kraki Mac" but pair with their machine name.
+    env.headControl({ type: 'device_joined', device: { id: laptop.id, name: 'Kraki Mac', role: 'app', online: true, publicKey: laptop.rsaCompact } });
+    env.headControl({ type: 'device_renamed', deviceId: phone.id, name: 'Kraki iOS' });
+    expect(lastNames()).toEqual({ [laptop.id]: laptop.id, [phone.id]: phone.id });
+    env.headControl({ type: 'device_renamed', deviceId: laptop.id, name: 'Work Mac', defaultName: 'Kraki Mac' });
+    expect(lastNames()).toEqual({ [laptop.id]: 'Work Mac', [phone.id]: phone.id });
+  });
+
   it('a paired app revokes another; the revoked one loses access at once', async () => {
     const { env, phone, laptop } = pairedPolicy(true);
     env.deliver(appSend(env, phone, { type: 'revoke_device', payload: { deviceId: laptop.id } }), phone.id);

@@ -359,10 +359,12 @@ extension AppState {
     }
 
     /// The name to show for an app a computer trusts: the account's current
-    /// name, so a rename shows at once (older computers list the name the app
-    /// reported when it paired).
+    /// name when the app was renamed (so a rename shows at once, even from
+    /// older computers), otherwise the machine name it reported when it paired
+    /// (its Head name is only the product name, "Kraki Mac").
     func trustedDeviceName(_ entry: TrustedDeviceEntry) -> String {
-        deviceStore.devices[entry.id]?.name ?? entry.name
+        if let device = deviceStore.devices[entry.id], device.defaultName != nil { return device.name }
+        return entry.name
     }
 
     /// The computer's signed list of the apps it trusts.
