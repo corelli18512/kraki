@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
-import { MAX_DEVICE_NAME_LENGTH } from '@kraki/protocol';
+import { MAX_DEVICE_NAME_LENGTH, normalizeDeviceName } from '@kraki/protocol';
 import { exportPublicKey, generateKeyPair, signChallenge } from '@kraki/crypto';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
@@ -51,6 +51,21 @@ function next(device: MockDevice, type: string) {
   for (const m of device.messages) if (m.type === type) m._consumed = true;
   return device.waitFor(type).then(({ _consumed: _, ...msg }) => msg);
 }
+
+/** The relay's name rule. Swift `DeviceName.normalize` checks the same
+ *  vectors (KrakiTests/DeviceRenameTests.swift): keep both lists identical. */
+describe('normalizeDeviceName vectors (shared with Swift)', () => {
+  const becomesSpace = [0x00, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1f, 0x20, 0x7f, 0x85, 0x9f, 0xa0, 0x1680,
+    0x2000, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff];
+  const kept = [0x180e, 0x200b, 0x200c, 0x200d, 0x2060, 0xfffe];
+
+  it('turns control and white-space code points into one space and keeps the rest', () => {
+    for (const cp of becomesSpace) expect(normalizeDeviceName(`a${String.fromCodePoint(cp)}b`), cp.toString(16)).toBe('a b');
+    for (const cp of kept) expect(normalizeDeviceName(`a${String.fromCodePoint(cp)}b`), cp.toString(16)).toBe(`a${String.fromCodePoint(cp)}b`);
+    expect(normalizeDeviceName('  Work \n\t laptop ')).toBe('Work laptop');
+    expect(normalizeDeviceName('\ufeff\u3000')).toBe('');
+  });
+});
 
 describe('rename_device', () => {
   let storage: Storage;

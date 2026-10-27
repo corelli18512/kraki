@@ -41,6 +41,19 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertNil(DeviceName.normalize(String(repeating: "x", count: 65)))
     }
 
+    /// The relay's vectors (head/src/__tests__/device-rename.test.ts,
+    /// "normalizeDeviceName vectors"): keep both lists identical.
+    func testNormaliseMatchesTheRelayVectors() throws {
+        let becomesSpace: [UInt32] = [0x00, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1F, 0x20, 0x7F, 0x85, 0x9F, 0xA0, 0x1680,
+                                      0x2000, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF]
+        let kept: [UInt32] = [0x180E, 0x200B, 0x200C, 0x200D, 0x2060, 0xFFFE]
+        func around(_ cp: UInt32) throws -> String { "a" + String(Character(try XCTUnwrap(Unicode.Scalar(cp)))) + "b" }
+        for cp in becomesSpace { XCTAssertEqual(DeviceName.normalize(try around(cp)), "a b", String(cp, radix: 16)) }
+        for cp in kept { XCTAssertEqual(DeviceName.normalize(try around(cp)), try around(cp), String(cp, radix: 16)) }
+        XCTAssertEqual(DeviceName.normalize("  Work \n\t laptop "), "Work laptop")
+        XCTAssertEqual(DeviceName.normalize("\u{FEFF}\u{3000}"), "")
+    }
+
     func testRenameValue() {
         let laptop = DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true)
         let renamed = DeviceSummary(id: "t", name: "Work laptop", role: .tentacle, online: true, defaultName: "corelli-mbp")

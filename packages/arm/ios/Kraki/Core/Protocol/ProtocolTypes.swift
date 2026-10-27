@@ -332,12 +332,21 @@ enum DeviceName {
     /// name is too long.
     static func normalize(_ raw: String) -> String? {
         let scalars = raw.unicodeScalars.map { scalar -> Character in
-            let v = scalar.value
-            let control = v <= 0x1F || (0x7F...0x9F).contains(v) || v == 0x2028 || v == 0x2029
-            return control || CharacterSet.whitespacesAndNewlines.contains(scalar) ? " " : Character(scalar)
+            isSpace(scalar.value) ? " " : Character(scalar)
         }
         let cleaned = String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
         return cleaned.unicodeScalars.count > maxLength ? nil : cleaned
+    }
+
+    /// The relay's set: C0/C1 controls, U+2028/2029 and JavaScript's `\s`
+    /// (not Foundation's whitespace set, which differs on U+200B and U+FEFF).
+    private static func isSpace(_ v: UInt32) -> Bool {
+        switch v {
+        case 0x00...0x20, 0x7F...0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+            return true
+        default:
+            return false
+        }
     }
 
     /// What to send for `draft` typed over `device`'s name: `""` clears the
