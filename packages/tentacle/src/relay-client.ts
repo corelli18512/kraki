@@ -106,6 +106,11 @@ export class RelayClient {
    *  of them the Head reports online — so access can be re-evaluated when
    *  trust changes (pairing, revocation, policy). */
   private relayAppDevices = new Map<string, DeviceSummary>();
+
+  private trustedAppName(id: string, pairedName: string | undefined): string {
+    const live = this.relayAppDevices.get(id);
+    return (live?.defaultName ? live.name : undefined) ?? pairedName ?? live?.name ?? id;
+  }
   private headOnlineApps = new Set<string>();
   private trustRefreshTimer: ReturnType<typeof setInterval> | null = null;
   /** X25519 key each paired app had when last seen trusted, so an app that
@@ -734,6 +739,20 @@ export class RelayClient {
       if (this.localLink?.has(deviceId)) return;
       this.appFeatures.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
+      return;
+    }
+
+    if (msg.type === 'device_renamed') {
+      // Names are cosmetic: the trusted-devices list shows the account's
+      // current name for an app rather than the one it reported at pairing.
+      const deviceId = msg.deviceId as string;
+      const device = this.relayAppDevices.get(deviceId);
+      if (!device || typeof msg.name !== 'string') return;
+      const { defaultName: _old, ...rest } = device;
+      this.relayAppDevices.set(deviceId, typeof msg.defaultName === 'string'
+        ? { ...rest, name: msg.name, defaultName: msg.defaultName }
+        : { ...rest, name: msg.name });
+      if (this.deviceTrust?.isTrusted(deviceId)) this.broadcastTrustedDevices();
       return;
     }
 
@@ -1788,7 +1807,11 @@ export class RelayClient {
         policyRevision: trust.store.policyRevision,
         devices: trust.store.list().map((d) => ({
           id: d.id,
-          name: d.name ?? this.relayAppDevices.get(d.id)?.name ?? d.id,
+          // The account's name only when the app was renamed (`defaultName`
+          // present): released apps report a product name ("Kraki Mac") to
+          // the Head but their machine name at pairing, which tells two
+          // Macs apart.
+          name: this.trustedAppName(d.id, d.name),
           via: d.via,
           pairedAt: d.pairedAt,
         })),

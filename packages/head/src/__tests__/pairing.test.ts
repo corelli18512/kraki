@@ -6,6 +6,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import { createTestEnv, connectDevice, type TestEnv } from './integration-helpers.js';
+import { GitHubAuthProvider, OpenAuthProvider, ThrottledAuthProvider, type AuthProvider } from '../auth.js';
+import { LocalAuthBackend } from '../local-auth-backend.js';
+import { Storage } from '../storage.js';
 
 describe('Pairing (in-memory tokens)', () => {
   let env: TestEnv;
@@ -127,5 +130,33 @@ describe('Pairing (in-memory tokens)', () => {
     const app = await connectDevice(env.port, 'Phone', 'app', { pairingToken: tokenMsg.token });
     expect(app.deviceId).toBeTruthy();
     app.close();
+  });
+});
+
+describe('requestPairingToken with mixed auth modes', () => {
+  it('does not send the open shared key to the GitHub provider (--auth github,open)', async () => {
+    const githubCalls: string[] = [];
+    const github = new GitHubAuthProvider({
+      fetcher: (async (url: string | URL | Request) => {
+        githubCalls.push(String(url));
+        return new Response('{}', { status: 401 });
+      }) as typeof fetch,
+    });
+    const storage = new Storage(':memory:');
+    const backend = new LocalAuthBackend({
+      storage,
+      authProviders: new Map<string, AuthProvider>([
+        ['github', new ThrottledAuthProvider(github)],
+        ['open', new ThrottledAuthProvider(new OpenAuthProvider('open-shared-secret'))],
+      ]),
+    });
+    // `kraki pair` on an open computer sends its channel.key.
+    const result = await backend.requestPairingToken('open-shared-secret', '127.0.0.1');
+    expect(result.ok).toBe(true);
+    expect(githubCalls).toEqual([]);
+    // A GitHub token still reaches GitHub.
+    await backend.requestPairingToken('gho_not_the_open_key', '127.0.0.1');
+    expect(githubCalls).toEqual(['https://api.github.com/user']);
+    storage.close();
   });
 });

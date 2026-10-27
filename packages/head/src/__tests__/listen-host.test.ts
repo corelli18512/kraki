@@ -39,7 +39,7 @@ describe('resolveListenHost', () => {
 
   it('allows any host for open auth once a shared key is set', () => {
     expect(resolveListenHost({ ...base, host: '0.0.0.0', openSharedKey: 'secret' })).toEqual({ ok: true, host: '0.0.0.0' });
-    // With a key and no HOST, the bind stays Node's default (all interfaces), as before.
+    // With a key and no host, the bind stays Node's default (all interfaces), as before.
     expect(resolveListenHost({ ...base, openSharedKey: 'secret' })).toEqual({ ok: true, host: undefined });
   });
 

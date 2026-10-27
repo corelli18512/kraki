@@ -86,3 +86,38 @@ for (const width of [1280, 390]) {
     } finally { await server.close(); }
   });
 }
+
+test('a closing idle served from held history never shows the loading strip', async ({ page }) => {
+  const server = await MockRelayServer.create();
+  try {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(`/?relay=${encodeURIComponent(server.url)}`);
+    const ws = await server.waitForConnection();
+    await server.waitForMessage(ws);
+    server.sendAuthOk(ws, { sessions: [SESSION], devices: [DEVICE] });
+    await server.waitForMessage(ws);
+    await page.getByText('History status').first().click();
+    await expect(page.locator('[data-chat-scroll]')).toBeVisible();
+    for (let seq = 1; seq <= 10; seq++) server.sendMessage(ws, {
+      type: 'user_message', sessionId: SESSION.id, seq, payload: { content: `Held history ${seq}` },
+    });
+    await expect(page.getByRole('main').getByText('Held history 10', { exact: true })).toBeVisible();
+    await expect(page.locator('.khistory-status')).toHaveCount(0);
+    // Record every strip the DOM ever gets, even one removed before a paint.
+    await page.evaluate(() => {
+      const w = window as unknown as { stripSeen: number };
+      w.stripSeen = 0;
+      new MutationObserver(() => { if (document.querySelector('.khistory-status')) w.stripSeen++; })
+        .observe(document.body, { childList: true, subtree: true });
+    });
+    for (let turn = 0; turn < 3; turn++) {
+      const seq = 11 + turn * 2;
+      server.sendMessage(ws, { type: 'agent_message', sessionId: SESSION.id, seq, payload: { content: `Reply ${turn}` } });
+      server.sendMessage(ws, { type: 'idle', sessionId: SESSION.id, seq: seq + 1, payload: {} });
+      await expect(page.getByRole('main').getByText(`Reply ${turn}`, { exact: true })).toBeVisible();
+      await page.waitForTimeout(300);
+    }
+    expect(await page.evaluate(() => (window as unknown as { stripSeen: number }).stripSeen)).toBe(0);
+  } finally { await server.close(); }
+});

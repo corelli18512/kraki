@@ -46,7 +46,7 @@ async function startHead(args: string[], env: Record<string, string> = {}): Prom
   const dir = mkdtempSync(join(tmpdir(), 'kraki-head-cli-'));
   tmpDirs.push(dir);
   const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of ['HOST', 'OPEN_SHARED_KEY', 'AUTH_MODE', 'API_KEY', 'HEAD_MODE', 'MODE', 'ACCOUNT_URL', 'SERVICE_KEY', 'PUSH_PROVIDERS', 'VOICE_LEASE_ENABLED', 'REGION', 'PUBLIC_RELAY_URL']) {
+  for (const key of ['HOST', 'KRAKI_HOST', 'OPEN_SHARED_KEY', 'AUTH_MODE', 'API_KEY', 'HEAD_MODE', 'MODE', 'ACCOUNT_URL', 'SERVICE_KEY', 'PUSH_PROVIDERS', 'VOICE_LEASE_ENABLED', 'REGION', 'PUBLIC_RELAY_URL']) {
     // Empty rather than deleted: cli.ts loads packages/head/.env, and dotenv fills only unset keys.
     cleanEnv[key] = '';
   }
@@ -75,9 +75,9 @@ async function waitForListening(head: RunningHead): Promise<string> {
 }
 
 /** Send one message on a fresh connection and return the first reply. */
-async function exchange(host: string, port: number, msg: unknown): Promise<Record<string, unknown>> {
+async function exchange(host: string, port: number, msg: unknown, headers: Record<string, string> = {}): Promise<Record<string, unknown>> {
   return new Promise((resolveMsg, reject) => {
-    const ws = new WebSocket(`ws://${host}:${port}`);
+    const ws = new WebSocket(`ws://${host}:${port}`, { headers });
     const timer = setTimeout(() => { ws.terminate(); reject(new Error('no reply')); }, 5_000);
     ws.on('open', () => ws.send(JSON.stringify(msg)));
     ws.on('message', (data) => {
@@ -130,13 +130,44 @@ describe('kraki-relay bind and open auth (cli.ts)', () => {
   }, 30_000);
 
   it.each([
+    ['X-Forwarded-For', { 'X-Forwarded-For': '203.0.113.7' }],
+    ['Forwarded', { Forwarded: 'for=203.0.113.7' }],
+    ['X-Real-IP', { 'X-Real-IP': '203.0.113.7' }],
+  ])('refuses keyless open sign-in and pairing that came through a reverse proxy (%s)', async (_label, headers) => {
+    const head = await startHead([]);
+    await waitForListening(head);
+    // A proxy on this host connects from loopback; its forwarding header shows the client is elsewhere.
+    const signIn = await exchange('127.0.0.1', head.port, openAuth(), headers);
+    expect(signIn.type).toBe('auth_error');
+    expect(String(signIn.message)).toContain('OPEN_SHARED_KEY');
+    expect((await exchange('127.0.0.1', head.port, { type: 'request_pairing_token', token: 'dev' }, headers)).type).toBe('auth_error');
+    // Direct loopback clients (local tentacle, dev and e2e setups) still sign in.
+    expect((await exchange('127.0.0.1', head.port, openAuth())).type).toBe('auth_ok');
+  }, 30_000);
+
+  it('accepts proxied open sign-ins when OPEN_SHARED_KEY is set', async () => {
+    const head = await startHead([], { OPEN_SHARED_KEY: 'correct-horse-battery' });
+    await waitForListening(head);
+    const headers = { 'X-Forwarded-For': '203.0.113.7' };
+    expect((await exchange('127.0.0.1', head.port, openAuth('correct-horse-battery'), headers)).type).toBe('auth_ok');
+    expect((await exchange('127.0.0.1', head.port, { type: 'request_pairing_token', token: 'correct-horse-battery' }, headers)).type)
+      .toBe('pairing_token_created');
+  }, 30_000);
+
+  it.each([
     ['--host flag', ['--host', '0.0.0.0'], {}],
-    ['HOST env', [], { HOST: '0.0.0.0' }],
+    ['KRAKI_HOST env', [], { KRAKI_HOST: '0.0.0.0' }],
   ])('refuses a non-loopback host in open mode without a shared key (%s)', async (_label, args, env) => {
     const head = await startHead(args as string[], env as Record<string, string>);
     expect(await head.exited).toBe(1);
     expect(head.output()).toContain('Refusing to listen on 0.0.0.0');
     expect(head.output()).toContain('OPEN_SHARED_KEY');
+  }, 30_000);
+
+  it('ignores the shell\'s HOST variable (tcsh exports HOST=<hostname>)', async () => {
+    const head = await startHead([], { HOST: '0.0.0.0' });
+    const line = await waitForListening(head);
+    expect(line).toContain('127.0.0.1');
   }, 30_000);
 
   it('enforces OPEN_SHARED_KEY on open auth and on pairing requests', async () => {

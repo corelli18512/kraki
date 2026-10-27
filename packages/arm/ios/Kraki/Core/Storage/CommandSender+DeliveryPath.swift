@@ -31,4 +31,27 @@ extension CommandSender {
         guard let appState, appState.isFullyOnline, let target = pendingPlaceholderTargets[sessionId] else { return false }
         return appState.deviceStore.devices[target]?.online == true
     }
+
+    /// Stop the running turn. Connection-scoped: never replayed on another
+    /// connection or route.
+    @discardableResult
+    func abortSession(sessionId: String) -> Bool {
+        #if os(macOS)
+        // The local link carries a send to its Tentacle whenever it is up.
+        var linkedTentacle: String?
+        if let owner = appState?.sessionStore.sessions[sessionId]?.deviceId,
+           appState?.tentacleRouteIsIndependent(owner) == true {
+            linkedTentacle = owner
+        }
+        #endif
+        let sent = send(
+            ["type": "abort_session", "payload": [:] as [String: Any]],
+            sessionId: sessionId,
+            connectionScoped: true
+        )
+        #if os(macOS)
+        appState?.stopsOverLocalLink[sessionId] = sent ? linkedTentacle : nil
+        #endif
+        return sent
+    }
 }

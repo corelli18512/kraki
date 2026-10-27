@@ -27,9 +27,10 @@
  */
 
 import type Database from 'better-sqlite3';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
 import type { AuthResult } from './auth-backend.js';
+import { ChallengeNonces } from './challenge-nonce.js';
 
 export interface EdgeAuthCacheOptions {
   /** Longest time since the account service last confirmed a device. */
@@ -57,12 +58,9 @@ export const DEFAULT_REVALIDATE_MS = 60_000;
 /** A challenge must be answered within this (the Head also enforces it per
  *  socket, for account-service nonces too). */
 const NONCE_TTL_MS = 5 * 60_000;
-/** Used/expired local nonces are remembered this long, so a late answer is
- *  still recognised as ours (and rejected) instead of looking unknown. */
-const NONCE_RETAIN_MS = 24 * 3600_000;
-const MAX_NONCES = 20_000;
 
-/** What `takeNonce` found: `local` = issued here for this device and unused. */
+/** What `checkNonce` found: `local` = issued here for this device and not
+ *  yet accepted; `foreign` = issued here for another device, or accepted. */
 export type NonceCheck = 'local' | 'expired' | 'foreign' | 'unknown';
 
 /** Short, stable fingerprint of a signing key, for status polls. */
@@ -74,14 +72,19 @@ export class EdgeAuthCache {
   readonly maxStaleMs: number;
   readonly revalidateMs: number;
   private readonly now: () => number;
-  /** Nonces this edge issued itself (not the account service). Kept (marked
-   *  used) until twice their lifetime so a reuse is recognised, not mistaken
-   *  for an account-service nonce. */
-  private readonly localNonces = new Map<string, { deviceId: string; expiresAt: number; used: boolean }>();
+  /** Nonces this edge issued itself (not the account service). They carry
+   *  their own proof of origin, so issuing stores nothing (a flood of
+   *  challenge starts cannot void another device's nonce), and a reused or
+   *  late one is still recognised as ours, never mistaken for an
+   *  account-service nonce. */
+  private readonly localNonces: ChallengeNonces;
   private readonly lastRevalidation = new Map<string, number>();
   /** Bumped whenever a device's trust is dropped: an account-service answer
    *  requested before the drop must not bring it back. */
   private readonly epochs = new Map<string, number>();
+  /** Bumped only when a device's trust is dropped (`forget`), not when a
+   *  newer answer is stored: see `newerAnswerFor`. */
+  private readonly drops = new Map<string, number>();
   /** Monotonic clock of trust changes, and when each device last changed:
    *  fences answers for requests that did not know the device id yet. */
   private changeClock = 0;
@@ -91,6 +94,7 @@ export class EdgeAuthCache {
     this.maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
     this.revalidateMs = options.revalidateMs ?? DEFAULT_REVALIDATE_MS;
     this.now = options.now ?? Date.now;
+    this.localNonces = new ChallengeNonces(NONCE_TTL_MS, () => this.now());
     db.exec(`CREATE TABLE IF NOT EXISTS edge_auth_cache (
       device_id   TEXT PRIMARY KEY,
       user_id     TEXT NOT NULL,
@@ -110,6 +114,9 @@ export class EdgeAuthCache {
 
   /** Current trust epoch of a device (see `remember`). */
   epoch(deviceId: string): number { return this.epochs.get(deviceId) ?? 0; }
+
+  /** How often the device's trust was dropped (see `newerAnswerFor`). */
+  dropCount(deviceId: string): number { return this.drops.get(deviceId) ?? 0; }
 
   /** The id belongs to an account deleted through this edge. */
   isTombstoned(deviceId: string): boolean {
@@ -131,8 +138,9 @@ export class EdgeAuthCache {
    * The account service accepted this device (challenge or token auth).
    * `epochAtRequest` (from `epoch()` before the request was sent) fences the
    * answer: if the device was dropped, or a newer answer was stored, since
-   * the request left, this one is `stale` and must not be acted on. Storing
-   * advances the epoch, so an older answer can never overwrite a newer one.
+   * the request left, this one is `stale` and must not be acted on (but see
+   * `newerAnswerFor`). Storing advances the epoch, so an older answer can
+   * never overwrite a newer one.
    */
   remember(result: AuthResult, epochAtRequest?: number): 'stored' | 'stale' | 'skipped' {
     if (epochAtRequest !== undefined && epochAtRequest !== this.epoch(result.deviceId)) return 'stale';
@@ -172,7 +180,44 @@ export class EdgeAuthCache {
   forget(deviceId: string): void {
     this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?').run(deviceId);
     this.lastRevalidation.delete(deviceId);
+    this.drops.set(deviceId, this.dropCount(deviceId) + 1);
     this.bump(deviceId);
+  }
+
+  /**
+   * For an answer `remember` called `stale`: if all that happened since its
+   * request left (`dropsAtRequest` from `dropCount()`) is that a newer answer
+   * for the same account and keys was stored, that newer answer. A client
+   * that retried a slow sign-in gets both answers; the later one may use
+   * the stored one instead of failing. Undefined when trust was dropped or
+   * the account or keys changed: then the stale answer must fail.
+   */
+  newerAnswerFor(result: AuthResult, dropsAtRequest: number): AuthResult | undefined {
+    if (dropsAtRequest !== this.dropCount(result.deviceId)) return undefined;
+    const row = this.db.prepare('SELECT user_id, public_key, encryption_key, result_json FROM edge_auth_cache WHERE device_id = ?')
+      .get(result.deviceId) as { user_id: string; public_key: string; encryption_key: string | null; result_json: string } | undefined;
+    const self = result.devices.find((d) => d.id === result.deviceId);
+    if (!row || !self || row.user_id !== result.userId || row.public_key !== self.publicKey
+      || (row.encryption_key ?? undefined) !== (self.encryptionKey ?? undefined)) return undefined;
+    try { return JSON.parse(row.result_json) as AuthResult; } catch { return undefined; }
+  }
+
+  /**
+   * Delete rows too old for local sign-in (`maxStaleMs`) unless `keep` says
+   * otherwise. Not a revocation (no epoch change): the device's next sign-in
+   * goes to the account service and stores a fresh row. A connected device
+   * must be kept: the status poll of its row is what kicks it if it is
+   * removed or moved elsewhere.
+   */
+  pruneStale(keep: (deviceId: string) => boolean): void {
+    const rows = this.db.prepare('SELECT device_id FROM edge_auth_cache WHERE verified_at < ?')
+      .all(this.now() - this.maxStaleMs) as Array<{ device_id: string }>;
+    const remove = this.db.prepare('DELETE FROM edge_auth_cache WHERE device_id = ?');
+    for (const { device_id: deviceId } of rows) {
+      if (keep(deviceId)) continue;
+      remove.run(deviceId);
+      this.lastRevalidation.delete(deviceId);
+    }
   }
 
   deviceIds(): string[] {
@@ -188,31 +233,23 @@ export class EdgeAuthCache {
   }
 
   issueNonce(deviceId: string): string {
-    this.sweepNonces();
-    // Bounded: oldest first. An evicted nonce reads as unknown (the account
-    // service decides), and the Head still rejects any answer older than
-    // five minutes on the socket that asked.
-    while (this.localNonces.size >= MAX_NONCES) {
-      const oldest = this.localNonces.keys().next().value;
-      if (oldest === undefined) break;
-      this.localNonces.delete(oldest);
-    }
-    const nonce = randomBytes(32).toString('hex');
-    this.localNonces.set(nonce, { deviceId, expiresAt: this.now() + NONCE_TTL_MS, used: false });
-    return nonce;
+    return this.localNonces.issue(deviceId);
   }
 
   /**
-   * Consume a nonce. `unknown` means this edge did not issue it (an
+   * Where a nonce came from. `unknown` means this edge did not issue it (an
    * account-service nonce); anything but `local` and `unknown` must be
    * rejected, never passed on to the account service.
    */
-  takeNonce(nonce: string, deviceId: string): NonceCheck {
-    const entry = this.localNonces.get(nonce);
-    if (!entry) return 'unknown';
-    if (entry.used || entry.deviceId !== deviceId) { entry.used = true; return 'foreign'; }
-    entry.used = true;
-    return entry.expiresAt >= this.now() ? 'local' : 'expired';
+  checkNonce(nonce: string, deviceId: string): NonceCheck {
+    const check = this.localNonces.check(nonce, deviceId);
+    if (check === 'valid') return 'local';
+    return check === 'used' ? 'foreign' : check;
+  }
+
+  /** The answer to this `local` nonce was accepted: never again. */
+  acceptNonce(nonce: string): void {
+    this.localNonces.accept(nonce);
   }
 
   verifySignature(entry: CachedDevice, nonce: string, signature: string): boolean {
@@ -230,17 +267,6 @@ export class EdgeAuthCache {
     this.lastRevalidation.set(deviceId, this.now());
     return true;
   }
-
-  private lastSweep = 0;
-  private sweepNonces(): void {
-    const now = this.now();
-    // At most once a minute: issuing a nonce must not scan the whole map.
-    if (now - this.lastSweep < 60_000) return;
-    this.lastSweep = now;
-    for (const [nonce, entry] of this.localNonces) {
-      if (entry.expiresAt + NONCE_RETAIN_MS < now) this.localNonces.delete(nonce);
-    }
-  }
 }
 
 /** Rejections that are about the device itself (it is gone, moved or the
@@ -249,10 +275,4 @@ export class EdgeAuthCache {
 export function isDeviceRejection(code: string | undefined): boolean {
   return code === 'unknown_device' || code === 'device_not_found' || code === 'account_deleted'
     || code === 'wrong_region' || code === 'user_not_found';
-}
-
-/** Account-service answers that mean "this device may not sign in here". */
-export function isDefinitiveRejection(code: string | undefined): boolean {
-  return code !== undefined && code !== 'service_unavailable' && code !== 'internal_error'
-    && code !== 'rate_limited' && code !== 'bad_request' && code !== 'not_supported' && code !== 'auth_unavailable';
 }

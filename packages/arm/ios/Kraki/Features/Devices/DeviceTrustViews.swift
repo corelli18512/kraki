@@ -288,7 +288,7 @@ struct ComputerSecurityRows: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(entry.name).lineLimit(1)
+                    Text(appState.trustedDeviceName(entry)).lineLimit(1)
                     if entry.id == appState.deviceId {
                         Text("This device")
                             .font(.system(size: 10, weight: .semibold))
@@ -306,7 +306,7 @@ struct ComputerSecurityRows: View {
                 .accessibilityIdentifier("trust.revoke.\(entry.id)")
         }
         .confirmationDialog(
-            "Revoke \(revoking?.name ?? "device")?",
+            "Revoke \(revoking.map { appState.trustedDeviceName($0) } ?? "device")?",
             isPresented: Binding(get: { revoking?.id == entry.id }, set: { if !$0 { revoking = nil } }),
             titleVisibility: .visible
         ) {
@@ -328,8 +328,8 @@ struct ComputerSecurityRows: View {
                 : "This device will no longer be paired with \(device.name). While \"Only paired devices\" is off, it can still connect unpaired."
         }
         return enforced
-            ? "\(entry.name) will no longer see or control \(device.name). To use it again, scan the computer's code on it."
-            : "\(entry.name) will no longer be paired. While \"Only paired devices\" is off, any device on your account — including it — can still connect. Turn that on to block it."
+            ? "\(appState.trustedDeviceName(entry)) will no longer see or control \(device.name). To use it again, scan the computer's code on it."
+            : "\(appState.trustedDeviceName(entry)) will no longer be paired. While \"Only paired devices\" is off, any device on your account — including it — can still connect. Turn that on to block it."
     }
 
     private func subtitle(_ entry: TrustedDeviceEntry) -> String {

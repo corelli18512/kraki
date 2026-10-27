@@ -35,8 +35,12 @@ export class CommandState {
     }
   }
 
-  /** Clean up a failed request (called on server_error with requestId). */
+  /** Clean up a failed request (called on server_error with requestId).
+   *  The typed first message goes back to the New Session draft (as on
+   *  iOS/Mac, CommandSender.failPendingRequest), instead of being lost. */
   clearRequest(requestId: string): void {
+    const prompt = this.pendingPrompts.get(requestId);
+    if (prompt !== undefined && this.pendingCreateRequests.has(requestId)) recoverNewSessionText(prompt);
     this.pendingPrompts.delete(requestId);
     this.pendingCreateRequests.delete(requestId);
     this.forkSources.delete(requestId);
@@ -145,6 +149,18 @@ export function setSessionModel(
   if (session) {
     store.upsertSession({ ...session, model });
   }
+}
+
+/** Shared with NewSessionComposer (its draft id). */
+export const NEW_SESSION_DRAFT_ID = 'kraki.new-session-draft';
+
+/** Put text back into the New Session draft, after anything already typed
+ *  there (CommandSender+VoiceHandoff.swift recoverNewSessionText). */
+export function recoverNewSessionText(text: string): void {
+  if (!text.trim()) return;
+  const store = getStore();
+  const existing = store.drafts.get(NEW_SESSION_DRAFT_ID) ?? '';
+  store.setDraft(NEW_SESSION_DRAFT_ID, existing ? `${existing}\n${text}` : text);
 }
 
 export function createSession(

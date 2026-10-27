@@ -429,21 +429,23 @@ final class DeviceStore {
 
     /// How long a finished update's outcome stays on screen. Success is
     /// brief; problems stay until dismissed or for ten minutes.
-    nonisolated(unsafe) static var updatedOutcomeLifetime: Duration = .seconds(60)
-    nonisolated(unsafe) static var problemOutcomeLifetime: Duration = .seconds(600)
+    @ObservationIgnored var updatedOutcomeLifetime: Duration = .seconds(60)
+    @ObservationIgnored var problemOutcomeLifetime: Duration = .seconds(600)
+    /// The scheduled clear of each computer's finished outcome.
+    @ObservationIgnored private(set) var outcomeExpiry: [String: Task<Void, Never>] = [:]
 
     func setUpdateProgress(_ id: String, _ progress: DeviceUpdateProgress?) {
         updateProgress[id] = progress
         guard let progress else { return }
         if progress.phase == .updated, let to = progress.to { recordInstalledVersion(id, to) }
         let lifetime: Duration? = switch progress.phase {
-        case .updated: Self.updatedOutcomeLifetime
-        case .failed, .rolled_back: Self.problemOutcomeLifetime
+        case .updated: updatedOutcomeLifetime
+        case .failed, .rolled_back: problemOutcomeLifetime
         default: nil
         }
         guard let lifetime else { return }
         // Clear the finished outcome later, unless a newer status replaced it.
-        Task { @MainActor [weak self] in
+        outcomeExpiry[id] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: lifetime)
             if self?.updateProgress[id] == progress { self?.updateProgress[id] = nil }
         }

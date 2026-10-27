@@ -18,6 +18,7 @@ import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import type { Element, ElementContent, Root } from 'hast';
 import { Search, X } from 'lucide-react';
+import { isImeComposing } from '../../lib/ime';
 
 export const PREVIEW_ROW_LIMIT = 8;
 
@@ -260,7 +261,7 @@ function TableWindow({ model, components, onClose }: { model: TableModel; compon
               value={query}
               placeholder={t('table.search')}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && matches.length) setMatchIndex((i) => (i + (e.shiftKey ? matches.length - 1 : 1)) % matches.length); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && matches.length && !isImeComposing(e)) setMatchIndex((i) => (i + (e.shiftKey ? matches.length - 1 : 1)) % matches.length); }}
             />
             {q && <span className="ktable-count">{matches.length ? t('table.matchIndex', { index: (matchIndex % matches.length) + 1, total: matches.length }) : t('table.noMatches')}</span>}
           </label>

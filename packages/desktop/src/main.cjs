@@ -4,7 +4,7 @@
 // a taskbar badge, single-instance behaviour, and GitHub sign-in in a window of its own.
 const {
   app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, globalShortcut, nativeImage, nativeTheme,
-  net, protocol, screen, shell,
+  net, powerMonitor, protocol, screen, shell,
 } = require('electron');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
@@ -16,6 +16,7 @@ const i18n = require('./i18n.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
 const windowsTitleBar = require('./windows-titlebar.cjs');
+const power = require('./power.cjs');
 const { appOnlyIpc } = require('./ipc-guard.cjs');
 const navigation = require('./navigation.cjs');
 const buildInfo = require('./build-info.json');
@@ -88,12 +89,9 @@ const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 function loadBounds() {
   try {
     const b = JSON.parse(readFileSync(stateFile(), 'utf8'));
-    const display = screen.getAllDisplays().find((d) => {
-      const a = d.workArea;
-      return b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
-    });
-    if (!display) return null;
-    const a = display.workArea;
+    // The display holding most of the window; none if the window is off-screen.
+    const a = screen.getDisplayMatching(b)?.workArea;
+    if (!a || !(b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y)) return null;
     const width = Math.min(b.width, a.width);
     const height = Math.min(b.height, a.height);
     return { ...b, width, height,
@@ -236,8 +234,8 @@ function createWindow() {
 
 // ── Tray: is this PC online (presence.cjs) ──
 const trayImages = {};
-/** Monochrome glyph matching the taskbar (white on dark, black on light),
- *  like a macOS template image. build/tray/*.ico from make-tray-icons.py. */
+/** Full-colour logo for the taskbar theme (logo-dark.png on a dark taskbar,
+ *  logo.png on a light one). build/tray/*.ico from make-tray-icons.py. */
 function trayTheme() {
   return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? 'dark' : 'light';
 }
@@ -481,7 +479,10 @@ appIpc.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(pa
 appIpc.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
   if (builtIn.marker()) throw new Error(i18n.t('error.builtInManagesPC'));
-  await settings.exec(pref('externalCliPath') || builtIn.bin, [action]);
+  // Never Node's "Command failed: <path> …"; like the Mac, our sentence plus
+  // the last line the CLI printed (e.g. "kraki: daemon is not installed").
+  try { await settings.exec(pref('externalCliPath') || builtIn.bin, [action]); }
+  catch (error) { throw new Error(settings.withCliDetail(i18n.t(`error.external.${action}`), error)); }
 }));
 appIpc.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
 appIpc.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
@@ -549,7 +550,8 @@ appIpc.handle('kraki:settings-recheck-cli', safely(async () => {
 }));
 appIpc.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
   if (!readConfig()) throw new Error(i18n.t('error.setupFirst'));
-  await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']);
+  try { await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']); }
+  catch (error) { throw new Error(settings.withCliDetail(i18n.t('error.updatePolicy'), error)); }
   if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error(i18n.t('error.updatePolicy'));
 }));
 
@@ -600,6 +602,8 @@ app.whenReady().then(async () => {
   serveApp();
   createWindow();
   createTray();
+  // Main window only (send), app origin only (preload.cjs).
+  power.forwardPowerEvents(powerMonitor, send);
   if (pref('usageShortcutEnabled') === true) {
     try { registerUsageShortcut(pref('usageShortcut') ?? 'F6', true); } catch { /* state reports unavailable */ }
   }

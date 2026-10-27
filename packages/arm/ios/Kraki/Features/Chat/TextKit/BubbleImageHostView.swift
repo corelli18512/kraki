@@ -409,6 +409,13 @@ final class BubbleImageHostView: UIView {
     }
 }
 
+/// The image viewer pager's horizontal offset and page width.
+struct IOSImagePreviewPagerGeometry: Equatable {
+    let offset: CGFloat
+    let width: CGFloat
+    var page: Int { Int((offset / max(width, 1)).rounded()) }
+}
+
 struct IOSImagePreviewGallery: View {
     let selection: IOSImagePreviewSelection
     @Environment(\.dismiss) private var dismiss
@@ -465,10 +472,17 @@ struct IOSImagePreviewGallery: View {
                 // The page shown is derived from the actual offset, so it
                 // follows drags, programmatic scrolls and re-renders alike;
                 // nothing re-applies a stale page while content loads.
-                .onScrollGeometryChange(for: Int.self) { scroll in
-                    Int((scroll.contentOffset.x / max(scroll.containerSize.width, 1)).rounded())
-                } action: { _, now in
-                    let page = min(max(now, 0), max(selection.items.count - 1, 0))
+                .onScrollGeometryChange(for: IOSImagePreviewPagerGeometry.self) { scroll in
+                    IOSImagePreviewPagerGeometry(offset: scroll.contentOffset.x, width: scroll.containerSize.width)
+                } action: { old, now in
+                    // A resize (fold/unfold, rotation) keeps the old absolute
+                    // offset, which now sits between pages: put the page that
+                    // was shown back instead of reading a page from it.
+                    if old.width != now.width, old.width > 0 {
+                        proxy.scrollTo(index, anchor: .leading)
+                        return
+                    }
+                    let page = min(max(now.page, 0), max(selection.items.count - 1, 0))
                     if page != index { index = page }
                 }
                 .onAppear {

@@ -13,6 +13,8 @@ import { BusyTracker } from './busy';
 type Fields = Partial<Record<DiagField, DiagValue | undefined>>;
 
 const RUNNING_KEY = 'kraki.diag.running';
+/** Bound on events recorded before `start` (the outbox restores at module load). */
+const EARLY_LIMIT = 256;
 /** Events that are worth writing to disk soon (native KrakiDiag.record). */
 const FLUSH_SOON = new Set<DiagEventName>(['cmd.answer', 'cmd.input', 'outbox.state', 'echo.input', 'app.phase', 'ready.summary', 'outage.summary', 'open.summary', 'send.summary', 'voice.summary', 'ui.busy']);
 
@@ -27,9 +29,13 @@ export class Diag {
   private recorder: DiagRecorder | null = null;
   private client: DiagClient | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Recorded before `start`; null once started (native records before configuration). */
+  private early: Array<[DiagEventName, string | undefined, Fields]> | null = [];
 
   /** Wire up once at startup. `http` absent: diagnostics stay off (browser). */
   start(http: DiagHttp | undefined, info: { version: string; build: string }): void {
+    const early = this.early ?? [];
+    this.early = null;
     if (!http || this.client) return;
     this.recorder = new DiagRecorder();
     this.client = new DiagClient({
@@ -45,7 +51,7 @@ export class Diag {
     this.stability.onReady = (r) => this.record('ready.summary', undefined, {
       kind: r.kind, outcome: r.outcome, path: r.path, attempt: r.attempts, gap: r.gap, viewing: r.viewing,
       backgroundMs: r.backgroundMs, firstContentMs: r.firstContentMs, wsOpenMs: r.wsOpenMs, authedMs: r.authedMs,
-      listFreshMs: r.listFreshMs, viewCurrentMs: r.viewCurrentMs, previousExit: r.previousExit,
+      listFreshMs: r.listFreshMs, viewCurrentMs: r.viewCurrentMs, previousExit: r.previousExit, kept: r.kept,
     });
     this.stability.onOutage = (o) => this.record('outage.summary', undefined, {
       source: o.reason, outcome: o.outcome, path: o.path, attempt: o.attempts, detectMs: o.detectMs,
@@ -55,6 +61,7 @@ export class Diag {
     });
     this.stability.onOpen = (o) => this.record('open.summary', undefined, {
       outcome: o.outcome, gap: o.gap, firstContentMs: o.firstContentMs, viewCurrentMs: o.currentMs,
+      reconnecting: o.reconnecting,
     });
     this.sends.onSummary = (s) => this.record('send.summary', undefined, {
       kind: s.kind, outcome: s.outcome, shown: s.shown, shownMs: s.shownMs, falseAlarm: sendFalseAlarm(s),
@@ -80,13 +87,26 @@ export class Diag {
     window.addEventListener('online', () => this.stability.pathChanged(path()));
     window.addEventListener('offline', () => this.stability.pathChanged(path()));
     const visible = () => document.visibilityState === 'visible';
+    const viewing = () => location.pathname.startsWith('/session/');
     document.addEventListener('visibilitychange', () => {
       this.phase(visible() ? 'active' : 'background');
-      if (visible()) this.stability.appVisible(true, location.pathname.startsWith('/session/'));
+      if (visible()) this.stability.appVisible(true, viewing());
       else this.stability.appHidden();
+    });
+    // Windows sleep/wake (Mac willSleep): the next visibility is a `wake`
+    // opening. A window that stayed visible gets no visibilitychange.
+    desktop?.onPower?.((event) => {
+      if (event === 'suspend') {
+        this.phase('background');
+        this.stability.systemWillSleep();
+      } else if (visible()) {
+        this.phase('active');
+        this.stability.appVisible(true, viewing());
+      }
     });
     this.client.start();
     this.record('app.launch');
+    for (const [ev, sid, fields] of early) this.record(ev, sid, fields);
     if (visible()) this.stability.appVisible(false, location.pathname.startsWith('/session/'));
     else this.client.setForeground(false);
   }
@@ -95,6 +115,7 @@ export class Diag {
   get enabled(): boolean { return this.client?.enabled ?? false; }
 
   record(ev: DiagEventName, sid?: string, fields: Fields = {}): void {
+    if (this.early) { if (this.early.length < EARLY_LIMIT) this.early.push([ev, sid, fields]); return; }
     if (!this.recorder?.record(ev, sid, fields) || !FLUSH_SOON.has(ev) || this.flushTimer) return;
     this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.client?.flush(); }, 250);
   }

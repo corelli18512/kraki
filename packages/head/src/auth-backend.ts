@@ -71,6 +71,8 @@ export interface AuthBackend {
     headRegion?: string,
     /** The connecting client's IP, for per-IP auth throttling. */
     clientIp?: string,
+    /** The client is on another machine or behind a reverse proxy. */
+    remoteClient?: boolean,
   ): Promise<AuthOutcome>;
 
   /**
@@ -136,6 +138,8 @@ export interface AuthBackend {
   requestPairingToken(
     token: string,
     ip?: string,
+    /** The client is on another machine or behind a reverse proxy. */
+    remoteClient?: boolean,
   ): Promise<{ ok: true; userId: string; pairingToken: string; expiresIn: number } | AuthError>;
 
   /**

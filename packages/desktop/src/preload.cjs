@@ -75,6 +75,12 @@ if (globalThis.location?.origin === APP_ORIGIN) contextBridge.exposeInMainWorld(
     ipcRenderer.on(channel, listener);
     return () => ipcRenderer.removeListener(channel, listener);
   },
+  /** System sleep/wake ('suspend' | 'resume') for performance data. */
+  onPower: (handler) => {
+    const listener = (_e, event) => { if (event === 'suspend' || event === 'resume') handler(event); };
+    ipcRenderer.on('kraki:power', listener);
+    return () => ipcRenderer.removeListener('kraki:power', listener);
+  },
   onOpenSession: (handler) => {
     const listener = (_e, sessionId) => handler(String(sessionId));
     ipcRenderer.on('kraki:open-session', listener);

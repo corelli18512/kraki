@@ -8,12 +8,12 @@ Principles:
 - The logic lives in `StabilityTracker` / `SendTracker` / `VoiceTracker` (`Core/Diagnostics/`). This code is always compiled, so it is covered by unit tests.
 - Production iOS / Mac builds report, through the KrakiDiag → `kraki-diag` Monitor channel (Release compiles `KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY`). The user can turn it off in Settings → Privacy → Share Performance Data (on by default; off deletes anything unsent), and the collector can turn it off for everyone (`touch $KRAKI_DIAG_DIR/DISABLED` → config `enabled:false`). Privacy text: `docs/privacy-performance-data.md`.
 - Uploads use any network except Low Data Mode, in the foreground, outside Low Power Mode and thermal pressure. A heavy day (200 messages with replies, full event feed) is about 65 KB in ~11 requests; recording one event costs ~0.3 µs. Both are checked by `scripts/diag/run-native-tests.sh` (budget: < 100 KB/day, < 20 µs/event). Production keeps at most 5 MB unsent; test builds 50 MB.
-- Web and Windows do not report yet.
+- Kraki for Windows reports too, with the same events and fields: the Web client's `lib/diag` ports these trackers (platform `windows`) and uploads only inside the desktop shell. The Web app in a browser sends nothing.
 
 ## Events
 
 ### `ready.summary`: app opened → latest messages on screen
-- **kind**: `cold` is the process's first connection; `warm` is iOS returning from the background; `wake` is the Mac waking from sleep.
+- **kind**: `cold` is the process's first connection; `warm` is iOS returning from the background (Windows: the window becoming visible again); `wake` is the Mac or Windows PC waking from sleep.
 - **Milestones**: milliseconds from the moment the app became visible.
   - `firstContentMs`: content on screen, possibly stale
   - `wsOpenMs`: connection open

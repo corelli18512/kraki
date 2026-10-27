@@ -74,10 +74,31 @@ final class TentacleSetupRunner {
         case "done":
             return .done(username: json["username"] as? String ?? "")
         case "error":
-            if json["code"] as? String == "cancelled" { return .idle }
-            return .failed(message: json["message"] as? String ?? String(localized: "Setup failed."))
+            let code = json["code"] as? String
+            if code == "cancelled" { return .idle }
+            return .failed(message: signInErrorText(code: code))
         default:
             return nil
+        }
+    }
+
+    /// Localized copy for a setup `error` code. The CLI's `message` is English
+    /// terminal text, so it is only logged. Same table as Windows
+    /// (`DesktopSetup.tsx` `SIGN_IN_ERRORS`).
+    static func signInErrorText(code: String?) -> String {
+        switch code {
+        case "network", "relay_unreachable", "client_id_unavailable":
+            String(localized: "Could not reach Kraki. Check your network connection, then try again.")
+        case "expired":
+            String(localized: "The GitHub code expired. Try again.")
+        case "denied", "cancelled":
+            String(localized: "GitHub sign-in was cancelled.")
+        case "bad_callback", "token_invalid":
+            String(localized: "GitHub sign-in could not be verified. Try again.")
+        case "oauth_unavailable":
+            String(localized: "Browser sign-in is not available yet.")
+        default:
+            String(localized: "Sign-in did not finish. Try again.")
         }
     }
 
@@ -237,6 +258,7 @@ final class TentacleSetupRunner {
                 continue
             }
             if let next = Self.phase(after: phase, line: line) {
+                if case .failed = next { KLog.diag("[Setup] tentacle setup error: \(line)") }
                 let firstCode: Bool = {
                     if case .waitingForGitHub = next, !(phase.isWaitingForGitHub) { return true }
                     return false

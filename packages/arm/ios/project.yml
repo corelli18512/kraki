@@ -76,6 +76,9 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # Tests assert English copy: pin it so zh-Hans hosts match CI.
+      language: en
+      region: US
       targets:
         - KrakiTests
       environmentVariables:
@@ -89,6 +92,9 @@ schemes:
         KrakiUITests: [test]
     test:
       config: Debug
+      # Tests assert English copy: pin it so zh-Hans hosts match CI.
+      language: en
+      region: US
       targets:
         - KrakiUITests
   KrakiVoiceHold:
@@ -98,6 +104,9 @@ schemes:
         KrakiVoiceUITests: [test]
     test:
       config: Debug
+      # Tests assert English copy: pin it so zh-Hans hosts match CI.
+      language: en
+      region: US
       targets:
         - KrakiVoiceUITests
   KrakiMac:
@@ -113,6 +122,9 @@ schemes:
         KrakiMacTests: [test]
     test:
       config: Debug
+      # Tests assert English copy: pin it so zh-Hans hosts match CI.
+      language: en
+      region: US
       targets:
         - KrakiMacTests
       environmentVariables:
