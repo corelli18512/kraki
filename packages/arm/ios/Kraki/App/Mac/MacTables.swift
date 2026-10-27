@@ -263,7 +263,9 @@ final class MacTableScrollView: NSScrollView, NSMenuItemValidation {
         }
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
-        setAccessibilityLabel(String(localized: "Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns"))
+        let rows = String(localized: "\(layout.bodyRowCount) rows")
+        let columns = String(localized: "\(layout.columnCount) columns")
+        setAccessibilityLabel(String(localized: "Table, \(rows), \(columns)"))
         setAccessibilityValue(layout.semanticText())
     }
 
@@ -583,11 +585,17 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
     }
 
     private func updateSubtitle() {
+        window?.subtitle = Self.subtitle(for: table)
+    }
+
+    /// "1 row × 2 columns · sorted by Name"; same keys as iOS `TKTable`.
+    static func subtitle(for table: ChatTable) -> String {
+        let rows = String(localized: "\(table.bodyRowCount) rows")
+        let columns = String(localized: "\(table.columnCount) columns")
         if let column = table.sortColumn {
-            window?.subtitle = String(localized: "\(table.bodyRowCount) rows × \(table.columnCount) columns · sorted by \(table.plainHeader[column])")
-        } else {
-            window?.subtitle = String(localized: "\(table.bodyRowCount) rows × \(table.columnCount) columns")
+            return String(localized: "\(rows) × \(columns) · sorted by \(table.plainHeader[column])")
         }
+        return String(localized: "\(rows) × \(columns)")
     }
 
     func controlTextDidChange(_ obj: Notification) { runSearch(scroll: true) }

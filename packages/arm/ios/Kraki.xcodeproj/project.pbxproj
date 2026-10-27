@@ -157,6 +157,7 @@
 		2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		2EC40327706787FAA97C3224 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
 		2F476221B7E810C4A0FE4602 /* CommandSender+DeviceRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1DAF876E96DDCBAC9E1A874 /* CommandSender+DeviceRequests.swift */; };
+		2F782D730886C3B177C726E7 /* MacTablesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7BF3021A06D272FC62C1A49 /* MacTablesTests.swift */; };
 		2F8FC1545C44E7A5A78F9025 /* MacUnreadEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2CCAFB46B1FAF31D20CE3C /* MacUnreadEntryTests.swift */; };
 		3038625FBC08F11D1FC57F5B /* IOSVoiceComposerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4FFB255BA0EAD5FA0EE3D2F /* IOSVoiceComposerUITests.swift */; };
 		3081E32A4A16DAF6DBD9F6EE /* LICENSE-mermaid.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */; };
@@ -1217,6 +1218,7 @@
 		F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarNavigationUITests.swift; sourceTree = "<group>"; };
 		F70B56E49F0EA690CE7F1B08 /* MacPresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPresenceTests.swift; sourceTree = "<group>"; };
 		F799055BE41FFC1A38C46985 /* TKBubbleCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TKBubbleCell.swift; sourceTree = "<group>"; };
+		F7BF3021A06D272FC62C1A49 /* MacTablesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTablesTests.swift; sourceTree = "<group>"; };
 		F85975C0842C3E6C99D031CE /* PairingSheet+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingSheet+macOS.swift"; sourceTree = "<group>"; };
 		F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatView.swift; sourceTree = "<group>"; };
 		F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardView.swift; sourceTree = "<group>"; };
@@ -1897,6 +1899,7 @@
 				7FB356B782E0E6EEB01499BF /* MacSidebarActivityDotsScrollTests.swift */,
 				A006864BDF76F105F7DD91A4 /* MacSteerPlacementMotionTests.swift */,
 				903F7944488AA6630F10C8DE /* MacSubagentStepsShots.swift */,
+				F7BF3021A06D272FC62C1A49 /* MacTablesTests.swift */,
 				5B3C976D61C108B3931DF4BA /* MacToolArgFormatTests.swift */,
 				96811B83F01971C85020C2C6 /* MacUnderfilledHistoryTests.swift */,
 				BC2CCAFB46B1FAF31D20CE3C /* MacUnreadEntryTests.swift */,
@@ -2412,6 +2415,7 @@
 				5A0E75014D1B7EACA5F4098F /* MacSidebarActivityDotsScrollTests.swift in Sources */,
 				6F36555AE0DC8F192F6F376A /* MacSteerPlacementMotionTests.swift in Sources */,
 				9F9A095EF96B86C046F5C273 /* MacSubagentStepsShots.swift in Sources */,
+				2F782D730886C3B177C726E7 /* MacTablesTests.swift in Sources */,
 				02CF38D9A22D8B5C40FD2689 /* MacToolArgFormatTests.swift in Sources */,
 				78109BB33B9871FA7E0E7091 /* MacUnderfilledHistoryTests.swift in Sources */,
 				2F8FC1545C44E7A5A78F9025 /* MacUnreadEntryTests.swift in Sources */,

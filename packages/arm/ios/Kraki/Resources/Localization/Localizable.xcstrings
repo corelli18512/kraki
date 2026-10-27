@@ -735,38 +735,6 @@
         }
       }
     },
-    "%lld rows × %lld columns" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld rows × %2$lld columns"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 行 × %lld 列"
-          }
-        }
-      }
-    },
-    "%lld rows × %lld columns · sorted by %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld rows × %2$lld columns · sorted by %3$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 行 × %lld 列 · 按 %@ 排序"
-          }
-        }
-      }
-    },
     "%lld sessions" : {
       "localizations" : {
         "en" : {
@@ -9512,22 +9480,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "表格，%@，%@"
-          }
-        }
-      }
-    },
-    "Table, %lld rows, %lld columns" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Table, %1$lld rows, %2$lld columns"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "表格，%lld 行，%lld 列"
           }
         }
       }
