@@ -62,25 +62,45 @@ extension ChatPerfListVC {
         return content
     }
 
-    var liveCardSignature: String {
+    var liveCardSignature: String { Self.liveCardSignature(of: vm.card) }
+
+    /// Covers every field the live bubble and its action slot render (the
+    /// same set as the Mac `liveCardSignature`): `syncLiveUpdates` skips the
+    /// reconfigure and `liveContent` reuses its memo while this is unchanged.
+    static func liveCardSignature(of card: MessageStore.SessionCard?) -> String {
         // Hash the streaming text instead of inlining it: syncLive fires on
         // every frame while idle (≈10–20 Hz), so embedding the full draft text
         // into the signature string wasted memory + made logs unreadable. A
         // stable hash captures "did the text change" at a fraction of the cost.
-        let text = vm.card?.text ?? ""
         var hasher = Hasher()
-        hasher.combine(text)
-        hasher.combine(vm.card?.action?.id ?? "")
-        // Every card action decodes with the same id; the permission id is
-        // what tells a newer pending request apart from the one shown.
-        hasher.combine(vm.card?.action?.payload["id"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.type ?? "")
-        hasher.combine(vm.card?.action?.payload["decision"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.payload["localPending"]?.boolValue ?? false)
-        hasher.combine(vm.card?.action?.payload["localError"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.payload["retained"]?.boolValue ?? false)
-        hasher.combine(vm.card?.action?.cancelled ?? false)
-        hasher.combine(vm.card?.aboveSteer ?? "")
+        hasher.combine(card?.text ?? "")
+        hasher.combine(card?.aboveSteer ?? "")
+        if let action = card?.action {
+            hasher.combine(action.id)
+            hasher.combine(action.type)
+            hasher.combine(action.toolCallId)
+            hasher.combine(action.toolName)
+            hasher.combine(action.headline)
+            // Every card action decodes with the same id; the permission id is
+            // what tells a newer pending request apart from the one shown.
+            hasher.combine(action.permissionId)
+            hasher.combine(action.questionId)
+            hasher.combine(action.payload["running"]?.intValue ?? 0)
+            hasher.combine(action.toolDescription)
+            hasher.combine(action.choices)
+            hasher.combine(action.payload["message"]?.stringValue)
+            hasher.combine(action.payload["decision"]?.stringValue)
+            hasher.combine(action.payload["success"]?.boolValue ?? true)
+            hasher.combine(action.payload["localPending"]?.boolValue ?? false)
+            hasher.combine(action.payload["localError"]?.stringValue)
+            hasher.combine(action.payload["retained"]?.boolValue ?? false)
+            hasher.combine(action.cancelled)
+            if action.type == "permission", let args = action.args {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .sortedKeys
+                hasher.combine(try? encoder.encode(args))
+            }
+        }
         return String(hasher.finalize(), radix: 16)
     }
 
