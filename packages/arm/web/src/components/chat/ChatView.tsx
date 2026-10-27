@@ -179,6 +179,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const listRef = useRef<ChatScrollerHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
+  // The delayed window shrink after reaching the bottom; cleared on unmount
+  // so it never sets state on an unmounted view.
+  const shrinkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (shrinkTimer.current) clearTimeout(shrinkTimer.current); }, []);
   const [unseen, setUnseen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(72);
   const measuredComposerHeight = useRef(72);
@@ -485,7 +489,11 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
             setUnseen(false);
             // Back at the newest edge: let the rendered window shrink again
             // (history stays in memory; it is revealed again on the way up).
-            setTimeout(() => { if (atBottomRef.current) setWindowSize(WINDOW_START); }, 600);
+            if (shrinkTimer.current) clearTimeout(shrinkTimer.current);
+            shrinkTimer.current = setTimeout(() => {
+              shrinkTimer.current = null;
+              if (atBottomRef.current) setWindowSize(WINDOW_START);
+            }, 600);
           }
         }}
         onNearTop={() => { void loadOlder(); }}

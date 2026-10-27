@@ -23,10 +23,10 @@ afterEach(async () => {
   }
 });
 
-async function fixture(options: { enabled?: boolean; dailyBytes?: number } = {}) {
+async function fixture(options: { enabled?: boolean; dailyBytes?: number; now?: () => number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'kraki-diag-test-'));
   const api = new DiagApi({ directory: options.enabled === false ? undefined : dir,
-    getDevice: id => devices[id], dailyBytes: options.dailyBytes });
+    getDevice: id => devices[id], dailyBytes: options.dailyBytes, now: options.now });
   const server = createServer(async (req, res) => {
     if (!await api.handleRequest(req, res)) { res.writeHead(404); res.end(); }
   });
@@ -38,7 +38,7 @@ async function fixture(options: { enabled?: boolean; dailyBytes?: number } = {})
   const batch = { schema: 1, batchId: id, processId: randomUUID(), platform: 'ios', version: '0.1.1', build: '1',
     events: [{ ev: 'cmd.answer', seq: 1, t: Date.now(), m: 30, sid: 'session-1', d: { questionId: 'q1', textLength: 12, duplicate: false } }] };
   function request(body = gzipSync(JSON.stringify(batch)), extra: Record<string, string> = {}, path = '/api/diag/v1/batch', method = 'POST', deviceId = device.id) {
-    const timestamp = String(Date.now());
+    const timestamp = String(options.now?.() ?? Date.now());
     const signature = sign('sha256', Buffer.from(diagSigningText(method, path, deviceId, timestamp, id, body)), key.privateKey).toString('base64');
     return fetch(url + path, { method, headers: {
       'content-type': 'application/json', 'content-encoding': 'gzip',
@@ -285,7 +285,9 @@ describe('off-band diagnostics', () => {
     expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.11' })).status).toBe(204);
   });
   it('rate limits by the client address the proxy forwards', async () => {
-    const f = await fixture();
+    const f = await fixture({ now: () => 1_790_000_039_999 });
+    // All 121 requests must share one minute bucket; a wall-clock loop crossing
+    // :00 got 204 instead of 429 (see the device test below).
     for (let i = 0; i < 120; i++) {
       expect((await f.request(Buffer.alloc(0), { 'x-kraki-signature': 'bad', 'x-forwarded-for': '203.0.113.1' })).status).toBe(401);
     }
@@ -294,7 +296,13 @@ describe('off-band diagnostics', () => {
     expect((await f.request(undefined, { 'x-forwarded-for': '203.0.113.1, 203.0.113.2' })).status).toBe(204);
   });
   it('rate limits a device including replayed requests', async () => {
-    const f = await fixture();
+    let now = 1_790_000_039_999; // Last millisecond of a calendar-minute bucket.
+    const f = await fixture({ now: () => now });
+    // Requests must share one minute. A wall-clock loop crossing :00 used to
+    // assert 429 against a fresh bucket, especially on loaded CI runners.
+    for (let i = 0; i < 30; i++) expect((await f.request()).status).toBe(204);
+    expect((await f.request()).status).toBe(429);
+    now++;
     for (let i = 0; i < 30; i++) expect((await f.request()).status).toBe(204);
     expect((await f.request()).status).toBe(429);
   });
