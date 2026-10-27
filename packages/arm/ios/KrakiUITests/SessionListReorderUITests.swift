@@ -78,4 +78,36 @@ final class SessionListReorderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Pin"].exists)
         XCTAssertNotEqual(order(), frozen, "deferred reorder applied after the swipe closed")
     }
+
+    /// A Session that gets a new message moves to the top and its card shows
+    /// its own new preview ("New reply #N in <title>") and the unread dot.
+    /// Sampled between reorders, once the move animation has settled, so the
+    /// title and preview are read from one stable card.
+    func testCardContentFollowsNewMessages() {
+        settle(7.75) // first tick ≈ 6.5 s; sample mid-way between ticks (2.5 s apart)
+        var numbers: [Int] = []
+        for _ in 0..<5 {
+            let cell = rows.element(boundBy: 0)
+            // One atomic snapshot: element-by-element queries can straddle a reorder.
+            guard let snap = try? cell.snapshot() else { XCTFail("snapshot"); continue }
+            func texts(_ e: XCUIElementSnapshot) -> [String] {
+                (e.elementType == .staticText ? [e.label] : []) + e.children.flatMap(texts)
+            }
+            func hasUnread(_ e: XCUIElementSnapshot) -> Bool {
+                e.identifier == "Unread" || e.label == "Unread" || e.children.contains(where: hasUnread)
+            }
+            let labels = texts(snap)
+            log("top labels=\(labels)")
+            let title = labels.first ?? ""
+            guard let preview = labels.first(where: { $0.hasPrefix("New reply #") }) else {
+                XCTFail("top card shows the new message: \(labels)"); settle(2.5); continue
+            }
+            XCTAssertTrue(preview.hasSuffix(" in \(title)"), "preview belongs to the card's own Session: \(labels)")
+            XCTAssertTrue(hasUnread(snap), "unread dot on \(title)")
+            numbers.append(Int(preview.dropFirst("New reply #".count).prefix { $0.isNumber }) ?? -1)
+            settle(2.5)
+        }
+        XCTAssertEqual(numbers, numbers.sorted())
+        XCTAssertEqual(Set(numbers).count, numbers.count, "a new message reached the top card on every tick")
+    }
 }

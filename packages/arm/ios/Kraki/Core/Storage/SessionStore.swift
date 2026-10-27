@@ -229,7 +229,15 @@ final class SessionStore {
         )
     }
 
-    var sessions: [String: SessionInfo] = [:]
+    var sessions: [String: SessionInfo] = [:] {
+        didSet {
+            // Stored, and written only when it changes: the tab badge and app
+            // icon observe it, and a plain preview/seq update must not
+            // re-render the whole tab root (Time Profiler, session reorder).
+            let unread = Self.unreadIDs(in: sessions)
+            if unread != unreadSessionIDs { unreadSessionIDs = unread }
+        }
+    }
     var activeSessionId: String?
     /// Ephemeral UI guard for a manual Mark Unread on the currently open Chat.
     /// Tentacle remains durable authority; this only prevents focus/live-event
@@ -340,6 +348,8 @@ final class SessionStore {
         do {
             let snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
             self.sessions = snapshot.sessions
+            // didSet does not run for assignments inside init.
+            self.unreadSessionIDs = Self.unreadIDs(in: snapshot.sessions)
             self.sessionPreviews = snapshot.previews
             for (id, s) in snapshot.sessions {
                 sessionModes[id] = s.mode
@@ -701,7 +711,9 @@ final class SessionStore {
 
     /// Authoritative unread Session identities. The app icon, tab badge, and
     /// notification extension all project this same boolean-per-Session set.
-    var unreadSessionIDs: Set<String> {
+    private(set) var unreadSessionIDs: Set<String> = []
+
+    private static func unreadIDs(in sessions: [String: SessionInfo]) -> Set<String> {
         Set(sessions.values.compactMap { session in
             session.readSeq < session.lastSeq ? session.id : nil
         })

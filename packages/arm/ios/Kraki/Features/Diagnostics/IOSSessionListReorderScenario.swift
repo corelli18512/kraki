@@ -73,7 +73,7 @@ enum IOSSessionListReorderScenario {
         let pick = tick.isMultiple(of: 2) ? order[order.count / 2] : order[min(order.count - 1, 7)]
         guard let index = rows.firstIndex(where: { $0.id == pick.id }) else { return }
         rows[index].lastSeq += 2
-        rows[index].preview = "New reply #\(tick): finished the step and waiting for you"
+        rows[index].preview = "New reply #\(tick) in \(rows[index].title)"
         rows[index].previewAt = Date()
         let started = CACurrentMediaTime()
         FrameMonitor.shared.markTick(tick)
