@@ -21,6 +21,13 @@ final class LocalizationTests: XCTestCase {
 
     func testSupportedLanguagesHaveNativeNames() {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["en", "zh-Hans"])
+    /// The test schemes pin English (project.yml `language: en`); tests that
+    /// assert copy rely on it even on a zh-Hans Mac or simulator.
+    func testTestHostRunsInEnglish() {
+        XCTAssertEqual(Bundle.main.preferredLocalizations.first, "en")
+        XCTAssertEqual(Locale.current.language.languageCode?.identifier, "en")
+    }
+
         XCTAssertEqual(AppLanguage.simplifiedChinese.nativeName, "简体中文")
     }
 
