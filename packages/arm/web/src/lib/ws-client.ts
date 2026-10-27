@@ -66,6 +66,10 @@ export class KrakiWSClient {
   private headEpoch = 0;
   private routeEpochs = new Map<string, number>();
   private routeChanges = 0;
+  /** The latest Stop per session that the local link accepted, by Tentacle.
+   *  Stop is connection-scoped and never replayed through the Head, so when
+   *  that link drops it is reported refused (the UI settles its Stop latch). */
+  private linkedStops = new Map<string, { tentacleId: string; onRefused: () => void }>();
   private encryptedQueue: Array<Parameters<EncryptionHandler['handleEncrypted']>[0]> = [];
   private peerEpochs = new Map<string, number>();
   private cmdState = new CommandState();
@@ -461,6 +465,11 @@ export class KrakiWSClient {
     this.attachmentPulls.disconnect();
     this.attachmentPulls.resume();
     for (const { payload, target } of unacked) this.pulse.send(payload, target, false);
+    for (const [sessionId, stop] of this.linkedStops) {
+      if (stop.tentacleId !== tentacleId) continue;
+      this.linkedStops.delete(sessionId);
+      if (!linked) stop.onRefused();
+    }
     if (linked) getStore().setDeviceOnline(tentacleId, true);
   }
 
@@ -760,7 +769,15 @@ export class KrakiWSClient {
    *  connection (no key/target, offline, or the connection dropped while it
    *  was being encrypted), so the UI can make Stop actionable again. */
   abortSession(sessionId: string, onRefused?: () => void) {
-    commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg, (seq) => { if (seq === null) onRefused?.(); }));
+    commands.abortSession(sessionId, (msg) => {
+      const tentacleId = this.targetFor(msg);
+      this.sendEncrypted(msg, (seq) => {
+        if (seq === null) { onRefused?.(); return; }
+        // route() returns 0n for the local link.
+        if (seq === 0n && onRefused && tentacleId) this.linkedStops.set(sessionId, { tentacleId, onRefused });
+        else this.linkedStops.delete(sessionId);
+      });
+    });
   }
 
   setSessionMode(sessionId: string, mode: SessionMode) {

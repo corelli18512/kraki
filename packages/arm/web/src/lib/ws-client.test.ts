@@ -2523,6 +2523,22 @@ describe('desktop local link routing (fake link)', () => {
     expect(useStore.getState().devices.get('dev-1')?.online).toBe(true);
   });
 
+  it('a Stop the link accepted is reported refused when the link drops (it is not replayed through the Head)', async () => {
+    const { client, linkSends, unlink } = await setup();
+    const refused = vi.fn();
+    client.abortSession('sess-1', refused);
+    await vi.waitFor(() => expect(linkSends.map((s) => s.type)).toContain('abort_session'));
+    expect(refused).not.toHaveBeenCalled();
+    unlink();
+    (client as unknown as { onLocalLinkChange: (t: string, l: boolean, u: Array<{ payload: string; target: string }>) => void })
+      .onLocalLinkChange('dev-1', false, []);
+    expect(refused).toHaveBeenCalledTimes(1);
+    // Settled once: a later route change does not report it again.
+    (client as unknown as { onLocalLinkChange: (t: string, l: boolean, u: Array<{ payload: string; target: string }>) => void })
+      .onLocalLinkChange('dev-1', false, []);
+    expect(refused).toHaveBeenCalledTimes(1);
+  });
+
   it('a link drop re-sends unconfirmed commands through the Head', async () => {
     const { client, unlink } = await setup();
     unlink();
