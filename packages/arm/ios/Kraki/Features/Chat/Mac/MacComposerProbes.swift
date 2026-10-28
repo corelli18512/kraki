@@ -116,7 +116,8 @@ final class MacComposerVoiceKeyProbeView: NSView {
         super.init(frame: frameRect)
         isHidden = true
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.enabled, event.window === self.window else { return event }
+            guard let self, self.enabled, event.window === self.window,
+                  !Self.focusOwnsKeys(self.window?.firstResponder) else { return event }
             switch Self.action(keyCode: event.keyCode, flags: event.modifierFlags,
                                isRepeat: event.isARepeat, voiceActive: self.voiceActive) {
             case .toggle: self.onToggle?()
@@ -129,6 +130,16 @@ final class MacComposerVoiceKeyProbeView: NSView {
     }
 
     enum KeyAction: Equatable { case toggle, cancel, swallow, pass }
+
+    /// The shortcuts work window-wide (chat list, buttons, nothing focused),
+    /// except where focus needs the keys itself: an IME composition (marked
+    /// text, in any editor) or another text input (sidebar Search, a rename
+    /// field: an NSTextField's field editor or another editable NSTextView).
+    static func focusOwnsKeys(_ responder: NSResponder?) -> Bool {
+        guard let textView = responder as? NSTextView else { return false }
+        if textView.hasMarkedText() { return true }
+        return textView.isEditable && !(textView is MacComposerTextView)
+    }
 
     /// Option-Space toggles recording once per press (a held key's repeats are
     /// swallowed, not toggled or typed as NBSP); Esc cancels while recording.
