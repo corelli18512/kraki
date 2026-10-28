@@ -62,8 +62,6 @@ struct MessageInputView: View {
 
     @Environment(AppState.self) private var appState
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var imageData: Data?
-    @State private var imageMimeType: String = "image/jpeg"
     /// Surfaces image-attach failures (too large after compression,
     /// unsupported format, etc.) so the user sees that the picker
     /// didn't silently swallow their selection.
@@ -108,6 +106,9 @@ struct MessageInputView: View {
         session?.state == .active || session?.state == .compacting
     }
     private var text: String { sessionStore.drafts[sessionId] ?? "" }
+    /// Kept per Session in the store (like the draft), so it survives
+    /// navigating away from the Session and back.
+    private var stagedImage: StagedComposerImage? { sessionStore.stagedImages[sessionId] }
     private var isBusy: Bool { sessionActive || isCompacting || awaitingActive }
     private var isIdle: Bool { !isBusy }
     private var isStructuredResponse: Bool { pendingPermission != nil || pendingQuestion != nil }
@@ -119,7 +120,7 @@ struct MessageInputView: View {
         )
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var hasImage: Bool { imageData != nil }
+    private var hasImage: Bool { stagedImage != nil }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
     private var voice: IOSVoiceComposer { appState.iosVoiceComposer }
     private var isRecordingHere: Bool { voice.isRecording(in: sessionId) }
@@ -386,7 +387,7 @@ struct MessageInputView: View {
 
     private var recordingHeaderContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let imageData, let uiImage = UIImage(data: imageData) {
+            if let uiImage = stagedImage.flatMap(IOSComposerImages.preview) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -656,7 +657,7 @@ struct MessageInputView: View {
     @ViewBuilder
     private var imageSlot: some View {
         Group {
-            if let imageData, let uiImage = UIImage(data: imageData) {
+            if let uiImage = stagedImage.flatMap(IOSComposerImages.preview) {
                 ZStack(alignment: .topTrailing) {
                     PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
                         Image(uiImage: uiImage)
@@ -695,8 +696,7 @@ struct MessageInputView: View {
     }
 
     private var imageAttachments: [ImageAttachment]? {
-        guard let imageData else { return nil }
-        return [ImageAttachment(type: "image", mimeType: imageMimeType, data: imageData.base64EncodedString())]
+        stagedImage.map { [ImageAttachment(type: "image", mimeType: $0.mimeType, data: $0.data.base64EncodedString())] }
     }
 
     // MARK: - Clear
@@ -938,7 +938,7 @@ struct MessageInputView: View {
     }
 
     private func clearImage() {
-        imageData = nil
+        sessionStore.setStagedImage(sessionId, nil)
         selectedPhoto = nil
     }
 
@@ -951,7 +951,7 @@ struct MessageInputView: View {
         guard selectedPhoto == item else { return }
         switch outcome {
         case .image(let jpeg):
-            imageData = jpeg; imageMimeType = "image/jpeg"
+            sessionStore.setStagedImage(sessionId, StagedComposerImage(data: jpeg, mimeType: "image/jpeg"))
         case .unreadable:
             imageAttachError = String(localized: "Couldn't read that image."); selectedPhoto = nil
         case .unsupported:
@@ -960,7 +960,7 @@ struct MessageInputView: View {
             // Reset the picker so the user can pick a smaller / different
             // image instead of sending with a silently missing attachment.
             imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
-            selectedPhoto = nil; imageData = nil
+            clearImage()
         }
     }
 }
