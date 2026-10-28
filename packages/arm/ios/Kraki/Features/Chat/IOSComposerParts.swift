@@ -17,6 +17,19 @@ struct IOSComposerGlassBackground: View {
     }
 }
 
+/// The staged image's thumbnail (composer and dictation header), decoded once
+/// per attachment rather than on every composer update.
+enum IOSComposerImages {
+    private static let previews = NSCache<NSUUID, UIImage>()
+
+    static func preview(_ image: StagedComposerImage) -> UIImage? {
+        if let cached = previews.object(forKey: image.id as NSUUID) { return cached }
+        guard let decoded = UIImage(data: image.data) else { return nil }
+        previews.setObject(decoded, forKey: image.id as NSUUID)
+        return decoded
+    }
+}
+
 /// What has been heard so far, or the listening status before any speech.
 struct IOSVoiceLiveTranscript: View {
     let preview: (prefix: String, spoken: String, suffix: String)
