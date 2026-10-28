@@ -6,6 +6,8 @@ name: Prerelease
 # `prerelease` mode. Never npm, the Sparkle appcast or GitHub "latest".
 
 on:
+  push:
+    branches: [ci/auto-prerelease]
   workflow_run:
     workflows: ["CI"]
     types:
