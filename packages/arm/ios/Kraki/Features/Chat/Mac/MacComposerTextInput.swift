@@ -10,13 +10,13 @@ import SwiftUI
 /// scroll view, that edge fades out — a hint that there is more.
 final class MacScrollEdgeFade {
     static let length: CGFloat = 14
-    /// Overflow up to this is padding, not hidden text. While the composer
-    /// animates its height, AppKit (`-[NSTextView _superviewClipViewFrameChanged:]`)
-    /// sets the text view's height and minSize to the clip's intermediate
-    /// height, while the composer writes the measured one. Whichever write
-    /// lands last wins, so a one-line draft could keep a few points of
-    /// overflow and a bottom fade over its only line until the next keystroke.
+    /// Overflow up to this is padding, not hidden text. A defense only: the
+    /// composer editor is sized by one writer and settles with no overflow
+    /// (`MacComposerTextView.sizesDocumentToText`).
     static let minimumHiddenText: CGFloat = 4
+    /// True while all of the text will be visible once the box settles: any
+    /// overflow then is the box still growing, not text scrolled out of view.
+    var textFitsSettledBox: (() -> Bool)?
     private weak var scrollView: NSScrollView?
     private let mask = CAGradientLayer()
     private var observers: [NSObjectProtocol] = []
@@ -53,8 +53,9 @@ final class MacScrollEdgeFade {
         guard let scrollView, let layer = scrollView.layer else { return }
         let clip = scrollView.contentView.bounds
         let documentHeight = scrollView.documentView?.frame.height ?? 0
-        let top = clip.minY > Self.minimumHiddenText
-        let bottom = documentHeight - clip.maxY > Self.minimumHiddenText
+        let hidesText = textFitsSettledBox?() != true
+        let top = hidesText && clip.minY > Self.minimumHiddenText
+        let bottom = hidesText && documentHeight - clip.maxY > Self.minimumHiddenText
         fadesTop = top; fadesBottom = bottom
         guard top || bottom else {
             if layer.mask != nil { layer.mask = nil }
@@ -79,13 +80,83 @@ final class MacScrollEdgeFade {
 /// layout and scroll — the final geometry, never an intermediate frame.
 class MacEdgeFadingScrollView: NSScrollView {
     var edgeFade: MacScrollEdgeFade?
-    /// Re-fits the document to a new width before the fade is computed.
+    /// Re-fits the document to the new clip size before the fade is computed.
     var onTile: (() -> Void)?
     override func tile() { super.tile(); onTile?(); edgeFade?.update() }
     override func layout() { super.layout(); edgeFade?.update() }
     override func reflectScrolledClipView(_ clipView: NSClipView) {
         super.reflectScrolledClipView(clipView)
         edgeFade?.update()
+    }
+}
+
+// MARK: - Text layout and height
+
+/// How the composer editor lays out its text, and the height a text takes.
+/// The editor is TextKit 1 with exactly this configuration, so the box's
+/// height (measured here) and the editor's own layout agree to the point.
+@MainActor
+enum MacComposerTextLayout {
+    static let font = NSFont.systemFont(ofSize: 15)
+    static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+    /// One point for the text/caret; the stable visual padding lives outside
+    /// the scroll view so it remains present at every scroll position.
+    static let verticalPadding: CGFloat = 1
+    static let horizontalInset: CGFloat = 4
+
+    /// Editor height (insets included) for a laid-out text height.
+    static func editorHeight(usedHeight: CGFloat) -> CGFloat {
+        max(lineHeight, ceil(usedHeight)) + verticalPadding * 2
+    }
+
+    /// The laid-out text height, including an empty trailing line.
+    static func usedHeight(_ layoutManager: NSLayoutManager, in container: NSTextContainer) -> CGFloat {
+        max(layoutManager.usedRect(for: container).maxY, layoutManager.extraLineFragmentRect.maxY)
+    }
+
+    private struct Measurement {
+        let text: String
+        let width: CGFloat
+        let limit: CGFloat
+        let height: CGFloat
+    }
+
+    /// Recent measurements: one SwiftUI pass asks for the same text and width
+    /// several times (body, layout, sizeThatFits); the text changes per key.
+    private static var recent: [Measurement] = []
+    private static let recentCapacity = 8
+
+    /// Editor height of `text` in an editor `width` wide. Exact up to
+    /// `limit` (the box's cap); a taller text reports more than `limit`
+    /// without laying out the rest.
+    static func height(_ text: String, width: CGFloat, limit: CGFloat) -> CGFloat {
+        if let index = recent.firstIndex(where: {
+            abs($0.width - width) < 0.01 && $0.limit == limit && $0.text == text
+        }) {
+            let hit = recent.remove(at: index)
+            recent.insert(hit, at: 0)
+            return hit.height
+        }
+        let height = measure(text, width: width, limit: limit)
+        recent.insert(Measurement(text: text, width: width, limit: limit, height: height), at: 0)
+        if recent.count > recentCapacity { recent.removeLast() }
+        return height
+    }
+
+    private static func measure(_ text: String, width: CGFloat, limit: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [.font: font])
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: max(1, width - horizontalInset * 2),
+                                                     height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(forBoundingRect: NSRect(x: 0, y: 0, width: container.size.width,
+                                                           height: max(1, limit - verticalPadding * 2)),
+                                   in: container)
+        let height = editorHeight(usedHeight: usedHeight(layoutManager, in: container))
+        let complete = layoutManager.firstUnlaidCharacterIndex() >= storage.length
+        return complete ? height : max(height, limit + 1)
     }
 }
 
@@ -109,6 +180,114 @@ final class MacComposerTextView: NSTextView {
     var onMarkedTextChange: (() -> Void)?
     var voicePendingRange: NSRange?
 
+    // MARK: Document size
+    //
+    // Several writers used to set this view's height: the composer's updates
+    // and re-tiles, NSTextView sizing itself to its text, and AppKit following
+    // the clip view (`-[NSTextView _superviewClipViewFrameChanged:]` sets the
+    // height and minSize to the clip's height, intermediate ones included
+    // while the box animates). Whichever wrote last won: a few points of
+    // overflow and edge fades over text that fits. Now every write resolves
+    // to one height: the text's own (from this editor's layout manager), or
+    // the clip's when that is taller.
+
+    /// Set by the composer, which owns this editor's height.
+    var sizesDocumentToText = false
+    /// The box's cap: a taller text scrolls inside it.
+    var maximumVisibleHeight: CGFloat = .greatestFiniteMagnitude
+    /// The text's height (insets included) from this editor's own layout.
+    private(set) var textHeight = MacComposerTextLayout.editorHeight(usedHeight: 0)
+    private var textHeightWidth: CGFloat = -1
+    private var isFittingDocument = false
+
+    /// All of the text is visible once the box has settled.
+    var textFitsVisibleHeight: Bool { textHeight <= maximumVisibleHeight + 0.5 }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard sizesDocumentToText, !isFittingDocument else { return }
+        // Re-measure only for a new width: NSTextView also resizes itself from
+        // inside its own layout pass, where laying out again is not safe.
+        fitDocumentToText(remeasure: abs(newSize.width - textHeightWidth) > 0.01)
+    }
+
+    /// Sizes the document to the clip's width and the text's height (at
+    /// least the clip's), measuring the text with this editor's layout.
+    func fitDocumentToText(remeasure: Bool = true) {
+        guard sizesDocumentToText, let clip = superview as? NSClipView else { return }
+        // Before the first real tile the clip has no width (a new composer
+        // mounting with a long draft): laying the draft out there, about one
+        // glyph per line, would be thrown away at the next tile.
+        let width = clip.bounds.width
+        guard width > MacComposerTextLayout.horizontalInset * 2 + 1 else { return }
+        isFittingDocument = true
+        defer { isFittingDocument = false }
+        if abs(frame.width - width) > 0.01 { super.setFrameSize(NSSize(width: width, height: frame.height)) }
+        if remeasure || abs(textHeightWidth - width) > 0.01 { measureTextHeight() }
+        let height = max(textHeight, clip.bounds.height)
+        if abs(frame.height - height) > 0.01 { super.setFrameSize(NSSize(width: width, height: height)) }
+    }
+
+    private func measureTextHeight() {
+        guard textLayoutManager == nil, let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        textHeight = MacComposerTextLayout.editorHeight(usedHeight: MacComposerTextLayout.usedHeight(layoutManager, in: textContainer))
+        textHeightWidth = frame.width
+    }
+
+    override func didChangeText() {
+        // Before the delegate hears of the change and scrolls to the caret.
+        fitDocumentToText()
+        super.didChangeText()
+    }
+
+    /// Scrolls the caret into view, then snaps the clip to the document's
+    /// edges (see `snapClipToDocumentEdges`).
+    func scrollCaretToVisible() {
+        scrollRangeToVisible(selectedRange())
+        snapClipToDocumentEdges()
+    }
+
+    /// Keeps the clip inside the document, and takes the 1 pt text inset
+    /// above the first or below the last line along with its line:
+    /// scrolling to a caret on the last line stopped 1 pt short of the
+    /// bottom, which read as hidden text. Near both edges (the box almost
+    /// grown), the edge on the caret's side wins, so its line stays whole.
+    func snapClipToDocumentEdges() {
+        guard let scrollView = enclosingScrollView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, frame.height - clip.bounds.height)
+        let inset = textContainerInset.height + 0.5
+        var target = min(max(clip.bounds.minY, 0), maxY)
+        let nearTop = target < inset, nearBottom = maxY - target < inset
+        if nearTop, nearBottom {
+            target = (caretLineMidY ?? 0) > frame.height / 2 ? maxY : 0
+        } else if nearTop {
+            target = 0
+        } else if nearBottom {
+            target = maxY
+        }
+        guard abs(clip.bounds.minY - target) > 0.001 else { return }
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// The vertical middle of the caret's line, in this view's coordinates.
+    private var caretLineMidY: CGFloat? {
+        guard textLayoutManager == nil, let layoutManager, let textStorage else { return nil }
+        let location = selectedRange().location
+        let line: NSRect
+        if location >= textStorage.length, !layoutManager.extraLineFragmentRect.isEmpty {
+            line = layoutManager.extraLineFragmentRect
+        } else if textStorage.length > 0 {
+            let glyph = layoutManager.glyphIndexForCharacter(at: min(location, textStorage.length - 1))
+            line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        } else {
+            return nil
+        }
+        return line.midY + textContainerOrigin.y
+    }
+
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         if became { onFirstResponderChange?(true) }
@@ -131,9 +310,9 @@ final class MacComposerTextView: NSTextView {
     // Edit ▸ Undo/Redo and ⌘Z/⇧⌘Z send undo:/redo: up the responder chain.
     // NSTextView does not implement them; NSWindow does, with the window's
     // undo manager, which never holds this draft's records. So the editor
-    // answers them itself, against `draftUndoManager`. (TextKit 2 does not
-    // register typing with the text view or its storage as the undo target,
-    // so the window's manager could not be scrubbed per editor instead.)
+    // answers them itself, against `draftUndoManager`: the app replaces the
+    // whole draft (Send, Clear, voice, Edit) and must drop exactly this
+    // editor's records, which a private manager allows.
 
     @objc func undo(_ sender: Any?) { stepDraftUndo(redo: false) }
     @objc func redo(_ sender: Any?) { stepDraftUndo(redo: true) }
@@ -143,8 +322,11 @@ final class MacComposerTextView: NSTextView {
         // Later typing must start a new record, not extend an undone one.
         breakUndoCoalescing()
         if redo { draftUndoManager.redo() } else { draftUndoManager.undo() }
-        // TextKit 2 applies the undo without posting NSText.didChange, so
-        // the draft (and the next re-render) would keep the old text.
+        // TextKit 1 announces the undone edit itself, so this is a second,
+        // no-op publish (2 NSText.didChange per ⌘Z, measured by
+        // testUndoAndRedoThroughTheResponderChainUpdateTheDraft). Kept as a
+        // guarantee: a missed change would leave the draft (and the next
+        // re-render) with the old text.
         didChangeText()
     }
 
@@ -209,11 +391,13 @@ final class MacComposerTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         onTakeOver?()
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        fitDocumentToText()
         onMarkedTextChange?()
     }
 
     override func unmarkText() {
         super.unmarkText()
+        fitDocumentToText()
         onMarkedTextChange?()
     }
 
@@ -251,14 +435,10 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
     var minLines: CGFloat? = nil
     var maxLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
-    private static let font = NSFont.systemFont(ofSize: 15)
-    private static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
-    // One point for the text/caret; the stable visual padding lives outside
-    // the scroll view so it remains present at every scroll position.
-    private static let verticalPadding: CGFloat = 1
-
     /// Editor height for `lines` lines of text (without the outer padding).
-    static func height(lines: CGFloat) -> CGFloat { lineHeight * lines + verticalPadding * 2 }
+    static func height(lines: CGFloat) -> CGFloat {
+        MacComposerTextLayout.lineHeight * lines + MacComposerTextLayout.verticalPadding * 2
+    }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MacComposerScrollableTextInput
@@ -332,7 +512,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             // update, e.g. discarding a composition): no state writes there.
             reportVisualTextPresence(of: textView, deferred: isApplying)
             guard !isApplying else { return }
-            textView.scrollRangeToVisible(textView.selectedRange())
+            textView.scrollCaretToVisible()
             // Do not round-trip marked IME text through SwiftUI. Replacing the
             // backing string while a Chinese/Japanese composition is active
             // commits or discards the input session and can resign first
@@ -473,7 +653,11 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .automatic
         scrollView.horizontalScrollElasticity = .none
 
-        let textView = MacComposerTextView(frame: .zero)
+        // TextKit 1: its full, contiguous layout is the height the box is
+        // measured with. TextKit 2 laid long drafts out lazily with estimated
+        // positions, so the document height and caret scrolling disagreed
+        // with the measured height (blank rows, the caret out of view).
+        let textView = MacComposerTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
         textView.onTakeOver = onTakeOver
         textView.onSubmit = onSubmit
@@ -497,28 +681,30 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
-        textView.font = Self.font
+        textView.font = MacComposerTextLayout.font
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
-        textView.textContainerInset = NSSize(width: 4, height: Self.verticalPadding)
+        textView.textContainerInset = NSSize(width: MacComposerTextLayout.horizontalInset,
+                                             height: MacComposerTextLayout.verticalPadding)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.lineFragmentPadding = 0
         textView.string = text
         scrollView.documentView = textView
+        textView.sizesDocumentToText = true
+        textView.maximumVisibleHeight = maximumHeight
         context.coordinator.scrollView = scrollView
         context.coordinator.textView = textView
-        context.coordinator.edgeFade = MacScrollEdgeFade(scrollView)
-        scrollView.edgeFade = context.coordinator.edgeFade
-        // The width can change after the last update (the clear button moving
-        // above the mic): the document must follow, or a stale (narrower,
-        // taller) height leaves a phantom scroll range.
-        scrollView.onTile = { [weak scrollView, weak textView] in
-            guard let scrollView, let textView, !textView.hasMarkedText() else { return }
-            let width = max(1, scrollView.contentSize.width)
-            let height = max(Self.measuredHeight(textView.string, width: width), scrollView.contentSize.height)
-            guard abs(textView.frame.height - height) > 0.5 || abs(textView.frame.width - width) > 0.5 else { return }
-            textView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let edgeFade = MacScrollEdgeFade(scrollView)
+        edgeFade.textFitsSettledBox = { [weak textView] in textView?.textFitsVisibleHeight ?? false }
+        context.coordinator.edgeFade = edgeFade
+        scrollView.edgeFade = edgeFade
+        // The clip changes size without an update (the box animating, the
+        // clear button moving above the mic): the document follows it at once.
+        scrollView.onTile = { [weak textView] in
+            guard let textView else { return }
+            textView.fitDocumentToText()
+            textView.snapClipToDocumentEdges()
         }
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         return scrollView
@@ -579,14 +765,8 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         if !textView.hasMarkedText() { textView.typingAttributes[.foregroundColor] = NSColor.labelColor }
         context.coordinator.isApplying = false
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
-        let layoutText = textView.hasMarkedText() ? textView.string : text
-        let measuredHeight = Self.measuredHeight(layoutText, width: max(1, scrollView.contentSize.width))
-        textView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: max(1, scrollView.contentSize.width),
-            height: max(measuredHeight, scrollView.contentSize.height)
-        )
+        textView.maximumVisibleHeight = maximumHeight
+        textView.fitDocumentToText()
         // Keep the three-line editor internally scrollable without ever
         // exposing an AppKit scrollbar. NSClipView still follows the insertion
         // point; removing the scroller objects prevents system settings from
@@ -614,10 +794,13 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             } else if window.firstResponder === textView {
                 window.makeFirstResponder(nil)
             }
-            textView.scrollRangeToVisible(textView.selectedRange())
+            textView.scrollCaretToVisible()
             coordinator.edgeFade?.scheduleUpdate()
         }
     }
+
+    private var minimumHeight: CGFloat { minLines.map(Self.height(lines:)) ?? MacComposerMetrics.minimumTextHeight }
+    private var maximumHeight: CGFloat { max(minimumHeight, Self.height(lines: maxLines)) }
 
     /// The editor height this text takes at `width` (what sizeThatFits
     /// returns); composers animate their growth on its changes.
@@ -625,7 +808,8 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
                              minLines: CGFloat? = nil, maxLines: CGFloat = MacComposerMetrics.maxVisibleTextLines) -> CGFloat {
         guard width > 1 else { return 0 }
         let minHeight = minLines.map(height(lines:)) ?? MacComposerMetrics.minimumTextHeight
-        return min(max(measuredHeight(text, width: width), minHeight), max(minHeight, height(lines: maxLines)))
+        let maxHeight = max(minHeight, height(lines: maxLines))
+        return min(max(MacComposerTextLayout.height(text, width: width, limit: maxHeight), minHeight), maxHeight)
     }
 
     func sizeThatFits(
@@ -637,25 +821,8 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         // While composing, size for the visible text, marked part included.
         let editor = nsView.documentView as? NSTextView
         let layoutText = editor?.hasMarkedText() == true ? editor?.string ?? text : text
-        let measured = Self.measuredHeight(layoutText, width: width)
-        let minHeight = minLines.map(Self.height(lines:)) ?? MacComposerMetrics.minimumTextHeight
-        let maxHeight = max(minHeight, Self.height(lines: maxLines))
-        return CGSize(width: width, height: min(max(measured, minHeight), maxHeight))
-    }
-
-    private static func measuredHeight(_ text: String, width: CGFloat) -> CGFloat {
-        // Measure with the same TextKit layout as NSTextView, including an
-        // empty trailing line. CoreText's extra rounding used to change the
-        // apparent padding when the editor grew from one line to two.
-        let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [.font: font])
-        let layout = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: max(1, width - 8), height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layout.addTextContainer(container)
-        storage.addLayoutManager(layout)
-        layout.ensureLayout(for: container)
-        let height = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
-        return max(lineHeight, ceil(height)) + verticalPadding * 2
+        let measured = MacComposerTextLayout.height(layoutText, width: width, limit: maximumHeight)
+        return CGSize(width: width, height: min(max(measured, minimumHeight), maximumHeight))
     }
 }
 #endif

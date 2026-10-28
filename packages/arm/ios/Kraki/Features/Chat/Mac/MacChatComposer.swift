@@ -42,6 +42,15 @@ enum MacComposerMetrics {
     /// Outside the scrolling viewport: retained even when text scrolls.
     static let textVerticalPadding: CGFloat = 8
     static let maxVisibleTextLines: CGFloat = 3
+    /// Resting row: [attach slot] text [clear] [mic]. The one-row editor
+    /// width (where the draft wraps and the box stacks) is derived from these.
+    static let attachButtonWidth: CGFloat = 38
+    static let attachSlotLeading: CGFloat = 6
+    static var attachSlotWidth: CGFloat { attachSlotLeading + attachButtonWidth }
+    static let clearButtonWidth: CGFloat = 26
+    static let micButtonWidth: CGFloat = 32
+    /// Between the editor and the clear button.
+    static let textTrailingInset: CGFloat = 4
     #if DEBUG
     /// Off-screen snapshot tests: cacheDisplay cannot draw Liquid Glass (nor
     /// anything composited into it), so draw flat fills instead.
@@ -96,11 +105,12 @@ struct MacChatComposer: View {
 
     /// Multi-line drafts use two rows: the text spans the box, the controls
     /// sit in a row below (as on iOS, and as dictation). Decided from the
-    /// one-row width only, so it switches once at the wrap.
+    /// one-row editor width only, so it switches once, where the text wraps.
     private var stacksRows: Bool {
         guard !layoutText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, restingWidth > 1 else { return false }
-        let oneRowText = restingWidth - 44 - (showsClear ? 26 : 0) - (canShowVoice ? 32 : 0) - 5 - 8
-        return MacComposerScrollableTextInput.fittedHeight(layoutText, width: oneRowText)
+        let oneRowEditor = MacComposerRestingLayout.oneRowEditorWidth(width: restingWidth, showsClear: showsClear,
+                                                                      showsMic: canShowVoice)
+        return MacComposerScrollableTextInput.fittedHeight(layoutText, width: oneRowEditor)
             > MacComposerMetrics.minimumTextHeight + 0.5
     }
     @State private var inputBoxWidth: CGFloat = 0
@@ -448,9 +458,9 @@ struct MacChatComposer: View {
                 onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) }
             )
             .padding(.leading, 0)
-            .padding(.trailing, 4)
+            .padding(.trailing, MacComposerMetrics.textTrailingInset)
             .padding(.vertical, MacComposerMetrics.textVerticalPadding)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width - 4 } action: { textInputWidth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width - MacComposerMetrics.textTrailingInset } action: { textInputWidth = $0 }
         }
         .frame(maxWidth: .infinity)
         .onPasteCommand(
@@ -529,7 +539,7 @@ struct MacChatComposer: View {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 14))
                 .foregroundStyle(.tertiary)
-                .frame(width: 26, height: Self.inputBoxHeight)
+                .frame(width: MacComposerMetrics.clearButtonWidth, height: Self.inputBoxHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -550,7 +560,7 @@ struct MacChatComposer: View {
                     .opacity(voiceComposer.isFinishing(in: sessionId) ? 0 : 1)
                 if voiceComposer.isFinishing(in: sessionId) { ProgressView().controlSize(.small) }
             }
-            .frame(width: 32, height: Self.inputBoxHeight)
+            .frame(width: MacComposerMetrics.micButtonWidth, height: Self.inputBoxHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -638,7 +648,7 @@ struct MacChatComposer: View {
                             .scaledToFill()
                             .frame(width: 28, height: 28)
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .frame(width: 38, height: Self.inputBoxHeight)
+                            .frame(width: MacComposerMetrics.attachButtonWidth, height: Self.inputBoxHeight)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -658,7 +668,7 @@ struct MacChatComposer: View {
             } else {
                 Button(action: chooseImage) {
                     LucideIcon(.imagePlus, size: 19, strokeWidth: 2.1, color: .secondary)
-                        .frame(width: 38, height: Self.inputBoxHeight)
+                        .frame(width: MacComposerMetrics.attachButtonWidth, height: Self.inputBoxHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -666,7 +676,7 @@ struct MacChatComposer: View {
                 .controlHelp(attachHelp)
             }
         }
-        .padding(.leading, 6)
+        .padding(.leading, MacComposerMetrics.attachSlotLeading)
         .opacity(canUseImageSlot ? 1 : 0.4)
         .background {
             #if DEBUG
@@ -870,6 +880,16 @@ struct MacComposerRestingLayout: Layout {
     static let stackedLeading: CGFloat = 12
     /// The text's bottom padding and the row's top inset overlap by this.
     static let rowOverlap: CGFloat = 6
+
+    /// The editor's width in the one-row arrangement of a layout `width`
+    /// wide: the text column beside the attach slot, clear and mic, less the
+    /// editor's trailing inset (the same widths `frames` places).
+    static func oneRowEditorWidth(width: CGFloat, showsClear: Bool, showsMic: Bool) -> CGFloat {
+        width - MacComposerMetrics.attachSlotWidth
+            - (showsClear ? MacComposerMetrics.clearButtonWidth : 0)
+            - (showsMic ? MacComposerMetrics.micButtonWidth : 0)
+            - MacComposerMetrics.textTrailingInset
+    }
 
     private func frames(width: CGFloat, _ s: Subviews) -> (frames: [CGRect], height: CGFloat) {
         let image = s[0].sizeThatFits(.unspecified)
