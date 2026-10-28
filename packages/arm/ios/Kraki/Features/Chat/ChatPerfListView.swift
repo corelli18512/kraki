@@ -56,6 +56,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// anchoring, and animation; entry/follow/intent/paging rules are identical
     /// to the AppKit adapter through this platform-neutral state machine.
     var scrollPolicy = ChatScrollPolicy()
+    var underfilledHistory = IOSUnderfilledHistoryState()
     /// Read position this Session was entered with (new messages / notification).
     let unreadEntryBoundary: Int?
     /// The entry had a real red dot (SessionStore.entryUnreadGaps).
@@ -168,7 +169,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var ids: [String] {
         var result = messages.map(\.id)
         // Last, or above a steer the agent has not read yet (MessageStore+SteerPlacement).
-        if let card = vm.card, !card.text.isEmpty || card.action != nil { result.insert(Self.liveCardID, at: card.rowIndex(in: messages)) }
+        if let card = vm.card, !card.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || card.action != nil { result.insert(Self.liveCardID, at: card.rowIndex(in: messages)) }
         return result
     }
     var messageCount: Int { messages.count }
@@ -386,6 +387,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // before the navigation transition was presented.
         warmWindow(radius: 0)
         scheduleWarmKick()
+        scheduleUnderfilledHistoryCheck()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -408,6 +410,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         super.viewDidLayoutSubviews()
         scrollIndicator.updateGeometry()
         handleWidthChangeIfNeeded()
+        scheduleUnderfilledHistoryCheck()
         // A hidden/zero-width page may have deferred starting a barrier. Retry
         // after layout, never re-enter a collection batch from inside layout.
         if !isLeavingView, view.window != nil, collectionView.bounds.width > 0,

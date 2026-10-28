@@ -69,7 +69,11 @@ final class IOSSearchIMETests: XCTestCase {
     private func views<T: UIView>(_ type: T.Type) -> [T] { all(type, in: window) }
 
     private func openSearch() throws -> UITextField {
-        return try XCTUnwrap(views(UITextField.self).first, "search field")
+        // Mounting the field and UIKit's queued first-responder handoff are
+        // separate turns; the fixed appearance delay did not prove focus.
+        let deadline = Date().addingTimeInterval(5)
+        while views(UITextField.self).first?.isFirstResponder != true, Date() < deadline { drain(20) }
+        return try XCTUnwrap(views(UITextField.self).first(where: \.isFirstResponder), "focused search field")
     }
 
     /// Visible session rows (0 when the empty "no results" state replaced the list).
@@ -116,6 +120,13 @@ final class IOSSearchIMETests: XCTestCase {
         XCTAssertTrue(field.isFirstResponder)
         XCTAssertEqual(field.text, "中")
         XCTAssertEqual(visibleRows, 2, "committed text filters: 中文搜索修复, 中国区重要会话")
+    }
+
+    func testOpenSearchWaitsForDeferredNativeFocus() throws {
+        let field = try openSearch()
+        field.resignFirstResponder()
+        DispatchQueue.main.async { field.becomeFirstResponder() }
+        XCTAssertTrue(try openSearch().isFirstResponder, "wait for UIKit's queued focus handoff")
     }
 
     /// No match → empty state → a new match. The field (and an in-progress

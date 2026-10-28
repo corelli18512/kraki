@@ -96,6 +96,7 @@ extension ChatPerfListVC {
 
     func updateJumpButtonVisibility() {
         guard collectionView != nil else { return }
+        scheduleUnderfilledHistoryCheck()
         if isAtConversationBottom, unseenArrivals > 0 {
             unseenArrivals = 0
             refreshJumpButtonTitle()

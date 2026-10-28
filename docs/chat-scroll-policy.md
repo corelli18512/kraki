@@ -87,6 +87,17 @@ Physical iPhone/iPad touch, ProMotion, Mac trackpad momentum, and scrollbar
 interaction remain hardware checks; semantic automation does not claim to
 replace them.
 
+## Underfilled history at rest
+
+Both adapters also fill a raw history window that projects to less than one
+viewport (including a nonvisual-only window). This is a bounded native geometry
+recovery, not user edge paging: it waits for exact applied row heights and true
+rest, excludes spinners/composer clearance from history height, and requests at
+most eight older pages per entry. A no-progress raw top is not requested again.
+It preserves the tail or unread reading anchor and never unlocks entry or
+consumes a user paging allowance. Complete short history stays top-aligned.
+`IOSUnderfilledHistoryTests` and `MacUnderfilledHistoryTests` cover the adapters.
+
 ## Deliberately native mechanics
 
 No remaining product-level scroll decision is duplicated between the adapters.

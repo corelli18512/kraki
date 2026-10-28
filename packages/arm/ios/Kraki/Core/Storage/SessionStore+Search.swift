@@ -18,3 +18,12 @@ extension SessionStore {
         }
     }
 }
+
+extension SessionStore {
+    /// The unread definition behind `unreadSessionIDs`: readSeq < lastSeq.
+    static func unreadIDs(in sessions: [String: SessionInfo]) -> Set<String> {
+        Set(sessions.values.compactMap { session in
+            session.readSeq < session.lastSeq ? session.id : nil
+        })
+    }
+}

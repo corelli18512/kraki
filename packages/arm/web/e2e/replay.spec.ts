@@ -56,12 +56,13 @@ async function authenticateClient(
 ): Promise<WebSocket> {
   const ws = await server.waitForConnection();
   await server.waitForMessage(ws);
+  const requestedSessions = server.waitForMessage(ws);
   server.sendAuthOk(ws, {
     sessions: options.sessions ?? [TEST_SESSION],
     devices: options.devices ?? [TEST_DEVICE],
     readState: options.readState,
   });
-  await server.waitForMessage(ws);
+  await requestedSessions;
   return ws;
 }
 
@@ -74,8 +75,11 @@ async function setupAndOpenSession(
   server: MockRelayServer,
   options?: { sessions?: Record<string, unknown>[]; devices?: Record<string, unknown>[] },
 ): Promise<WebSocket> {
+  // A fast client can connect (and send auth) before page.goto resolves.
+  // Install both listeners before navigation, not after the load event.
+  const authenticated = authenticateClient(server, options);
   await gotoWithRelay(page, server);
-  const ws = await authenticateClient(server, options);
+  const ws = await authenticated;
   // Wait for session card to appear in sidebar (session_list processed)
   const sessionCard = page.getByRole('list').getByRole('button', { name: /Replay test/ }).first();
   await expect(sessionCard).toBeVisible({ timeout: 5000 });
@@ -117,6 +121,21 @@ test.describe('Replay and chat history', () => {
   });
 
   test('displays messages during replay and clears loading state', async ({ page }) => {
+    // Hold a document subresource until authentication. This deterministically
+    // puts the WS connection before page.goto's load completion, as under load.
+    let authenticated!: () => void;
+    const authDone = new Promise<void>(resolve => { authenticated = resolve; });
+    const sendAuthOk = server.sendAuthOk.bind(server);
+    server.sendAuthOk = (...args) => { sendAuthOk(...args); authenticated(); };
+    await page.route('**/replay-load-gate.png', async route => {
+      await authDone;
+      await route.fulfill({ status: 204, body: '' });
+    });
+    await page.route('**/?relay=*', async route => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace('</body>', '<img src="/replay-load-gate.png" hidden></body>');
+      await route.fulfill({ response, body });
+    });
     const ws = await setupAndOpenSession(page, server);
 
     sendAgentMessages(server, ws, [
