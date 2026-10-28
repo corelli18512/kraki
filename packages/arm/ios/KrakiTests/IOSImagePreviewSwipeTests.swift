@@ -87,6 +87,33 @@ import UIKit
         XCTAssertLessThan(green.2, 0.3)
     }
 
+    /// A slow first layout (one long main-run-loop callout, as on a busy CI
+    /// runner or an old phone) must not leave the tapped-image placement
+    /// pending: a swipe right after opening stays on the page it reached.
+    func testSwipeRightAfterASlowOpenIsNotPulledBack() throws {
+        let items = [UIColor.red, .green, .blue].enumerated().map { index, color in
+            IOSImagePreviewItem(id: "img-\(index)", image: image(color), title: "image-\(index + 1).png")
+        }
+        let host = UIHostingController(rootView: IOSImagePreviewGallery(selection: IOSImagePreviewSelection(items: items, initialIndex: 2)))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        window.windowLevel = .alert + 1
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        RunLoop.main.perform { Thread.sleep(forTimeInterval: 1) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        let scroll = try XCTUnwrap(pager(host.view))
+        XCTAssertEqual(scroll.contentOffset.x, scroll.bounds.width * 2, accuracy: 1, "starts exactly on page 3")
+        scroll.setContentOffset(CGPoint(x: scroll.bounds.width, y: 0), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(scroll.contentOffset.x, scroll.bounds.width, accuracy: 1, "the swipe was not pulled back to page 3")
+        let green = centerColor(snapshot(window, "kraki-preview-slow-open-back2.png"))
+        XCTAssertGreaterThan(green.1, 0.6, "swiping back shows the green image: \(green)")
+    }
+
     /// iPhone Duo fold/unfold (or rotation) while the viewer is open: the
     /// pager must stay exactly on the page being viewed at the new width.
     func testResizingWhileOpenStaysOnThePage() throws {

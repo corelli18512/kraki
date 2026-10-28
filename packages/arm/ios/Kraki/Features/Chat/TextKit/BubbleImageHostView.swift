@@ -422,12 +422,18 @@ struct IOSImagePreviewGallery: View {
     @State private var index: Int
     /// A page to scroll to (Previous/Next buttons).
     @State private var target: Int?
-    /// The tapped image is scrolled to once, when the viewer opens.
-    @State private var placedInitialPage = false
 
     init(selection: IOSImagePreviewSelection) {
         self.selection = selection
         _index = State(initialValue: selection.initialIndex)
+    }
+
+    /// The tapped image as the scroll view's initial offset: part of its first
+    /// layout. A `scrollTo` from `onAppear` stayed pending when that layout ran
+    /// long and was applied again on the next update, pulling a swipe made in
+    /// the meantime back to the tapped image (and first reported page 1).
+    private var initialPageAnchor: UnitPoint {
+        UnitPoint(x: CGFloat(selection.initialIndex) / CGFloat(max(selection.items.count - 1, 1)), y: 0)
     }
 
     private var item: IOSImagePreviewItem {
@@ -467,6 +473,7 @@ struct IOSImagePreviewGallery: View {
                     .scrollTargetLayout()
                 }
                 .scrollTargetBehavior(.paging)
+                .defaultScrollAnchor(initialPageAnchor, for: .initialOffset)
                 .scrollIndicators(.hidden)
                 .contentMargins(0, for: .scrollContent)
                 // The page shown is derived from the actual offset, so it
@@ -484,11 +491,6 @@ struct IOSImagePreviewGallery: View {
                     }
                     let page = min(max(now.page, 0), max(selection.items.count - 1, 0))
                     if page != index { index = page }
-                }
-                .onAppear {
-                    guard !placedInitialPage else { return }
-                    placedInitialPage = true
-                    if selection.initialIndex > 0 { proxy.scrollTo(selection.initialIndex, anchor: .leading) }
                 }
                 .onChange(of: target) { _, page in
                     guard let page else { return }

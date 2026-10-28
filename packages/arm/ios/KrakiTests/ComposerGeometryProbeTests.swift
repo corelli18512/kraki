@@ -48,6 +48,20 @@ import UIKit
         try runScenario(readingHistory: true)
     }
 
+    /// Recording, with the mic open. The mic opens in an async task (scenario
+    /// lease 20 ms, connection 40 ms); a partial applied before that has no
+    /// recording to land in: on CI the long transcript was dropped and the
+    /// overlay stayed at 51 pt.
+    private func assertRecording(_ app: AppState, sessionID: String) {
+        XCTAssertTrue(app.iosVoiceComposer.isRecording)
+        let controller = app.voiceInputController
+        let deadline = Date().addingTimeInterval(5)
+        while !(controller.isRecording && controller.activeSessionID == sessionID), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(controller.isRecording, "voice never started recording; controller=\(controller.state)")
+    }
+
     private func runScenario(readingHistory: Bool) throws {
         try requireForegroundUITests()
         // This test drives the transcript itself: no canned fixture partial.
@@ -207,7 +221,7 @@ import UIKit
         rows.append(try snapshot("idle"))
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
         drain(0.9)
-        XCTAssertTrue(app.iosVoiceComposer.isRecording)
+        assertRecording(app, sessionID: sid)
         rows.append(try snapshot("recording-short"))
         let longText = String(repeating: "A longer live transcript should cover the chat rather than move its bubbles. ", count: 10)
         app.voiceInputController.debugApplyPartial(longText)

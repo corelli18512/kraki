@@ -33,11 +33,24 @@ final class ChatWidthChangeTests: XCTestCase {
         drain(300)
     }
 
+    /// The list re-lays out for a new width one main-queue turn after the
+    /// layout that saw it (it never re-enters a collection update from inside
+    /// layout). A fixed drain can expire before that turn when a single layout
+    /// pass outlasts it (CI: a 900 ms drain returned after ~4 s with the
+    /// bubbles still at the old width), so wait for the relayout itself.
+    private func waitForWidthRelayout(_ fx: ChatUXRegressionTests.Fx, from oldWidth: CGFloat) {
+        let deadline = Date().addingTimeInterval(5)
+        while fx.cv.bounds.width == oldWidth || fx.vc.laidOutWidth != fx.cv.bounds.width || fx.vc.widthRelayoutScheduled,
+              Date() < deadline { drain(10) }
+    }
+
     private func resize(_ fx: ChatUXRegressionTests.Fx, _ size: CGSize) {
         guard let window = fx.vc.view.window else { return XCTFail("chat is not in a window") }
+        let oldWidth = fx.cv.bounds.width
         window.frame = CGRect(origin: .zero, size: size)
         fx.vc.view.frame = window.bounds
         fx.vc.view.layoutIfNeeded()
+        if size.width != oldWidth { waitForWidthRelayout(fx, from: oldWidth) }
         drain(700)
         fx.cv.layoutIfNeeded()
     }
@@ -123,7 +136,9 @@ final class ChatWidthChangeTests: XCTestCase {
         drag(live, to: cv0.contentSize.height * 0.4)
         let start = try XCTUnwrap(anchor(live))
         for (step, size) in [CGSize(width: 951, height: 669), CGSize(width: 466, height: 678), CGSize(width: 951, height: 669), CGSize(width: 466, height: 678)].enumerated() {
+            let oldWidth = cv0.bounds.width
             window.frame = CGRect(origin: .zero, size: size)
+            waitForWidthRelayout(live, from: oldWidth)
             drain(900)
             let cv = try chat()
             XCTAssertTrue(cv === cv0, "step \(step): the same chat list survives the resize")
@@ -155,10 +170,12 @@ final class ChatWidthChangeTests: XCTestCase {
         drag(fx, to: fx.cv.contentSize.height * 0.4)
         let start = try XCTUnwrap(anchor(fx))
         guard let window = fx.vc.view.window else { return XCTFail("chat is not in a window") }
+        let oldWidth = fx.cv.bounds.width
         window.frame = CGRect(origin: .zero, size: CGSize(width: 951, height: 669))
         fx.vc.view.frame = window.bounds
         fx.vc.view.layoutIfNeeded()
-        drain(30)
+        // Right after the fold's relayout, while its delayed restores are pending.
+        waitForWidthRelayout(fx, from: oldWidth)
         guard let target = fx.vc.automationUpTargetItem else { throw XCTSkip("no earlier reply to jump to") }
         let targetID = fx.vc.items[target]
         fx.vc.automationTapUp()

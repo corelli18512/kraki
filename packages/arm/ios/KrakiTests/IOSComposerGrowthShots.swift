@@ -185,6 +185,24 @@ final class IOSComposerGrowthShots: XCTestCase {
         all(host.view).compactMap { $0 as? UIScrollView }.first { !($0 is UITextView) && $0.contentSize.height > 1 }
     }
 
+    /// The transcript has finished easing to its new height: its glyphs and
+    /// viewport unchanged for six 50 ms samples (at most 5 s). The viewport
+    /// eases over 0.18 s and the text rides its bottom edge meanwhile, so a
+    /// fixed 0.4 s wait on slow CI sampled it mid-way (glyphs 13-37 pt down).
+    private func settleTranscript() {
+        func layout() -> [CGFloat] {
+            let text = IOSVoiceGeometryProbe.frames["text"] ?? .zero, scroll = transcriptScroll
+            return [text.minY, text.maxY, scroll?.bounds.height ?? -1, scroll?.contentOffset.y ?? -1]
+        }
+        var last = layout(), stableSamples = 0
+        let started = Date()
+        while Date().timeIntervalSince(started) < 5, stableSamples < 6 {
+            drain(0.05)
+            let now = layout()
+            if zip(now, last).allSatisfy({ abs($0 - $1) <= 0.5 }) { stableSamples += 1 } else { stableSamples = 0; last = now }
+        }
+    }
+
     func testRecordingTextStaysTopAlignedAcrossWrappingAndResize() throws {
         for (style, suffix) in [(UIUserInterfaceStyle.light, "light"), (.dark, "dark")] {
             try mount(style)
@@ -198,7 +216,7 @@ final class IOSComposerGrowthShots: XCTestCase {
                 for (name, text) in [("short", "短句"), ("wrap", Self.voiceTexts[1].1),
                                      ("long", Self.voiceTexts[2].1), ("short-again", "短句")] {
                     app.iosVoiceComposer.receive(text, id: id)
-                    drain(0.4)
+                    settleTranscript()
                     let box = try XCTUnwrap(IOSVoiceGeometryProbe.frames["box"])
                     let header = try XCTUnwrap(IOSVoiceGeometryProbe.frames["header"])
                     let glyphs = try XCTUnwrap(IOSVoiceGeometryProbe.frames["text"])
