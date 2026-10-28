@@ -6,8 +6,6 @@ name: Prerelease
 # `prerelease` mode. Never npm, the Sparkle appcast or GitHub "latest".
 
 on:
-  push:
-    branches: [ci/auto-prerelease]
   workflow_run:
     workflows: ["CI"]
     types:
@@ -120,8 +118,7 @@ jobs:
           set -euo pipefail
           # release.yml runs on the tag, so its provenance names the exact
           # commit. A re-run of this workflow reuses its tag.
-          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null || true)
-          if [ -z "$existing" ]; then
+          if ! existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null); then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
           elif [ "$existing" != "$SHA" ]; then
             echo "::error::Tag $TAG already points at $existing, not $SHA"
