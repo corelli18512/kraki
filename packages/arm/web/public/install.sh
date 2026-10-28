@@ -1,6 +1,8 @@
 #!/bin/sh
 # Kraki installer — https://app.kraki.chat
 # Usage: curl -fsSL https://app.kraki.chat/install.sh | bash
+# A specific release, e.g. a dogfood prerelease (docs/prerelease.md):
+#   curl -fsSL https://app.kraki.chat/install.sh | KRAKI_VERSION=dev-cli-0.38.12-dev.57 bash
 set -e
 
 REPO="corelli18512/kraki"
@@ -39,8 +41,18 @@ detect_platform() {
 }
 
 # ── Fetch latest version ─────────────────────────────────
+#
+# GitHub's "latest" release is never a prerelease. KRAKI_VERSION names a
+# release tag to install instead; it is checksum-verified like any other.
 
 fetch_latest_version() {
+  if [ -n "${KRAKI_VERSION:-}" ]; then
+    case "$KRAKI_VERSION" in
+      *[!A-Za-z0-9._-]*) echo "Error: Invalid KRAKI_VERSION: ${KRAKI_VERSION}"; exit 1 ;;
+    esac
+    VERSION="$KRAKI_VERSION"
+    return
+  fi
   VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
   if [ -z "$VERSION" ]; then

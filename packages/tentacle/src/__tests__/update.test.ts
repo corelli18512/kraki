@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
+import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -172,5 +172,43 @@ describe('formatBytes', () => {
     expect(formatBytes(1024 * 1024)).toBe('1.0 MB');
     expect(formatBytes(1.5 * 1024 * 1024)).toBe('1.5 MB');
     expect(formatBytes(121462912)).toBe('115.8 MB');
+  });
+});
+
+// Dogfood prereleases (docs/prerelease.md) must never reach regular users.
+describe('update ignores dogfood prereleases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+  });
+
+  it('offers the newest formal CLI release, past a full set of prereleases', async () => {
+    const cli = [{ name: 'kraki-cli-macos-arm64', browser_download_url: 'https://example.com/bin' }];
+    const releases: Array<{ tag_name: string; prerelease: boolean; assets: typeof cli }> = [];
+    for (let n = 30; n > 10; n--) {
+      releases.push(n % 2
+        ? { tag_name: `dev-cli-0.38.12-dev.${n}`, prerelease: true, assets: cli }
+        : { tag_name: `dev-mac-0.2.92-dev.${n}`, prerelease: true, assets: [] });
+    }
+    // Even a prerelease that looks like a formal tag is skipped.
+    releases.push({ tag_name: 'v0.38.12-rc.1', prerelease: true, assets: cli });
+    releases.push({ tag_name: 'v0.38.11', prerelease: false, assets: cli });
+    let requested = '';
+    mockHttpsRequest.mockImplementation((url: URL, _options: unknown, callback: (res: PassThrough) => void) => {
+      requested = url.toString();
+      return createMockRequest(() => callback(createMockResponse(200, JSON.stringify(releases))));
+    });
+
+    await expect(fetchLatestVersion()).resolves.toBe('0.38.11');
+    expect(requested).toContain('per_page=100');
+  });
+
+  it('moves a tester on a prerelease to the next formal release, never back', () => {
+    expect(isNewer('0.38.12', '0.38.12-dev.57')).toBe(true);
+    expect(isNewer('0.38.11', '0.38.12-dev.57')).toBe(false);
+    expect(isNewer('0.38.12-dev.57', '0.38.11')).toBe(true);
   });
 });

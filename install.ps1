@@ -1,5 +1,7 @@
 # Kraki installer for Windows PowerShell
 # Usage: irm https://app.kraki.chat/install.ps1 | iex
+# A specific release, e.g. a dogfood prerelease (docs/prerelease.md):
+#   $env:KRAKI_VERSION = "dev-cli-0.38.12-dev.57"; irm https://app.kraki.chat/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $repo = "corelli18512/kraki"
@@ -33,7 +35,16 @@ function Get-KrakiWindowsRelease {
     throw "No stable release contains $AssetName. See https://github.com/$Repository/releases"
 }
 
-$release = Get-KrakiWindowsRelease -Repository $repo -AssetName $asset
+if ($env:KRAKI_VERSION) {
+    # A named release tag; checksum-verified like the latest one.
+    if ($env:KRAKI_VERSION -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid KRAKI_VERSION: $env:KRAKI_VERSION" }
+    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$($env:KRAKI_VERSION)" @web
+    if (@($release.assets | Where-Object { $_.name -eq $asset }).Count -eq 0) {
+        throw "Release $($env:KRAKI_VERSION) does not contain $asset."
+    }
+} else {
+    $release = Get-KrakiWindowsRelease -Repository $repo -AssetName $asset
+}
 $version = $release.tag_name
 Write-Host "  Installing Kraki $version..."
 

@@ -1,0 +1,143 @@
+name: Prerelease
+
+# Dogfood prereleases of the CLI and Kraki for Mac after every green CI on
+# main that changed them (docs/prerelease.md). This workflow only decides and
+# tags; release.yml builds, signs, notarizes, attests and publishes in its
+# `prerelease` mode. Never npm, the Sparkle appcast or GitHub "latest".
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      component:
+        description: auto = only changed components; otherwise build regardless of changes
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - cli
+          - mac
+          - both
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: prerelease-plan-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan prereleases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only a successful CI of a push to main in this repository; a pull
+    # request from a fork's "main" branch must never publish.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      cli_build: ${{ steps.plan.outputs.cli_build }}
+      cli_base: ${{ steps.plan.outputs.cli_base }}
+      cli_version: ${{ steps.plan.outputs.cli_version }}
+      cli_tag: ${{ steps.plan.outputs.cli_tag }}
+      mac_build: ${{ steps.plan.outputs.mac_build }}
+      mac_base: ${{ steps.plan.outputs.mac_base }}
+      mac_version: ${{ steps.plan.outputs.mac_version }}
+      mac_tag: ${{ steps.plan.outputs.mac_tag }}
+      mac_bundle_build: ${{ steps.plan.outputs.mac_bundle_build }}
+      mac_tentacle_version: ${{ steps.plan.outputs.mac_tentacle_version }}
+
+    steps:
+      - name: Resolve tested commit
+        id: sha
+        env:
+          # The commit CI tested, not whatever main points at now.
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          # All tags and history: change detection and formal versions.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Decide what to prerelease
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.sha.outputs.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          FORCE: ${{ github.event.inputs.component || 'auto' }}
+        run: node scripts/release/prerelease.mjs plan
+
+  dispatch:
+    name: Prerelease ${{ matrix.component }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: cli
+            target: tentacle
+          - component: mac
+            target: mac
+
+    steps:
+      - name: Tag and start the release build
+        if: needs.plan.outputs[format('{0}_build', matrix.component)] == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.plan.outputs[format('{0}_tag', matrix.component)] }}
+          VERSION: ${{ needs.plan.outputs[format('{0}_version', matrix.component)] }}
+          BASE: ${{ needs.plan.outputs[format('{0}_base', matrix.component)] }}
+          BUNDLE_BUILD: ${{ matrix.component == 'mac' && needs.plan.outputs.mac_bundle_build || '' }}
+          TENTACLE_VERSION: ${{ matrix.component == 'mac' && needs.plan.outputs.mac_tentacle_version || '' }}
+        run: |
+          set -euo pipefail
+          # release.yml runs on the tag, so its provenance names the exact
+          # commit. A re-run of this workflow reuses its tag.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null || true)
+          if [ -z "$existing" ]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
+          elif [ "$existing" != "$SHA" ]; then
+            echo "::error::Tag $TAG already points at $existing, not $SHA"
+            exit 1
+          fi
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" \
+            -f mode=prerelease -f target="$TARGET" -f tag="$TAG" \
+            -f prerelease_version="$VERSION" -f prerelease_base="$BASE" \
+            -f prerelease_bundle_build="$BUNDLE_BUILD" -f prerelease_tentacle_version="$TENTACLE_VERSION"
+          {
+            echo "### $TAG"
+            echo "Release build started from \`$SHA\` (changes since \`$BASE\`):"
+            echo "https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml?query=branch%3A$TAG"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nothing to prerelease
+        if: needs.plan.outputs[format('{0}_build', matrix.component)] != 'true'
+        env:
+          COMPONENT: ${{ matrix.component }}
+          BASE: ${{ needs.plan.outputs[format('{0}_base', matrix.component)] }}
+        run: echo "No shipped $COMPONENT files changed since $BASE."

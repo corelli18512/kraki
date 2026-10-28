@@ -263,7 +263,9 @@ function fetchJsonArray(url: string): Promise<GitHubRelease[]> {
 
 export async function fetchLatestVersion(): Promise<string | null> {
   try {
-    const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`);
+    // A full page: up to 20 dogfood prereleases (docs/prerelease.md) can sit
+    // above the newest formal release.
+    const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`);
     for (const r of releases) {
       // Never offer a draft or pre-release as "the latest version".
       if (r.draft || r.prerelease) continue;
