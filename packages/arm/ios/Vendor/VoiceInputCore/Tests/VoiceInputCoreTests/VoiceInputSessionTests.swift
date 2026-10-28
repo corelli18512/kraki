@@ -326,11 +326,17 @@ final class VoiceInputSessionTests: XCTestCase {
     }
 
     func testCloseCancelsWatchdogAndAllLateCallbacks() {
-        let f = Fixture { $0.captureStallTimeout = 0.05 }; f.start()
+        // Audio time moves only when the test advances it. On real time a
+        // descheduled test thread let the 50 ms watchdog fail and retire the
+        // capture before close() (CI: nil `buffer` at the unwrap below).
+        let clock = Locked<TimeInterval>(1)
+        let f = Fixture(monotonicTime: { clock.snapshot }) { $0.captureStallTimeout = 0.05 }; f.start()
         eventually { f.capture.state.snapshot.buffer != nil }
         let stale = f.capture.state.snapshot.buffer!
         f.session.close()
         eventually { f.transport.state.snapshot.cancellations > 0 }
+        // Far past the stall timeout: a watchdog that outlived close() fails now.
+        clock.with { $0 += 1 }
         stale(Capture.buffer())
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertTrue(f.failures.isEmpty)
