@@ -469,6 +469,85 @@ final class MacComposerInputRegressionTests: XCTestCase {
     }
 
 
+    // MARK: Voice shortcut
+
+    /// A key press the way AppKit delivers one: NSApplication, its local
+    /// monitors (the voice key probe), then the window's first responder.
+    private func press(_ keyCode: UInt16, _ flags: NSEvent.ModifierFlags, in window: NSWindow) throws {
+        let characters = keyCode == 53 ? "\u{1B}" : (flags.contains(.option) ? "\u{A0}" : " ")
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: keyCode == 53 ? "\u{1B}" : " ",
+            isARepeat: false, keyCode: keyCode))
+        NSApp.sendEvent(event)
+        drain(300)
+    }
+
+    /// Option-Space starts dictation from the composer and from a window
+    /// with no text input focused, but not while the user types in another
+    /// text field (sidebar Search, rename): the key belongs to that field.
+    func testOptionSpaceLeavesAnotherTextFieldAlone() throws {
+        let (window, app, field) = makeChatComposer()
+        let voice = app.iosVoiceComposer
+        XCTAssertTrue(window.makeFirstResponder(field)); drain(150)
+        XCTAssertNotNil(field.currentEditor())
+        try press(49, .option, in: window)
+        XCTAssertFalse(voice.isRecording, "Option-Space in another text field started dictation")
+        XCTAssertNotNil(field.currentEditor(), "the other text field lost focus to dictation")
+
+        // Nothing focused: the shortcut is window-wide.
+        XCTAssertTrue(window.makeFirstResponder(nil)); drain(100)
+        try press(49, .option, in: window)
+        XCTAssertTrue(voice.isRecording, "Option-Space with no text input focused must start dictation")
+        try press(53, [], in: window)
+        XCTAssertFalse(voice.isRecording, "Esc must cancel dictation")
+        drain(300)
+
+        // From the composer.
+        let editor = try editor(in: window)
+        XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
+        try press(49, .option, in: window)
+        XCTAssertTrue(voice.isRecording, "Option-Space in the composer must start dictation")
+    }
+
+    /// While recording, Esc in another text field is that field's (Search
+    /// clears with it): it must not cancel dictation or be swallowed.
+    func testEscapeInAnotherTextFieldDoesNotCancelDictation() throws {
+        let (window, app, field) = makeChatComposer()
+        let voice = app.iosVoiceComposer
+        let editor = try editor(in: window)
+        XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
+        try press(49, .option, in: window)
+        XCTAssertTrue(voice.isRecording)
+
+        XCTAssertTrue(window.makeFirstResponder(field)); drain(150)
+        try press(53, [], in: window)
+        XCTAssertTrue(voice.isRecording, "Esc in another text field cancelled dictation")
+
+        XCTAssertTrue(window.makeFirstResponder(nil)); drain(100)
+        try press(53, [], in: window)
+        XCTAssertFalse(voice.isRecording, "Esc outside a text input must still cancel dictation")
+    }
+
+    /// Option-Space during a Pinyin composition goes to the input method:
+    /// dictation used to start and swap the editor out, discarding it.
+    func testOptionSpaceWhileComposingKeepsTheComposition() throws {
+        let (window, app, _) = makeChatComposer()
+        let editor = try editor(in: window)
+        XCTAssertTrue(window.makeFirstResponder(editor)); drain(100)
+        type("draft ", into: editor); drain(150)
+        editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        drain(150)
+        try press(49, .option, in: window)
+        XCTAssertFalse(app.iosVoiceComposer.isRecording, "Option-Space during an IME composition started dictation")
+        // The key itself goes to the editor's input context (without a real
+        // input method AppKit inserts it), so the editor must still be live.
+        XCTAssertTrue(editor.window === window, "the editor was swapped out during the composition")
+        XCTAssertTrue(window.firstResponder === editor, "the composer lost focus during the composition")
+    }
+
     /// The app's composer paste/focus regression probe (also run by the
     /// automation driver) passes against the current focus model.
     func testPasteFocusRegressionProbePasses() {
