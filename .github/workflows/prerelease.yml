@@ -35,7 +35,7 @@ concurrency:
 
 env:
   # Dogfood builds come only from this branch (release.yml checks it too).
-  DOGFOOD_BRANCH: main
+  DOGFOOD_BRANCH: ci/auto-prerelease
 
 jobs:
   plan:
@@ -46,7 +46,7 @@ jobs:
     # request from a fork's "main" branch must never publish), or a manual
     # run on main.
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/ci/auto-prerelease')
       || (github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.event == 'push'
           && github.event.workflow_run.head_repository.full_name == github.repository)
