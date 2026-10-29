@@ -71,7 +71,7 @@ concurrency:
 
 env:
   # Dogfood (prerelease mode) builds come only from this branch.
-  DOGFOOD_BRANCH: ci/auto-prerelease
+  DOGFOOD_BRANCH: main
   KRAKI_BUILD_CHANNEL: ${{ (github.event_name == 'push' || github.event.inputs.mode == 'publish' || github.event.inputs.mode == 'prerelease') && 'release' || 'ci' }}
 
 # ─── Prepare ─────────────────────────────────────────────
