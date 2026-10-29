@@ -26,23 +26,34 @@ async function freePort(): Promise<number> {
 describe('InflightRequests', () => {
   it('drain waits for open responses and reports the ones still open at the deadline', async () => {
     const inflight = new InflightRequests();
+    // Wait on the server actually receiving each request instead of a fixed
+    // sleep (CI under load: a 20 ms sleep sometimes ran before the request
+    // arrived, so nothing was in flight yet).
+    const arrived: Record<string, () => void> = {};
+    const arrival = (path: string) => new Promise<void>((r) => { arrived[path] = r; });
+    let finishSlow: (() => void) | undefined;
     const server = createServer((req, res) => {
       inflight.track(res);
-      if (req.url === '/slow') setTimeout(() => res.end('ok'), 50);
+      if (req.url === '/slow') finishSlow = () => res.end('ok');
       // '/hang' never answers.
+      arrived[req.url ?? '']?.();
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const { port } = server.address() as AddressInfo;
+    const slowArrived = arrival('/slow');
     const slow = fetch(`http://127.0.0.1:${port}/slow`).then((r) => r.text());
-    await new Promise((r) => setTimeout(r, 20));
+    await slowArrived;
     expect(inflight.size).toBe(1);
-    expect(await inflight.drain(1_000)).toBe(0);
+    const drained = inflight.drain(5_000);
+    finishSlow!();
+    expect(await drained).toBe(0);
     expect(await slow).toBe('ok');
 
+    const hangArrived = arrival('/hang');
     const hung = request({ host: '127.0.0.1', port, path: '/hang' });
     hung.on('error', () => {});
     hung.end();
-    await new Promise((r) => setTimeout(r, 20));
+    await hangArrived;
     expect(await inflight.drain(50)).toBe(1);
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
