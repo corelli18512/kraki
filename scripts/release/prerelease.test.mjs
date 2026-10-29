@@ -150,25 +150,45 @@ test('swap replaces every asset and leaves only previous copies behind', () => {
   assert.deepEqual(run([...done.keys()], recoveryActions([...done.keys()])), names);
 });
 
-test('an interrupted swap always recovers one complete set, never a mix', () => {
-  const oldSet = ['Kraki.app.zip', 'Kraki.dmg', 'SHA256SUMS.txt', 'dropped.txt', 'provenance.json'];
-  const newSet = ['Kraki.app.zip', 'Kraki.dmg', 'SHA256SUMS.txt', 'appcast-dogfood.xml', 'provenance.json'];
+test('an interrupted swap recovers one complete set, never a mix', () => {
+  const names = ['Kraki.app.zip', 'Kraki.dmg', 'SHA256SUMS.txt', 'appcast-dogfood.xml', 'provenance.json'];
+  const snapshots = simulateSwap(names, names);
+  snapshots.forEach((state, i) => {
+    const after = recover(state);
+    assert.deepEqual([...after.keys()].sort(), [...names].sort(), `step ${i}`);
+    // Rolled back to the old set until every incoming asset was swapped in.
+    const build = i < snapshots.length - 1 ? 'old' : 'new';
+    for (const [name, value] of after) assert.equal(value, `${build}:${name}`, `step ${i}`);
+  });
+});
+
+test('a changed asset list: old assets come back, a new name waits for the next publish', () => {
+  const oldSet = ['Kraki.app.zip', 'SHA256SUMS.txt', 'dropped.txt'];
+  const newSet = ['Kraki.app.zip', 'SHA256SUMS.txt', 'appcast-dogfood.xml'];
   const snapshots = simulateSwap(oldSet, newSet);
   snapshots.forEach((state, i) => {
     const after = recover(state);
-    const names = [...after.keys()].sort();
+    const names = [...after.keys()];
     assert.ok(!names.some(n => n.startsWith(INCOMING) || n.startsWith(PREVIOUS)), `step ${i}: ${names}`);
-    const oldNames = stableSet(after, 'old'), newNames = stableSet(after, 'new');
-    // Rolled back to the old set until every incoming asset was swapped in.
     if (i < snapshots.length - 1) {
-      assert.deepEqual(newNames, [], `step ${i}`);
-      assert.deepEqual(oldNames, [...oldSet].sort(), `step ${i}`);
-      for (const [name, value] of after) assert.equal(value, `old:${name}`);
+      for (const name of oldSet) assert.equal(after.get(name), `old:${name}`, `step ${i}`);
+      // Only once its own swap step ran, and never in place of an old asset.
+      for (const name of names.filter(n => !oldSet.includes(n))) assert.equal(after.get(name), `new:${name}`);
     } else {
-      assert.deepEqual(oldNames, [], `step ${i}`);
-      assert.deepEqual(newNames, [...newSet].sort(), `step ${i}`);
+      assert.deepEqual(stableSet(after, 'new'), [...newSet].sort());
+      assert.deepEqual(stableSet(after, 'old'), []);
     }
   });
+});
+
+test('recovery never deletes the only copy of an asset', () => {
+  // Not a state a swap produces (incoming for one name only): still nothing
+  // without a previous.* copy is deleted.
+  const names = ['SHA256SUMS.txt', `${PREVIOUS}SHA256SUMS.txt`, `${INCOMING}release-manifest.json`, 'kraki-cli-linux-x64', 'release-manifest.json'];
+  assert.deepEqual(run(names, recoveryActions(names)), ['SHA256SUMS.txt', 'kraki-cli-linux-x64', 'release-manifest.json']);
+  for (const action of recoveryActions(names).filter(a => a.op === 'delete')) {
+    assert.ok(action.name.startsWith(INCOMING) || names.includes(PREVIOUS + action.name), action.name);
+  }
 });
 
 test('an interrupted upload only removes the incoming copies', () => {

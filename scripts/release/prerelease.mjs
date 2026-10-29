@@ -150,9 +150,12 @@ export function planComponent({ component, changedSince, base, force }) {
 /**
  * Steps that bring a release back to one complete asset set after a publish
  * was interrupted. A swap is unfinished while incoming.* assets remain: it is
- * rolled back to the previous set (still complete under previous.* and the
- * not yet swapped stable names). Without incoming.*, the swap finished and
- * only the previous.* copies are left to delete.
+ * rolled back to the previous set (complete under previous.* and the not yet
+ * swapped stable names). Without incoming.*, the swap finished and only the
+ * previous.* copies are left to delete. Only a name with a previous.* copy is
+ * ever deleted, so recovery never removes the only copy of an asset; a name
+ * that is new in the interrupted build stays until the next publish
+ * replaces it.
  */
 export function recoveryActions(names) {
   const present = new Set(names);
@@ -160,25 +163,19 @@ export function recoveryActions(names) {
   const previous = names.filter(n => n.startsWith(PREVIOUS));
   if (!incoming.length) return previous.map(name => ({ op: 'delete', name }));
   const actions = [];
-  if (previous.length) {
-    const stable = names.filter(n => !n.startsWith(INCOMING) && !n.startsWith(PREVIOUS));
-    for (const name of stable) {
-      // Swapped in already: its old copy is previous.<name>, or it is new in
-      // this build (no old copy, no incoming copy left; see swapActions order).
-      const swapped = present.has(PREVIOUS + name) || !present.has(INCOMING + name);
-      if (swapped) actions.push({ op: 'delete', name });
-    }
-    for (const name of previous) actions.push({ op: 'rename', name, to: name.slice(PREVIOUS.length) });
+  for (const name of previous) {
+    const stable = name.slice(PREVIOUS.length);
+    // Swapped in already: drop the new copy, restore the old one.
+    if (present.has(stable)) actions.push({ op: 'delete', name: stable });
+    actions.push({ op: 'rename', name, to: stable });
   }
   for (const name of incoming) actions.push({ op: 'delete', name });
   return actions;
 }
 
 /**
- * Swap incoming.<name> in for <name>. Order matters for recoveryActions:
- * first move assets the new set drops, then replace shared names, and only
- * then add names that are new, so that any interruption leaves a previous.*
- * asset behind before a new-only name appears.
+ * Swap incoming.<name> in for <name>: first move assets the new set drops,
+ * then replace shared names, then add names that are new in this build.
  */
 export function swapActions(oldNames, newNames) {
   const old = new Set(oldNames), next = new Set(newNames);
