@@ -71,6 +71,10 @@ older CLIs read (`per_page=20` up to 0.38.11).
    - While `incoming.*` assets remain, the release is rolled back to the
      previous set.
    - Otherwise only the `previous.*` copies are deleted.
+   - Recovery deletes only a name that has a `previous.*` copy, so it never
+     removes the only copy of an asset. An asset name that is new in the
+     interrupted build (not in the previous set) stays until the next
+     publish replaces it.
 
    The first build creates the release as a draft and publishes it only
    after its assets verify. A draft left by an interrupted first build is
