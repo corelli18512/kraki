@@ -1216,17 +1216,25 @@ jobs:
         run: node scripts/release/check-published.mjs packages/protocol packages/crypto packages/pulse
 
       - name: Pack and publish
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
           mkdir -p "$ARTIFACT_DIR"
 
+          # Each tag publishes only its own component plus the shared packages
+          # it depends on: a head-v* tag must not put an untested CLI on npm
+          # "latest" (and a CLI tag must not ship an undeployed Head).
           specs=(
             "packages/protocol|@kraki/protocol"
             "packages/crypto|@kraki/crypto"
             "packages/pulse|@kraki/pulse"
-            "packages/tentacle|@kraki/tentacle"
-            "packages/head|@kraki/head"
           )
+          case "$RELEASE_TAG" in
+            head-v*) specs+=("packages/head|@kraki/head") ;;
+            v*) specs+=("packages/tentacle|@kraki/tentacle") ;;
+            *) echo "::error::publish-npm: unexpected tag $RELEASE_TAG"; exit 1 ;;
+          esac
 
           for spec in "${specs[@]}"; do
             dir="${spec%%|*}"
