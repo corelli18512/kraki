@@ -1,7 +1,9 @@
 # Kraki installer for Windows PowerShell
 # Usage: irm https://app.kraki.chat/install.ps1 | iex
-# A specific release, e.g. a dogfood prerelease (docs/prerelease.md):
-#   $env:KRAKI_VERSION = "dev-cli-0.38.12-dev.57"; irm https://app.kraki.chat/install.ps1 | iex
+# A specific formal release:
+#   $env:KRAKI_VERSION = "v0.38.11"; irm https://app.kraki.chat/install.ps1 | iex
+# The current dogfood build, for testers (docs/dogfood.md):
+#   $env:KRAKI_CHANNEL = "dogfood"; irm https://app.kraki.chat/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $repo = "corelli18512/kraki"
@@ -35,12 +37,25 @@ function Get-KrakiWindowsRelease {
     throw "No stable release contains $AssetName. See https://github.com/$Repository/releases"
 }
 
-if ($env:KRAKI_VERSION) {
+# KRAKI_CHANNEL=dogfood selects the rolling dogfood-cli prerelease and
+# KRAKI_VERSION a release tag; neither (or KRAKI_CHANNEL=stable) the latest.
+function Get-KrakiPinnedTag {
+    param([string]$Channel, [string]$Version)
+    if ($Channel -eq 'dogfood') {
+        if ($Version) { throw "Set KRAKI_CHANNEL=dogfood or KRAKI_VERSION, not both." }
+        return 'dogfood-cli'
+    }
+    if ($Channel -and $Channel -ne 'stable') { throw "Unknown KRAKI_CHANNEL: $Channel (use dogfood)" }
+    if ($Version -and $Version -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid KRAKI_VERSION: $Version" }
+    return $Version
+}
+
+$pinnedTag = Get-KrakiPinnedTag -Channel $env:KRAKI_CHANNEL -Version $env:KRAKI_VERSION
+if ($pinnedTag) {
     # A named release tag; checksum-verified like the latest one.
-    if ($env:KRAKI_VERSION -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid KRAKI_VERSION: $env:KRAKI_VERSION" }
-    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$($env:KRAKI_VERSION)" @web
+    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$pinnedTag" @web
     if (@($release.assets | Where-Object { $_.name -eq $asset }).Count -eq 0) {
-        throw "Release $($env:KRAKI_VERSION) does not contain $asset."
+        throw "Release $pinnedTag does not contain $asset."
     }
 } else {
     $release = Get-KrakiWindowsRelease -Repository $repo -AssetName $asset

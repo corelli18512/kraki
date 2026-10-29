@@ -1,8 +1,10 @@
 #!/bin/sh
 # Kraki installer — https://app.kraki.chat
 # Usage: curl -fsSL https://app.kraki.chat/install.sh | bash
-# A specific release, e.g. a dogfood prerelease (docs/prerelease.md):
-#   curl -fsSL https://app.kraki.chat/install.sh | KRAKI_VERSION=dev-cli-0.38.12-dev.57 bash
+# A specific formal release:
+#   curl -fsSL https://app.kraki.chat/install.sh | KRAKI_VERSION=v0.38.11 bash
+# The current dogfood build, for testers (docs/dogfood.md):
+#   curl -fsSL https://app.kraki.chat/install.sh | KRAKI_CHANNEL=dogfood bash
 set -e
 
 REPO="corelli18512/kraki"
@@ -43,9 +45,22 @@ detect_platform() {
 # ── Fetch latest version ─────────────────────────────────
 #
 # GitHub's "latest" release is never a prerelease. KRAKI_VERSION names a
-# release tag to install instead; it is checksum-verified like any other.
+# release tag to install instead, KRAKI_CHANNEL=dogfood the rolling
+# dogfood-cli prerelease; both are checksum-verified like any other.
 
 fetch_latest_version() {
+  case "${KRAKI_CHANNEL:-}" in
+    ""|stable) ;;
+    dogfood)
+      if [ -n "${KRAKI_VERSION:-}" ]; then
+        echo "Error: Set KRAKI_CHANNEL=dogfood or KRAKI_VERSION, not both"
+        exit 1
+      fi
+      VERSION="dogfood-cli"
+      return
+      ;;
+    *) echo "Error: Unknown KRAKI_CHANNEL: ${KRAKI_CHANNEL} (use dogfood)"; exit 1 ;;
+  esac
   if [ -n "${KRAKI_VERSION:-}" ]; then
     case "$KRAKI_VERSION" in
       *[!A-Za-z0-9._-]*) echo "Error: Invalid KRAKI_VERSION: ${KRAKI_VERSION}"; exit 1 ;;

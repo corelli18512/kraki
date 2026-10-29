@@ -22,8 +22,8 @@ export function pickMacDmg(releases: Release[]): string | null {
 
 export async function resolveMacDmgUrl(fetcher: typeof fetch = fetch): Promise<string> {
   try {
-    // A full page: up to 20 dogfood prereleases (docs/prerelease.md) can sit
-    // above the newest mac-v release.
+    // A full page: Windows, iOS build records and the dogfood releases
+    // (docs/dogfood.md) can sit above the newest mac-v release.
     const res = await fetcher('https://api.github.com/repos/corelli18512/kraki/releases?per_page=100', {
       headers: { Accept: 'application/vnd.github+json' },
     });

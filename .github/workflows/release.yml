@@ -18,7 +18,7 @@ on:
           - publish
           - prerelease
       tag:
-        description: Existing tag to build from (required for publish and prerelease)
+        description: Existing tag to build from (required for publish); prerelease mode names dogfood-cli or dogfood-mac
         required: false
         type: string
       target:
@@ -34,8 +34,12 @@ on:
         required: false
         default: false
         type: boolean
-      # Prerelease mode is dispatched by prerelease.yml on a dev-cli-*/dev-mac-*
-      # tag; see docs/prerelease.md.
+      # Prerelease mode is dispatched by prerelease.yml on main to replace the
+      # rolling dogfood-cli / dogfood-mac release; see docs/dogfood.md.
+      prerelease_sha:
+        description: 'Prerelease only: the main commit to build (must be what main points at)'
+        required: false
+        type: string
       prerelease_version:
         description: 'Prerelease only: version (CLI 0.38.12-dev.57, Mac 0.2.92-dev.57)'
         required: false
@@ -49,7 +53,7 @@ on:
         required: false
         type: string
       prerelease_base:
-        description: 'Prerelease only: previous prerelease or formal tag, for the changelog'
+        description: 'Prerelease only: previous dogfood commit or formal tag, for the changelog'
         required: false
         type: string
 
@@ -66,6 +70,8 @@ concurrency:
   cancel-in-progress: ${{ github.event.inputs.mode == 'prerelease' }}
 
 env:
+  # Dogfood (prerelease mode) builds come only from this branch.
+  DOGFOOD_BRANCH: main
   KRAKI_BUILD_CHANNEL: ${{ (github.event_name == 'push' || github.event.inputs.mode == 'publish' || github.event.inputs.mode == 'prerelease') && 'release' || 'ci' }}
 
 # ─── Prepare ─────────────────────────────────────────────
@@ -115,13 +121,11 @@ jobs:
             fi
             checkout_ref="${release_tag}"
           elif [ "${INPUT_MODE}" = "prerelease" ]; then
+            # Built from main itself (checked below); the tag is the rolling
+            # dogfood release it replaces.
             publish_mode="prerelease"
             release_tag="${INPUT_TAG}"
-            if [ -z "${release_tag}" ]; then
-              echo "workflow_dispatch prerelease requires inputs.tag"
-              exit 1
-            fi
-            checkout_ref="${release_tag}"
+            checkout_ref="${GITHUB_SHA}"
           else
             # Dry-run validates the exact branch/ref selected in the workflow
             # dispatch. It never publishes, so it need not already be on main.
@@ -154,8 +158,28 @@ jobs:
             exit 1
           }
 
+      - name: Ensure dogfood source is main
+        if: steps.meta.outputs.publish_mode == 'prerelease'
+        env:
+          EXPECTED_SHA: ${{ github.event.inputs.prerelease_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/$DOGFOOD_BRANCH" ]; then
+            echo "Dogfood builds run only on $DOGFOOD_BRANCH (gh workflow run release.yml --ref $DOGFOOD_BRANCH), not $GITHUB_REF."
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
+            echo "$DOGFOOD_BRANCH moved to $GITHUB_SHA after $EXPECTED_SHA was planned; the newer commit's CI dogfoods it."
+            exit 1
+          fi
+          git fetch origin "$DOGFOOD_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DOGFOOD_BRANCH" || {
+            echo "Dogfood source must be a commit on $DOGFOOD_BRANCH."
+            exit 1
+          }
+
       - name: Ensure CI passed for this commit
-        if: steps.meta.outputs.publish_mode == 'publish'
+        if: steps.meta.outputs.publish_mode == 'publish' || steps.meta.outputs.publish_mode == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
@@ -239,19 +263,17 @@ jobs:
           TENTACLE_VERSION: ${{ github.event.inputs.prerelease_tentacle_version }}
         run: |
           set -euo pipefail
-          # Dispatched on the dev tag itself (checked above), never on a formal
-          # tag: the CLI updater and this workflow's publish jobs match v*,
-          # mac-v* and head-v*.
-          test "$GITHUB_REF" = "refs/tags/$TAG"
+          # Only the two rolling dogfood releases, never a formal tag: the CLI
+          # updater and this workflow's publish jobs match v*, mac-v* and head-v*.
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[1-9][0-9]*$ ]]
           case "$TARGET" in
             tentacle)
-              test "$TAG" = "dev-cli-$VERSION"
+              test "$TAG" = "dogfood-cli"
               TENTACLE_VERSION="$VERSION"
               BUNDLE_BUILD=""
               ;;
             mac)
-              test "$TAG" = "dev-mac-$VERSION"
+              test "$TAG" = "dogfood-mac"
               [[ "$BUNDLE_BUILD" =~ ^[1-9][0-9]*\.[1-9][0-9]*$ ]]
               [[ "$TENTACLE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[1-9][0-9]*$ ]]
               ;;
@@ -353,6 +375,8 @@ jobs:
         run: |
           set -euo pipefail
           BINARY="packages/tentacle/dist/sea/${{ matrix.asset_name }}"
+          # A dogfood version (0.39.0-dev.12) keeps CFBundleVersion numeric
+          # (0.39.0); CFBundleShortVersionString and --version show it whole.
           VERSION=$(node -p "require('./packages/tentacle/package.json').version")
           APP_DIR="packages/tentacle/dist/sea/Kraki.app"
 
@@ -388,7 +412,7 @@ jobs:
               <key>CFBundleIconFile</key>
               <string>app</string>
               <key>CFBundleVersion</key>
-              <string>${VERSION}</string>
+              <string>${VERSION%%-*}</string>
               <key>CFBundleShortVersionString</key>
               <string>${VERSION}</string>
               <key>CFBundlePackageType</key>
@@ -616,7 +640,7 @@ jobs:
         run: |
           set -euo pipefail
           # A prerelease keeps a numeric short version and a CFBundleVersion
-          # between two formal builds (docs/prerelease.md).
+          # between two formal builds (docs/dogfood.md).
           VERSION_SETTINGS=()
           if [ -n "$PRERELEASE_VERSION" ]; then
             VERSION_SETTINGS=("MARKETING_VERSION=${PRERELEASE_VERSION%-dev.*}" "CURRENT_PROJECT_VERSION=$PRERELEASE_BUNDLE_BUILD")
@@ -769,6 +793,51 @@ jobs:
           path: ${{ runner.temp }}/Kraki.app.zip
           if-no-files-found: error
 
+      - name: Generate dogfood Sparkle feed
+        # A one-item appcast for the Kraki.app.zip of the dogfood-mac release,
+        # signed with the production Sparkle key. The app still reads the
+        # production feed; docs/dogfood.md describes switching to this one.
+        # The mac-updates branch is never touched here.
+        if: needs.prepare.outputs.publish_mode == 'prerelease'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          BUNDLE_BUILD: ${{ needs.prepare.outputs.prerelease_bundle_build }}
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_ED25519_PRIVATE_KEY"
+          test "$RELEASE_TAG" = dogfood-mac
+          WORK_DIR="$RUNNER_TEMP/dogfood-appcast"
+          mkdir -p "$WORK_DIR/archives" "$WORK_DIR/sparkle" "$WORK_DIR/out"
+          cp "$RUNNER_TEMP/Kraki.app.zip" "$WORK_DIR/archives/Kraki.app.zip"
+          gh release download 2.9.5 --repo sparkle-project/Sparkle \
+            --pattern 'Sparkle-for-Swift-Package-Manager.zip' \
+            --dir "$WORK_DIR"
+          unzip -q "$WORK_DIR/Sparkle-for-Swift-Package-Manager.zip" -d "$WORK_DIR/sparkle"
+          "$WORK_DIR/sparkle/bin/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
+            --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --link "https://kraki.chat" \
+            --maximum-versions 1 \
+            "$WORK_DIR/archives" <<< "$SPARKLE_ED25519_PRIVATE_KEY"
+          FEED="$WORK_DIR/out/appcast-dogfood.xml"
+          cp "$WORK_DIR/archives/appcast.xml" "$FEED"
+          grep -q 'sparkle:edSignature=' "$FEED"
+          grep -q "url=\"https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Kraki.app.zip\"" "$FEED"
+          grep -q "sparkle:version>${BUNDLE_BUILD}<" "$FEED"
+          test "$(grep -c '<item>' "$FEED")" = 1
+          cat "$FEED"
+
+      - name: Upload dogfood Sparkle feed
+        if: needs.prepare.outputs.publish_mode == 'prerelease'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-kraki-mac-dogfood-appcast-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dogfood-appcast/out/appcast-dogfood.xml
+          if-no-files-found: error
+
       - name: Verify packaged app
         run: |
           set -euo pipefail
@@ -899,9 +968,9 @@ jobs:
           PRERELEASE_VERSION: ${{ needs.prepare.outputs.prerelease_version }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_TAG" == dev-mac-* ]]; then
+          if [ "$RELEASE_TAG" = dogfood-mac ]; then
             COMPONENT=mac; VERSION="$PRERELEASE_VERSION"
-          elif [[ "$RELEASE_TAG" == dev-cli-* ]]; then
+          elif [ "$RELEASE_TAG" = dogfood-cli ]; then
             COMPONENT=cli; VERSION="$PRERELEASE_VERSION"
           elif [[ "$RELEASE_TAG" == mac-v* ]]; then
             COMPONENT=mac; VERSION="${RELEASE_TAG#mac-v}"
@@ -955,40 +1024,30 @@ jobs:
             --latest="$latest" \
             release-assets/*
 
-      - name: Create GitHub prerelease
-        # Never "latest": install.sh / install.ps1, the CLI updater, the web
-        # Mac download and Sparkle all skip prereleases (docs/prerelease.md).
+      - name: Replace dogfood release assets
+        # Updates the rolling dogfood-cli / dogfood-mac prerelease in place
+        # (docs/dogfood.md): new assets are uploaded under temporary names
+        # and verified before they replace the previous set; then the tag
+        # moves to this commit and the notes are rewritten. Never "latest".
         if: needs.prepare.outputs.publish_mode == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          COMPONENT: ${{ github.event.inputs.target == 'mac' && 'mac' || 'cli' }}
+          SHA: ${{ needs.prepare.outputs.release_sha }}
+          VERSION: ${{ needs.prepare.outputs.prerelease_version }}
+          BUNDLE_BUILD: ${{ needs.prepare.outputs.prerelease_bundle_build }}
+          TENTACLE_VERSION: ${{ needs.prepare.outputs.prerelease_tentacle_version }}
           BASE: ${{ github.event.inputs.prerelease_base }}
-        run: |
-          set -euo pipefail
-          {
-            echo "Dogfood prerelease for the owner and internal testers. No automatic update or"
-            echo "download path offers it; see docs/prerelease.md to install it."
-            echo
-            if [ -n "$BASE" ]; then
-              echo "## Changes since $BASE"
-              echo
-              [[ "$BASE" =~ ^[A-Za-z0-9._-]+$ ]]
-              gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$RELEASE_SHA" \
-                --jq '.commits | reverse | .[:100] | .[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:7] + ")"'
-              echo
-              echo "Full diff: https://github.com/$GITHUB_REPOSITORY/compare/$BASE...$RELEASE_SHA"
-            fi
-          } > "$RUNNER_TEMP/prerelease-notes.md"
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "$RELEASE_TAG" \
-            --notes-file "$RUNNER_TEMP/prerelease-notes.md" \
-            --prerelease \
-            --latest=false \
-            release-assets/*
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = true
+        run: node scripts/release/prerelease.mjs publish
+
+      - name: Undo an interrupted dogfood publish
+        # A failed or cancelled run leaves the previous complete asset set
+        # (or no release at all on a first build, never a draft).
+        if: (failure() || cancelled()) && needs.prepare.outputs.publish_mode == 'prerelease'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPONENT: ${{ github.event.inputs.target == 'mac' && 'mac' || 'cli' }}
+        run: node scripts/release/prerelease.mjs recover
 
       - name: Verify downloaded release assets
         env:
@@ -998,42 +1057,6 @@ jobs:
           set -euo pipefail
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verify-release
           node scripts/release/artifacts.mjs verify verify-release verify-release/provenance.json
-
-  # ─── Prerelease retention ──────────────────────────────
-
-  prune-prereleases:
-    name: Prune old prereleases
-    needs:
-      - prepare
-      - publish
-    if: |
-      always() &&
-      needs.publish.result == 'success' &&
-      needs.prepare.outputs.publish_mode == 'prerelease'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      # Tags of prerelease builds still running are not orphans.
-      actions: read
-
-    steps:
-      - name: Check out release tooling
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-
-      - name: Keep the newest prereleases of this component
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMPONENT: ${{ github.event.inputs.target == 'mac' && 'mac' || 'cli' }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-        run: node scripts/release/prerelease.mjs prune "$COMPONENT" "$RELEASE_TAG"
 
   # ─── Publish Sparkle appcast ───────────────────────────
 

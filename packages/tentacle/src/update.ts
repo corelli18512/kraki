@@ -261,27 +261,35 @@ function fetchJsonArray(url: string): Promise<GitHubRelease[]> {
   return fetchJson<GitHubRelease[]>(url);
 }
 
+/** The CLI version of a formal CLI release, or null for anything else. */
+function formalCliVersion(r: GitHubRelease): string | null {
+  // Never offer a draft or pre-release (dogfood builds, docs/dogfood.md).
+  if (r.draft || r.prerelease || typeof r.tag_name !== 'string') return null;
+  const tag = r.tag_name;
+  // Support both v* and tentacle-v* tag formats
+  if (tag.startsWith('v')) {
+    const version = tag.slice(1);
+    // Skip non-tentacle releases (e.g. head-v*, web-v*)
+    if (!/^\d+\.\d+\.\d+/.test(version)) return null;
+    // Only consider releases with CLI binary assets
+    return r.assets?.some(a => a.name.startsWith('kraki-cli-')) ? version : null;
+  }
+  if (tag.startsWith('tentacle-v')) return tag.slice('tentacle-v'.length);
+  return null;
+}
+
 export async function fetchLatestVersion(): Promise<string | null> {
+  // GitHub's "latest" release is reserved for formal CLI tags (release.yml),
+  // so however many other releases pile up above it, this finds it.
   try {
-    // A full page: up to 20 dogfood prereleases (docs/prerelease.md) can sit
-    // above the newest formal release.
+    const latest = formalCliVersion(await fetchJson<GitHubRelease>(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`));
+    if (latest) return latest;
+  } catch { /* fall back to the list */ }
+  try {
     const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`);
     for (const r of releases) {
-      // Never offer a draft or pre-release as "the latest version".
-      if (r.draft || r.prerelease) continue;
-      const tag = r.tag_name;
-      // Support both v* and tentacle-v* tag formats
-      if (tag.startsWith('v')) {
-        const version = tag.slice(1);
-        // Skip non-tentacle releases (e.g. head-v*, web-v*)
-        if (/^\d+\.\d+\.\d+/.test(version)) {
-          // Only consider releases with CLI binary assets
-          const hasBinary = r.assets?.some(a => a.name.startsWith('kraki-cli-'));
-          if (hasBinary) return version;
-        }
-      } else if (tag.startsWith('tentacle-v')) {
-        return tag.slice('tentacle-v'.length);
-      }
+      const version = formalCliVersion(r);
+      if (version) return version;
     }
     return null;
   } catch {

@@ -20,6 +20,9 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-KrakiWindowsRelease' }, $true)
 if (-not $function) { throw 'Missing release selector' }
 Invoke-Expression $function.Extent.Text
+$pinned = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-KrakiPinnedTag' }, $true)
+if (-not $pinned) { throw 'Missing pinned tag selector' }
+Invoke-Expression $pinned.Extent.Text
 
 function New-Release($tag, $asset, $prerelease = $false) {
     return [pscustomobject]@{ tag_name = $tag; draft = $false; prerelease = $prerelease; assets = @([pscustomobject]@{ name = $asset; browser_download_url = "https://example.invalid/$tag/$asset" }) }
@@ -49,3 +52,14 @@ $failed = $false
 try { Get-KrakiWindowsRelease 'test/repo' $asset | Out-Null } catch { $failed = $_.Exception.Message -like 'No stable release contains*' }
 if (-not $failed) { throw 'Missing assets must fail clearly' }
 Write-Output 'PASS: missing asset fails clearly'
+
+# docs/dogfood.md: the dogfood channel and pinned tags; nothing else.
+if (Get-KrakiPinnedTag -Channel '' -Version '') { throw 'No channel and no tag must install the latest' }
+if ((Get-KrakiPinnedTag -Channel 'dogfood' -Version '') -ne 'dogfood-cli') { throw 'Dogfood channel must select dogfood-cli' }
+if ((Get-KrakiPinnedTag -Channel '' -Version 'v0.38.11') -ne 'v0.38.11') { throw 'KRAKI_VERSION must pin its tag' }
+foreach ($case in @(@('nightly', ''), @('dogfood', 'v0.38.11'), @('', '../../evil'))) {
+    $failed = $false
+    try { Get-KrakiPinnedTag -Channel $case[0] -Version $case[1] | Out-Null } catch { $failed = $true }
+    if (-not $failed) { throw "Must reject channel '$($case[0])' with version '$($case[1])'" }
+}
+Write-Output 'PASS: dogfood channel and pinned tags'

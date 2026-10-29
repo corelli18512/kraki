@@ -108,12 +108,11 @@ describe('update proxy support', () => {
 
     mockHttpsRequest.mockImplementation((options: { socket?: unknown }, callback: (res: PassThrough) => void) => {
       const req = createMockRequest(() => {
-        callback(createMockResponse(200, JSON.stringify([
-          {
-            tag_name: 'v0.12.0',
-            assets: [{ name: 'kraki-cli-macos-arm64', browser_download_url: 'https://example.com/bin' }],
-          },
-        ])));
+        // GitHub's "latest" release, the first and only request.
+        callback(createMockResponse(200, JSON.stringify({
+          tag_name: 'v0.12.0',
+          assets: [{ name: 'kraki-cli-macos-arm64', browser_download_url: 'https://example.com/bin' }],
+        })));
       });
       expect(options.socket).toBeDefined();
       return req;
@@ -175,8 +174,25 @@ describe('formatBytes', () => {
   });
 });
 
-// Dogfood prereleases (docs/prerelease.md) must never reach regular users.
-describe('update ignores dogfood prereleases', () => {
+// Dogfood releases (docs/dogfood.md) must never reach regular users.
+describe('update ignores dogfood releases', () => {
+  const cli = [{ name: 'kraki-cli-macos-arm64', browser_download_url: 'https://example.com/bin' }];
+  const dogfoodCli = { tag_name: 'dogfood-cli', prerelease: true, assets: cli };
+  const dogfoodMac = { tag_name: 'dogfood-mac', prerelease: true, assets: [] };
+
+  /** Serve `latest` for releases/latest (an Error = HTTP 404) and `list` for the release list. */
+  function serve(latest: object | Error, list: object[]) {
+    const requested: string[] = [];
+    mockHttpsRequest.mockImplementation((url: URL, _options: unknown, callback: (res: PassThrough) => void) => {
+      requested.push(url.toString());
+      const isLatest = url.pathname.endsWith('/releases/latest');
+      return createMockRequest(() => callback(isLatest && latest instanceof Error
+        ? createMockResponse(404, '{"message":"Not Found"}')
+        : createMockResponse(200, JSON.stringify(isLatest ? latest : list))));
+    });
+    return requested;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.HTTPS_PROXY;
@@ -185,28 +201,28 @@ describe('update ignores dogfood prereleases', () => {
     delete process.env.http_proxy;
   });
 
-  it('offers the newest formal CLI release, past a full set of prereleases', async () => {
-    const cli = [{ name: 'kraki-cli-macos-arm64', browser_download_url: 'https://example.com/bin' }];
-    const releases: Array<{ tag_name: string; prerelease: boolean; assets: typeof cli }> = [];
-    for (let n = 30; n > 10; n--) {
-      releases.push(n % 2
-        ? { tag_name: `dev-cli-0.38.12-dev.${n}`, prerelease: true, assets: cli }
-        : { tag_name: `dev-mac-0.2.92-dev.${n}`, prerelease: true, assets: [] });
-    }
-    // Even a prerelease that looks like a formal tag is skipped.
-    releases.push({ tag_name: 'v0.38.12-rc.1', prerelease: true, assets: cli });
-    releases.push({ tag_name: 'v0.38.11', prerelease: false, assets: cli });
-    let requested = '';
-    mockHttpsRequest.mockImplementation((url: URL, _options: unknown, callback: (res: PassThrough) => void) => {
-      requested = url.toString();
-      return createMockRequest(() => callback(createMockResponse(200, JSON.stringify(releases))));
-    });
-
+  it('asks for GitHub\'s latest release first, whatever the list holds', async () => {
+    const requested = serve({ tag_name: 'v0.38.11', prerelease: false, assets: cli }, [dogfoodCli, dogfoodMac]);
     await expect(fetchLatestVersion()).resolves.toBe('0.38.11');
-    expect(requested).toContain('per_page=100');
+    expect(requested).toEqual(['https://api.github.com/repos/corelli18512/kraki/releases/latest']);
   });
 
-  it('moves a tester on a prerelease to the next formal release, never back', () => {
+  it('falls back to a full page of releases when latest is not a CLI release or fails', async () => {
+    const list = [dogfoodCli, dogfoodMac];
+    // Even a prerelease that looks like a formal tag is skipped.
+    list.push({ tag_name: 'v0.38.12-rc.1', prerelease: true, assets: cli });
+    for (let n = 0; n < 30; n++) list.push({ tag_name: `win-v0.1.${n}`, prerelease: false, assets: [] });
+    list.push({ tag_name: 'v0.38.11', prerelease: false, assets: cli });
+
+    for (const latest of [{ tag_name: 'mac-v0.2.91', prerelease: false, assets: [] }, dogfoodCli, new Error('404')]) {
+      const requested = serve(latest, list);
+      await expect(fetchLatestVersion()).resolves.toBe('0.38.11');
+      expect(requested).toHaveLength(2);
+      expect(requested[1]).toContain('per_page=100');
+    }
+  });
+
+  it('moves a tester on a dogfood build to the next formal release, never back', () => {
     expect(isNewer('0.38.12', '0.38.12-dev.57')).toBe(true);
     expect(isNewer('0.38.11', '0.38.12-dev.57')).toBe(false);
     expect(isNewer('0.38.12-dev.57', '0.38.11')).toBe(true);

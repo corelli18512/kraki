@@ -16,9 +16,10 @@ describe('Kraki for Mac download link', () => {
     ])).toBe('https://x/mac-v0.2.49/Kraki.dmg');
   });
 
-  it('never links a dogfood prerelease, even when the formal release is further down the list', async () => {
-    const releases: ReturnType<typeof rel>[] = [];
-    for (let n = 30; n > 10; n--) releases.push(rel(`dev-mac-0.2.92-dev.${n}`, ['Kraki.dmg', 'Kraki.app.zip'], { prerelease: true }));
+  it('never links the dogfood release, even when the formal release is further down the list', async () => {
+    const releases = [rel('dogfood-mac', ['Kraki.dmg', 'Kraki.app.zip', 'appcast-dogfood.xml'], { prerelease: true }),
+      rel('dogfood-cli', ['kraki-macos-arm64.app.tar.gz'], { prerelease: true })];
+    for (let n = 30; n > 0; n--) releases.push(rel(`win-v0.1.${n}`, ['Kraki-Setup-0.1.0-x64.exe']));
     releases.push(rel('v0.38.11', ['kraki-macos-arm64.app.tar.gz']), rel('mac-v0.2.91', ['Kraki.dmg']));
     expect(pickMacDmg(releases)).toBe('https://x/mac-v0.2.91/Kraki.dmg');
     let requested = '';
