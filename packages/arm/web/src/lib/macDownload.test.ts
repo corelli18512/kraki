@@ -16,6 +16,21 @@ describe('Kraki for Mac download link', () => {
     ])).toBe('https://x/mac-v0.2.49/Kraki.dmg');
   });
 
+  it('never links the dogfood release, even when the formal release is further down the list', async () => {
+    const releases = [rel('dogfood-mac', ['Kraki.dmg', 'Kraki.app.zip', 'appcast-dogfood.xml'], { prerelease: true }),
+      rel('dogfood-cli', ['kraki-macos-arm64.app.tar.gz'], { prerelease: true })];
+    for (let n = 30; n > 0; n--) releases.push(rel(`win-v0.1.${n}`, ['Kraki-Setup-0.1.0-x64.exe']));
+    releases.push(rel('v0.38.11', ['kraki-macos-arm64.app.tar.gz']), rel('mac-v0.2.91', ['Kraki.dmg']));
+    expect(pickMacDmg(releases)).toBe('https://x/mac-v0.2.91/Kraki.dmg');
+    let requested = '';
+    const fetcher = (async (url: string) => {
+      requested = url;
+      return { ok: true, json: async () => releases };
+    }) as unknown as typeof fetch;
+    await expect(resolveMacDmgUrl(fetcher)).resolves.toBe('https://x/mac-v0.2.91/Kraki.dmg');
+    expect(requested).toContain('per_page=100');
+  });
+
   it('falls back to the releases page when no DMG is published or GitHub is unreachable', async () => {
     expect(pickMacDmg([rel('mac-v0.2.48', ['Kraki.app.zip'])])).toBeNull();
     const failing = (async () => { throw new Error('offline'); }) as unknown as typeof fetch;

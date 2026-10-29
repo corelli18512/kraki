@@ -1,0 +1,143 @@
+name: Prerelease
+
+# Rolling dogfood releases of the CLI and Kraki for Mac after every green CI
+# on main that changed them (docs/dogfood.md). This workflow only decides;
+# release.yml builds, signs, notarizes, attests and replaces the assets of the
+# fixed `dogfood-cli` / `dogfood-mac` prerelease in its `prerelease` mode.
+# Never npm, the production Sparkle appcast or GitHub "latest".
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      component:
+        description: auto = only changed components; otherwise build regardless of changes
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - cli
+          - mac
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prerelease-plan-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Dogfood builds come only from this branch (release.yml checks it too).
+  DOGFOOD_BRANCH: main
+
+jobs:
+  plan:
+    name: Plan dogfood builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only a successful CI of a push to main in this repository (a pull
+    # request from a fork's "main" branch must never publish), or a manual
+    # run on main.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      cli_build: ${{ steps.plan.outputs.cli_build }}
+      cli_base: ${{ steps.plan.outputs.cli_base }}
+      cli_version: ${{ steps.plan.outputs.cli_version }}
+      mac_build: ${{ steps.plan.outputs.mac_build }}
+      mac_base: ${{ steps.plan.outputs.mac_base }}
+      mac_version: ${{ steps.plan.outputs.mac_version }}
+      mac_bundle_build: ${{ steps.plan.outputs.mac_bundle_build }}
+      mac_tentacle_version: ${{ steps.plan.outputs.mac_tentacle_version }}
+
+    steps:
+      - name: Resolve tested commit
+        id: sha
+        env:
+          # The commit CI tested, not whatever main points at now.
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          # All tags and history: change detection and formal versions.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Decide what to dogfood
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.sha.outputs.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          FORCE: ${{ github.event.inputs.component || 'auto' }}
+        run: node scripts/release/prerelease.mjs plan
+
+  dispatch:
+    name: Dogfood ${{ matrix.component }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Start release.yml.
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: cli
+            target: tentacle
+            tag: dogfood-cli
+          - component: mac
+            target: mac
+            tag: dogfood-mac
+
+    steps:
+      - name: Start the release build
+        if: needs.plan.outputs[format('{0}_build', matrix.component)] == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ matrix.tag }}
+          VERSION: ${{ needs.plan.outputs[format('{0}_version', matrix.component)] }}
+          BASE: ${{ needs.plan.outputs[format('{0}_base', matrix.component)] }}
+          BUNDLE_BUILD: ${{ matrix.component == 'mac' && needs.plan.outputs.mac_bundle_build || '' }}
+          TENTACLE_VERSION: ${{ matrix.component == 'mac' && needs.plan.outputs.mac_tentacle_version || '' }}
+        run: |
+          set -euo pipefail
+          # release.yml runs on main and refuses any commit other than SHA,
+          # so its provenance names exactly the commit CI tested.
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$DOGFOOD_BRANCH" \
+            -f mode=prerelease -f target="$TARGET" -f tag="$TAG" \
+            -f prerelease_sha="$SHA" -f prerelease_version="$VERSION" -f prerelease_base="$BASE" \
+            -f prerelease_bundle_build="$BUNDLE_BUILD" -f prerelease_tentacle_version="$TENTACLE_VERSION"
+          {
+            echo "### $TAG $VERSION"
+            echo "Release build started from \`$SHA\` (changes since \`$BASE\`):"
+            echo "https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml?query=branch%3A$DOGFOOD_BRANCH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nothing to dogfood
+        if: needs.plan.outputs[format('{0}_build', matrix.component)] != 'true'
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: echo "No dogfood build of $COMPONENT (see the plan job's log)."

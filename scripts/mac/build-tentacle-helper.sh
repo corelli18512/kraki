@@ -82,6 +82,8 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/app.icns"
 
+# CFBundleVersion stays numeric for a dogfood version (0.39.0-dev.12 ->
+# 0.39.0, docs/dogfood.md); the short version and `kraki --version` show it whole.
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -98,7 +100,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>
     <string>app</string>
     <key>CFBundleVersion</key>
-    <string>${VERSION}</string>
+    <string>${VERSION%%-*}</string>
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundlePackageType</key>
