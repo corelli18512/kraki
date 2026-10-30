@@ -3,6 +3,9 @@
 /// Debug/Dev builds intentionally do not start an updater. The bundle identity
 /// check also prevents a copied Dev build from ever consuming the production
 /// appcast or replacing the production app.
+///
+/// The feed follows `MacUpdateChannel` (Stable or Dogfood), read at every
+/// check, so a switch applies to the next check and all scheduled ones.
 
 #if os(macOS)
 import AppKit
@@ -11,7 +14,8 @@ import Sparkle
 @MainActor
 final class MacUpdateController: NSObject, SPUUpdaterDelegate {
     static let productionBundleIdentifier = "chat.kraki.mac"
-    static let productionFeedURL = "https://raw.githubusercontent.com/corelli18512/kraki/mac-updates/appcast.xml"
+
+    private var started = false
 
     private(set) lazy var controller: SPUStandardUpdaterController = {
         SPUStandardUpdaterController(
@@ -36,7 +40,24 @@ final class MacUpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     func start() {
+        guard !started else { return }
+        started = true
         controller.startUpdater()
+        KLog.diag("[Updates] Sparkle started; channel \(MacUpdateChannel.stored().rawValue)")
+    }
+
+    /// Settings › General › Updates. Checks the new channel's feed right
+    /// away with the update window, so Dogfood offers the newest dogfood
+    /// build at once. Stable never downgrades: a dogfood build stays until
+    /// a formal release with a higher build is published.
+    func switchChannel(to channel: MacUpdateChannel) {
+        let previous = MacUpdateChannel.stored()
+        guard channel != previous else { return }
+        MacUpdateChannel.store(channel)
+        KLog.diag("[Updates] channel \(previous.rawValue) -> \(channel.rawValue)")
+        start()
+        controller.updater.resetUpdateCycle()
+        controller.checkForUpdates(nil)
     }
 
     func checkForUpdates() {
@@ -44,7 +65,7 @@ final class MacUpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     func feedURLString(for updater: SPUUpdater) -> String? {
-        Self.productionFeedURL
+        MacUpdateChannel.stored().feedURL
     }
 
     func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool {

@@ -7,10 +7,12 @@ contents of one of exactly **two fixed GitHub releases**:
 | Release | Contents |
 | --- | --- |
 | [`dogfood-cli`](https://github.com/corelli18512/kraki/releases/tag/dogfood-cli) | the CLI binaries and macOS `.app.tar.gz` files, same names as a formal `v*` release |
-| [`dogfood-mac`](https://github.com/corelli18512/kraki/releases/tag/dogfood-mac) | `Kraki.dmg`, `Kraki.app.zip`, `kraki-mac-gui-universal.app.tar.gz` and the dogfood Sparkle feed `appcast-dogfood.xml` |
+| [`dogfood-mac`](https://github.com/corelli18512/kraki/releases/tag/dogfood-mac) | `Kraki.dmg`, `kraki-mac-gui-universal.app.tar.gz`, the Sparkle update `Kraki-<CFBundleVersion>.app.zip` (for example `Kraki-93.57.app.zip`) and the dogfood Sparkle feed `appcast-dogfood.xml` |
 
 Both releases also contain `release-manifest.json`, `SHA256SUMS.txt` and
-`provenance.json`. Both are marked *Pre-release* and are never GitHub's
+`provenance.json`. They cover every asset except `appcast-dogfood.xml`,
+which carries its own EdDSA signature and is replaced by every formal Mac
+release ([Dogfood Sparkle feed](#dogfood-sparkle-feed)). Both are marked *Pre-release* and are never GitHub's
 "latest". Regular users never receive a dogfood build through any automatic
 path. Formal releases stay manual and unchanged: push a `v*` / `mac-v*` /
 `head-v*` tag, or run `release.yml` with `mode=publish`.
@@ -60,7 +62,9 @@ older CLIs read (`per_page=20` up to 0.38.11).
    2. Download each one, compare it with the built file, and verify its
       provenance.
    3. Swap names one at a time: `<name>` becomes `previous.<name>`, and
-      `incoming.<name>` becomes `<name>`.
+      `incoming.<name>` becomes `<name>`. `appcast-dogfood.xml` goes last.
+      Only then do the names the new build no longer has (the previous
+      `Kraki-<build>.app.zip`) become `previous.<name>`.
    4. Move the tag to the built commit, then rewrite the title and notes:
       version, commit, build run, and the commits since the previous dogfood
       build.
@@ -70,7 +74,8 @@ older CLIs read (`per_page=20` up to 0.38.11).
    step runs `prerelease.mjs recover`, and the next run repeats it first:
    - While `incoming.*` assets remain, the release is rolled back to the
      previous set.
-   - Otherwise only the `previous.*` copies are deleted.
+   - Otherwise only the `previous.*` copies are deleted. A name the new
+     build dropped that was not moved yet stays until the next publish.
    - Recovery deletes only a name that has a `previous.*` copy, so it never
      removes the only copy of an asset. An asset name that is new in the
      interrupted build (not in the previous set) stays until the next
@@ -135,7 +140,7 @@ gh workflow run prerelease.yml --ref main -f component=auto
 | `install.sh` | `releases/latest`, unless `KRAKI_CHANNEL=dogfood` or `KRAKI_VERSION` is set |
 | `install.ps1` | skips prereleases, unless `KRAKI_CHANNEL=dogfood` or `KRAKI_VERSION` is set |
 | Web "Download for Mac" (`pickMacDmg`) | skips prereleases and tags that do not start with `mac-v` |
-| Kraki for Mac (Sparkle) | the app reads the production appcast on `mac-updates`, written only for `mac-v*` releases |
+| Kraki for Mac (Sparkle) | the app reads the production appcast on `mac-updates`, written only for `mac-v*` releases. Only a Mac switched to Dogfood in Settings (shown to internal accounts) reads the dogfood feed |
 | npm | dogfood builds are never published to npm |
 | Windows | out of scope: no Windows dogfood build, and `install.ps1` skips prereleases |
 
@@ -145,6 +150,8 @@ Tests:
 - `packages/tentacle/src/__tests__/installer-contract.test.ts`
 - `scripts/e2e/windows-installer.test.ps1`
 - `scripts/release/prerelease.test.mjs`
+- `scripts/release/dogfood-feed.test.mjs`
+- `packages/arm/ios/KrakiMacTests/MacUpdateChannelTests.swift`
 
 ## Installing a dogfood build (testers)
 
@@ -173,46 +180,70 @@ The stable download URLs always serve the newest build, for example:
 `kraki update` and remote updates move the tester back to the formal line.
 Until then, `kraki update` reports "already on the latest version".
 
-**Kraki for Mac**: download
-[`Kraki.dmg`](https://github.com/corelli18512/kraki/releases/download/dogfood-mac/Kraki.dmg),
-open it, and drag Kraki to Applications.
-- **What changes**: this replaces `/Applications/Kraki.app`. Sign-in and data
-  are kept.
-- **Signing**: the app is Developer ID signed and notarized like a formal
+**Kraki for Mac**: in Kraki, open **Settings › General › Updates** and
+choose **Dogfood**.
+- **Who sees it**: accounts with `preferences.internal` (as on Web), and any
+  Mac that is already on Dogfood, so it can always switch back.
+- **What happens**: Kraki checks the dogfood feed right away and offers the
+  newest dogfood build. From then on every update check (daily, or **Check
+  for Updates…**) uses the dogfood feed, so the Mac follows each new dogfood
+  build and each formal release that is newer.
+- **The setting**: stored per Mac (`mac.updateChannel` in the app's
+  defaults). Production app only; Dev builds have no updater.
+- **What changes**: Sparkle replaces `/Applications/Kraki.app` and its
+  built-in tentacle; the daemon restarts on the new helper. Sign-in and data
+  are kept. The app is Developer ID signed and notarized like a formal
   release.
-- **Updates**: Sparkle offers the next formal release when it is published,
-  because that release's `CFBundleVersion` is higher.
-- **Going back early**: install the latest formal `Kraki.dmg`.
+- **Back to Stable**: choose **Stable**. Sparkle never downgrades: the Mac
+  keeps its dogfood build until the next formal release, whose
+  `CFBundleVersion` is higher, and then updates as usual. Settings says so.
+- **Without the setting** (for example signed out on a non-internal
+  account): download
+  [`Kraki.dmg`](https://github.com/corelli18512/kraki/releases/download/dogfood-mac/Kraki.dmg),
+  open it, and drag Kraki to Applications. That Mac stays on Stable and is
+  offered the next formal release. To go back early, install the latest
+  formal `Kraki.dmg`.
 
-### Dogfood Sparkle feed (not used by the app yet)
+### Dogfood Sparkle feed
 
-Every dogfood Mac build also publishes a one-item Sparkle feed:
-<https://github.com/corelli18512/kraki/releases/download/dogfood-mac/appcast-dogfood.xml>.
-- It is signed with the production Sparkle key (`SPARKLE_ED25519_PRIVATE_KEY`,
-  so the shipped `SUPublicEDKey` accepts it).
-- It points at the `Kraki.app.zip` of the same release.
-- It is replaced together with the other assets.
+<https://github.com/corelli18512/kraki/releases/download/dogfood-mac/appcast-dogfood.xml>
+(`MacUpdateChannel.dogfoodFeedURL`). It lists the newest dogfood build and
+the newest formal release, and Sparkle offers whichever is higher:
+- **Each dogfood build** writes it in `release.yml` (`Generate dogfood Sparkle
+  feed`): the production appcast from `mac-updates` plus this build, the
+  newest two kept. The `mac-updates` branch is only read.
+- **Each formal Mac release** rewrites it in `publish-mac-appcast` (`Refresh
+  the dogfood Sparkle feed`), after the production appcast is pushed: the
+  live dogfood feed plus the new release. So a dogfood Mac is never left
+  below a formal release. The refresh waits while a dogfood publish is
+  swapping assets, then swaps only the feed (`prerelease.mjs feed-replace`).
+- **Signing**: `generate_appcast` signs the feed and every item with the
+  production Sparkle key (`SPARKLE_ED25519_PRIVATE_KEY`); the app requires
+  signed feeds (`SURequireSignedFeed`) and checks them with the shipped
+  `SUPublicEDKey`.
+- **No mismatched archive**: a dogfood item points at
+  `Kraki-<CFBundleVersion>.app.zip`, a name only that build uses. The swap
+  adds the new archive before the new feed and removes the old archive
+  after it, so a feed never names a missing archive or another build's.
+- **Checks**: `scripts/release/dogfood-feed.mjs check` fails the run unless
+  the feed is signed, lists the expected item and the newest production item
+  unchanged, and every dogfood item names its own archive.
 
-The app does not read it yet: `MacUpdateController.feedURLString(for:)`
-always returns the production appcast. Switching a dogfood build to this feed
-needs a follow-up change, for example: when a build-time Info.plist key
-(stamped only in `mode=prerelease`) names a feed, return that URL instead.
-
-With that change, a dogfood app updates itself to every newer dogfood build,
-because `93.58` > `93.57`. It still never receives a formal release through
-this feed, so it must also check the production feed or be reinstalled from
-the formal DMG.
+The production appcast never lists a dogfood build: it is written only by
+`publish-mac-appcast` for `mac-v*` releases, as before.
 
 ## Owner setup
 
 Dogfood builds need no secrets beyond the formal release ones: Apple signing
-and notarization, plus the Sparkle key for the dogfood feed.
+and notarization, plus the Sparkle key for the dogfood feed (also used by
+`publish-mac-appcast` to refresh it).
 
 Permissions:
 - `prerelease.yml` uses `GITHUB_TOKEN` with only `contents: read`, plus
   `actions: write` in the job that dispatches `release.yml`.
 - `release.yml`'s `publish` job uses its existing `contents: write` to move
-  the `dogfood-*` tags and replace assets.
+  the `dogfood-*` tags and replace assets; `publish-mac-appcast` uses it to
+  replace `appcast-dogfood.xml`.
 
 A tag ruleset that restricts updating tags must let GitHub Actions move
 `dogfood-cli` and `dogfood-mac`.

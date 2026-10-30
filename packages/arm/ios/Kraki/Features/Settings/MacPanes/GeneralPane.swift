@@ -1,4 +1,5 @@
-/// GeneralPane — App-wide appearance + window behavior preferences.
+/// GeneralPane — App-wide appearance + window behavior preferences, and the
+/// update channel for internal testers.
 
 #if os(macOS)
 import ServiceManagement
@@ -84,6 +85,8 @@ struct GeneralPane: View {
                 }
             }
 
+            MacUpdateChannelSection()
+
             #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
             DiagSettingsSection()
             #endif
@@ -121,6 +124,49 @@ final class LoginItemSetting {
         let status = SMAppService.mainApp.status
         enabled = status == .enabled || status == .requiresApproval
         needsApproval = status == .requiresApproval
+    }
+}
+
+/// Settings › General › Updates: Stable or Dogfood (MacUpdateChannel), one
+/// click. Only in the production app (the only build with an updater), and
+/// only for internal accounts or a Mac already on Dogfood.
+private struct MacUpdateChannelSection: View {
+    @Environment(AppState.self) private var appState
+    @AppStorage(MacUpdateChannel.defaultsKey) private var channel: MacUpdateChannel = .stable
+
+    private var bundleVersion: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+    }
+
+    var body: some View {
+        if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier,
+           MacUpdateChannel.isSwitchVisible(accountIsInternal: appState.user?.isInternalAccount == true, current: channel) {
+            Section("Updates") {
+                // The updater stores the channel and checks the new feed;
+                // the picker follows the stored value.
+                Picker("Update channel", selection: Binding(
+                    get: { channel },
+                    set: { NotificationCenter.default.post(name: .macSwitchUpdateChannel, object: $0) })) {
+                    Text("Stable").tag(MacUpdateChannel.stable)
+                    Text("Dogfood").tag(MacUpdateChannel.dogfood)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("settings-update-channel")
+                note
+                    .font(.system(size: 11)).foregroundStyle(Color.textMuted)
+            }
+        }
+    }
+
+    private var note: Text {
+        switch MacUpdateChannel.note(for: channel, bundleVersion: bundleVersion) {
+        case .followsDogfood:
+            Text("Kraki checks the dogfood feed and offers each new dogfood build, and a formal release when it is newer. Dogfood builds are for internal testing.")
+        case let .staysUntilNextFormalRelease(build):
+            Text("Stable never downgrades: this Mac keeps build \(build) until the next formal release, which is newer, and then updates as usual.")
+        case .formalReleasesOnly:
+            Text("This Mac gets formal releases only.")
+        }
     }
 }
 

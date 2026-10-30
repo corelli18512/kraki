@@ -363,6 +363,8 @@ extension Notification.Name {
     static let macDeleteSession   = Notification.Name("mac.deleteSession")
     static let macArchiveSession  = Notification.Name("mac.archiveSession")
     static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
+    /// Object: the `MacUpdateChannel` to switch to (Settings › General).
+    static let macSwitchUpdateChannel = Notification.Name("mac.switchUpdateChannel")
 }
 
 /// Session Info asked for a Session whose chat may not be open yet (a row's

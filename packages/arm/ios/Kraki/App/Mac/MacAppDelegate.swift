@@ -24,6 +24,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     private(set) var updateController: MacUpdateController?
     private var updateNotificationObserver: NSObjectProtocol?
+    private var updateChannelObserver: NSObjectProtocol?
 
     override init() {
         updateController = nil
@@ -154,15 +155,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         removeUnwantedMenus()
         DispatchQueue.main.async { [weak self] in self?.removeUnwantedMenus() }
 
-        updateNotificationObserver = NotificationCenter.default.addObserver(
-            forName: .macCheckForUpdates,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateController?.checkForUpdates()
-            }
-        }
+        installUpdateObservers()
 
         #if DEBUG
         if nativeAutomation && !visibleAutomation {
@@ -370,6 +363,29 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
 
+    /// Kraki › Check for Updates… and Settings › General › Updates.
+    private func installUpdateObservers() {
+        updateNotificationObserver = NotificationCenter.default.addObserver(
+            forName: .macCheckForUpdates,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateController?.checkForUpdates()
+            }
+        }
+        updateChannelObserver = NotificationCenter.default.addObserver(
+            forName: .macSwitchUpdateChannel,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let channel = note.object as? MacUpdateChannel else { return }
+            Task { @MainActor [weak self] in
+                self?.updateController?.switchChannel(to: channel)
+            }
+        }
+    }
+
     /// Removes the synthesized "File" menu from the menu bar. The Window
     /// menu stays (trimmed in MacCommands): it carries ⌘W and ⌘M.
     private func removeUnwantedMenus() {
@@ -383,6 +399,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     deinit {
         if let updateNotificationObserver {
             NotificationCenter.default.removeObserver(updateNotificationObserver)
+        }
+        if let updateChannelObserver {
+            NotificationCenter.default.removeObserver(updateChannelObserver)
         }
     }
 

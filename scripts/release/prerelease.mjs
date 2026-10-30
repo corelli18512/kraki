@@ -13,12 +13,15 @@
  *   stamp-tentacle VERSION   -> set packages/tentacle/package.json version (CI workspace only)
  *   publish                  -> replace the dogfood release's assets, tag and notes
  *   recover                  -> undo an interrupted publish (failed or cancelled run)
+ *   feed-fetch FILE          -> download the live dogfood Sparkle feed (formal Mac release)
+ *   feed-replace FILE        -> replace only the dogfood Sparkle feed (formal Mac release)
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOGFOOD_FEED } from './dogfood-feed.mjs';
 
 export const COMPONENTS = ['cli', 'mac'];
 export const DOGFOOD_TAG = { cli: 'dogfood-cli', mac: 'dogfood-mac' };
@@ -174,20 +177,33 @@ export function recoveryActions(names) {
 }
 
 /**
- * Swap incoming.<name> in for <name>: first move assets the new set drops,
- * then replace shared names, then add names that are new in this build.
+ * Swap incoming.<name> in for <name>, the Sparkle feed last, then move the
+ * assets the new set drops to previous.*. The feed names a per-build
+ * archive (dogfood-feed.mjs), so the old feed's archive stays until the
+ * new feed is live, and the new archive is live before the new feed.
  */
 export function swapActions(oldNames, newNames) {
   const old = new Set(oldNames), next = new Set(newNames);
   const actions = [];
-  for (const name of oldNames) if (!next.has(name)) actions.push({ op: 'rename', name, to: PREVIOUS + name });
-  for (const name of newNames) {
-    if (!old.has(name)) continue;
-    actions.push({ op: 'rename', name, to: PREVIOUS + name });
+  const incoming = [...newNames.filter(name => name !== DOGFOOD_FEED), ...newNames.filter(name => name === DOGFOOD_FEED)];
+  for (const name of incoming) {
+    if (old.has(name)) actions.push({ op: 'rename', name, to: PREVIOUS + name });
     actions.push({ op: 'rename', name: INCOMING + name, to: name });
   }
-  for (const name of newNames) if (!old.has(name)) actions.push({ op: 'rename', name: INCOMING + name, to: name });
+  for (const name of oldNames) if (!next.has(name)) actions.push({ op: 'rename', name, to: PREVIOUS + name });
   return actions;
+}
+
+/** Replace only the feed: its incoming copy is uploaded and verified. */
+export function feedSwapActions(names) {
+  const actions = names.includes(DOGFOOD_FEED) ? [{ op: 'rename', name: DOGFOOD_FEED, to: PREVIOUS + DOGFOOD_FEED }] : [];
+  actions.push({ op: 'rename', name: INCOMING + DOGFOOD_FEED, to: DOGFOOD_FEED });
+  return actions;
+}
+
+/** A publish or feed refresh is in progress (or was interrupted). */
+export function swapPending(names) {
+  return names.some(name => name.startsWith(INCOMING) || name.startsWith(PREVIOUS));
 }
 
 // ── Release title and notes ─────────────────────────────
@@ -211,7 +227,7 @@ export function dogfoodNotes({ component, repo, version, bundleBuild, tentacleVe
   if (component === 'cli') {
     lines.push('Install: `curl -fsSL https://app.kraki.chat/install.sh | KRAKI_CHANNEL=dogfood bash`', '');
   } else {
-    lines.push(`Install: download [Kraki.dmg](${download}/Kraki.dmg). Dogfood Sparkle feed: ${download}/appcast-dogfood.xml`, '');
+    lines.push(`Install: in Kraki for Mac, Settings › General › Updates › Dogfood (internal accounts), or download [Kraki.dmg](${download}/Kraki.dmg). Dogfood Sparkle feed: ${download}/${DOGFOOD_FEED}`, '');
   }
   lines.push(`## Changes since ${base.label}`, '');
   if (commits.length) {
@@ -482,11 +498,73 @@ async function recover() {
   await recoverRelease(github(repo), tag);
 }
 
+// ── Dogfood feed refresh (formal Mac release) ───────────
+
+/**
+ * The published dogfood-mac release once no publish or feed refresh is
+ * swapping its assets, or null if there is none. Waits up to
+ * FEED_WAIT_MINUTES (default 30): a dogfood publish swaps for a minute or
+ * two, and a failed one is undone by its own run.
+ */
+async function idleDogfoodMacRelease(api) {
+  const tag = DOGFOOD_TAG.mac;
+  const deadline = Date.now() + Number(process.env.FEED_WAIT_MINUTES || 30) * 60_000;
+  for (;;) {
+    const release = publishedDogfoodRelease(await api.releases(), 'mac');
+    if (!release) return null;
+    const names = (await api.assets(release.id)).map(a => a.name);
+    if (!swapPending(names)) return release;
+    if (Date.now() > deadline) throw new Error(`${tag} is still swapping assets (${names.join(', ')}); rerun this job once it is done`);
+    console.log(`${tag} is swapping assets; waiting 30 s`);
+    await new Promise(done => setTimeout(done, 30_000));
+  }
+}
+
+function feedRepo() {
+  if (!process.env.GITHUB_REPOSITORY) throw new Error('GITHUB_REPOSITORY is required');
+  return process.env.GITHUB_REPOSITORY;
+}
+
+/** Download the live dogfood feed to FILE; GITHUB_OUTPUT exists=true|false. */
+async function feedFetch(file) {
+  if (!file) throw new Error('Usage: prerelease.mjs feed-fetch FILE');
+  const api = github(feedRepo());
+  const release = await idleDogfoodMacRelease(api);
+  const asset = release && (await api.assets(release.id)).find(a => a.name === DOGFOOD_FEED);
+  if (!asset) {
+    console.log(`${DOGFOOD_TAG.mac} has no ${DOGFOOD_FEED} yet: nothing to refresh`);
+    output({ exists: false });
+    return;
+  }
+  writeFileSync(file, await api.download(asset.id));
+  output({ exists: true });
+}
+
+/** Replace only the dogfood feed, the way publish swaps assets. */
+async function feedReplace(file) {
+  if (!file) throw new Error('Usage: prerelease.mjs feed-replace FILE');
+  const api = github(feedRepo());
+  const release = await idleDogfoodMacRelease(api);
+  if (!release) throw new Error(`${DOGFOOD_TAG.mac} is gone`);
+  const data = readFileSync(file);
+  await api.upload(release.id, INCOMING + DOGFOOD_FEED, data);
+  const current = await api.assets(release.id);
+  const uploaded = current.find(a => a.name === INCOMING + DOGFOOD_FEED);
+  if (!uploaded || sha256(await api.download(uploaded.id)) !== sha256(data)) throw new Error(`Uploaded ${INCOMING}${DOGFOOD_FEED} differs from ${file}`);
+  await apply(api, current, feedSwapActions(current.map(a => a.name)));
+  await settle(api, release.id);
+  const live = (await api.assets(release.id)).find(a => a.name === DOGFOOD_FEED);
+  if (!live || sha256(await api.download(live.id)) !== sha256(data)) throw new Error(`${DOGFOOD_FEED} was not replaced`);
+  console.log(`${DOGFOOD_TAG.mac}: replaced ${DOGFOOD_FEED}`);
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'plan') await plan();
   else if (command === 'stamp-tentacle') stampTentacle(args[0]);
   else if (command === 'publish') await publish();
   else if (command === 'recover') await recover();
-  else throw new Error('Usage: prerelease.mjs plan | stamp-tentacle VERSION | publish | recover');
+  else if (command === 'feed-fetch') await feedFetch(args[0]);
+  else if (command === 'feed-replace') await feedReplace(args[0]);
+  else throw new Error('Usage: prerelease.mjs plan | stamp-tentacle VERSION | publish | recover | feed-fetch FILE | feed-replace FILE');
 }

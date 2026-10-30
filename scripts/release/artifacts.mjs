@@ -13,11 +13,16 @@ export async function digest(path) {
   return hash.digest('hex');
 }
 
-export function requireReleaseArtifacts(dir, component, version) {
+/**
+ * `sparkleArchive`: the Mac Sparkle update zip, `Kraki.app.zip` in a formal
+ * release and `Kraki-<CFBundleVersion>.app.zip` in dogfood-mac
+ * (dogfood-feed.mjs).
+ */
+export function requireReleaseArtifacts(dir, component, version, sparkleArchive = 'Kraki.app.zip') {
   const expected = {
     cli: ['kraki-cli-linux-x64', 'kraki-cli-windows-x64.exe', 'kraki-cli-macos-arm64', 'kraki-cli-macos-x64',
       'kraki-macos-arm64.app.tar.gz', 'kraki-macos-x64.app.tar.gz'],
-    mac: ['Kraki.dmg', 'Kraki.app.zip', 'kraki-mac-gui-universal.app.tar.gz'],
+    mac: ['Kraki.dmg', sparkleArchive, 'kraki-mac-gui-universal.app.tar.gz'],
     ios: ['Kraki.ipa'],
     windows: [`Kraki-Setup-${version}-x64.exe`],
   }[component];
@@ -76,8 +81,8 @@ export function checkVerifiedIdentity(results, env = process.env) {
 async function main() {
   const [command, dir, ...args] = process.argv.slice(2);
   if (command === 'manifest') {
-    const [component, version] = args;
-    requireReleaseArtifacts(dir, component, version);
+    const [component, version, sparkleArchive] = args;
+    requireReleaseArtifacts(dir, component, version, sparkleArchive);
     const manifest = await createManifest(dir, createBuildInfo({ component, version }));
     writeFileSync(join(dir, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     const files = [...manifest.artifacts.map(a => a.name), 'release-manifest.json'];
@@ -93,7 +98,7 @@ async function main() {
       console.log(`Verified ${file} (source, workflow and run/attempt)`);
     }
   } else {
-    throw new Error('Usage: artifacts.mjs manifest DIR COMPONENT VERSION | verify DIR [BUNDLE]');
+    throw new Error('Usage: artifacts.mjs manifest DIR COMPONENT VERSION [SPARKLE_ARCHIVE] | verify DIR [BUNDLE]');
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

@@ -765,6 +765,8 @@ jobs:
           grep -q 'TeamIdentifier=3A83X5JZ3S' "$RUNNER_TEMP/codesign.txt"
 
       - name: Package .app bundle
+        env:
+          PRERELEASE_BUNDLE_BUILD: ${{ needs.prepare.outputs.prerelease_bundle_build }}
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
@@ -774,9 +776,15 @@ jobs:
           # the stapled ticket is part of the signed distribution artifact.
           tar -czf "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" \
             -C "$RUNNER_TEMP/stage" Kraki.app
-          # Sparkle updates use a zip containing the notarized app bundle.
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
-          ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/Kraki.app.zip"
+          # Sparkle updates use a zip containing the notarized app bundle. A
+          # dogfood build names it after its CFBundleVersion, so the dogfood
+          # feed never points at an asset that is replaced in place
+          # (scripts/release/dogfood-feed.mjs).
+          SPARKLE_ARCHIVE=Kraki.app.zip
+          if [ -n "$PRERELEASE_BUNDLE_BUILD" ]; then SPARKLE_ARCHIVE="Kraki-${PRERELEASE_BUNDLE_BUILD}.app.zip"; fi
+          mkdir -p "$RUNNER_TEMP/sparkle-update"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/sparkle-update/$SPARKLE_ARCHIVE"
+          ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/sparkle-update/$SPARKLE_ARCHIVE"
 
       - name: Preserve matching dSYMs for diagnostics
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -790,14 +798,15 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-kraki-mac-sparkle-update-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/Kraki.app.zip
+          path: ${{ runner.temp }}/sparkle-update/*.app.zip
           if-no-files-found: error
 
       - name: Generate dogfood Sparkle feed
-        # A one-item appcast for the Kraki.app.zip of the dogfood-mac release,
-        # signed with the production Sparkle key. The app still reads the
-        # production feed; docs/dogfood.md describes switching to this one.
-        # The mac-updates branch is never touched here.
+        # appcast-dogfood.xml (scripts/release/dogfood-feed.mjs, docs/dogfood.md):
+        # the production appcast's items plus this build, the newest two kept,
+        # signed with the production Sparkle key. A Mac on the Dogfood channel
+        # reads only this feed, so it also lists the newest formal release.
+        # The mac-updates branch is only read here.
         if: needs.prepare.outputs.publish_mode == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -808,33 +817,38 @@ jobs:
           set -euo pipefail
           test -n "$SPARKLE_ED25519_PRIVATE_KEY"
           test "$RELEASE_TAG" = dogfood-mac
+          ARCHIVE="Kraki-${BUNDLE_BUILD}.app.zip"
           WORK_DIR="$RUNNER_TEMP/dogfood-appcast"
           mkdir -p "$WORK_DIR/archives" "$WORK_DIR/sparkle" "$WORK_DIR/out"
-          cp "$RUNNER_TEMP/Kraki.app.zip" "$WORK_DIR/archives/Kraki.app.zip"
+          cp "$RUNNER_TEMP/sparkle-update/$ARCHIVE" "$WORK_DIR/archives/$ARCHIVE"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/appcast.xml?ref=mac-updates" \
+            -H 'Accept: application/vnd.github.raw' > "$WORK_DIR/production.xml"
+          cp "$WORK_DIR/production.xml" "$WORK_DIR/archives/appcast.xml"
           gh release download 2.9.5 --repo sparkle-project/Sparkle \
             --pattern 'Sparkle-for-Swift-Package-Manager.zip' \
             --dir "$WORK_DIR"
           unzip -q "$WORK_DIR/Sparkle-for-Swift-Package-Manager.zip" -d "$WORK_DIR/sparkle"
+          # --maximum-versions: DOGFOOD_FEED_ITEMS in dogfood-feed.mjs.
           "$WORK_DIR/sparkle/bin/generate_appcast" \
             --ed-key-file - \
             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
             --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
             --link "https://kraki.chat" \
-            --maximum-versions 1 \
+            --maximum-versions 2 \
             "$WORK_DIR/archives" <<< "$SPARKLE_ED25519_PRIVATE_KEY"
           FEED="$WORK_DIR/out/appcast-dogfood.xml"
           cp "$WORK_DIR/archives/appcast.xml" "$FEED"
-          grep -q 'sparkle:edSignature=' "$FEED"
-          grep -q "url=\"https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Kraki.app.zip\"" "$FEED"
-          grep -q "sparkle:version>${BUNDLE_BUILD}<" "$FEED"
-          test "$(grep -c '<item>' "$FEED")" = 1
+          node scripts/release/dogfood-feed.mjs check "$FEED" "$WORK_DIR/production.xml" "$BUNDLE_BUILD" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           cat "$FEED"
 
       - name: Upload dogfood Sparkle feed
+        # Not a build-kraki-* artifact: the publish job adds the feed after
+        # the manifest and attestation (see "Add the dogfood Sparkle feed").
         if: needs.prepare.outputs.publish_mode == 'prerelease'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-kraki-mac-dogfood-appcast-${{ github.run_attempt }}
+          name: dogfood-feed-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dogfood-appcast/out/appcast-dogfood.xml
           if-no-files-found: error
 
@@ -966,10 +980,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           PRERELEASE_VERSION: ${{ needs.prepare.outputs.prerelease_version }}
+          PRERELEASE_BUNDLE_BUILD: ${{ needs.prepare.outputs.prerelease_bundle_build }}
         run: |
           set -euo pipefail
           if [ "$RELEASE_TAG" = dogfood-mac ]; then
-            COMPONENT=mac; VERSION="$PRERELEASE_VERSION"
+            node scripts/release/artifacts.mjs manifest release-assets mac "$PRERELEASE_VERSION" "Kraki-${PRERELEASE_BUNDLE_BUILD}.app.zip"
+            exit 0
           elif [ "$RELEASE_TAG" = dogfood-cli ]; then
             COMPONENT=cli; VERSION="$PRERELEASE_VERSION"
           elif [[ "$RELEASE_TAG" == mac-v* ]]; then
@@ -994,6 +1010,17 @@ jobs:
           set -euo pipefail
           node scripts/release/artifacts.mjs verify release-assets "$PROVENANCE_BUNDLE"
           cp "$PROVENANCE_BUNDLE" release-assets/provenance.json
+
+      - name: Add the dogfood Sparkle feed
+        # Published with the dogfood-mac assets but outside the manifest and
+        # attestation: the feed carries its own EdDSA signature (the app
+        # requires signed feeds), and every formal Mac release replaces it
+        # (publish-mac-appcast). prerelease.mjs publish swaps it in last.
+        if: needs.prepare.outputs.publish_mode == 'prerelease' && needs.prepare.outputs.release_tag == 'dogfood-mac'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dogfood-feed-${{ github.run_attempt }}
+          path: release-assets
 
       - name: Upload release assets bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1155,6 +1182,66 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "chore(mac): publish appcast for ${RELEASE_TAG}"
           git push origin mac-updates
+
+      - name: Check out release tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          path: tooling
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Refresh the dogfood Sparkle feed
+        # A Mac on the Dogfood channel reads only appcast-dogfood.xml of the
+        # dogfood-mac release (docs/dogfood.md). Add this release to it, so a
+        # dogfood build below it is offered it. Runs after the production
+        # appcast is pushed; the production appcast never gets dogfood items.
+        id: refresh_dogfood_feed
+        working-directory: tooling
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PRODUCTION_DIR="$RUNNER_TEMP/sparkle-appcast/archives"
+          WORK_DIR="$RUNNER_TEMP/dogfood-appcast-refresh"
+          mkdir -p "$WORK_DIR/archives"
+          # Waits while a dogfood publish is swapping assets.
+          node scripts/release/prerelease.mjs feed-fetch "$WORK_DIR/archives/appcast.xml"
+          if [ ! -f "$WORK_DIR/archives/appcast.xml" ]; then
+            echo "No dogfood feed to refresh."
+            exit 0
+          fi
+          cp "$PRODUCTION_DIR/Kraki.app.zip" "$WORK_DIR/archives/"
+          if [ -s "$PRODUCTION_DIR/Kraki.app.md" ]; then cp "$PRODUCTION_DIR/Kraki.app.md" "$WORK_DIR/archives/"; fi
+          # --maximum-versions: DOGFOOD_FEED_ITEMS in dogfood-feed.mjs.
+          "$RUNNER_TEMP/sparkle-appcast/sparkle/bin/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
+            --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --embed-release-notes \
+            --link "https://kraki.chat" \
+            --maximum-versions 2 \
+            "$WORK_DIR/archives" <<< "$SPARKLE_ED25519_PRIVATE_KEY"
+          UPDATE_BUILD_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+            "$RUNNER_TEMP/sparkle-update-verify/Kraki.app/Contents/Info.plist")
+          node scripts/release/dogfood-feed.mjs check "$WORK_DIR/archives/appcast.xml" "$PRODUCTION_DIR/appcast.xml" \
+            "$UPDATE_BUILD_VERSION" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Kraki.app.zip"
+          node scripts/release/prerelease.mjs feed-replace "$WORK_DIR/archives/appcast.xml"
+
+      - name: Undo an interrupted dogfood feed refresh
+        if: failure() && steps.refresh_dogfood_feed.outcome == 'failure'
+        working-directory: tooling
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPONENT: mac
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/release/prerelease.mjs recover
 
   # ─── Publish npm packages ──────────────────────────────
 

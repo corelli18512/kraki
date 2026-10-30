@@ -13,6 +13,8 @@
 ///
 /// Future keys the protocol supports but iOS deliberately ignores:
 /// - `internal: Bool` — debug-log verbosity. Honour when we wire KLog.
+///   (Kraki for Mac reads it from auth_ok's user instead, for the update
+///   channel switch: `UserInfo.isInternalAccount`.)
 /// - `channel: String` — release channel. Not relevant until iOS gains
 ///   a multi-channel mechanism.
 ///
