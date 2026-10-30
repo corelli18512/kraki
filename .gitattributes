@@ -1,0 +1,2 @@
+# Sparkle feed fixtures are signed byte-for-byte: never convert line endings.
+scripts/release/fixtures/dogfood-feed/** -text
