@@ -476,8 +476,8 @@ jobs:
           # online Gatekeeper check, so an offline or rate-limited machine sees
           # "damaged app" — and an app Gatekeeper refuses to launch has no TCC
           # grants at all.
-          xcrun stapler staple packages/tentacle/dist/sea/Kraki.app
-          xcrun stapler validate packages/tentacle/dist/sea/Kraki.app
+          bash scripts/release/apple-retry.sh xcrun stapler staple packages/tentacle/dist/sea/Kraki.app
+          bash scripts/release/apple-retry.sh xcrun stapler validate packages/tentacle/dist/sea/Kraki.app
           spctl -a -vvv --type exec packages/tentacle/dist/sea/Kraki.app
 
       - name: Package .app bundle (macOS)
@@ -748,8 +748,8 @@ jobs:
             test "$NOTARY_STATUS" -eq 0
             test "$NOTARY_RESULT" = "Accepted"
           fi
-          xcrun stapler staple "$APP"
-          xcrun stapler validate "$APP"
+          bash scripts/release/apple-retry.sh xcrun stapler staple "$APP"
+          bash scripts/release/apple-retry.sh xcrun stapler validate "$APP"
           spctl -a -vvv --type exec "$APP"
 
       - name: Verify architecture and distribution identity
@@ -873,7 +873,7 @@ jobs:
           test "$SHIPPED" = "$EXPECTED"
           test "$("$HELPER/Contents/MacOS/kraki" --version)" = "$EXPECTED"
           if [ "${{ needs.prepare.outputs.publish_mode }}" != "dry-run" ] || [ "${{ github.event.inputs.notarize }}" = "true" ]; then
-            xcrun stapler validate "$APP"
+            bash scripts/release/apple-retry.sh xcrun stapler validate "$APP"
             spctl -a -vvv --type exec "$APP"
           fi
           PRERELEASE_VERSION='${{ needs.prepare.outputs.prerelease_version }}'
@@ -913,8 +913,8 @@ jobs:
             xcrun notarytool submit "$DMG" \
               --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
               --team-id "$APPLE_TEAM_ID" --wait
-            xcrun stapler staple "$DMG"
-            xcrun stapler validate "$DMG"
+            bash scripts/release/apple-retry.sh xcrun stapler staple "$DMG"
+            bash scripts/release/apple-retry.sh xcrun stapler validate "$DMG"
             spctl -a -vvv -t open --context context:primary-signature "$DMG"
           fi
           ls -lh "$DMG"
