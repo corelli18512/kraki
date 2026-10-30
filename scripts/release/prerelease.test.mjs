@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   DOGFOOD_TAG, INCOMING, PREVIOUS, affects, bumpPatch, cliDogfoodVersion, compareCore, dogfoodNotes, dogfoodTitle,
-  krakiMacSetting, latestFormalTag, macDogfoodVersion, planComponent, publishedDogfoodRelease, recoveryActions,
-  swapActions,
+  feedSwapActions, krakiMacSetting, latestFormalTag, macDogfoodVersion, planComponent, publishedDogfoodRelease,
+  recoveryActions, swapActions, swapPending,
 } from './prerelease.mjs';
+import { DOGFOOD_FEED } from './dogfood-feed.mjs';
 
 test('CLI dogfood version: next formal patch, or a higher in-repo version, with -dev.N', () => {
   assert.equal(cliDogfoodVersion({ formal: '0.38.11', packageVersion: '0.38.11', number: 57 }), '0.38.12-dev.57');
@@ -162,7 +163,7 @@ test('an interrupted swap recovers one complete set, never a mix', () => {
   });
 });
 
-test('a changed asset list: old assets come back, a new name waits for the next publish', () => {
+test('a changed asset list: rolled back to the old set until every new asset is in, then the new set', () => {
   const oldSet = ['Kraki.app.zip', 'SHA256SUMS.txt', 'dropped.txt'];
   const newSet = ['Kraki.app.zip', 'SHA256SUMS.txt', 'appcast-dogfood.xml'];
   const snapshots = simulateSwap(oldSet, newSet);
@@ -170,15 +171,56 @@ test('a changed asset list: old assets come back, a new name waits for the next 
     const after = recover(state);
     const names = [...after.keys()];
     assert.ok(!names.some(n => n.startsWith(INCOMING) || n.startsWith(PREVIOUS)), `step ${i}: ${names}`);
-    if (i < snapshots.length - 1) {
+    if ([...state.keys()].some(n => n.startsWith(INCOMING))) {
       for (const name of oldSet) assert.equal(after.get(name), `old:${name}`, `step ${i}`);
       // Only once its own swap step ran, and never in place of an old asset.
       for (const name of names.filter(n => !oldSet.includes(n))) assert.equal(after.get(name), `new:${name}`);
     } else {
-      assert.deepEqual(stableSet(after, 'new'), [...newSet].sort());
-      assert.deepEqual(stableSet(after, 'old'), []);
+      // Every new asset is in: the new set stays; a dropped name not moved
+      // yet waits for the next publish.
+      for (const name of newSet) assert.equal(after.get(name), `new:${name}`, `step ${i}`);
+      assert.deepEqual(names.filter(n => !newSet.includes(n)).map(n => after.get(n)), names.includes('dropped.txt') ? ['old:dropped.txt'] : []);
     }
   });
+  assert.deepEqual(stableSet(recover(snapshots.at(-1)), 'new'), [...newSet].sort());
+  assert.deepEqual(stableSet(recover(snapshots.at(-1)), 'old'), []);
+});
+
+test('the dogfood feed never names an archive that is missing or from another build', () => {
+  const common = ['Kraki.dmg', 'SHA256SUMS.txt', 'kraki-mac-gui-universal.app.tar.gz', 'provenance.json', 'release-manifest.json'];
+  const oldSet = [...common, 'Kraki-93.57.app.zip', DOGFOOD_FEED].sort();
+  const newSet = [...common, 'Kraki-93.58.app.zip', DOGFOOD_FEED].sort();
+  const archiveOf = { old: 'Kraki-93.57.app.zip', new: 'Kraki-93.58.app.zip' };
+  const feedArchiveIsLive = (state, label) => {
+    const feed = state.get(DOGFOOD_FEED);
+    assert.ok(feed, `${label}: no feed`);
+    const build = feed.split(':')[0];
+    assert.equal(state.get(archiveOf[build]), `${build}:${archiveOf[build]}`, `${label}: feed of ${build} build`);
+  };
+  const steps = swapActions(oldSet, newSet);
+  const feedStep = steps.findIndex(a => a.name === INCOMING + DOGFOOD_FEED);
+  assert.equal(feedStep, steps.findLastIndex(a => a.name.startsWith(INCOMING)), 'feed is the last incoming asset');
+  simulateSwap(oldSet, newSet).forEach((state, i) => {
+    // During the swap the feed's name is gone for one rename at most.
+    if (state.has(DOGFOOD_FEED)) feedArchiveIsLive(state, `step ${i}`);
+    feedArchiveIsLive(recover(state), `step ${i} recovered`);
+  });
+});
+
+test('feed refresh swaps only the feed and recovers like a publish', () => {
+  const names = ['Kraki-93.57.app.zip', 'Kraki.dmg', DOGFOOD_FEED, INCOMING + DOGFOOD_FEED];
+  assert.deepEqual(feedSwapActions(names), [
+    { op: 'rename', name: DOGFOOD_FEED, to: PREVIOUS + DOGFOOD_FEED },
+    { op: 'rename', name: INCOMING + DOGFOOD_FEED, to: DOGFOOD_FEED },
+  ]);
+  assert.deepEqual(feedSwapActions(['Kraki.dmg', INCOMING + DOGFOOD_FEED]), [
+    { op: 'rename', name: INCOMING + DOGFOOD_FEED, to: DOGFOOD_FEED },
+  ]);
+  // Interrupted between the two renames: the old feed comes back.
+  const mid = ['Kraki.dmg', PREVIOUS + DOGFOOD_FEED, INCOMING + DOGFOOD_FEED];
+  assert.deepEqual(run(mid, recoveryActions(mid)), ['Kraki.dmg', DOGFOOD_FEED]);
+  assert.ok(swapPending(mid));
+  assert.ok(!swapPending(['Kraki.dmg', DOGFOOD_FEED]));
 });
 
 test('recovery never deletes the only copy of an asset', () => {

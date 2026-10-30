@@ -42,6 +42,7 @@
 		0B7F87636F4C000C2349DDF3 /* SessionPreviewGlyphLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E72790D159855C5D594CC7C6 /* SessionPreviewGlyphLayer.swift */; };
 		0B9C805B95F5C98CA01E756B /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A9A346933E404A3656AD63 /* SessionStore.swift */; };
 		0C4075542DBB1798C14B7B11 /* MacBubbleTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C5D0987ED225B3C748129E /* MacBubbleTextView.swift */; };
+		0CFB5B693FEC25B39AD4C6EA /* MacUpdateChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914714BBF4BAE455D23E1D6E /* MacUpdateChannel.swift */; };
 		0D0FBFD6156B748621A453EE /* HeightMeasurementScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D84628110444A258D3500CF /* HeightMeasurementScheduler.swift */; };
 		0D308117E395227EF0CE74B3 /* MacComposerVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF8680E8FA7950959D1553DE /* MacComposerVoice.swift */; };
 		0D53876497E67CC983EC6525 /* VoiceVocabularySync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CEA6A534E6C629E191BE060 /* VoiceVocabularySync.swift */; };
@@ -690,6 +691,7 @@
 		ECD0B5973DEEEEBEFD39ACAA /* ForegroundTestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */; };
 		ED69BD9687C030C318D9EF49 /* SessionSubscriptionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */; };
 		EE106403A11A61E285A4D705 /* DeviceDates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A0EADC2F8D9117AA3642F8 /* DeviceDates.swift */; };
+		EE2CDDD0211830EDEA2AE69A /* MacUpdateChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914714BBF4BAE455D23E1D6E /* MacUpdateChannel.swift */; };
 		EE5ABC53C6507BE6B265F395 /* PairingSheetDetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83F65DF5E2CEEFA6DA23D6C /* PairingSheetDetectionTests.swift */; };
 		EF182DDCEE43C64585164D92 /* VoiceInputCore in Frameworks */ = {isa = PBXBuildFile; productRef = C18741B12304BDBDCC5AF55E /* VoiceInputCore */; };
 		EFCB36ED6A3073460B301A47 /* VoiceVocabularyNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92BF68CFEA168494A5D2D70E /* VoiceVocabularyNetworkTests.swift */; };
@@ -726,6 +728,7 @@
 		F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8261534E96234C67C920EDCA /* AuthManager.swift */; };
 		FA148474BFE2419BD93D7EFF /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
 		FA4AF6C487B11062A2F3C7DB /* AppColorScheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E80769CD696851C28434036 /* AppColorScheme.swift */; };
+		FA7108CEC52166F796651612 /* MacUpdateChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36FE9973AE5B981EB1ED6629 /* MacUpdateChannelTests.swift */; };
 		FC78727E338B18B601FFFF6E /* TKTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141616DC70091EA4EEE28FA6 /* TKTable.swift */; };
 		FCE093CC69E41DAA6487FFF2 /* ChatPerfListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EDC494E5B0CBA712CCA550C /* ChatPerfListView.swift */; };
 		FD397069CD369BF4E1C49F6F /* AppLanguageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 334E0F4925699AF38863C546 /* AppLanguageTests.swift */; };
@@ -887,6 +890,7 @@
 		3644A5BC702F47286386D70F /* MacProcessLocalKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProcessLocalKeyTests.swift; sourceTree = "<group>"; };
 		36547BB6B68E22C1BEB7D1CD /* KrakiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KrakiMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupIntro.swift; sourceTree = "<group>"; };
+		36FE9973AE5B981EB1ED6629 /* MacUpdateChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateChannelTests.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
 		37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerPlacementTallCardTests.swift; sourceTree = "<group>"; };
 		39C948CE4CF2E3E0DB588D74 /* SwiftPulse */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftPulse; path = ../../pulse/SwiftPulse; sourceTree = SOURCE_ROOT; };
@@ -1062,6 +1066,7 @@
 		8F7A9DE94395DCACB82420EF /* IOSMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMotionTests.swift; sourceTree = "<group>"; };
 		903F7944488AA6630F10C8DE /* MacSubagentStepsShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSubagentStepsShots.swift; sourceTree = "<group>"; };
 		9096638DD70F2733CBC131FB /* ChatPerfListSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPerfListSupport.swift; sourceTree = "<group>"; };
+		914714BBF4BAE455D23E1D6E /* MacUpdateChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateChannel.swift; sourceTree = "<group>"; };
 		92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatMockSnapshot.swift; sourceTree = "<group>"; };
 		924794751B4507709362A1AE /* LucideIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LucideIcon.swift; sourceTree = "<group>"; };
 		92BF68CFEA168494A5D2D70E /* VoiceVocabularyNetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceVocabularyNetworkTests.swift; sourceTree = "<group>"; };
@@ -1353,6 +1358,7 @@
 				C024AE6690757FB0A6916CEE /* MacNotifications.swift */,
 				CF4F58D7B95DFE2EE271C71F /* MacPresence.swift */,
 				D546816336FD2098D82DEB04 /* MacTables.swift */,
+				914714BBF4BAE455D23E1D6E /* MacUpdateChannel.swift */,
 				CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */,
 				5469FDA14AA91327B6DF4400 /* MainWindowView.swift */,
 				735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */,
@@ -1947,6 +1953,7 @@
 				5B3C976D61C108B3931DF4BA /* MacToolArgFormatTests.swift */,
 				96811B83F01971C85020C2C6 /* MacUnderfilledHistoryTests.swift */,
 				BC2CCAFB46B1FAF31D20CE3C /* MacUnreadEntryTests.swift */,
+				36FE9973AE5B981EB1ED6629 /* MacUpdateChannelTests.swift */,
 				5B840BBE9C2E72331DE8CD87 /* MacVoiceComposerTests.swift */,
 				A12AD389B30F05A2599BF32A /* NetworkResilienceTests.swift */,
 				6353A0E87A0D7AC8DBD5AAB0 /* NewSessionComposerDefaultDeviceTests.swift */,
@@ -2474,6 +2481,7 @@
 				02CF38D9A22D8B5C40FD2689 /* MacToolArgFormatTests.swift in Sources */,
 				78109BB33B9871FA7E0E7091 /* MacUnderfilledHistoryTests.swift in Sources */,
 				2F8FC1545C44E7A5A78F9025 /* MacUnreadEntryTests.swift in Sources */,
+				FA7108CEC52166F796651612 /* MacUpdateChannelTests.swift in Sources */,
 				29B069587F551B25D683BB2A /* MacVoiceComposerTests.swift in Sources */,
 				329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */,
 				84954F7CDDC34A4F2B61CF3C /* NativeStyleTests.swift in Sources */,
@@ -2786,6 +2794,7 @@
 				15312135EA00DA125A8AF740 /* MacTables.swift in Sources */,
 				058F05193E5F187FE59EA1F9 /* MacToolActivityRow.swift in Sources */,
 				29FFC9E9F372B2E4E761152D /* MacTransientScroller.swift in Sources */,
+				0CFB5B693FEC25B39AD4C6EA /* MacUpdateChannel.swift in Sources */,
 				B28AD9034476281891032293 /* MacUpdateController.swift in Sources */,
 				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
 				BDBC81A8682AC662CD78C2F1 /* MainWindowView.swift in Sources */,
@@ -3060,6 +3069,7 @@
 				517FBFF724C37803322FF32B /* MacTables.swift in Sources */,
 				5294ABB3C1CF9D77CD60F131 /* MacToolActivityRow.swift in Sources */,
 				4BCE0573ABECAD4387747A78 /* MacTransientScroller.swift in Sources */,
+				EE2CDDD0211830EDEA2AE69A /* MacUpdateChannel.swift in Sources */,
 				C0AD5E96F22955DB2473E341 /* MacUpdateController.swift in Sources */,
 				1BA230F7EC3DA0D4AF911D14 /* MainWindowView.swift in Sources */,
 				000021788275B9A715E2E204 /* MenuBarExtraView.swift in Sources */,

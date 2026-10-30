@@ -19,11 +19,14 @@ The current feed is:
 
 The `mac-updates` branch contains only the generated appcast. Release archives remain GitHub Release assets.
 
+A Mac switched to Dogfood in Settings › General › Updates (internal accounts) reads the dogfood feed instead; see `docs/dogfood.md`.
+
 ## Release flow
 
 A `mac-v*` tag runs the normal signed universal Mac archive pipeline. The archive is Developer ID signed, notarized, stapled, and uploaded as the `Kraki.dmg` download for new users, the existing `.tar.gz` distribution asset and a `Kraki.app.zip` Sparkle update asset.
 
 After the GitHub Release is created, a macOS release job downloads `Kraki.app.zip`, runs Sparkle's `generate_appcast`, signs the feed with the Ed25519 key, and pushes the updated `appcast.xml` to `mac-updates`.
+Then it adds the release to the dogfood feed (`appcast-dogfood.xml` of the `dogfood-mac` release), so Macs on Dogfood are offered it too.
 
 The public Sparkle key is embedded in the production `Info.plist` as `SUPublicEDKey`. The matching private key is stored only in the GitHub Actions secret `SPARKLE_ED25519_PRIVATE_KEY`. It must never be committed, printed in logs, or placed in a release asset.
 

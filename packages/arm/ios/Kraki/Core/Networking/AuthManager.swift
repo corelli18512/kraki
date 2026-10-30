@@ -442,18 +442,8 @@ final class AuthManager {
         KLog.d("✅ auth_ok — deviceId: \(deviceId.prefix(12))...")
 
         // Parse user info
-        var user: UserInfo?
-        if let userDict = message["user"] as? [String: Any],
-           let userId = userDict["id"] as? String,
-           let login = userDict["login"] as? String {
-            user = UserInfo(
-                id: userId,
-                login: login,
-                provider: userDict["provider"] as? String,
-                email: userDict["email"] as? String
-            )
-            KLog.d("👤 User: \(login)")
-        }
+        let user = (message["user"] as? [String: Any]).flatMap(UserInfo.init(authOk:))
+        if let user { KLog.d("👤 User: \(user.login)") }
 
         // Parse device list
         var devices: [DeviceSummary] = []

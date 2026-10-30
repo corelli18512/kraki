@@ -795,6 +795,11 @@ struct UserInfo: Codable, Equatable {
     let email: String?
     let preferences: [String: AnyCodable]?
 
+    /// `preferences.internal` of the account as of auth_ok (Web's rule; the
+    /// Head owns it). `preferences_updated` can be partial and never
+    /// changes this.
+    var isInternalAccount: Bool { preferences?["internal"]?.boolValue == true }
+
     enum CodingKeys: String, CodingKey {
         case id, login, provider, email, preferences
     }
@@ -805,6 +810,13 @@ struct UserInfo: Codable, Equatable {
         self.provider = provider
         self.email = email
         self.preferences = preferences
+    }
+
+    /// The `user` object of auth_ok (the full account, preferences included).
+    init?(authOk user: [String: Any]) {
+        guard let id = user["id"] as? String, let login = user["login"] as? String else { return nil }
+        self.init(id: id, login: login, provider: user["provider"] as? String, email: user["email"] as? String,
+                  preferences: (user["preferences"] as? [String: Any])?.mapValues { AnyCodable($0) })
     }
 
     init(from decoder: Decoder) throws {

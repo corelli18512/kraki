@@ -11440,6 +11440,66 @@
           }
         }
       }
+    },
+    "Update channel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新渠道"
+          }
+        }
+      }
+    },
+    "Stable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "稳定版"
+          }
+        }
+      }
+    },
+    "Dogfood" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内测版"
+          }
+        }
+      }
+    },
+    "Kraki checks the dogfood feed and offers each new dogfood build, and a formal release when it is newer. Dogfood builds are for internal testing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 会从内测渠道检查更新，提供每个新的内测版本；有更新的正式版时也会提供。内测版本仅供内部测试。"
+          }
+        }
+      }
+    },
+    "Stable never downgrades: this Mac keeps build %@ until the next formal release, which is newer, and then updates as usual." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到稳定版不会降级：这台 Mac 会保留版本 %@，直到下一个正式版发布（它比当前版本更新），之后照常更新。"
+          }
+        }
+      }
+    },
+    "This Mac gets formal releases only." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 只接收正式版。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
