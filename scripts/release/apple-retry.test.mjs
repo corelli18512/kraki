@@ -38,3 +38,21 @@ test('gives up after the attempt limit', posix, () => {
   assert.equal(r.status, 68);
   assert.equal(readFileSync(join(f.dir, 'n'), 'utf8'), '5');
 });
+test('release.yml staples the macOS x64 CLI bundle on arm64 before anything publishes it', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const job = (name) => workflow.split(new RegExp(`\\n  ${name}:\\n`))[1].split(/\n  [a-z-]+:\n/)[0];
+  const staple = job('staple-macos-x64');
+  assert.match(staple, /runs-on: macos-14\n/);
+  assert.match(staple, /apple-retry\.sh xcrun stapler staple "\$APP"/);
+  assert.match(staple, /apple-retry\.sh xcrun stapler validate "\$APP"/);
+  assert.match(staple, /spctl -a -vvv --type exec "\$APP"/);
+  // Stapling is mandatory for every publishing mode.
+  assert.match(staple, /if: needs\.prepare\.outputs\.publish_mode == 'publish' \|\| needs\.prepare\.outputs\.publish_mode == 'prerelease' \|\|/);
+  assert.match(staple, /name: build-kraki-cli-macos-x64-app-\$\{\{ github\.run_attempt \}\}/);
+  // The Intel leg's unstapled bundle is never a release asset (publish downloads build-kraki-*).
+  assert.match(job('build-binary'), /name: unstapled-kraki-macos-x64-app-/);
+  for (const name of ['publish', 'publish-npm']) {
+    assert.match(job(name), /- staple-macos-x64\n/, name);
+    assert.match(job(name), /needs\.build-binary\.result == 'success' && needs\.staple-macos-x64\.result == 'success'/, name);
+  }
+});
