@@ -18,19 +18,20 @@ writeFileSync(d + '/n', String(n + 1)); const [code, msg] = JSON.parse(readFileS
 console.log(msg); process.exit(code);`);
   return { dir, run: () => spawnSync('bash', [script, process.execPath, cmd], { encoding: 'utf8', env: { ...process.env, APPLE_RETRY_DELAY: '0' } }) };
 }
-test('retries a transient Apple network error, then succeeds', () => {
+const posix = { skip: process.platform === 'win32' && 'apple-retry.sh runs on the macOS release runners only' };
+test('retries a transient Apple network error, then succeeds', posix, () => {
   const f = fake([[68, 'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."'], [0, 'The validate action worked!']]);
   const r = f.run();
   assert.equal(r.status, 0);
   assert.equal(readFileSync(join(f.dir, 'n'), 'utf8'), '2');
 });
-test('does not retry a real failure', () => {
+test('does not retry a real failure', posix, () => {
   const f = fake([[65, 'CloudKit query for Kraki.app failed due to "Record not found".'], [0, 'ok']]);
   const r = f.run();
   assert.equal(r.status, 65);
   assert.equal(readFileSync(join(f.dir, 'n'), 'utf8'), '1');
 });
-test('gives up after the attempt limit', () => {
+test('gives up after the attempt limit', posix, () => {
   const lost = [68, 'NSURLErrorDomain Code=-1005 network connection was lost'];
   const f = fake([lost, lost, lost, lost, lost, [0, 'ok']]);
   const r = f.run();
