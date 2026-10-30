@@ -30,7 +30,7 @@ on:
           - tentacle
           - mac
       notarize:
-        description: Notarize a mac dry-run build (for clean-machine testing; never published)
+        description: Notarize (and staple) a dry-run build (for clean-machine testing; never published)
         required: false
         default: false
         type: boolean
@@ -310,9 +310,15 @@ jobs:
           - runner: macos-15-intel
             label: macOS x64
             asset_name: kraki-cli-macos-x64
+            # Stapled by staple-macos-x64 on an arm64 runner: from the Intel
+            # runner, the stapler keeps losing its connection to Apple's ticket
+            # service (NSURLErrorDomain -1005) even after the notarization is
+            # accepted.
+            staple_app: false
           - runner: macos-14
             label: macOS arm64
             asset_name: kraki-cli-macos-arm64
+            staple_app: true
           - runner: windows-2022
             label: Windows x64
             asset_name: kraki-cli-windows-x64.exe
@@ -449,7 +455,7 @@ jobs:
           # "Notarize" step below.
 
       - name: Notarize and staple (macOS)
-        if: runner.os == 'macOS' && (needs.prepare.outputs.publish_mode == 'publish' || needs.prepare.outputs.publish_mode == 'prerelease')
+        if: runner.os == 'macOS' && (needs.prepare.outputs.publish_mode == 'publish' || needs.prepare.outputs.publish_mode == 'prerelease' || github.event.inputs.notarize == 'true')
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -476,12 +482,16 @@ jobs:
           # online Gatekeeper check, so an offline or rate-limited machine sees
           # "damaged app" — and an app Gatekeeper refuses to launch has no TCC
           # grants at all.
+          if [ "${{ matrix.staple_app }}" != "true" ]; then
+            echo "Notarized; staple-macos-x64 staples this bundle on an arm64 runner."
+            exit 0
+          fi
           bash scripts/release/apple-retry.sh xcrun stapler staple packages/tentacle/dist/sea/Kraki.app
           bash scripts/release/apple-retry.sh xcrun stapler validate packages/tentacle/dist/sea/Kraki.app
           spctl -a -vvv --type exec packages/tentacle/dist/sea/Kraki.app
 
       - name: Package .app bundle (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.staple_app
         run: |
           set -euo pipefail
           # Packaged only after notarization + stapling, so the tarball carries
@@ -513,11 +523,90 @@ jobs:
           if-no-files-found: error
 
       - name: Upload .app bundle artifact (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.staple_app
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ matrix.asset_name }}-app-${{ github.run_attempt }}
           path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
+          if-no-files-found: error
+
+      - name: Package unstapled .app bundle (macOS x64)
+        if: runner.os == 'macOS' && !matrix.staple_app
+        run: |
+          set -euo pipefail
+          # Notarized (when this run notarizes) but not stapled. Never a
+          # release asset: the artifact name is outside the build-kraki-*
+          # pattern the publish job downloads.
+          tar -czf "$RUNNER_TEMP/kraki-macos-x64.unstapled.app.tar.gz" \
+            -C packages/tentacle/dist/sea Kraki.app
+
+      - name: Upload unstapled .app bundle artifact (macOS x64)
+        if: runner.os == 'macOS' && !matrix.staple_app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unstapled-kraki-macos-x64-app-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kraki-macos-x64.unstapled.app.tar.gz
+          if-no-files-found: error
+
+  # ─── Staple the macOS x64 CLI bundle ───────────────────
+
+  staple-macos-x64:
+    name: Staple .app bundle (macOS x64)
+    needs:
+      - prepare
+      - build-binary
+    # Runs whenever build-binary succeeded, so it is skipped with it (head-v*,
+    # mac-v*, mac dry-runs). Publishing requires this job to succeed.
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Download unstapled .app bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unstapled-kraki-macos-x64-app-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/unstapled
+
+      - name: Unpack and verify signature
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/x64"
+          tar -xzf "$RUNNER_TEMP/unstapled/kraki-macos-x64.unstapled.app.tar.gz" -C "$RUNNER_TEMP/x64"
+          APP="$RUNNER_TEMP/x64/Kraki.app"
+          test "$(lipo -archs "$APP/Contents/MacOS/kraki")" = "x86_64"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Staple, validate and assess
+        # Mandatory whenever the build was notarized: a release or dogfood
+        # build never ships the x64 bundle without its ticket.
+        if: needs.prepare.outputs.publish_mode == 'publish' || needs.prepare.outputs.publish_mode == 'prerelease' || github.event.inputs.notarize == 'true'
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/x64/Kraki.app"
+          bash scripts/release/apple-retry.sh xcrun stapler staple "$APP"
+          bash scripts/release/apple-retry.sh xcrun stapler validate "$APP"
+          # A Gatekeeper assessment reads the signature and the stapled ticket;
+          # it does not run the x86_64 executable, so it needs no Rosetta.
+          spctl -a -vvv --type exec "$APP"
+          test -f "$APP/Contents/CodeResources"
+
+      - name: Package .app bundle
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          tar -czf "$RUNNER_TEMP/out/kraki-macos-x64.app.tar.gz" -C "$RUNNER_TEMP/x64" Kraki.app
+          ls -lh "$RUNNER_TEMP/out/kraki-macos-x64.app.tar.gz"
+
+      - name: Upload .app bundle artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-kraki-cli-macos-x64-app-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/out/kraki-macos-x64.app.tar.gz
           if-no-files-found: error
 
   # ─── Build macOS GUI App ───────────────────────────────
@@ -933,10 +1022,12 @@ jobs:
     needs:
       - prepare
       - build-binary
+      - staple-macos-x64
       - build-mac-gui
     # Run for any non-head release where the relevant build succeeded (or was
-    # correctly skipped). build-binary is skipped for head-v*/mac-v*;
-    # build-mac-gui is skipped for v*/head-v*. Neither may have failed.
+    # correctly skipped). build-binary (and staple-macos-x64 with it) is
+    # skipped for head-v*/mac-v*; build-mac-gui is skipped for v*/head-v*.
+    # Neither may have failed.
     if: |
       always() &&
       needs.prepare.result == 'success' &&
@@ -947,7 +1038,7 @@ jobs:
            ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'tentacle') ||
             (github.event.inputs.mode == 'prerelease' && github.event.inputs.target == 'tentacle') ||
             (startsWith(github.event.inputs.tag, 'v') && !startsWith(github.event.inputs.tag, 'head-v'))))) &&
-         needs.build-binary.result == 'success') ||
+         needs.build-binary.result == 'success' && needs.staple-macos-x64.result == 'success') ||
         (((github.event_name == 'push' && startsWith(github.ref_name, 'mac-v')) ||
           (github.event_name == 'workflow_dispatch' &&
            ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'mac') ||
@@ -1250,6 +1341,7 @@ jobs:
     needs:
       - prepare
       - build-binary
+      - staple-macos-x64
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: |
@@ -1258,7 +1350,7 @@ jobs:
       needs.prepare.outputs.publish_mode == 'publish' &&
       (
         (startsWith(needs.prepare.outputs.release_tag, 'head-v') && needs.build-binary.result == 'skipped')
-        || (!startsWith(needs.prepare.outputs.release_tag, 'head-v') && needs.build-binary.result == 'success')
+        || (!startsWith(needs.prepare.outputs.release_tag, 'head-v') && needs.build-binary.result == 'success' && needs.staple-macos-x64.result == 'success')
       )
     permissions:
       contents: write
