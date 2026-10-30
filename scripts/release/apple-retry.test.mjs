@@ -39,7 +39,7 @@ test('gives up after the attempt limit', posix, () => {
   assert.equal(readFileSync(join(f.dir, 'n'), 'utf8'), '5');
 });
 test('release.yml staples the macOS x64 CLI bundle on arm64 before anything publishes it', () => {
-  const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // Windows checkouts are CRLF
   const job = (name) => workflow.split(new RegExp(`\\n  ${name}:\\n`))[1].split(/\n  [a-z-]+:\n/)[0];
   const staple = job('staple-macos-x64');
   assert.match(staple, /runs-on: macos-14\n/);
