@@ -6,7 +6,7 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fsp, accessSync, constants, statSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -195,12 +195,27 @@ export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 
   { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
 ];
 
-/** The shell could not find the command at all (POSIX 127, cmd.exe's "is
- *  not recognized"), as opposed to a command that exists and failed. */
-export function isCommandNotFound(err: unknown): boolean {
-  const e = err as { status?: number | null; code?: string; stderr?: unknown };
-  if (e?.code === 'ENOENT' || e?.status === 127) return true;
-  return /is not recognized as an internal or external command|command not found/i.test(String(e?.stderr ?? ''));
+/** Full path of `bin` as the shell would find it on PATH, or null. POSIX:
+ *  an executable file; Windows: `bin` plus each PATHEXT extension. Decides
+ *  "installed" for checkAgentCli without reading the shell's (localized)
+ *  error text or exit code. */
+export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env, os: string = platform()): string | null {
+  const win = os === 'win32';
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+  const dirs = (env[pathKey] ?? '').split(win ? ';' : ':').filter(Boolean);
+  const exts = win ? ['', ...(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)] : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = join(dir, bin + ext);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        if (!win) accessSync(candidate, constants.X_OK);
+        else if (!ext) continue; // cmd.exe runs only PATHEXT files
+        return candidate;
+      } catch { /* not here */ }
+    }
+  }
+  return null;
 }
 
 /** First line of a failed `--version` (stderr, else the error message). */
@@ -215,7 +230,21 @@ function versionFailure(err: unknown): string {
  *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts).
  *  A CLI that is there but fails `--version` is `found` with `error`: it is
  *  installed and broken, not missing (K-128). */
-export function checkAgentCli(bin: string): CliCheckResult & { path?: string; error?: string } {
+export interface AgentCliDeps {
+  /** `<bin> --version` through the shell; throws like execSync on failure. */
+  runVersion: (bin: string) => string;
+  resolveOnPath: (bin: string) => string | null;
+  findBundled: (bin: string) => string | null | undefined;
+}
+
+const defaultAgentCliDeps: AgentCliDeps = {
+  // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
+  runVersion: (bin) => execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }),
+  resolveOnPath: (bin) => resolveOnPath(bin),
+  findBundled: (bin) => findAppBundledCli(bin),
+};
+
+export function checkAgentCli(bin: string, deps: AgentCliDeps = defaultAgentCliDeps): CliCheckResult & { path?: string; error?: string } {
   const parse = (output: string, path?: string) => {
     const first = output.trim().split('\n')[0] ?? '';
     const match = first.match(/(\d+\.\d+\.\d+)/);
@@ -223,12 +252,13 @@ export function checkAgentCli(bin: string): CliCheckResult & { path?: string; er
   };
   let failure: string | undefined;
   try {
-    // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
-    return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }));
+    return parse(deps.runVersion(bin));
   } catch (err) {
-    if (!isCommandNotFound(err)) failure = versionFailure(err);
+    // On PATH but failing (even exit 127 from a missing `#!/usr/bin/env node`)
+    // is a broken install; not on PATH is "not installed".
+    if (deps.resolveOnPath(bin)) failure = versionFailure(err);
   }
-  const bundled = findAppBundledCli(bin);
+  const bundled = deps.findBundled(bin);
   if (bundled) {
     try {
       return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }), bundled);

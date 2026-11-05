@@ -61,6 +61,9 @@ export interface AgentsCheckDeps {
   piHasShell?: () => boolean;
 }
 
+/** Stopping an agent is local cleanup; it should not take as long as a start. */
+const STOP_TIMEOUT_MS = 5_000;
+
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
@@ -117,7 +120,7 @@ export async function checkAgent(
   } finally {
     // A stop that never returns would keep `kraki agents --json` (and Kraki
     // for Mac's setup waiting on it) from ever finishing (K-346).
-    try { if (adapter) await withTimeout(adapter.stop(), deps.timeoutMs, `${agent.name} stop`); } catch { /* best effort */ }
+    try { if (adapter) await withTimeout(adapter.stop(), Math.min(deps.timeoutMs, STOP_TIMEOUT_MS), `${agent.name} stop`); } catch { /* best effort */ }
   }
 }
 
@@ -184,17 +187,28 @@ export async function runAgentsCheckChild(
   };
   return new Promise((resolve) => {
     const results: AgentCheckResult[] = [];
-    const child = spawn(command.file, command.args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true });
+    // POSIX: its own process group, so the SIGKILL below also ends the agent
+    // CLIs it started (Windows: taskkill /T ends the tree).
+    const posix = process.platform !== 'win32';
+    const child = spawn(command.file, command.args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true, detached: posix });
+    const killGroup = () => {
+      try {
+        if (!child.pid) return;
+        if (posix) process.kill(-child.pid, 'SIGKILL');
+        else killProcessTree(child.pid, 'SIGKILL');
+      } catch { /* gone */ }
+    };
+    // Detached, the group no longer gets the terminal's Ctrl+C: end it if setup exits first.
+    const onParentExit = () => { if (child.exitCode === null && child.signalCode === null) killGroup(); };
+    process.once('exit', onParentExit);
     // A child that ignores SIGTERM, or a grandchild (an agent CLI it started)
     // still holding the stdout pipe, never lets 'close' fire: setup hung
-    // forever (K-346). SIGTERM, then SIGKILL, then stop waiting regardless.
+    // forever (K-346). SIGTERM, then SIGKILL the group, then stop waiting regardless.
     let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       try { child.kill(); } catch { /* gone */ }
       killTimer = setTimeout(() => {
-        try {
-          if (child.pid) killProcessTree(child.pid, 'SIGKILL');
-        } catch { /* gone */ }
+        killGroup();
         child.stdout.destroy();
         finish();
       }, options.killGraceMs ?? 5_000);
@@ -224,6 +238,7 @@ export async function runAgentsCheckChild(
       finished = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      process.removeListener('exit', onParentExit);
       for (const agent of SETUP_AGENTS) {
         if (results.some((r) => r.id === agent.id)) continue;
         results.push({
