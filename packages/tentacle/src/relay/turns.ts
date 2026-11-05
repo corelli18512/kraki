@@ -27,7 +27,8 @@ export function beginAdapterTurn(client: RelayClient, sessionId: string, turnId?
  * The turn behaves like a prompted one from here: `active` (sleep guard,
  * session list), its steps/narration/reply pass the turn fence, and its
  * closing idle marks unread, pushes the reply preview and may title the
- * session. Its trace has its own key (SessionManager.beginAgentTurn).
+ * session. Its trace has its own key (SessionManager.beginAgentTurn), and a
+ * prompt that arrives meanwhile waits for its idle like behind any turn.
  */
 export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string): string | undefined {
   const meta = client.sessionManager.getMeta(sessionId);
@@ -55,6 +56,14 @@ export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string):
   client.errorPersistedForTurn.delete(sessionId);
   // Steps and artifacts from here on belong to this turn, not the last prompt's.
   const traceStartSeq = client.sessionManager.beginAgentTurn(sessionId);
+  // A prompt arriving while this turn runs queues behind it (send_input
+  // persists and dispatches it at this idle) instead of aborting the run.
+  // Idle, Stop and session end all resolve the waiter (resolveTurnIdle).
+  const settled = waitForTurnIdle(client, sessionId);
+  client.inputChains.set(sessionId, settled);
+  void settled.finally(() => {
+    if (client.inputChains.get(sessionId) === settled) client.inputChains.delete(sessionId);
+  });
   client.send({ type: 'active', sessionId, payload: {} });
   client.sessionManager.markActive(sessionId);
   beginAdapterTurn(client, sessionId, turnId);

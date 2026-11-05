@@ -562,4 +562,24 @@ describe('RelayClient: a pi wake run after the hold timed out', () => {
     const failed = sm.getMessagesAfterSeq(t.sessionId, 0)[3];
     expect(commands(sm.readTurnTrace(t.sessionId, failed.seq).entries)).toEqual(['gh pr list']);
   });
+
+  it('a prompt that arrives during W waits for W\'s idle instead of aborting the wake run', async () => {
+    const t = build();
+    await idleAfterPrompt(t);
+    const wakeTurnId = await startWake(t);
+    expect(t.client.inputChains.has(t.sessionId)).toBe(true);
+    const send = vi.spyOn(t.adapter, 'sendMessage');
+    handleConsumerMessage(t.client, { type: 'send_input', sessionId: t.sessionId, deviceId: 'app-1', payload: { text: 'next', clientId: 'cid-2' } });
+    await new Promise(r => setTimeout(r, 10));
+    // Not persisted, not sent: W still owns the agent.
+    expect(send).not.toHaveBeenCalled();
+    expect(t.rows().filter(r => r.type === 'user_message')).toHaveLength(1);
+    expect(t.client.activeInputTurnIds.get(t.sessionId)).toBe(wakeTurnId);
+    await reply(t, 'W done');
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(t.rows().map(r => r.type)).toEqual(['user_message', 'agent_message', 'idle', 'agent_message', 'idle', 'user_message']);
+    expect(t.rows()[3].payload).toMatchObject({ content: 'W done' });
+    expect(t.session.proc.request.mock.calls.filter(c => c[0] === 'abort')).toEqual([]);
+    expect(t.client.activeInputTurnIds.get(t.sessionId)).not.toBe(wakeTurnId);
+  });
 });
