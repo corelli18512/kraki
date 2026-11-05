@@ -178,8 +178,9 @@ final class MessageStore {
             do {
                 try db.insert(sessionId, [message])
                 notePersisted(sessionId, upTo: message.seq)
+                noteCacheWrite(failed: nil)
             } catch {
-                KLog.d("⚠️ Message cache write failed: \(error)")
+                noteCacheWrite(failed: error)
             }
         }
 
@@ -311,8 +312,27 @@ final class MessageStore {
         do {
             try db.insert(sessionId, batch)
             notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
+            noteCacheWrite(failed: nil)
         } catch {
-            KLog.d("⚠️ Message cache write failed: \(error)")
+            noteCacheWrite(failed: error)
+        }
+    }
+
+    /// True while writes to the message cache fail (disk full, data
+    /// protection). Nothing is lost: unwritten rows leave a gap that is
+    /// fetched again once writes work.
+    @ObservationIgnored private(set) var cacheWritesFailing = false
+
+    /// Logs the start and the end of a run of failed cache writes (in release
+    /// builds too), not every failed write.
+    private func noteCacheWrite(failed error: Error?) {
+        if let error {
+            guard !cacheWritesFailing else { return }
+            cacheWritesFailing = true
+            KLog.diag("[MessageStore] message cache writes failing; history is fetched again later: \(error)")
+        } else if cacheWritesFailing {
+            cacheWritesFailing = false
+            KLog.diag("[MessageStore] message cache writes work again")
         }
     }
 
