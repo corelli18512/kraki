@@ -194,9 +194,12 @@ describe('useStore', () => {
       useStore.getState().setDevices([mockDevice, mockDevice2]);
       useStore.getState().upsertSession(mockSession);
       useStore.getState().upsertSession(mockSession2);
+      useStore.getState().setDraft('sess-1', 'half-typed reply');
       useStore.getState().setDevices([mockDevice2]);
       expect(useStore.getState().sessions.has('sess-1')).toBe(false);
       expect(useStore.getState().sessions.has('sess-2')).toBe(true);
+      // No user action removed it: the unsent text is kept for when the computer returns.
+      expect(useStore.getState().drafts.get('sess-1')).toBe('half-typed reply');
     });
 
     it('renameDevice renames the device and relabels its sessions', () => {

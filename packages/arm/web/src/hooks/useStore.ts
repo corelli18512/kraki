@@ -159,11 +159,17 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
 
 /** A device removed from the account takes its sessions with it: sidebar,
  *  unread count and cached history (K-317). They stay on the computer and come
- *  back if it signs in again. */
-function forgetDeviceSessions(get: () => Store, deviceId: string): void {
+ *  back if it signs in again, and so do unsent drafts: this can follow from
+ *  the relay's list alone, with no user action, so typed text is kept. */
+function forgetDeviceSessions(get: () => Store, set: (partial: Partial<Store>) => void, deviceId: string): void {
+  const kept = new Map<string, string>();
   for (const session of [...get().sessions.values()]) {
-    if (session.deviceId === deviceId) get().removeSession(session.id);
+    if (session.deviceId !== deviceId) continue;
+    const draft = get().drafts.get(session.id);
+    if (draft !== undefined) kept.set(session.id, draft);
+    get().removeSession(session.id);
   }
+  if (kept.size > 0) set({ drafts: new Map([...get().drafts, ...kept]) });
 }
 
 export const useStore = create<Store>()(persist((set, get) => ({
@@ -264,7 +270,7 @@ export const useStore = create<Store>()(persist((set, get) => ({
   setDevices: (devices) => {
     const listed = new Set(devices.map((d) => d.id));
     const removed = [...get().devices.keys()].filter((id) => !listed.has(id));
-    for (const id of removed) forgetDeviceSessions(get, id);
+    for (const id of removed) forgetDeviceSessions(get, set, id);
     set((state) => {
       let sessions = state.sessions;
       for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
@@ -280,7 +286,7 @@ export const useStore = create<Store>()(persist((set, get) => ({
     }),
 
   removeDevice: (deviceId) => {
-    forgetDeviceSessions(get, deviceId);
+    forgetDeviceSessions(get, set, deviceId);
     set((state) => {
       const next = new Map(state.devices);
       next.delete(deviceId);

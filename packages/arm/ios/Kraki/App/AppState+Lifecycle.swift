@@ -407,11 +407,13 @@ extension AppState {
 
     /// A device removed from the account takes its sessions with it: list,
     /// unread badge and this app's cached history (K-317). The sessions stay
-    /// on the computer itself and come back if it signs in again.
+    /// on the computer itself and come back if it signs in again, and so do
+    /// unsent drafts: this can follow from the relay's list alone, with no
+    /// user action, so typed text is kept.
     func forgetSessions(onDevice deviceId: String) {
         let ids = sessionStore.sessions.values.filter { $0.deviceId == deviceId }.map(\.id)
         for id in ids {
-            sessionStore.removeSession(id)
+            sessionStore.removeSession(id, keepingComposer: true)
             messageStore.deleteSessionMessages(id)
         }
     }

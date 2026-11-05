@@ -953,7 +953,10 @@ final class SessionStore {
         return discardingStagedImages(of: removedIDs)
     }
 
-    func removeSession(_ id: String) {
+    /// `keepingComposer` keeps the Session's unsent draft and staged image
+    /// (in memory only): used when a removed computer takes its sessions off
+    /// the list, so the text is back if the computer returns (K-317).
+    func removeSession(_ id: String, keepingComposer: Bool = false) {
         if sessionListRevealId == id {
             sessionListRevealId = nil
         }
@@ -962,8 +965,10 @@ final class SessionStore {
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
-        drafts.removeValue(forKey: id)
-        stagedImages.removeValue(forKey: id)
+        if !keepingComposer {
+            drafts.removeValue(forKey: id)
+            stagedImages.removeValue(forKey: id)
+        }
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
     }

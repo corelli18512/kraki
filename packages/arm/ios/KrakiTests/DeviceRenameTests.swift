@@ -159,11 +159,14 @@ final class DeviceRenameTests: XCTestCase {
         ])
         app.sessionStore.sessions = ["s1": session("s1", on: "t", named: "corelli-mbp"),
                                      "s2": session("s2", on: "o", named: "other")]
+        app.sessionStore.setDraft("s1", "half-typed reply")
         app.onAuthenticated(deviceId: "me", user: nil,
                             devices: [DeviceSummary(id: "o", name: "other", role: .tentacle, online: true)],
                             githubClientId: nil, relayVersion: nil)
         XCTAssertNil(app.sessionStore.sessions["s1"])
         XCTAssertNotNil(app.sessionStore.sessions["s2"])
+        XCTAssertEqual(app.sessionStore.drafts["s1"], "half-typed reply",
+                       "no user action removed it: the unsent text is kept for when the computer returns")
     }
 
     /// K-189: the rename field is cut at the limit on a character boundary,
