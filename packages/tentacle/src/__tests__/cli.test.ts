@@ -592,6 +592,20 @@ describe('CLI connect (interactive)', () => {
   });
 });
 
+describe('CLI auth', () => {
+  it('names github.com when GitHub cannot be reached (K-324)', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } })) as typeof fetch;
+    try {
+      await runCli(['auth', '--client-id', 'cid']);
+      await vi.waitFor(() => expect(stderrOutput.join('')).toContain('Could not reach github.com (ENOTFOUND)'));
+      expect(mockExit).toHaveBeenCalledWith(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
 describe('CLI relay-info', () => {
   it('exits non-zero when the relay cannot be reached (K-267)', async () => {
     // A port that was just freed: the connection is refused.
