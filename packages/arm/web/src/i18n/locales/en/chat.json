@@ -52,7 +52,8 @@
       "empty": "empty",
       "invalidHash": "Attachment id is not a valid content hash",
       "checksumMismatch": "Attachment checksum mismatch",
-      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}"
+      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}",
+      "chunkTimeout": "Timed out receiving the attachment (part {{index}}, {{attempts}} attempts)."
     }
   },
   "bubble": {
@@ -69,7 +70,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "working": "Agent is working",
-    "processLost": "Agent process was lost"
+    "processLost": "Agent process was lost",
+    "attachmentsNotKept": "Attachments were too large to keep when the page reloaded. Attach them again, or retry to send the text only."
   },
   "header": {
     "modePicker": "Session mode picker",

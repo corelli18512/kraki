@@ -26,6 +26,15 @@ function sameFields(a: object | undefined, b: object | undefined): boolean {
   return true;
 }
 
+/** A Session's titles are text or absent. A Tentacle (or an old persisted
+ *  snapshot) that sends anything else must not reach rendering (K-005). */
+function withTextTitles(session: WebSessionSummary): WebSessionSummary {
+  const title = typeof session.title === 'string' ? session.title : undefined;
+  const autoTitle = typeof session.autoTitle === 'string' ? session.autoTitle : undefined;
+  if (title === session.title && autoTitle === session.autoTitle) return session;
+  return { ...session, title, autoTitle };
+}
+
 // --- Custom Map/Set JSON serialization ---
 
 function replacer(_key: string, value: unknown): unknown {
@@ -119,6 +128,8 @@ export function mergePersistedStore(persisted: unknown, current: Store): Store {
   const pinned = saved.pinnedSessions;
   if (pinned instanceof Set) next.pinnedSessions = pinned as Set<string>;
   else if (Array.isArray(pinned)) next.pinnedSessions = new Set(pinned.filter((id): id is string => typeof id === 'string'));
+  // An old persisted snapshot may hold non-text titles (K-005).
+  if (next.sessions) next.sessions = new Map([...next.sessions].map(([id, session]) => [id, withTextTitles(session)]));
   return { ...current, ...next };
 }
 
@@ -155,6 +166,7 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
  *  stored JSON is already current. */
+let storageFullReported = false;
 function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
   if (!storage) return storage;
   let written: StorageValue<PersistedStore> | null = null;
@@ -166,7 +178,17 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
     getItem: (name) => storage.getItem(name),
     setItem: (name, value) => {
       if (unchanged(value)) return;
-      storage.setItem(name, value);
+      // Full storage (quota) must not make every store update throw (K-201):
+      // the in-memory state stays authoritative for this page.
+      try {
+        storage.setItem(name, value);
+      } catch (err) {
+        if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
+        storageFullReported = true;
+        // Don't serialize and fail again for the same state on every update.
+        written = value;
+        return;
+      }
       written = value;
     },
     removeItem: (name) => {
@@ -204,13 +226,14 @@ export const useStore = create<Store>()(persist((set) => ({
         }
       }
       return {
-        sessions: new Map(sessions.map((session) => [session.id, session])),
+        sessions: new Map(sessions.map((session) => [session.id, withTextTitles(session)])),
         unreadCount,
       };
     }),
 
-  upsertSession: (session) =>
+  upsertSession: (incoming) =>
     set((state) => {
+      const session = withTextTitles(incoming);
       // The Tentacle re-broadcasts the whole list after every reply; an
       // unchanged digest must not notify every subscriber.
       if (sameFields(state.sessions.get(session.id), session)) {

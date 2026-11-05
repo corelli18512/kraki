@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
 import { diag } from './diag';
 import type { Message } from '@kraki/protocol';
@@ -20,16 +21,19 @@ const RECONNECT_FAST_WINDOW = 120_000;
 const RECONNECT_SLOW = 15_000;
 const RECONNECT_SLOW_WINDOW = 300_000;
 const RECONNECT_MAX = 30_000;
-/** No frame at all for this long on an authenticated socket → dead link
- *  (half-open). Pings every 10 s get a pong, and payload frames are ≤32 KB
- *  from fragment-capable Tentacles, so a live link is never this quiet. */
+/** A ping that has gone this long with no frame at all arriving after it →
+ *  dead link (half-open). Counted from the ping, not from the last frame, so
+ *  a latency spike of up to ~20 s (mobile handover, bufferbloat) does not drop
+ *  a live link (K-311), like the native apps' liveness ping timeout. */
 const LIVENESS_TIMEOUT = 22_000;
 const LIVENESS_CHECK = 2_000;
 /** A WebSocket handshake that has not opened by now is abandoned. */
 const CONNECT_TIMEOUT = 10_000;
 /** Shown while another tab/window with the same stored identity holds the
  *  relay connection. Coming back to this tab takes the connection over. */
-export const REPLACED_ELSEWHERE_MESSAGE = 'Kraki is open in another tab or window. Come back to this tab to use it here.';
+export function replacedElsewhereMessage(): string {
+  return t('app:errors.replacedElsewhere');
+}
 /** Application-level ping interval. 10s keeps the connection warm through
  *  proxies and bounds liveness-detection latency during read-only viewing. */
 const PING_INTERVAL = 10_000;
@@ -258,12 +262,16 @@ export class KrakiTransport {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   intentionalClose = false;
   private replacedElsewhere = false;
+  /** The banner text shown when replaced, in the language of that moment. */
+  private replacedBanner: string | null = null;
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
   private authenticated = false;
   /** When the current outage began (first failed/closed attempt). */
   private outageStartedAt: number | null = null;
   private lastRxAt = 0;
+  /** When the oldest ping with no frame received since was sent. */
+  private unansweredPingAt: number | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeListenersInstalled = false;
@@ -317,7 +325,7 @@ export class KrakiTransport {
         this.codeVerifier = pkce.codeVerifier;
         this.redirectUri = pkce.redirectUri;
       } else {
-        getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
+        getStore().setLastError(t('app:errors.oauthUnverified'));
         logger.warn('OAuth state mismatch — ignoring code');
       }
     }
@@ -350,7 +358,9 @@ export class KrakiTransport {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
-      if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+      const lastError = getStore().lastError;
+      if (lastError !== null && (lastError === this.replacedBanner || lastError === replacedElsewhereMessage())) getStore().setLastError(null);
+      this.replacedBanner = null;
       this.callbacks.onSignedOutElsewhere?.();
       return;
     }
@@ -407,12 +417,17 @@ export class KrakiTransport {
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.lastRxAt = Date.now();
+      this.unansweredPingAt = null;
       let msg: Message;
       try {
         msg = JSON.parse(event.data as string) as Message;
       } catch (err) {
         const raw = typeof event.data === 'string' ? event.data : '';
         logger.warn('Malformed WS message:', raw.slice(0, 200), err);
+        return;
+      }
+      if (!msg || typeof msg !== 'object') {
+        logger.warn('Ignoring WS frame that is not an object');
         return;
       }
       const rawLen = typeof event.data === 'string' ? event.data.length : 0;
@@ -481,7 +496,8 @@ export class KrakiTransport {
     this.outageStartedAt = null;
     getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
-    getStore().setLastError(REPLACED_ELSEWHERE_MESSAGE);
+    this.replacedBanner = replacedElsewhereMessage();
+    getStore().setLastError(this.replacedBanner);
   }
 
   /** True while another tab holds this device's connection. */
@@ -492,15 +508,27 @@ export class KrakiTransport {
     if (!this.replacedElsewhere) return;
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
-    if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+    if (this.replacedBanner !== null && getStore().lastError === this.replacedBanner) getStore().setLastError(null);
+    this.replacedBanner = null;
     this.reconnectDelay = RECONNECT_BASE;
     this.connect();
   }
 
-  /** Close the current socket as a non-intentional drop, so the usual
-   *  backoff reconnects (a passing failure while authenticating). */
-  retryLater(reason: string) {
-    if (this.ws) this.abandon(this.ws, reason);
+  /** A passing failure while authenticating (key store unavailable, or the
+   *  relay refused the sign-in for a reason that may pass: auth backend down,
+   *  signing-key refresh): close the current socket as a non-intentional drop
+   *  so it is retried on the reconnect backoff, never at once (K-198). The
+   *  outage clock keeps running, so repeated refusals slow down like any
+   *  other outage. */
+  retryLater(reason = 'auth_retry_later') {
+    this.replacedElsewhere = false;
+    if (this.ws) {
+      this.abandon(this.ws, reason);
+      return;
+    }
+    this.cleanup();
+    getStore().setStatus('disconnected');
+    this.scheduleReconnect();
   }
 
   /** Stop using a socket that is dead but has not closed (half-open, stuck
@@ -600,12 +628,13 @@ export class KrakiTransport {
 
   private startPing() {
     this.pingTimer = setInterval(() => {
+      if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) this.unansweredPingAt ??= Date.now();
       this.send({ type: 'ping' });
     }, PING_INTERVAL);
     const ws = this.ws;
     this.livenessTimer = setInterval(() => {
       if (!ws || this.ws !== ws || !this.authenticated) return;
-      if (this.msSinceLastRx() > LIVENESS_TIMEOUT) {
+      if (this.unansweredPingAt !== null && Date.now() - this.unansweredPingAt > LIVENESS_TIMEOUT) {
         logger.warn('No frames from relay — link is dead, reconnecting');
         traceEvent({ comp: 'arm', evt: 'WS-LIVENESS-TIMEOUT', quietMs: this.msSinceLastRx() });
         this.abandon(ws);
@@ -642,6 +671,7 @@ export class KrakiTransport {
 
   private cleanup() {
     this.authenticated = false;
+    this.unansweredPingAt = null;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;

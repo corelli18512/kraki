@@ -676,9 +676,9 @@ export function SettingsPanel({
             </p>
           )}
           {tab === 'General' && !desktop && state.user?.preferences?.internal === true && (
-            <SettingsSection title="Dogfood">
-              <SettingsRow label="Builds" detail="Internal account: you get every new build first.">
-                <span data-testid="release-channel">{isBeta ? 'Dogfood' : 'Switching…'}</span>
+            <SettingsSection title={t('dogfood.title')}>
+              <SettingsRow label={t('dogfood.builds')} detail={t('dogfood.detail')}>
+                <span data-testid="release-channel">{isBeta ? t('dogfood.title') : t('dogfood.switching')}</span>
               </SettingsRow>
             </SettingsSection>
           )}

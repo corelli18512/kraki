@@ -8,7 +8,8 @@
     <script>
       // Apply dark mode before first paint to avoid flash and iOS PWA white status bar
       (function() {
-        var t = localStorage.getItem('kraki-theme');
+        var t = null;
+        try { t = localStorage.getItem('kraki-theme'); } catch (e) { /* storage blocked */ }
         var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
         if (dark) document.documentElement.classList.add('dark');
       })();
@@ -19,7 +20,6 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@800&display=swap" rel="stylesheet" />
     <meta property="og:title" content="Kraki — Agent Control" />
     <meta property="og:description" content="E2E encrypted relay for AI coding agents" />
     <meta property="og:image" content="/icon-512.png" />

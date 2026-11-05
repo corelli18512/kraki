@@ -16,9 +16,14 @@ import { trackVisualViewport } from './lib/visual-viewport';
 import { desktop } from './lib/desktop';
 import { syncDesktopLanguage } from './i18n/desktop-bridge';
 import { desktopBuildNumber, desktopDiagHttp, diag } from './lib/diag';
+import { registerServiceWorker } from './lib/push';
+import { onLanguageChanged } from './i18n';
 
 trackVisualViewport();
 syncDesktopLanguage();
+registerServiceWorker();
+// The worker's notification texts follow the UI language.
+onLanguageChanged((lang) => registerServiceWorker({ prod: import.meta.env.PROD, lang }));
 // Performance data (Settings › Share Performance Data): Windows shell only.
 diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktopBuildNumber() });
 

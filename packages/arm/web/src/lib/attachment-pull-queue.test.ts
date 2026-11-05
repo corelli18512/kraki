@@ -121,7 +121,7 @@ describe('AttachmentPullQueue', () => {
     expect(failure).toHaveBeenCalledWith(
       'session-a',
       failedRef,
-      'Timed out receiving attachment chunk 1 after 2 attempts',
+      'Timed out receiving the attachment (part 1, 2 attempts).',
     );
     expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'session-b', id: 'next', index: 0 }));
   });

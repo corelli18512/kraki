@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { KrakiWSClient } from './ws-client';
 import { useStore } from '../hooks/useStore';
-import { REPLACED_ELSEWHERE_MESSAGE } from './transport';
+import { replacedElsewhereMessage } from './transport';
 
 vi.mock('./message-db', () => ({
   putMessage: async () => {}, putMessages: async () => {}, getMessages: async () => [],
@@ -76,7 +76,7 @@ describe('two Web tabs with one stored identity', () => {
     tabB.connect();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(relay.auths).toBeLessThanOrEqual(2);
-    expect(useStore.getState().lastError).toBe(REPLACED_ELSEWHERE_MESSAGE);
+    expect(useStore.getState().lastError).toBe(replacedElsewhereMessage());
     expect(useStore.getState().reconnectAttempts).toBe(0); // no "Reconnecting…"
 
     // Focusing the replaced tab takes the connection back (once).
@@ -100,7 +100,7 @@ describe('two Web tabs with one stored identity', () => {
     tabA.connect();
     tabB.connect();
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(useStore.getState().lastError).toBe(REPLACED_ELSEWHERE_MESSAGE);
+    expect(useStore.getState().lastError).toBe(replacedElsewhereMessage());
     // B authenticated last: it holds the connection, A was replaced.
     return { relay, live: tabB, replaced: tabA };
   }
