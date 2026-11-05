@@ -127,11 +127,18 @@ export class CardManager {
 
   /** The action a session's live tools should occupy the slot with, derived from
    *  the concurrency: none → null, exactly one → that single running tool,
-   *  two-or-more → a collapsed `tool_batch` carrying just the count. */
+   *  two-or-more → a collapsed `tool_batch` carrying just the count. A
+   *  subagent's own steps run inside its dispatch tool and are not parallel
+   *  work of the turn: while their parent is running only the parent counts
+   *  (one subagent read "2 tools running in parallel…"). */
   private toolActionFor(c: CardState): CardActionState | null {
-    const n = c.runningTools.size;
+    const visible = [...c.runningTools.values()].filter((t) => {
+      const parent = t.payload.parentToolCallId;
+      return !parent || !c.runningTools.has(parent);
+    });
+    const n = visible.length;
     if (n === 0) return null;
-    if (n === 1) return c.runningTools.values().next().value ?? null;
+    if (n === 1) return visible[0];
     return { type: 'tool_batch', payload: { running: n } };
   }
 

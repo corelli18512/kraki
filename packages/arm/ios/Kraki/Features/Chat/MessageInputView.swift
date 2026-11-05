@@ -268,7 +268,8 @@ struct MessageInputView: View {
             }
             .onChange(of: sessionId) { _, _ in draftTarget = drafting ? liveTarget : nil }
             .settlesComposerLatches(sessionId: sessionId, state: session?.state,
-                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending,
+                                    onStopRejected: { showSubmitFailure($0, seconds: 6) })
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
@@ -941,14 +942,15 @@ struct MessageInputView: View {
         return false
     }
 
-    private func showSubmitFailure(_ message: String = String(localized: "Couldn't send — your text is kept. Try again.")) {
+    private func showSubmitFailure(_ message: String = String(localized: "Couldn't send — your text is kept. Try again."),
+                                   seconds: Int = 3) {
         submitFailureTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) {
             submitFailure = message
         }
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         submitFailureTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { submitFailure = nil }
         }
@@ -960,7 +962,8 @@ struct MessageInputView: View {
             Text(hint)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                // A failure note (e.g. why Stop did not stop) may need its reason.
+                .lineLimit(submitFailure == nil ? 1 : 3)
                 .truncationMode(.tail)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)

@@ -29,11 +29,10 @@ private final class TKRoundedView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
+    /// The bubble outline: `rect` with each corner's own radius.
+    static func path(in r: CGRect, radii: (CGFloat, CGFloat, CGFloat, CGFloat)) -> UIBezierPath {
         let (tl, tr, bl, br) = radii
         let path = UIBezierPath()
-        let r = bounds
         path.move(to: CGPoint(x: r.minX + tl, y: r.minY))
         path.addLine(to: CGPoint(x: r.maxX - tr, y: r.minY))
         path.addArc(withCenter: CGPoint(x: r.maxX - tr, y: r.minY + tr),
@@ -48,7 +47,12 @@ private final class TKRoundedView: UIView {
         path.addArc(withCenter: CGPoint(x: r.minX + tl, y: r.minY + tl),
                     radius: tl, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
         path.close()
-        let newPath = path.cgPath
+        return path
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let newPath = Self.path(in: bounds, radii: radii).cgPath
         let oldPath = shape.presentation()?.path ?? shape.path
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -331,8 +335,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         configuration.baseForegroundColor = .secondaryLabel
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 7, bottom: 2, trailing: 7)
         configuration.background.cornerRadius = 10
+        // A fixed-size glyph chip (its label is "Show steps"). The configuration
+        // title otherwise follows Dynamic Type; at the largest sizes the chip,
+        // centred on the bubble's top edge, covered the message above it.
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var attributes = attributes
+            attributes.font = .systemFont(ofSize: 14, weight: .bold)
+            return attributes
+        }
         moreButton.configuration = configuration
-        moreButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
         moreButton.addTarget(self, action: #selector(openSteps), for: .touchUpInside)
         moreButton.accessibilityLabel = String(localized: "Show steps")
         contentView.addSubview(moreButton)
@@ -957,6 +968,14 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 })
             }
         }
+        // The "Turn failed" reason sits in the SwiftUI action slot, under this
+        // cell's long-press menu, so the menu offers it (it cannot be selected).
+        if content.action?.type == "failed",
+           let reason = content.action?.payload["message"]?.stringValue, !reason.isEmpty {
+            actions.append(UIAction(title: String(localized: "Copy Error"), image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = reason
+            })
+        }
         if content.canShowSteps {
             actions.append(UIAction(title: String(localized: "Show Steps"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
                 self?.openSteps()
@@ -1056,11 +1075,50 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         _ interaction: UIContextMenuInteraction,
         configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-        guard bubbleBG.frame.contains(location), !messageActions().isEmpty else { return nil }
+        // Built now, at the long-press: a streaming bubble keeps growing under
+        // the open menu, and Copy must copy what the user pressed, not what
+        // the bubble had become when Copy was tapped.
+        let actions = messageActions()
+        guard bubbleBG.frame.contains(location), !actions.isEmpty else { return nil }
         lastMenuLocation = location
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            UIMenu(children: self?.messageActions() ?? [])
+        return UIContextMenuConfiguration(identifier: Self.menuIdentifier, previewProvider: nil) { _ in
+            UIMenu(children: actions)
         }
+    }
+
+    private static let menuIdentifier = "chat.kraki.bubble" as NSString
+
+    /// Lift the bubble itself (rounded, only its on-screen part), not a
+    /// rectangle of the whole cell: a tall reply's cell preview was a cropped
+    /// square that scrolled inside the menu.
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        highlightPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
+    }
+
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        dismissalPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
+    }
+
+    func bubblePreview() -> UITargetedPreview? {
+        guard renderClipView.window != nil, !bubbleBG.isHidden, bubbleBG.frame.width > 0 else { return nil }
+        var visible = bubbleBG.frame
+        if let scrollView = sequence(first: superview, next: { $0?.superview }).lazy.compactMap({ $0 as? UIScrollView }).first {
+            visible = visible.intersection(renderClipView.convert(scrollView.bounds, from: scrollView))
+        }
+        guard !visible.isNull, visible.height > 1 else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        let outline = TKRoundedView.path(in: bubbleBG.frame, radii: bubbleBG.radii).cgPath
+        parameters.visiblePath = UIBezierPath(cgPath: outline.intersection(CGPath(rect: visible, transform: nil)))
+        return UITargetedPreview(view: renderClipView, parameters: parameters)
     }
 
     override func layoutSubviews() {

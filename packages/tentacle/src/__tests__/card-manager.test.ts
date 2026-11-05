@@ -287,6 +287,21 @@ describe('CardManager action part', () => {
     expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc3', success: true } });
   });
 
+  it('a subagent and its own running step show as ONE tool, not a parallel batch (K-175)', () => {
+    const { card, sent } = setup();
+    const dispatch: RunningTool = { type: 'tool_start', payload: { toolName: 'subagent', headline: 'researcher', toolCallId: 'sub1' } };
+    const child: RunningTool = { type: 'tool_start', payload: { toolName: 'read', headline: 'a.ts', toolCallId: 'c1', parentToolCallId: 'sub1' } };
+    card.onToolStart('s1', dispatch);
+    card.onToolStart('s1', child);
+    expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'sub1' } });
+    expect(actions(sent).some((a) => (a as { type: string }).type === 'tool_batch')).toBe(false);
+    // A real parallel top-level tool still makes a batch of 2 (subagent + tool).
+    card.onToolStart('s1', tool('tc2', 'b'));
+    expect(actions(sent).at(-1)).toEqual({ type: 'tool_batch', payload: { running: 2 } });
+    card.onToolComplete('s1', toolDone('tc2', 'b'));
+    expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'sub1' } });
+  });
+
   it('resolving a permission updates it IN PLACE with the decision (no fallback to tool)', () => {
     const { card, sent } = setup();
     card.onToolStart('s1', tool('tc1', 't'));

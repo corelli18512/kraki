@@ -13,6 +13,11 @@ struct MainTabView: View {
     @State private var devicePath = NavigationPath()
     @State private var selectedTab: Int = 0
     @State private var showNewSession = false
+    /// From presenting the New Session sheet until its dismissal finished.
+    /// A Session started from it opens only then: pushed while the sheet and
+    /// its keyboard were still sliding away, the new page appeared beside the
+    /// keyboard and under the sheet.
+    @State private var newSessionSheetOnScreen = false
 
     var body: some View {
         Group {
@@ -24,12 +29,17 @@ struct MainTabView: View {
         }
         .tint(.krakiPrimary)
         .overlay(alignment: .top) { SignedInErrorToast() }
-        .sheet(isPresented: $showNewSession) {
+        .sheet(isPresented: $showNewSession, onDismiss: {
+            newSessionSheetOnScreen = false
+            guard allowsInitialNavigation else { return }
+            consumePendingSessionNavigation()
+        }) {
             NewSessionSheet()
                 .environment(appState)
+                .onAppear { newSessionSheetOnScreen = true }
         }
         .onChange(of: appState.sessionStore.navigateToSession) { _, _ in
-            guard allowsInitialNavigation else { return }
+            guard allowsInitialNavigation, !newSessionSheetOnScreen else { return }
             consumePendingSessionNavigation()
         }
         .onAppear {
@@ -86,43 +96,36 @@ struct MainTabView: View {
 
     private func consumePendingSessionNavigation() {
         guard let target = appState.sessionStore.navigateToSession else { return }
-        let replacesPlaceholder = appState.sessionStore.navigationReplacesPlaceholder
+        let placeholder = appState.sessionStore.navigationReplacesPlaceholder
         let pushesOnTop = appState.sessionStore.navigationPushesOnTop
-        appState.sessionStore.navigationReplacesPlaceholder = false
+        appState.sessionStore.navigationReplacesPlaceholder = nil
         appState.sessionStore.navigationPushesOnTop = false
         appState.sessionStore.navigateToSession = nil
-        if pushesOnTop, selectedTab == 0, !sessionPath.isEmpty {
-            // A fork opened from its source chat: a plain push, so the source
-            // never reappears mid-transition and Back returns to it.
-            sessionPath.append(SessionNavID(id: target))
-            return
-        }
+        let route = SessionNavigationRoute.open(
+            target, in: sessionPath, replacingPlaceholder: placeholder,
+            pushesOnTop: pushesOnTop, sessionsTabSelected: selectedTab == 0)
         selectedTab = 0
-        if replacesPlaceholder, sessionPath.count == 1 {
-            // "Starting session…" → the created Session: swap the top route in
-            // place, without a pop/push transition. The destination is keyed
-            // by id, so the real Session's page runs its own lifecycle
-            // (subscription, viewing state, read state) instead of inheriting
-            // the placeholder's.
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                sessionPath.removeLast()
-                sessionPath.append(SessionNavID(id: target))
-            }
+        guard route.inPlace else {
+            sessionPath = route.path
             return
         }
-        sessionPath = []
-        sessionPath.append(SessionNavID(id: target))
+        // "Starting session…" / "Copying session…" → the created Session: swap
+        // the route in place, without a pop/push transition. The destination
+        // is keyed by id, so the real Session's page runs its own lifecycle
+        // (subscription, viewing state, read state) instead of inheriting the
+        // placeholder's.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { sessionPath = route.path }
     }
 
     private func consumePendingDeviceNavigation() {
         guard let target = appState.deviceStore.navigateToDeviceId else { return }
         // Switch to Devices and push only after launch preparation. This keeps
         // a notification-created detail hierarchy from materializing behind the
-        // cold-launch gate.
+        // cold-launch gate. The Sessions stack is kept, like a manual tab
+        // switch: the chat the user came from is still there on Sessions.
         selectedTab = 1
-        sessionPath = []
         devicePath = NavigationPath()
         devicePath.append(DeviceNavID(id: target))
         appState.deviceStore.navigateToDeviceId = nil

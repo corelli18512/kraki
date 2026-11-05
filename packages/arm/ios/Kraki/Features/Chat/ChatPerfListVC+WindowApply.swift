@@ -402,6 +402,7 @@ extension ChatPerfListVC {
         // drift. Explicit older-history intent wins over the 24pt tolerance.
         let shouldFollow = shouldFollowLiveTail
         let delta = abs(value - bottomContentInset)
+        let grows = value > bottomContentInset
         bottomContentInset = value
         let apply = {
             self.collectionView.contentInset.bottom = value + self.composerOverlayInset
@@ -413,9 +414,12 @@ extension ChatPerfListVC {
                 self.pinToBottom(reason: "composer-inset")
             }
         }
-        // Animate genuine obstruction changes (e.g. the compaction status row).
+        // Animate a genuine obstruction going away (e.g. the compaction status
+        // row): the tail settles into the freed space. A new obstruction is
+        // drawn at once, so the clearance must be there in the same frame;
+        // animated, the newest reply showed under the row for a few frames.
         // Recording/multiline growth never changes this resting clearance.
-        if delta > 30, view.window != nil {
+        if delta > 30, !grows, view.window != nil {
             UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState],
                            animations: apply)
