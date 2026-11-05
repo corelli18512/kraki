@@ -39,6 +39,7 @@
 		0A1A6FDC1F3336009DEEBE7E /* MacChatTopEdgeFade.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E9F259AD6F525A5F3E63DD /* MacChatTopEdgeFade.swift */; };
 		0A3DA663CF07D926D368299E /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAD8FE70AF21152025CEA525 /* AppLanguage.swift */; };
 		0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */; };
+		0B30DB7FC5B34F29BC3132D2 /* UsageNumberFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A097642AE35139E63E55EEC0 /* UsageNumberFormat.swift */; };
 		0B7F87636F4C000C2349DDF3 /* SessionPreviewGlyphLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E72790D159855C5D594CC7C6 /* SessionPreviewGlyphLayer.swift */; };
 		0B9C805B95F5C98CA01E756B /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A9A346933E404A3656AD63 /* SessionStore.swift */; };
 		0C4075542DBB1798C14B7B11 /* MacBubbleTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C5D0987ED225B3C748129E /* MacBubbleTextView.swift */; };
@@ -723,6 +724,7 @@
 		F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97B0E319E0F6D893D83C12A /* PushManager.swift */; };
 		F6582FAA807D4A92471EBCA8 /* PendingTailBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */; };
 		F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
+		F67CBA90C9E31C659E178BBD /* AccessibilityAnnouncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E799F355EEB641067197A9 /* AccessibilityAnnouncer.swift */; };
 		F68223766885D060184C6278 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
 		F7469ADF2790C48517F2765F /* MessageStore+CardTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C21991B382385639B9398E8 /* MessageStore+CardTurn.swift */; };
 		F7876F1F5FF548F7C05C0BE7 /* LocalAgentsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */; };
@@ -2970,6 +2972,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E3C3A5804AF1AF52E8D8BBE8 /* AboutPane.swift in Sources */,
+				F67CBA90C9E31C659E178BBD /* AccessibilityAnnouncer.swift in Sources */,
 				20B2924FAB4D7CFEA52B6059 /* AccountAvatar.swift in Sources */,
 				B92E7E829FC61E56473A4C80 /* AccountPane.swift in Sources */,
 				8BC84DF82479BC8F8EA43240 /* AccountUsage.swift in Sources */,
@@ -3178,6 +3181,7 @@
 				0586AEFC6250C23DFFDEB549 /* TransientScrollIndicator.swift in Sources */,
 				40A1135A70EFBBC66418181C /* TurnSpineProjection.swift in Sources */,
 				81F0BBFCB18406A70015C47C /* TurnTraceRequestLedger.swift in Sources */,
+				0B30DB7FC5B34F29BC3132D2 /* UsageNumberFormat.swift in Sources */,
 				B4EE82019FEBB8D3DCE72E66 /* UsagePeekController.swift in Sources */,
 				20244E41A261DC881CCEDA17 /* UsagePeekHotKey.swift in Sources */,
 				A8FCE5708D96AB7C17D82C61 /* UsagePeekView.swift in Sources */,
