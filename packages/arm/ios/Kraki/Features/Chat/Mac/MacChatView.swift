@@ -843,8 +843,12 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        // Unchanged: no rename, so an auto title does not become a fixed one.
+        if let title = MacSessionInfoRules.titleToSaveOnClose(
+            editing: editingTitle, draft: titleDraft, original: titleEditOriginal
+        ) {
+            appState.commandSender?.renameSession(sessionId: session.id, title: title)
+        }
         editingTitle = false
         titleFocused = false
     }

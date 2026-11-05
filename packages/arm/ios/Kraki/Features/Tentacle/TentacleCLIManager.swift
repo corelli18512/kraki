@@ -855,7 +855,8 @@ extension TentacleCLIManager {
         panel.message = String(localized: "Pick the kraki binary in your filesystem.")
         panel.directoryURL = Self.locateStartDirectory()
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        guard await krakiVersion(at: url.path) != nil else {
+        // The helper inside a Kraki for Mac is not an independent CLI either.
+        guard !isEmbeddedHelper(url.path), await krakiVersion(at: url.path) != nil else {
             return String(localized: "\(url.lastPathComponent) is not the kraki command-line tool.")
         }
         setBinaryPathOverride(url.path)
