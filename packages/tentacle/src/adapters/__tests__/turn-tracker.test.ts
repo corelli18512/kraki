@@ -46,6 +46,27 @@ describe('TurnTracker', () => {
     expect(log).toEqual(['draft First.', 'draft Second.', 'step First.', 'reply Second.', 'idle']);
   });
 
+  it('a steer keeps the answer it interrupted as a reply (K-024)', () => {
+    const { tracker, log } = harness();
+    tracker.beginTurn();
+    tracker.proseSegment('Long essay.');
+    tracker.steerReceived();
+    tracker.proseSegment('Steer answer.');
+    tracker.finish();
+    expect(log).toEqual(['draft Long essay.', 'reply Long essay.', 'draft Steer answer.', 'reply Steer answer.', 'idle']);
+  });
+
+  it('a steer after a tool leaves the narration a step', () => {
+    const { tracker, log } = harness();
+    tracker.beginTurn();
+    tracker.proseSegment('Running tests.');
+    tracker.toolStarted();
+    tracker.steerReceived();
+    tracker.proseSegment('Steer answer.');
+    tracker.finish();
+    expect(log).toEqual(['draft Running tests.', 'step Running tests.', 'draft Steer answer.', 'reply Steer answer.', 'idle']);
+  });
+
   it('streamed prose is joined and classified at the next boundary', () => {
     const { tracker, log } = harness();
     tracker.beginTurn();

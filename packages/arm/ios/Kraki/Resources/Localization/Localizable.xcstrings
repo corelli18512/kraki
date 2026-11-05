@@ -9614,6 +9614,16 @@
         }
       }
     },
+    "The agent's request changed. Check your message, then send again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 的请求已变化。请检查消息后再发送。"
+          }
+        }
+      }
+    },
     "The audio input changed during recording. Please try again." : {
       "localizations" : {
         "zh-Hans" : {

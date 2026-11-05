@@ -153,6 +153,8 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         if (tracker && custom.customType === 'subagent-incremental-child-notify') adapter.emitSubagentSteps(sessionId, s, tracker.onChildNotify(text));
         if (s) adapter.checkSubagentsDone(sessionId, s);
       }
+      // Pi injects a steer as a user message between assistant messages.
+      if (m?.role === 'user') adapter.sessions.get(sessionId)?.turn.steerReceived();
       if (m?.role === 'assistant') {
         const s = adapter.sessions.get(sessionId);
         // A backend failure (bad model, 400, quota, rate-limit) surfaces here

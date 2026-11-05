@@ -13,7 +13,7 @@ import { isSpineMessage, messageProvider } from '../../lib/message-provider';
 import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
 import { Bubble, LIVE_KEY, rowSide, type BubbleContext, type ChatRow } from './Bubble';
-import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } from './Composer';
+import { Composer, composerIntent, composerTarget, type ComposerHandle, type ComposerIntent } from './Composer';
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
@@ -467,6 +467,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   }), [sessionId, afterSubmit, onOpenArtifact]);
 
   const intent = composerIntent(sessionActive, questions.length > 0, permissionOpen);
+  const target = composerTarget(permissionOpen ? String(action.payload.id) : undefined, questions.at(-1)?.id);
   const canAbort = sessionActive || showLive;
   const reachable = connected && deviceOnline;
   const navigationColors = agentNavigationColors(sessionId);
@@ -547,6 +548,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           ref={composerRef}
           sessionId={sessionId}
           intent={intent}
+          target={target}
           canAbort={canAbort}
           reachable={reachable}
           busy={sessionActive}

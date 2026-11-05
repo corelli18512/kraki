@@ -61,6 +61,19 @@ final class SubagentStepsTests: XCTestCase {
         XCTAssertNil(PermissionStep.outcome(permission("p3", description: "Open")))
     }
 
+    /// K-054: a request cancelled without a decision (agent gone, Stop, mode
+    /// switch) shows Cancelled, not an open request.
+    func testCancelledPermissionShowsCancelled() {
+        let request = permission("p1", description: "rm -rf build", toolName: "bash")
+        var cancelled = permission("p1")
+        cancelled.payload["cancelled"] = AnyCodable(true)
+        let merged = SubagentSteps.merge([request, cancelled])
+        let permissions = merged.filter { $0.type == "permission" }
+        XCTAssertEqual(permissions.count, 1)
+        XCTAssertEqual(PermissionStep.title(permissions[0]), "rm -rf build")
+        XCTAssertEqual(PermissionStep.outcome(permissions[0]), "Cancelled")
+    }
+
     func testTopLevelShowsDispatchCardsAndHidesSubagentSteps() {
         let trace = [
             narration("Delegating."),

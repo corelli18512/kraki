@@ -44,6 +44,22 @@ export function composerIntent(isBusy: boolean, hasQuestion: boolean, hasPermiss
   return isBusy ? 'steer' : 'prompt';
 }
 
+/** What a draft is addressed to: the open permission (its deny reason), the
+ *  open question (its answer) or the conversation. */
+export function composerTarget(permissionId?: string, questionId?: string): string {
+  if (permissionId) return `permission:${permissionId}`;
+  if (questionId) return `question:${questionId}`;
+  return 'conversation';
+}
+
+/** A draft stays bound to the target open when typing began. When that
+ *  target changed (a permission or question arrived, or was resolved
+ *  elsewhere), sending must be confirmed instead of silently going to the
+ *  new one: a deny reason must never deny another command. */
+export function composerTargetChanged(bound: string | null, live: string): boolean {
+  return bound !== null && bound !== live;
+}
+
 const PLACEHOLDER = {
   prompt: 'composer.placeholder.prompt',
   steer: 'composer.placeholder.steer',
@@ -86,6 +102,8 @@ export interface ComposerHandle {
 export interface ComposerProps {
   sessionId: string;
   intent: ComposerIntent;
+  /** {@link composerTarget} of the open permission / question. */
+  target?: string;
   /** The turn can be stopped (running / compacting / live card). */
   canAbort: boolean;
   /** Relay up and the session's device online. */
@@ -101,13 +119,30 @@ export interface ComposerProps {
 }
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { sessionId, intent, canAbort, reachable, busy, agent, onSend, onAbort, onStageVoice },
+  { sessionId, intent, target = 'conversation', canAbort, reachable, busy, agent, onSend, onAbort, onStageVoice },
   ref,
 ) {
   const { t } = useTranslation('chat');
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const [image, setImage] = useState<{ attachment: Attachment; preview: string } | null>(null);
+  const dictation = useDictation(sessionId);
+  // The target the draft was started for (see composerTargetChanged).
+  const [bound, setBound] = useState<{ sessionId: string; target: string } | null>(null);
+  const boundTarget = bound?.sessionId === sessionId ? bound.target : null;
+  const drafting = !!text.trim() || !!image || dictation.active;
+  useEffect(() => {
+    if (!drafting) setBound(null);
+    else if (boundTarget === null) setBound({ sessionId, target });
+  }, [drafting, boundTarget, sessionId, target]);
+  const retargeted = composerTargetChanged(boundTarget, target);
+  /** False (and the draft rebinds) when the send must be confirmed. */
+  const confirmTarget = () => {
+    if (!retargeted) return true;
+    setBound({ sessionId, target });
+    useStore.getState().setLastError(t('composer.targetChanged'));
+    return false;
+  };
   // Images in an answer (Mac ComposerAnswerImages): only Pi's questions take
   // them, image-only answers included. For other agents attach is off while
   // answering and a staged image stays in the composer for a later message.
@@ -123,12 +158,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const composing = useRef(false);
   const [multiline, setMultiline] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
-  const dictation = useDictation(sessionId);
 
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
     const draft = useStore.getState().drafts.get(sessionId) ?? '';
     const full = mergeVoiceDraft(draft, spoken);
-    if (mode === 'send' && full.trim()) {
+    if (mode === 'send' && full.trim() && confirmTarget()) {
       onSend(full.trim(), undefined, intent);
       setDraft(sessionId, '');
     } else {
@@ -144,7 +178,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       { id: sessionId, title: session?.title ?? session?.autoTitle ?? undefined, agent: session?.agent ?? 'agent', model: session?.model ?? undefined, mode: st.sessionModes.get(sessionId) },
       recent, [], voiceSettings.shareContext,
     );
-  }, onVoiceFinal, onStageVoice && intent !== 'denyPermission' ? (raw) => {
+  }, onVoiceFinal, onStageVoice && intent !== 'denyPermission' && !retargeted ? (raw) => {
     const base = useStore.getState().drafts.get(sessionId) ?? '';
     const sent = carriesImage ? image : null;
     const id = onStageVoice(mergeVoiceDraft(base, raw), sent ? [sent.attachment] : undefined, intent);
@@ -227,13 +261,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const showsStop = canAbort && !hasText && !image;
 
   const submit = useCallback(() => {
-    if (!canSend) return;
+    if (!canSend || !confirmTarget()) return;
     const trimmed = text.trim();
     const sent = carriesImage ? image : null;
     onSend(trimmed || '[image]', sent ? [sent.attachment] : undefined, intent);
     setDraft(sessionId, '');
     if (sent) setImage(null);
-  }, [canSend, text, image, carriesImage, intent, onSend, setDraft, sessionId]);
+  }, [canSend, text, image, carriesImage, intent, onSend, setDraft, sessionId, retargeted, target]);
 
   const primary = () => {
     if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation(intent === 'denyPermission' ? 'edit' : 'send'); return; }
