@@ -46,7 +46,12 @@ export function getSessionStatus(
 /** A Session's name everywhere (list, header, info): its title, else the
  *  agent's auto title, else "New Session" — the same as iOS and Mac. */
 export function sessionDisplayTitle(session: { title?: string | null; autoTitle?: string | null }): string {
-  return session.title?.trim() || session.autoTitle?.trim() || t('chat:session.new');
+  return textOf(session.title) || textOf(session.autoTitle) || t('chat:session.new');
+}
+
+/** Trimmed text, or '' when a peer sent something that is not text (K-005). */
+function textOf(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 /** A model's name as its agent reports it (what the model pickers show),

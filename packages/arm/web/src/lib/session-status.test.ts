@@ -88,6 +88,12 @@ describe('one name per session and model (same as iOS/Mac)', () => {
     expect(sessionDisplayTitle({ autoTitle: 'Fix tests' })).toBe('Fix tests');
     expect(sessionDisplayTitle({ title: 'Mine', autoTitle: 'Fix tests' })).toBe('Mine');
   });
+  it('K-005: a title that is not text falls back instead of throwing', async () => {
+    const { sessionDisplayTitle } = await import('./session-status');
+    expect(sessionDisplayTitle({ title: 42 as unknown as string })).toBe('New Session');
+    expect(sessionDisplayTitle({ title: { x: 1 } as unknown as string, autoTitle: 'Fix tests' })).toBe('Fix tests');
+    expect(sessionDisplayTitle({ autoTitle: [] as unknown as string })).toBe('New Session');
+  });
   it("models show their agent's name", async () => {
     const { modelDisplayName } = await import('./session-status');
     const agents = [{ id: 'pi', modelDetails: [{ id: 'deepseek/deepseek-flash', name: 'Deepseek deepseek-flash' }] }];

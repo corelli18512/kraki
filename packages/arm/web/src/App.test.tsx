@@ -109,3 +109,19 @@ describe('App', () => {
     expect(wsClient.connect).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('K-005: a sidebar render error stays inside the sidebar', () => {
+  it('keeps the main area rendered when the sidebar throws', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    useStore.setState({ status: 'connected' });
+    useStore.setState({ sessions: new Map([['s-bad', {
+      id: 's-bad', deviceId: 'dev-1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0,
+      // Bypasses the store's own title check, like an unforeseen bad field.
+      get title(): string { throw new TypeError('boom'); },
+      toJSON: () => ({ id: 's-bad' }),
+    } as never]]) });
+    renderApp();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+  });
+});
