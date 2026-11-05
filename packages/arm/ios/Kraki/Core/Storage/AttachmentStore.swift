@@ -31,6 +31,12 @@ enum AttachmentState: Equatable {
     case fetching
     case ready(mimeType: String, data: Data)
     case error(reason: String)
+
+    /// Text for a non-image attachment that failed. An empty reason (a
+    /// Tentacle wire code such as `not_found` is not shown) gets generic copy.
+    static func loadFailureText(_ reason: String) -> String {
+        reason.isEmpty ? String(localized: "Couldn't load this attachment") : String(localized: "Couldn't load: \(reason)")
+    }
 }
 
 /// Why a view wants an attachment. Higher values are served first.

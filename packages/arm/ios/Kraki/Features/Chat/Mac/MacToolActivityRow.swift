@@ -205,7 +205,7 @@ struct MacToolActivityRow: View {
                 }
                 .frame(maxHeight: 240)
             case .error(let reason):
-                Text("Couldn't load: \(reason)")
+                Text(AttachmentState.loadFailureText(reason))
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
             case .awaitingChunks(let received, let total):

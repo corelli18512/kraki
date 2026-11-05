@@ -176,7 +176,7 @@ struct SubagentPageView<StepView: View>: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             case .error(let reason):
-                Text("Couldn't load: \(reason)").font(.caption).foregroundStyle(.red)
+                Text(AttachmentState.loadFailureText(reason)).font(.caption).foregroundStyle(.red)
             default:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)

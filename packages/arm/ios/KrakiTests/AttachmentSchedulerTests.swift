@@ -242,6 +242,14 @@ final class AttachmentSchedulerTests: XCTestCase {
         XCTAssertNil(store.inFlightForTesting)
     }
 
+    /// K-155: tool output, subagent reports and HTML reports share the store;
+    /// an empty reason must not render as "Couldn't load: ".
+    func testEmptyFailureReasonGetsGenericAttachmentCopy() {
+        XCTAssertEqual(AttachmentState.loadFailureText(""), String(localized: "Couldn't load this attachment"))
+        XCTAssertFalse(AttachmentState.loadFailureText("").hasSuffix(": "))
+        XCTAssertEqual(AttachmentState.loadFailureText("disk full"), String(localized: "Couldn't load: \("disk full")"))
+    }
+
     func testCachedBytesLoadFromDiskWithoutTheNetwork() async {
         let c = id("cached")
         let first = makeStore(dwell: 0)
