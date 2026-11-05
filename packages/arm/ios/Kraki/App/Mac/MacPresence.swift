@@ -324,7 +324,7 @@ final class MacPresenceController {
     func takeOfflineForQuit() async {
         isQuittingOffline = true
         KLog.diag("[Presence] quitting; taking this Mac offline")
-        await tentacle?.goOffline()
+        await tentacle?.goOfflineForQuit()
         if UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) {
             try? await SMAppService.mainApp.unregister()
             UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
@@ -469,7 +469,8 @@ final class MacPresenceController {
     /// While this Mac is online, Kraki opens at login so the menu bar shows
     /// it. Only a login item we added is removed again (on quit).
     func syncLoginItem() {
-        guard managesPresence else { return }
+        // A launch still going online must not add it back around a quit.
+        guard managesPresence, !isQuittingOffline else { return }
         let service = SMAppService.mainApp
         guard service.status != .enabled, service.status != .requiresApproval else { return }
         do {

@@ -124,7 +124,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if NativeTestRuntime.isHeadlessTestHost { return }
-        if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
+        if MacUpdateController.updatesAvailable() {
             updateController = MacUpdateController.makeIfProduction()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 self?.updateController?.start()

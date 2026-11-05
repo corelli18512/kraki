@@ -209,6 +209,33 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 1))
     }
 
+    /// macOS reopening Kraki at login without the login-item event can create
+    /// the window, run its startup and never show it. The Dock icon must
+    /// still go once launch settled (it stayed, with zero windows: K-334).
+    func testASettledLaunchWithoutAWindowDropsTheDockIcon() {
+        let startedHidden = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: true, visibleWindows: 0)
+        XCTAssertTrue(startedHidden.dropDockIcon)
+        XCTAssertFalse(startedHidden.startWithoutWindow, "startup already ran")
+        let nothingStarted = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: false, visibleWindows: 0)
+        XCTAssertTrue(nothingStarted.dropDockIcon)
+        XCTAssertTrue(nothingStarted.startWithoutWindow)
+        let windowShown = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: true, visibleWindows: 1)
+        XCTAssertFalse(windowShown.dropDockIcon)
+        XCTAssertFalse(windowShown.startWithoutWindow)
+    }
+
+    /// Quitting right after launch, while launch was still bringing this Mac
+    /// online, left the service registered and the Mac online with no app
+    /// (K-118). The quit marks the manager so that startBuiltIn and
+    /// reRegisterBuiltIn refuse to register the job again. Seam test only:
+    /// registering the real job is not possible in tests.
+    func testGoingOfflineForQuitIsRemembered() async {
+        let tentacle = TentacleCLIManager()
+        XCTAssertFalse(tentacle.quittingOffline)
+        await tentacle.goOfflineForQuit()
+        XCTAssertTrue(tentacle.quittingOffline)
+    }
+
     func testQuitEventDescriptorsAreClassified() {
         let target = NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier)
         let userQuit = NSAppleEventDescriptor(

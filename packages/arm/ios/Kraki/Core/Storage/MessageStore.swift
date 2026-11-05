@@ -175,11 +175,8 @@ final class MessageStore {
             // Advance the persisted head only when the row is really on disk:
             // a failed write (disk full, data protection) must leave the gap
             // visible so the history is fetched again.
-            do {
-                try db.insert(sessionId, [message])
+            if cacheWrites.record({ try db.insert(sessionId, [message]) }) {
                 notePersisted(sessionId, upTo: message.seq)
-            } catch {
-                KLog.d("⚠️ Message cache write failed: \(error)")
             }
         }
 
@@ -308,13 +305,12 @@ final class MessageStore {
         }
         #endif
 
-        do {
-            try db.insert(sessionId, batch)
+        if cacheWrites.record({ try db.insert(sessionId, batch) }) {
             notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
-        } catch {
-            KLog.d("⚠️ Message cache write failed: \(error)")
         }
     }
+
+    @ObservationIgnored private(set) var cacheWrites = MessageCacheWrites()
 
     // MARK: - Local head
 
@@ -1181,5 +1177,31 @@ extension MessageStore {
     func lowerCaughtUp(_ sessionId: String, to seq: Int) {
         guard let head = persistedHeads[sessionId], head > seq else { return }
         persistedHeads.removeValue(forKey: sessionId)
+    }
+}
+
+/// Writes to the message cache, and whether they currently fail (disk full,
+/// data protection). Nothing is lost on failure: unwritten rows leave a gap
+/// that is fetched again once writes work. The start and the end of a run of
+/// failures are logged, in release builds too; single failed writes are not.
+struct MessageCacheWrites {
+    private(set) var failing = false
+
+    /// Runs `write` and returns whether it succeeded.
+    mutating func record(_ write: () throws -> Void) -> Bool {
+        do {
+            try write()
+            if failing {
+                failing = false
+                KLog.diag("[MessageStore] message cache writes work again")
+            }
+            return true
+        } catch {
+            if !failing {
+                failing = true
+                KLog.diag("[MessageStore] message cache writes failing; history is fetched again later: \(error)")
+            }
+            return false
+        }
     }
 }

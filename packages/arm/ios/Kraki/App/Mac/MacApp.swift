@@ -60,6 +60,16 @@ final class MacLaunchCoordinator {
         !bootstrapStarted && visibleWindows == 0
     }
 
+    /// What a launch without the login-item event still has to do once the
+    /// window had its chance: with no visible window the Dock icon goes
+    /// (also when the window's startup already ran), and startup runs from
+    /// the menu bar if nothing started it.
+    nonisolated static func afterLaunchSettled(
+        bootstrapStarted: Bool, visibleWindows: Int
+    ) -> (dropDockIcon: Bool, startWithoutWindow: Bool) {
+        (visibleWindows == 0, needsWindowlessStart(bootstrapStarted: bootstrapStarted, visibleWindows: visibleWindows))
+    }
+
     func bootstrap(
         appState: AppState,
         tentacleCLI: TentacleCLIManager,
@@ -643,11 +653,15 @@ struct MacApp: App {
                         // on "Checking this Mac…" until a window was opened.
                         // Start here once the window had its chance.
                         try? await Task.sleep(for: .seconds(2))
-                        guard MacLaunchCoordinator.needsWindowlessStart(
+                        // macOS reopening Kraki at login can also create the
+                        // window and never show it: then the window's startup
+                        // ran, but no close notification ever drops the Dock icon.
+                        let settled = MacLaunchCoordinator.afterLaunchSettled(
                             bootstrapStarted: launchCoordinator.bootstrapStarted,
                             visibleWindows: MacPresenceController.appWindows().count
-                        ) else { return }
-                        MacPresenceController.shared.updateActivationPolicy()
+                        )
+                        if settled.dropDockIcon { MacPresenceController.shared.updateActivationPolicy() }
+                        guard settled.startWithoutWindow else { return }
                     }
                     KLog.diag("[Presence] starting without a window")
                     await launchCoordinator.bootstrap(

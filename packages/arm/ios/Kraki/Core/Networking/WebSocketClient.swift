@@ -214,7 +214,11 @@ final class WebSocketClient: NSObject {
         state = .connecting
 
         let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = true
+        // Fail fast and let the owned reconnect cadence retry. Waiting for
+        // connectivity also parks a refused connection (relay down or
+        // restarting) until the connect deadline, up to 30 s, so the client
+        // came back that long after the relay did.
+        configuration.waitsForConnectivity = false
         session = URLSession(
             configuration: configuration,
             delegate: self,

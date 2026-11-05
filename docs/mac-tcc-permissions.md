@@ -279,6 +279,15 @@ location, Bluetooth, Desktop/Documents/Downloads, removable and network
 volumes. Kraki relays the user's agents; it does not decide which of these an
 agent may use — the user does, in System Settings or at the prompt.
 
+Kraki for Mac is not that simple. launchd runs the built-in helper's binary
+directly, and macOS has been seen attributing agents' requests to the outer
+app (`chat.kraki.mac`) rather than the helper: Full Disk Access on a notarized
+build (see `mac-builtin-tentacle.md`), and camera and contacts prompts on a
+Debug build (QA K-335). Accessibility and Screen Recording were seen on the
+helper. Which bundle owns the other prompts on a notarized release build is
+still to be measured; until it is, the outer app keeps its own usage strings
+and entitlements and does not carry the agent ones.
+
 The setup wizard (`kraki`) runs this step automatically and polls FDA as
 its "done" signal.
 

@@ -48,12 +48,62 @@
         }
       }
     },
+    "%lld sessions are running on this Mac. Switching restarts Kraki here and stops them." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 上有 %lld 个会话正在运行。切换会重启这里的 Kraki 并停止这些会话。"
+          }
+        }
+      }
+    },
+    "A session is running on this Mac. Switching restarts Kraki here and stops it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 上有一个会话正在运行。切换会重启这里的 Kraki 并停止该会话。"
+          }
+        }
+      }
+    },
     "Can't reach the Kraki server. Check this Mac's internet connection." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "连不上 Kraki 服务器。请检查这台 Mac 的网络连接。"
+          }
+        }
+      }
+    },
+    "Kraki didn't start on this Mac. Try again, or open the logs to see why." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 没有在这台 Mac 上启动。请重试，或打开日志查看原因。"
+          }
+        }
+      }
+    },
+    "Switch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换"
+          }
+        }
+      }
+    },
+    "Switch how this Mac runs agents?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换这台 Mac 运行 Agent 的方式？"
           }
         }
       }
