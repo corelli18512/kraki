@@ -736,13 +736,21 @@ export function getProcessBundleIdentity(pid: number): string | null {
 export function getDaemonTccIdentity(
   daemonPid: number | null,
   identityProof?: { pid: number; bundleId: string } | null,
+  managedByMacApp = false,
 ): {
   bundled: boolean;
   bundlePath: string | null;
   daemonPid: number | null;
   daemonBundleId: string | null;
   healthy: boolean;
+  managedBy?: 'kraki-mac';
 } {
+  if (managedByMacApp) {
+    // Kraki for Mac's helper has no Launch Services identity of its own: TCC
+    // attributes it to the enclosing Kraki for Mac bundle (its responsible
+    // process), whose grants survive updates. chat.kraki.cli does not apply.
+    return { bundled: true, bundlePath: null, daemonPid, daemonBundleId: null, healthy: true, managedBy: 'kraki-mac' };
+  }
   const bundlePath = getKrakiAppBundlePath();
   const bundled = bundlePath !== null;
   const daemonBundleId = daemonPid !== null

@@ -277,10 +277,27 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     }
   }
 
-  // Resolve GitHub token: explicit flag > gh CLI > saved token
-  if (auth === 'github_token' && githubToken) {
-    const { saveGitHubToken } = await import('../config.js');
-    saveGitHubToken(githubToken);
+  // Record the signed-in account so the daemon sets another account's
+  // device and sessions aside (account-switch.ts, K-028).
+  let account: KrakiConfig['account'];
+  if (auth === 'github_token') {
+    const { loadGitHubToken, saveGitHubToken } = await import('../config.js');
+    const { loadAccountDataOwner, adoptAccountDataOwner } = await import('../account-switch.js');
+    const { githubLogin } = await import('../setup.js');
+    const savedToken = loadGitHubToken();
+    const existing = loadConfig();
+    // Installs from before account.json: name the account the data in place
+    // belongs to while its token is still here (as setup --json does).
+    if (githubToken && existing && !loadAccountDataOwner()) {
+      const previous = existing.account?.login
+        ?? (savedToken && savedToken !== githubToken ? await githubLogin(savedToken) : null);
+      if (previous) adoptAccountDataOwner(previous);
+    }
+    // Resolve GitHub token: explicit flag > saved token
+    const token = githubToken ?? savedToken;
+    const login = token ? await githubLogin(token) : null;
+    if (login) account = { login };
+    if (githubToken) saveGitHubToken(githubToken);
   }
   if (auth === 'apikey' && apiKey) {
     const { saveChannelKey } = await import('../config.js');
@@ -294,6 +311,7 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
   const config: KrakiConfig = {
     relay,
     authMethod: auth as HeadlessAuthMethod,
+    ...(account && { account }),
     device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
     ...(agents && { agents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },

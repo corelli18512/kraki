@@ -108,6 +108,7 @@
 		1ED0B27461AF3BFD9CBA4F28 /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		1F48BE5D37814D8EEB75F5DF /* BackgroundVoiceFinisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EC5DD15AEE6A9C7DB3B590B /* BackgroundVoiceFinisherTests.swift */; };
 		1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F1C34007991B7E9D900DBF /* DevicesPane.swift */; };
+		1FCE1F5446DB79039F54D248 /* MacAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4F914A617BF666127C1BB40 /* MacAccountTests.swift */; };
 		20244E41A261DC881CCEDA17 /* UsagePeekHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C72F9E868EE4A250EB16AC4 /* UsagePeekHotKey.swift */; };
 		20392AD15A458E73F3DB1792 /* MacChatScenarioCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */; };
 		20B2924FAB4D7CFEA52B6059 /* AccountAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA78D91ACB2BAF91DB09337 /* AccountAvatar.swift */; };
@@ -1115,6 +1116,7 @@
 		A4037D4173EC6CC310DB2771 /* IOSClientAlignmentPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClientAlignmentPreview.swift; sourceTree = "<group>"; };
 		A40BC47A729AF4430834E394 /* PhotoAttachmentLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAttachmentLoadTests.swift; sourceTree = "<group>"; };
 		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
+		A4F914A617BF666127C1BB40 /* MacAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAccountTests.swift; sourceTree = "<group>"; };
 		A4F9C2453545401375A2F74C /* MacChatScrollView+BubbleActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacChatScrollView+BubbleActions.swift"; sourceTree = "<group>"; };
 		A5941D690801C4745401FC76 /* DeleteAccountSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteAccountSection.swift; sourceTree = "<group>"; };
 		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
@@ -1921,6 +1923,7 @@
 				BA35816AEE0E020E7C4DF9B2 /* LocalLinkHandshakeTests.swift */,
 				48458C5EF504DD7546D2E798 /* LocalLinkRouteTests.swift */,
 				61CD988049F4E7743DEC8E10 /* LogAuditAppDeliveryTests.swift */,
+				A4F914A617BF666127C1BB40 /* MacAccountTests.swift */,
 				C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */,
 				2D0E22E50EB544A5CA870E67 /* MacChatListRegressionTests.swift */,
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
@@ -2450,6 +2453,7 @@
 				D2FD0981FE2A232FFEB95D63 /* LocalLinkRouteTests.swift in Sources */,
 				E94C114FB5F4EEAC351AD913 /* LocalizationTests.swift in Sources */,
 				0E621FA111A62132EC046B10 /* LogAuditAppDeliveryTests.swift in Sources */,
+				1FCE1F5446DB79039F54D248 /* MacAccountTests.swift in Sources */,
 				2205FA9CAD968A53A45DD693 /* MacAuthRecoveryTests.swift in Sources */,
 				7484EC863D2C400D5C9DCD69 /* MacChatListRegressionTests.swift in Sources */,
 				231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */,

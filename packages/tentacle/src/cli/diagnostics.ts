@@ -8,7 +8,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { loadConfig, getKrakiHome, getLogVerbosity, getVersion } from '../config.js';
 import { getCliLaunchdJobState, isDaemonRunning, getDaemonStatus } from '../daemon.js';
 import { readStatusFile } from '../status-file.js';
-import { loadManagedBy, ownerName } from '../managed.js';
+import { MAC_APP_OWNER, loadManagedBy, ownerName } from '../managed.js';
 import { gracefulExit } from './exit.js';
 import type { FdaStatus } from '../checks.js';
 
@@ -354,7 +354,7 @@ export async function cmdDoctor(): Promise<void> {
       // Services bundle identity? A bundled, registered, correctly signed app
       // still reports healthy:false when its daemon was started by absolute
       // path — that combination is what made this bug recur six times.
-      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity()),
+      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity(), loadManagedBy()?.by === MAC_APP_OWNER),
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,

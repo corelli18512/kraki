@@ -47,6 +47,12 @@ enum AppInstallLocation: Equatable {
     }
 
     static var current: AppInstallLocation { classify(bundlePath: Bundle.main.bundlePath) }
+
+    /// A copy launchd and Login Items may point at: not the disk image, not a
+    /// translocated copy, not one in the Trash.
+    static func isPermanent(bundlePath: String) -> Bool {
+        classify(bundlePath: bundlePath) == .stable && !bundlePath.contains("/.Trash/")
+    }
 }
 
 /// Which tentacle this app drives.

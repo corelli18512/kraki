@@ -116,6 +116,14 @@ let mockConfig: Record<string, unknown> | null = null;
 let mockChannelKey: string | null = null;
 
 const mockSaveDaemonPid = vi.fn();
+const mockSaveConfig = vi.fn();
+let mockAccountSwitch: Record<string, unknown> = { switched: false };
+const mockSwitchAccountData = vi.fn((_login: string) => mockAccountSwitch);
+const mockAdoptAccountDataOwner = vi.fn();
+vi.mock('../account-switch.js', () => ({
+  switchAccountData: (login: string) => mockSwitchAccountData(login),
+  adoptAccountDataOwner: (...args: unknown[]) => mockAdoptAccountDataOwner(...args),
+}));
 const mockSaveDaemonReady = vi.fn();
 const mockClearDaemonReady = vi.fn();
 const mockClearDaemonIdentity = vi.fn();
@@ -130,6 +138,7 @@ vi.mock('../config.js', () => ({
   getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
   getKrakiHome: vi.fn(() => '/tmp/fake-kraki'),
   getVersion: vi.fn(() => '0.0.0-test'),
+  saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   saveDaemonReady: (...args: unknown[]) => mockSaveDaemonReady(...args),
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
@@ -371,6 +380,28 @@ describe('daemon-worker: startWorker()', () => {
       expect.objectContaining({ channelKeyPath: '/tmp/fake-kraki/channel.key' }),
       expect.stringContaining('Loaded channel key'),
     );
+  });
+
+  it('K-028: signed in with another account, sets the previous account\'s data aside before reading sessions', async () => {
+    mockConfig = { ...mockConfig, account: { login: 'bob' }, device: { name: 'test-machine', id: 'dev_accountA' } };
+    mockAccountSwitch = { switched: true, from: 'alice', to: 'bob', restored: false };
+    try {
+      const { SessionManager } = await import('../session-manager.js');
+      await startWorker();
+      expect(mockSwitchAccountData).toHaveBeenCalledWith('bob');
+      expect(mockSwitchAccountData.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(SessionManager).mock.invocationCallOrder[0]);
+      expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ device: { name: 'test-machine', id: 'dev_test123' } }));
+    } finally {
+      mockAccountSwitch = { switched: false };
+    }
+  });
+
+  it('K-028: an install set up before the account record names its owner from the relay', async () => {
+    await startWorker();
+    expect(mockSwitchAccountData).not.toHaveBeenCalled();
+    mockRelay.onAuthenticated?.({ deviceId: 'dev_test123', user: { login: 'alice' }, devices: [] });
+    expect(mockAdoptAccountDataOwner).toHaveBeenCalledWith('alice');
   });
 
   it('sets up relay state change and auth callbacks', async () => {

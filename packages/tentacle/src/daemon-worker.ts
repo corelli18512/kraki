@@ -14,6 +14,7 @@
  */
 
 import { platform, uptime as osUptime } from 'node:os';
+import { adoptAccountDataOwner, switchAccountData } from './account-switch.js';
 import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFdaDetailed, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
@@ -307,6 +308,27 @@ export async function startWorker(): Promise<WorkerResult> {
     process.exit(PERMANENT_EXIT_CODE);
   }
 
+  // 1b. Signed in with another account: this computer's identity and
+  // sessions are the previous account's. Move them aside before anything
+  // reads them, so the relay registers a new device for this account.
+  if (config.authMethod === 'github_token' && config.account?.login) {
+    startupPhase = 'account-switch';
+    const change = switchAccountData(config.account.login);
+    if (change.switched) {
+      config = { ...config, device: { ...config.device, id: getOrCreateDeviceId() } };
+      saveConfig(config);
+      logger.info(
+        { from: change.from, to: change.to, restored: change.restored, deviceId: config.device.id },
+        'Signed in with another account — set the previous account\'s device and sessions aside',
+      );
+      if (change.restoreError) {
+        logger.warn({ to: change.to, err: change.restoreError }, 'Could not restore all of this account\'s earlier data; the rest stays in accounts/');
+      }
+    }
+  }
+
+  const signsInWithGitHub = config.authMethod === 'github_token';
+
   // 2. Resolve relay auth token
   let token: string | undefined;
 
@@ -511,6 +533,10 @@ export async function startWorker(): Promise<WorkerResult> {
       updateRegion(info.user.region);
     }
     updateRelayIssue(null);
+    // Installs set up before account.json: the relay names the account.
+    if (signsInWithGitHub && info.user?.login) {
+      try { adoptAccountDataOwner(info.user.login); } catch { /* recorded next time */ }
+    }
     announceUpdateResult();
   };
 
