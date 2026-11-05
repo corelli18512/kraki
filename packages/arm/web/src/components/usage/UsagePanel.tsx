@@ -16,7 +16,7 @@ import { ArrowDownCircle, Gauge, Laptop, RotateCw } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import {
-  accountKeyForSession, isDataStale, isStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
+  accountKeyForSession, isDataStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
   readStatus, ringState, ringWindows, shortLabel, shortReset, usageUpdateHint, windowName, type MergedAccountUsage,
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
@@ -102,7 +102,9 @@ function AccountRings({ account, size, lineWidth, spacing, now, delay, animateIn
 }) {
   const { t } = useTranslation('usage');
   const windows = ringWindows(account);
-  const stale = isStale(account, now);
+  // Same rule as the tile's Stale badge: a failed refresh right after a fresh
+  // reading has its own status line and does not grey the rings.
+  const stale = isDataStale(account, now);
   const small = size < 70;
   return (
     <div className="ua-rings" style={{ gap: spacing }}>
