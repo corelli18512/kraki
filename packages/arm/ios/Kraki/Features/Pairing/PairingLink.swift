@@ -114,12 +114,15 @@ extension AppState {
         // pairs this app with that computer (the usual "re-scan to pair").
         // The computer must be one of this account's devices; a code from
         // another account falls through to the account-switch prompt.
-        if hasStoredCredentials && hasCompletedInitialConnect, let trust = link.trust,
+        // Signed in means stored credentials, also on a cold launch before
+        // the first connection: pairing then would sign in as another device
+        // (or account) on top of this one's cached sessions (K-007).
+        if hasStoredCredentials, let trust = link.trust,
            deviceStore.devices[trust.tentacleId] != nil {
             pairWithComputer(link)
             return
         }
-        if hasStoredCredentials && hasCompletedInitialConnect {
+        if hasStoredCredentials {
             pendingPairingPrompt = .alreadyConnected(link, login: user?.login)
             return
         }

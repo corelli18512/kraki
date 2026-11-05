@@ -28,6 +28,31 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertFalse(AuthManager.isAllowedRegionRedirect("wss://kraki.chat.evil.example"))
     }
 
+    /// K-007: a link that cold-launches a signed-in app (before the first
+    /// connection) asks before switching accounts, like a warm one does.
+    @MainActor
+    func testColdLaunchLinkWhileSignedInAsksBeforeSwitchingAccounts() throws {
+        let app = AppState.makeUnitTestHost()
+        app.hasStoredCredentials = true
+        app.hasCompletedInitialConnect = false
+        app.user = UserInfo(id: "u1", login: "octo", provider: "github")
+        let link = try XCTUnwrap(PairingLink(string: "https://app.kraki.chat/?relay=wss%3A%2F%2Frelay.kraki.chat&token=pt_other"))
+        app.openPairingLink(link)
+        XCTAssertEqual(app.pendingPairingPrompt, .alreadyConnected(link, login: "octo"))
+        XCTAssertNotEqual(app.connectionStatus, .authenticating, "no pairing on top of the stored identity")
+    }
+
+    @MainActor
+    func testLinkWhileSignedOutPairsWithoutPrompt() throws {
+        let app = AppState.makeUnitTestHost()
+        app.hasStoredCredentials = false
+        app.hasCompletedInitialConnect = false
+        let link = try XCTUnwrap(PairingLink(string: "https://app.kraki.chat/?token=pt_new"))
+        app.openPairingLink(link)
+        XCTAssertNil(app.pendingPairingPrompt)
+        XCTAssertEqual(app.connectionStatus, .authenticating)
+    }
+
     func testFingerprintMatchesTentacle() {
         XCTAssertEqual(DeviceKeyPins.fingerprint("abc"), "ungWv48Bz-pBQUDeXa4iIw")
     }
