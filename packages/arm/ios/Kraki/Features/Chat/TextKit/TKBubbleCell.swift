@@ -281,6 +281,13 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var bodyChunkStrings: [NSAttributedString?] = []
     private var bodyChunkRanges: [NSRange] = []
     private var bodyChunkHasTable: [Bool] = []
+    /// Chunks that have a text view: all of them, except for a very long
+    /// body, where only the chunks near the visible part of the cell do
+    /// (`bodyViews[i]` shows chunk `realizedChunks.lowerBound + i`). A 1 MB
+    /// reply has ~1100 chunks; a text view each froze entry and used GBs.
+    private var realizedChunks: Range<Int> = 0..<0
+    /// Bodies with more chunks than this realize only a window of them.
+    static let maxEagerChunks = 24
     private var assignedLive: (body: TKLiveBody, revision: Int)?
     private let moreButton = UIButton(type: .system)
     private let actionHost = BubbleActionHostView()
@@ -289,6 +296,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var tableViews: [TKTableScrollView] = []
     private var tableAttachmentIDs: [ObjectIdentifier] = []
     private var bodyHasLinks = false
+    /// Last `setBodyInteractive` state (on at rest, off while the list
+    /// scrolls). Tables created by a later layout pass start in it.
+    private var bodyInteractionEnabled = false
     private var content: TKBubbleContent?
     /// Action SwiftUI can finish a layout pass while UIKit is laying out the
     /// reusable cell. Defer the collection-view invalidation to the next main
@@ -344,6 +354,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
             (cell: TKBubbleCell, _: UITraitCollection) in
             cell.refreshBubbleAppearance()
+            // Quote surfaces use dynamic colors resolved when the body draws.
+            cell.bodyViews.forEach { $0.setNeedsDisplay() }
         }
     }
 
@@ -356,6 +368,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         view.isSelectable = true
         view.isUserInteractionEnabled = false
         view.isOpaque = false
+        // The code/quote surfaces are drawn by this view (`draw(_:)`). A
+        // reused view resized after its last draw must redraw them, not
+        // stretch or keep the previous message's pixels.
+        view.contentMode = .redraw
         view.tintColor = .clear
         view.backgroundColor = .clear
         view.subviews.forEach {
@@ -372,7 +388,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                                          height: CGFloat.greatestFiniteMagnitude)
         view.adjustsFontForContentSizeCategory = true
         view.dataDetectorTypes = []
-        view.linkTextAttributes = [.foregroundColor: IOSMarkdownPalette.link]
+        // Links carry their own color in the attributed body (agent blue, or
+        // white + underline on the user's navy bubble). UIKit's default link
+        // attributes would repaint every link in one color.
+        view.linkTextAttributes = [:]
         return view
     }
 
@@ -380,6 +399,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     /// changed. While an answer streams, that is just the last chunk.
     private func assignBody(_ content: TKBubbleContent, cellWidth: CGFloat) {
         guard let body = content.body, body.length > 0 else {
+            realizedChunks = 0..<0
             for (index, view) in bodyViews.enumerated() {
                 if bodyChunkStrings[index] != nil { view.attributedText = nil }
                 bodyChunkStrings[index] = nil
@@ -397,7 +417,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
            let assigned = assignedLive, assigned.body === live {
             unchangedPrefix = live.changedFrom(since: assigned.revision) ?? 0
         }
-        let chunks = content.bodyChunks(cellWidth: cellWidth)
+        let allChunks = content.bodyChunks(cellWidth: cellWidth)
+        realizedChunks = realizedRange(of: allChunks)
+        let chunks = Array(allChunks[realizedChunks])
         while bodyViews.count < chunks.count {
             let view = Self.makeBodyView()
             renderClipView.insertSubview(view, aboveSubview: bodyViews.last ?? bubbleBG)
@@ -447,8 +469,69 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         assignedLive = content.liveBody.map { ($0, content.liveRevision) }
     }
 
+    /// First chunk for which `isPast` holds (chunks are in y order).
+    private static func firstChunk(in chunks: [TKBodyChunks.Placed],
+                                   where isPast: (TKBodyChunks.Placed) -> Bool) -> Int {
+        var low = 0, high = chunks.count
+        while low < high {
+            let mid = (low + high) / 2
+            if isPast(chunks[mid]) { high = mid } else { low = mid + 1 }
+        }
+        return low
+    }
+
+    /// Top of the body text inside the cell (see `layoutSubviews`).
+    private static let bodyTop = TKMetrics.outerV + TKMetrics.msgPadV
+
+    /// The chunks to realize: all of an ordinary body; for a very long one,
+    /// those within a screen of the cell's visible part (the start of the
+    /// body while the cell is not in a window yet).
+    private func realizedRange(of chunks: [TKBodyChunks.Placed]) -> Range<Int> {
+        guard chunks.count > Self.maxEagerChunks else { return 0..<chunks.count }
+        let visible: CGRect
+        if let window {
+            visible = convert(window.bounds, from: window)
+        } else {
+            visible = CGRect(x: 0, y: 0, width: bounds.width, height: UIScreen.main.bounds.height)
+        }
+        let margin = max(visible.height, 400)
+        let low = visible.minY - margin - Self.bodyTop
+        let high = visible.maxY + margin - Self.bodyTop
+        var first = Self.firstChunk(in: chunks) { $0.y + $0.height >= low }
+        first = min(first, chunks.count - 1)
+        var end = Self.firstChunk(in: chunks) { $0.y > high }
+        end = max(end, first + 1)
+        return first..<end
+    }
+
+    /// The list scrolled: realize the chunks of a very long body that came
+    /// near the screen (and release the ones that left).
+    func refreshRealizedChunks() {
+        guard let content, let body = content.body, body.length > 0 else { return }
+        let chunks = content.bodyChunks(cellWidth: bounds.width)
+        guard chunks.count > Self.maxEagerChunks else { return }
+        let wanted = realizedRange(of: chunks)
+        // Re-assign only once the visible part nears the realized edge.
+        let needed = realizedNeededRange(of: chunks)
+        guard !(realizedChunks.contains(needed.lowerBound) && realizedChunks.contains(needed.upperBound - 1)),
+              wanted != realizedChunks else { return }
+        assignBody(content, cellWidth: bounds.width)
+        setNeedsLayout()
+    }
+
+    /// Chunks actually on screen (no margin).
+    private func realizedNeededRange(of chunks: [TKBodyChunks.Placed]) -> Range<Int> {
+        guard let window else { return realizedChunks }
+        let visible = convert(window.bounds, from: window)
+        var first = Self.firstChunk(in: chunks) { $0.y + $0.height >= visible.minY - Self.bodyTop }
+        first = min(first, chunks.count - 1)
+        let end = max(Self.firstChunk(in: chunks) { $0.y > visible.maxY - Self.bodyTop }, first + 1)
+        return first..<end
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window != nil { refreshRealizedChunks() }
         // A representable can configure cells before it inherits the window's
         // final forced color scheme. Re-resolve the bubble on attachment so an
         // entering Session never paints one light/dark frame before settling.
@@ -652,6 +735,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     func setBodyInteractive(_ enabled: Bool) {
         if isSelectingText { return }
+        bodyInteractionEnabled = enabled
         // Plain text never needs UITextView selection: whole-message Copy and
         // Steps are provided by the cell context menu. Only link-bearing text
         // receives UITextView touches, which prevents iOS selection highlights
@@ -817,7 +901,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 view.onShowAll = { [weak self] in
                     self?.onShowTable?(placement.attachment.tableLayout)
                 }
-                view.isUserInteractionEnabled = bodyView.isUserInteractionEnabled
+                // Not the body's state: plain text without links is never
+                // interactive, but its tables (Open, Copy, sort) are.
+                view.isUserInteractionEnabled = bodyInteractionEnabled
                 renderClipView.addSubview(view)
                 return view
             }
@@ -972,6 +1058,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         super.layoutSubviews()
         renderClipView.frame = contentView.bounds
         guard let content else { return }
+        refreshRealizedChunks()
         let cellWidth = bounds.width
         let bubbleWidth = content.bubbleWidth(cellWidth: cellWidth)
         let x: CGFloat
@@ -987,9 +1074,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         let textHeight = content.bodyTextHeight(cellWidth: cellWidth)
         if textHeight > 0 {
             let chunks = content.bodyChunks(cellWidth: cellWidth)
-            for (index, chunk) in chunks.enumerated() where index < bodyViews.count {
+            for (index, view) in bodyViews.enumerated() {
+                let chunkIndex = realizedChunks.lowerBound + index
+                guard chunkIndex < min(realizedChunks.upperBound, chunks.count) else { break }
+                let chunk = chunks[chunkIndex]
                 let frame = CGRect(x: innerX, y: cursorY + chunk.y, width: innerWidth, height: chunk.height)
-                if bodyViews[index].frame != frame { bodyViews[index].frame = frame }
+                if view.frame != frame { view.frame = frame }
             }
             cursorY += textHeight
         }
