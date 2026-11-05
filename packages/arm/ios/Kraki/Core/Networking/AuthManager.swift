@@ -667,19 +667,6 @@ final class AuthManager {
         }
     }
 
-    /// The sign-in error after the relay rejected this device for good, and
-    /// how many undelivered messages and unsent drafts went with its data.
-    static func fatalAuthErrorText(_ reason: String, discardedMessages: Int, discardedDrafts: Int) -> String {
-        var lines = [reason]
-        if discardedMessages > 0 {
-            lines.append(String(localized: "\(discardedMessages) undelivered messages were removed from this device with its sign-in."))
-        }
-        if discardedDrafts > 0 {
-            lines.append(String(localized: "\(discardedDrafts) unsent drafts were removed from this device with its sign-in."))
-        }
-        return lines.joined(separator: "\n")
-    }
-
     // MARK: - Credential Management
 
     func clearStoredCredentials() {
@@ -937,6 +924,19 @@ extension AuthManager {
     /// refuses any other string rather than sign it for whoever sent it.
     static func isHeadAuthNonce(_ nonce: String) -> Bool {
         nonce.utf8.count == 64 && nonce.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    /// The sign-in error after the relay rejected this device for good, and
+    /// how many undelivered messages and unsent drafts went with its data.
+    static func fatalAuthErrorText(_ reason: String, discardedMessages: Int, discardedDrafts: Int) -> String {
+        var lines = [reason]
+        if discardedMessages > 0 {
+            lines.append(String(localized: "\(discardedMessages) undelivered messages were removed from this device with its sign-in."))
+        }
+        if discardedDrafts > 0 {
+            lines.append(String(localized: "\(discardedDrafts) unsent drafts were removed from this device with its sign-in."))
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

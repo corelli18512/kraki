@@ -1,6 +1,6 @@
 /** K-315 (AGT-116): `kraki agents`/setup spinners redrew forever on a pty
  *  that reports zero columns (ora computes Infinity lines to clear). */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Writable } from 'node:stream';
 import { ora } from '../spinner.js';
 
@@ -16,6 +16,14 @@ function tty(columns: number): NodeJS.WriteStream & { output: () => string } {
 }
 
 describe('ora (zero-width safe)', () => {
+  // ora also turns itself off when CI is set or TERM=dumb (is-interactive);
+  // these tests are about the wrapper, so they must not depend on the runner.
+  beforeEach(() => {
+    vi.stubEnv('CI', undefined);
+    vi.stubEnv('TERM', 'xterm-256color');
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it('is disabled on a zero-column terminal and prints its lines once', () => {
     const stream = tty(0);
     const s = ora({ text: 'Checking the coding agents…', stream });

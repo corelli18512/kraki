@@ -579,12 +579,7 @@ private struct MacSessionInfoSheet: View {
                 Button("Done") {
                     // Done and Esc close the sheet without the title field
                     // losing focus first: save what was typed.
-                    if let title = MacSessionInfoRules.titleToSaveOnClose(
-                        editing: editingTitle, draft: titleDraft, session: session
-                    ) {
-                        appState.commandSender?.renameSession(sessionId: session.id, title: title)
-                    }
-                    editingTitle = false
+                    saveTitleIfEdited()
                     dismiss()
                 }
                     .keyboardShortcut(.cancelAction)
@@ -702,10 +697,7 @@ private struct MacSessionInfoSheet: View {
         )
     }
 
-    private func normalizedEffort(
-        for model: String,
-        preferred: ReasoningEffort?
-    ) -> ReasoningEffort? {
+    private func normalizedEffort(for model: String, preferred: ReasoningEffort?) -> ReasoningEffort? {
         MacSessionInfoRules.effort(for: model, in: modelDetails, preferred: preferred)
     }
 
@@ -859,15 +851,19 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func commitTitleEdit() {
-        // Not editing, or unchanged: no rename, so an auto title does not
-        // become a fixed one (and clearing a never-set title is a no-op).
+        saveTitleIfEdited()
+        titleFocused = false
+    }
+
+    /// Not editing, or unchanged: no rename, so an auto title does not
+    /// become a fixed one (and clearing a never-set title is a no-op).
+    private func saveTitleIfEdited() {
         if let title = MacSessionInfoRules.titleToSaveOnClose(
             editing: editingTitle, draft: titleDraft, session: session
         ) {
             appState.commandSender?.renameSession(sessionId: session.id, title: title)
         }
         editingTitle = false
-        titleFocused = false
     }
 
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {

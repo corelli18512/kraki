@@ -53,11 +53,11 @@ final class ComposerVoiceCopyAndLayoutTests: XCTestCase {
     }
 
     /// K-041: a long computer name no longer hides the word "offline".
-    func testOfflineNoticeKeepsOfflineInViewForLongNames() {
+    func testOfflineNoticeKeepsOfflineInViewForLongNames() throws {
         let long = String(repeating: "Workstation-", count: 6)
         let text = IOSComposerOfflineNotice.text(deviceName: long)
-        XCTAssertTrue(text.contains("offline"))
-        XCTAssertLessThan(text.distance(from: text.startIndex, to: text.range(of: "offline")!.lowerBound),
+        let offline = try XCTUnwrap(text.range(of: "offline"))
+        XCTAssertLessThan(text.distance(from: text.startIndex, to: offline.lowerBound),
                           IOSComposerOfflineNotice.maxNameLength + 5, "the name is shortened before \"offline\"")
         XCTAssertEqual(IOSComposerOfflineNotice.text(deviceName: "Desk"),
                        String(localized: "Desk is offline — message will deliver when it reconnects."))

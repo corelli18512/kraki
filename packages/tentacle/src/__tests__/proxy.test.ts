@@ -80,7 +80,7 @@ describe('trustSystemCertificates (K-295)', () => {
     const { trustSystemCertificates } = await import('../proxy.js');
     let installed: string[] | null = null;
     const api = {
-      getCACertificates: (type?: string) => (type === 'system' ? ['corp-root', 'shared-root'] : ['bundled-root', 'shared-root']),
+      getCACertificates: (type?: string) => (type === 'system' ? ['corp-root', 'shared-root', 'corp-root'] : ['bundled-root', 'shared-root']),
       setDefaultCACertificates: (certs: string[]) => { installed = certs; },
     };
     expect(trustSystemCertificates(api)).toBe(1);
@@ -99,10 +99,21 @@ describe('trustSystemCertificates (K-295)', () => {
   it('works against this Node', async () => {
     const { trustSystemCertificates } = await import('../proxy.js');
     const tls = await import('node:tls');
-    const before = tls.getCACertificates('default').length;
+    const { X509Certificate } = await import('node:crypto');
+    // Compare certificates, not PEM text or counts: Node keeps one copy of
+    // each certificate, and on Linux the OpenSSL store lists most roots twice
+    // (the bundle file and the per-certificate files) and shares most of
+    // them with Node's bundled set.
+    const fingerprints = (pems: readonly string[]) => new Set(pems.map((pem) => new X509Certificate(pem).fingerprint256));
+    const before = fingerprints(tls.getCACertificates('default'));
+    const system = fingerprints(tls.getCACertificates('system'));
     const added = trustSystemCertificates();
     expect(added).not.toBeNull();
-    expect(tls.getCACertificates('default').length).toBe(before + (added ?? 0));
+    const after = fingerprints(tls.getCACertificates('default'));
+    const missing = (set: Set<string>) => [...set].filter((fp) => !after.has(fp)).length;
+    expect({ droppedDefault: missing(before), missingSystem: missing(system) })
+      .toEqual({ droppedDefault: 0, missingSystem: 0 });
+    expect(after.size).toBe(new Set([...before, ...system]).size);
   });
 });
 

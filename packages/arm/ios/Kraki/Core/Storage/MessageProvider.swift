@@ -296,13 +296,6 @@ final class MessageProvider {
         return loaded
     }
 
-    /// After `SessionStore.captureEntryUnreadBoundary`: when the unread part
-    /// starts before the tail window, open the window at its first row.
-    func anchorEntryWindowAtFirstUnread(_ sessionId: String) {
-        guard let appState, let boundary = appState.sessionStore.entryUnreadBoundaries[sessionId] else { return }
-        appState.messageStore.anchorWindowAtFirstUnread(sessionId, after: boundary)
-    }
-
     /// Snapshot of the messages currently in memory for the session.
     /// Same shape as `MessageStore.currentWindow` but exposed here so
     /// callers don't take a dependency on MessageStore directly.
@@ -569,20 +562,7 @@ final class MessageProvider {
         #endif
 
         #if DEBUG
-        // Isolated Chat performance runs can inject a realistic round-trip so
-        // spinner visibility and prepend anchoring are tested over time rather
-        // than against an unrealistically instant local SQLite read. This is
-        // deliberately unavailable to ordinary production-connected launches.
-        let environment = ProcessInfo.processInfo.environment
-        let isIsolatedChatTest = environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
-            || environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
-        if isIsolatedChatTest,
-           let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
-           let delayMs = UInt64(rawDelay), delayMs > 0 {
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-        } else if MessageProviderDebug.olderPageDelayMs > 0 {
-            try? await Task.sleep(nanoseconds: MessageProviderDebug.olderPageDelayMs * 1_000_000)
-        }
+        await Self.debugOlderPageDelay()
         #endif
 
         // Off-main read. Keeps the scroll/runloop free — the core fix
@@ -652,24 +632,6 @@ final class MessageProvider {
         #endif
         requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderPage")
         return false
-    }
-    /// A DB page that does not reach the window top (`page.last.seq <
-    /// topSeq - 1`) skips a hole in the cache — e.g. a long run the phone
-    /// missed. Ask the Tentacle for the rows right below the top instead of
-    /// stitching the old page onto the new one. Returns true when the request
-    /// is (or already was) on its way; false when the DB page should be used:
-    /// adjacent, Tentacle unreachable, or this hole was already asked.
-    private func askTentacleToFillHole(_ sessionId: String, topSeq: Int, page: [ChatMessage]) -> Bool {
-        guard let appState, let pageTop = page.last?.seq, pageTop < topSeq - 1 else { return false }
-        if olderHolesUnfillable.contains(sessionId) { return false }
-        if olderHoleAsked[sessionId]?.contains(topSeq) == true { return false }
-        if hasSlot(sessionId, where: { if case .before = $0 { return true }; return false }) { return true }
-        guard let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId, !deviceId.isEmpty,
-              canReachTentacle(deviceId, sessionId: sessionId, reason: "olderHole") else { return false }
-        olderHoleAsked[sessionId, default: []].insert(topSeq)
-        KLog.diag("🕳️ [2/history older hole] session=\(sessionId.prefix(12)) topSeq=\(topSeq) dbPageTop=\(pageTop) → ask Tentacle")
-        requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderHole")
-        return true
     }
 
     /// the user scrolls back toward the tail and the in-memory window
@@ -1234,6 +1196,57 @@ extension MessageProvider {
         appState?.sessionStore.setLoading(sessionId, false)
     }
 }
+
+// MARK: - Older-page holes and entry anchor (same file: shares the class's private state)
+
+extension MessageProvider {
+    /// After `SessionStore.captureEntryUnreadBoundary`: when the unread part
+    /// starts before the tail window, open the window at its first row.
+    func anchorEntryWindowAtFirstUnread(_ sessionId: String) {
+        guard let appState, let boundary = appState.sessionStore.entryUnreadBoundaries[sessionId] else { return }
+        appState.messageStore.anchorWindowAtFirstUnread(sessionId, after: boundary)
+    }
+
+    /// A DB page that does not reach the window top (`page.last.seq <
+    /// topSeq - 1`) skips a hole in the cache — e.g. a long run the phone
+    /// missed. Ask the Tentacle for the rows right below the top instead of
+    /// stitching the old page onto the new one. Returns true when the request
+    /// is (or already was) on its way; false when the DB page should be used:
+    /// adjacent, Tentacle unreachable, or this hole was already asked.
+    private func askTentacleToFillHole(_ sessionId: String, topSeq: Int, page: [ChatMessage]) -> Bool {
+        guard let appState, let pageTop = page.last?.seq, pageTop < topSeq - 1 else { return false }
+        if olderHolesUnfillable.contains(sessionId) { return false }
+        if olderHoleAsked[sessionId]?.contains(topSeq) == true { return false }
+        if hasSlot(sessionId, where: { if case .before = $0 { return true }; return false }) { return true }
+        guard let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId, !deviceId.isEmpty,
+              canReachTentacle(deviceId, sessionId: sessionId, reason: "olderHole") else { return false }
+        olderHoleAsked[sessionId, default: []].insert(topSeq)
+        KLog.diag("🕳️ [2/history older hole] session=\(sessionId.prefix(12)) topSeq=\(topSeq) dbPageTop=\(pageTop) → ask Tentacle")
+        requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderHole")
+        return true
+    }
+}
+
+#if DEBUG
+extension MessageProvider {
+    /// Isolated Chat performance runs can inject a realistic round-trip so
+    /// spinner visibility and prepend anchoring are tested over time rather
+    /// than against an unrealistically instant local SQLite read. This is
+    /// deliberately unavailable to ordinary production-connected launches.
+    static func debugOlderPageDelay() async {
+        let environment = ProcessInfo.processInfo.environment
+        let isIsolatedChatTest = environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+            || environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+        if isIsolatedChatTest,
+           let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
+           let delayMs = UInt64(rawDelay), delayMs > 0 {
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        } else if MessageProviderDebug.olderPageDelayMs > 0 {
+            try? await Task.sleep(nanoseconds: MessageProviderDebug.olderPageDelayMs * 1_000_000)
+        }
+    }
+}
+#endif
 
 // MARK: - Reconnect catch-up (same file: shares the class's private state)
 

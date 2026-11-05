@@ -608,45 +608,8 @@ final class WebSocketClient: NSObject {
         }
     }
 
-    /// A socket kept through a short background visit may have gone
-    /// half-open while the app was suspended (network change, NAT timeout).
-    /// The regular liveness ping tolerates 22 s of latency, so the chat stayed
-    /// stale for ~20 s with no indicator. On return ask for proof at once,
-    /// with a short deadline: a dead link is replaced within a few seconds
-    /// (a false alarm costs one ~1 s reconnect).
-    static let resumeProbeTimeout: TimeInterval = 5
+    /// Deadline of the ping `probeAfterResume` sends (see there).
     private var resumeProbeDeadline: DispatchWorkItem?
-
-    func probeAfterResume(timeout: TimeInterval = resumeProbeTimeout) {
-        guard state == .connected, let probeTask = task else { return }
-        resumeProbeDeadline?.cancel()
-        let epoch = generation
-        let deadline = DispatchWorkItem { [weak self] in
-            guard let self, self.generation == epoch, self.task === probeTask else { return }
-            self.resumeProbeDeadline = nil
-            // Real payload still streaming in proves the link (the pong may
-            // queue behind it); the regular liveness check owns that case.
-            let now = Date()
-            if self.isReceivingPayload() || self.isUploading(now) { return }
-            KLog.d("⚠️ No pong after returning to the foreground — replacing stale connection")
-            self.recover(reason: "resume_ping_timeout")
-        }
-        resumeProbeDeadline = deadline
-        probeTask.sendPing { [weak self, weak probeTask] error in
-            DispatchQueue.main.async {
-                guard let self, let probeTask, self.task === probeTask else { return }
-                self.resumeProbeDeadline?.cancel()
-                self.resumeProbeDeadline = nil
-                if let error {
-                    KLog.d("⚠️ WebSocket resume ping failed: \(error)")
-                    self.recover(reason: "ping_failed")
-                } else {
-                    self.lastLivenessAt = Date()
-                }
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
-    }
 
     /// Keep the application-level JSON heartbeat for relay compatibility. The
     /// protocol-level ping above is the actual client-side liveness proof;
@@ -759,6 +722,48 @@ final class WebSocketClient: NSObject {
         stableConnectionWorkItem?.cancel()
         stableConnectionWorkItem = nil
         cancelReconnect()
+    }
+}
+
+// MARK: - Resume probe
+
+extension WebSocketClient {
+    /// A socket kept through a short background visit may have gone
+    /// half-open while the app was suspended (network change, NAT timeout).
+    /// The regular liveness ping tolerates 22 s of latency, so the chat stayed
+    /// stale for ~20 s with no indicator. On return ask for proof at once,
+    /// with a short deadline: a dead link is replaced within a few seconds
+    /// (a false alarm costs one ~1 s reconnect).
+    static let resumeProbeTimeout: TimeInterval = 5
+    func probeAfterResume(timeout: TimeInterval = resumeProbeTimeout) {
+        guard state == .connected, let probeTask = task else { return }
+        resumeProbeDeadline?.cancel()
+        let epoch = generation
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == epoch, self.task === probeTask else { return }
+            self.resumeProbeDeadline = nil
+            // Real payload still streaming in proves the link (the pong may
+            // queue behind it); the regular liveness check owns that case.
+            let now = Date()
+            if self.isReceivingPayload() || self.isUploading(now) { return }
+            KLog.d("⚠️ No pong after returning to the foreground — replacing stale connection")
+            self.recover(reason: "resume_ping_timeout")
+        }
+        resumeProbeDeadline = deadline
+        probeTask.sendPing { [weak self, weak probeTask] error in
+            DispatchQueue.main.async {
+                guard let self, let probeTask, self.task === probeTask else { return }
+                self.resumeProbeDeadline?.cancel()
+                self.resumeProbeDeadline = nil
+                if let error {
+                    KLog.d("⚠️ WebSocket resume ping failed: \(error)")
+                    self.recover(reason: "ping_failed")
+                } else {
+                    self.lastLivenessAt = Date()
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
     }
 }
 

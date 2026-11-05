@@ -272,7 +272,8 @@ export function trustSystemCertificates(api: TlsCaApi = tls as unknown as TlsCaA
   try {
     const current = api.getCACertificates('default');
     const known = new Set(current);
-    const added = api.getCACertificates('system').filter((cert) => !known.has(cert));
+    // The Linux store can list a root more than once (bundle + per-cert files).
+    const added = [...new Set(api.getCACertificates('system'))].filter((cert) => !known.has(cert));
     if (added.length > 0) api.setDefaultCACertificates([...current, ...added]);
     return added.length;
   } catch {

@@ -477,25 +477,6 @@ final class AppState {
     /// Key-mismatch warnings the user has already dismissed.
     var acknowledgedKeyWarnings: Set<String> = []
 
-    /// A computer-key warning to show (D4), if any is unacknowledged.
-    var keyWarning: (ids: Set<String>, message: String)? {
-        let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
-        guard !open.isEmpty else { return nil }
-        if open.contains(DeviceStore.unmatchedQRMarker) {
-            return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
-        }
-        let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
-        let computer = names.isEmpty ? String(localized: "a computer") : names
-        // Only the relay says the key changed (K-303): messages still reach
-        // the computer if it kept its key, so don't claim they can't.
-        #if os(macOS)
-        // A Mac cannot scan a pairing code; signing in again re-pins every computer.
-        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you sign out of Kraki on this Mac and sign in again to trust its new key. If you didn't, keep using it as before."))
-        #else
-        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
-        #endif
-    }
-
     /// True from the moment the user taps "Sign in with GitHub" until
     /// `ASWebAuthenticationSession`'s completion handler fires (success,
     /// error, or user cancel). Drives the LoginView's spinner so the
@@ -565,37 +546,6 @@ final class AppState {
     private(set) var showsReconnecting = false
     @ObservationIgnored private var reconnectingIndicatorWork: DispatchWorkItem?
     static let reconnectingIndicatorDelay: TimeInterval = 2
-
-    func updateReconnectingIndicator() {
-        guard isReconnecting else {
-            reconnectingIndicatorWork?.cancel()
-            reconnectingIndicatorWork = nil
-            if showsReconnecting {
-                showsReconnecting = false
-                stability.reconnectingShown(false)
-                // Only a real recovery; backgrounding also clears the notice.
-                if connectionStatus == .connected {
-                    announceForAccessibility(String(localized: "Connected"))
-                }
-            }
-            return
-        }
-        guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.reconnectingIndicatorWork = nil
-            if self.isReconnecting {
-                self.showsReconnecting = true
-                self.stability.reconnectingShown(true)
-                // The header changes silently otherwise (VoiceOver users
-                // would not learn the app is offline).
-                self.announceForAccessibility(self.hasCompletedInitialConnect
-                    ? String(localized: "Connecting…") : String(localized: "Signing in…"))
-            }
-        }
-        reconnectingIndicatorWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
-    }
 
     /// VoiceOver announcements of this app graph's state changes (tests
     /// replace it to observe them without other graphs in the process).
@@ -888,6 +838,60 @@ struct UserInfo: Codable, Equatable {
         provider = try container.decodeIfPresent(String.self, forKey: .provider)
         email = try container.decodeIfPresent(String.self, forKey: .email)
         preferences = try container.decodeIfPresent([String: AnyCodable].self, forKey: .preferences)
+    }
+}
+
+// MARK: - Connection notices (same file: private state)
+
+extension AppState {
+    /// A computer-key warning to show (D4), if any is unacknowledged.
+    var keyWarning: (ids: Set<String>, message: String)? {
+        let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
+        guard !open.isEmpty else { return nil }
+        if open.contains(DeviceStore.unmatchedQRMarker) {
+            return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
+        }
+        let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
+        let computer = names.isEmpty ? String(localized: "a computer") : names
+        // Only the relay says the key changed (K-303): messages still reach
+        // the computer if it kept its key, so don't claim they can't.
+        #if os(macOS)
+        // A Mac cannot scan a pairing code; signing in again re-pins every computer.
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you sign out of Kraki on this Mac and sign in again to trust its new key. If you didn't, keep using it as before."))
+        #else
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
+        #endif
+    }
+
+    func updateReconnectingIndicator() {
+        guard isReconnecting else {
+            reconnectingIndicatorWork?.cancel()
+            reconnectingIndicatorWork = nil
+            if showsReconnecting {
+                showsReconnecting = false
+                stability.reconnectingShown(false)
+                // Only a real recovery; backgrounding also clears the notice.
+                if connectionStatus == .connected {
+                    announceForAccessibility(String(localized: "Connected"))
+                }
+            }
+            return
+        }
+        guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectingIndicatorWork = nil
+            if self.isReconnecting {
+                self.showsReconnecting = true
+                self.stability.reconnectingShown(true)
+                // The header changes silently otherwise (VoiceOver users
+                // would not learn the app is offline).
+                self.announceForAccessibility(self.hasCompletedInitialConnect
+                    ? String(localized: "Connecting…") : String(localized: "Signing in…"))
+            }
+        }
+        reconnectingIndicatorWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
     }
 }
 
