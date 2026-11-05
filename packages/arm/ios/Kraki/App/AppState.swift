@@ -145,6 +145,16 @@ final class AppState {
             self?.sessionStore.flushCache()
             self?.deviceStore.flushCache()
         }
+        #elseif os(macOS)
+        // Quit: unsent drafts and the latest snapshot reach disk.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.sessionStore.flushCache()
+            self?.deviceStore.flushCache()
+        }
         #endif
     }
 

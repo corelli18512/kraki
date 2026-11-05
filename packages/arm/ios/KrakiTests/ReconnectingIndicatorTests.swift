@@ -49,8 +49,8 @@ final class ReconnectingIndicatorTests: XCTestCase {
         XCTAssertTrue(app.showsReconnecting)
 
         // Cached devices are all restored offline: unknown presence is not offline.
-        XCTAssertNil(MessageInputView.offlineHint(deviceOnline: false, deviceName: "Studio", presenceKnown: false))
-        XCTAssertEqual(MessageInputView.offlineHint(deviceOnline: false, deviceName: "Studio", presenceKnown: true),
+        XCTAssertNil(IOSComposerOfflineNotice.text(deviceOnline: false, deviceName: "Studio", presenceKnown: false))
+        XCTAssertEqual(IOSComposerOfflineNotice.text(deviceOnline: false, deviceName: "Studio", presenceKnown: true),
                        "Studio is offline — message will deliver when it reconnects.")
         let session = SessionInfo(id: "s", deviceId: "d", deviceName: "Studio", agent: "pi", model: "m", title: "t",
                                   state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,

@@ -842,4 +842,28 @@ extension SessionStoreTests {
         XCTAssertEqual(store.unreadSessionIDs, expected())
         XCTAssertEqual(store.totalUnread, expected().count)
     }
+
+    // MARK: - Drafts (K-083)
+
+    /// A typed draft is still there after the app is killed and relaunched.
+    func testDraftsSurviveRelaunch() {
+        store.setDraft("sess-1", "half-typed thought")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts["sess-1"], "half-typed thought")
+
+        store.setDraft("sess-1", "")
+        store.flushCache()
+        XCTAssertNil(SessionStore().drafts["sess-1"], "a sent or cleared draft does not come back")
+    }
+
+    func testRemovedSessionAndResetForgetPersistedDrafts() {
+        store.setDraft("gone", "for a deleted session")
+        store.setDraft("kept", "still here")
+        store.removeSession("gone")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts, ["kept": "still here"])
+
+        store.reset()
+        XCTAssertEqual(SessionStore().drafts, [:], "sign-out leaves no draft on disk")
+    }
 }

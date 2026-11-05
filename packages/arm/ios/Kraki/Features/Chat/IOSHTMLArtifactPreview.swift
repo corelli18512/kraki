@@ -145,11 +145,13 @@ struct IOSHTMLArtifactPreview: View {
             Text("Couldn’t load this report")
                 .font(.headline)
                 .foregroundStyle(Color.textTitle)
-            Text(reason)
-                .font(.subheadline)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
+            if !reason.isEmpty {
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
             if let retry {
                 Button("Try Again", action: retry)
                     .buttonStyle(.bordered)

@@ -191,7 +191,7 @@ struct ToolActivityView: View {
                     .foregroundStyle(.tertiary)
             }
         case .error(let reason):
-            Text("Couldn't load: \(reason)")
+            Text(AttachmentState.loadFailureText(reason))
                 .font(.caption2)
                 .foregroundStyle(.red)
         case .awaitingChunks(let received, let total):

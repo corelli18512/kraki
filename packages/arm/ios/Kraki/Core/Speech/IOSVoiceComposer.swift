@@ -439,6 +439,11 @@ protocol IOSVoiceComposerHost: AnyObject {
     /// its original owner.
     func depart(sessionID: String) {
         guard operation?.sessionID == sessionID, isRecording else { return }
+        // The OS microphone prompt itself makes the app inactive. Finishing
+        // now would cancel the request and drop its answer: a denial showed
+        // nothing until the next tap. The prompt is modal, so the recording
+        // either starts once allowed or reports the denial.
+        guard host?.voiceInputController.state != .requestingPermission else { return }
         finishToDraft(focusEditor: false)
     }
     /// Logout: drop everything.
