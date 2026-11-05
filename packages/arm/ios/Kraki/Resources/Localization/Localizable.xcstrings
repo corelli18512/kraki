@@ -58,12 +58,32 @@
         }
       }
     },
+    "Lower Other Sounds While Recording" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音时降低其他声音"
+          }
+        }
+      }
+    },
     "This Mac is reconnecting…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台 Mac 正在重新连接…"
+          }
+        }
+      }
+    },
+    "Turns this Mac's sound down while you speak and back up when you stop. A volume you change yourself in the meantime is kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话时调低这台 Mac 的声音，停止后恢复。期间你自己调过的音量会保留。"
           }
         }
       }

@@ -147,6 +147,8 @@ protocol VoiceInputAudioPolicy {
     func requestPermission() async -> Bool
     func activate() -> Bool
     func deactivate()
+    /// The microphone stopped (the recording may still be finishing).
+    func captureEnded()
 }
 
 #if DEBUG
@@ -204,81 +206,6 @@ enum NativeTestRuntime {
     static let allowsLiveAudio = true
 }
 #endif
-
-struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
-    var hasInputDevice: Bool {
-        #if DEBUG
-        guard NativeTestRuntime.allowsLiveAudio else { return false }
-        #endif
-        return VoiceAudioInputAvailability.isAvailable
-    }
-
-    var permission: VoiceMicrophonePermission {
-        #if DEBUG
-        guard NativeTestRuntime.allowsLiveAudio else { return .denied }
-        #endif
-        #if os(macOS)
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: return .granted
-        case .notDetermined: return .undetermined
-        default: return .denied
-        }
-        #else
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted: return .granted
-        case .undetermined: return .undetermined
-        default: return .denied
-        }
-        #endif
-    }
-
-    func requestPermission() async -> Bool {
-        switch permission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            #if os(macOS)
-            return await AVCaptureDevice.requestAccess(for: .audio)
-            #else
-            return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
-            #endif
-        }
-    }
-
-    func activate() -> Bool {
-        #if DEBUG
-        guard NativeTestRuntime.allowsLiveAudio else { return false }
-        #endif
-        #if os(iOS)
-        do {
-            let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.record, mode: .measurement, options: [.duckOthers])
-            try audio.setActive(true)
-            return true
-        } catch {
-            KLog.d("🎙️ [voice] audio-session activation failed: \(error.localizedDescription)")
-            return false
-        }
-        #else
-        return true
-        #endif
-    }
-
-    func deactivate() {
-        #if DEBUG
-        guard NativeTestRuntime.allowsLiveAudio else { return }
-        #endif
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
-    }
-}
 
 enum VoiceDraftMerger {
     static func merge(existing: String, final: String) -> String {
@@ -756,6 +683,9 @@ final class KrakiVoiceInputController {
         correctionDisplayTask = nil
         state = .finishing
         session?.stopCapture()
+        // Sound comes back when the microphone stops, not after correction.
+        let policy = audioPolicy
+        audioSessionQueue.async { policy.captureEnded() }
     }
 
     /// Leaving a conversation is not an explicit discard. Keep the original

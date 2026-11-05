@@ -124,6 +124,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if NativeTestRuntime.isHeadlessTestHost { return }
+        // Kraki died while dictating last time: give the sound back.
+        MacOutputVolumeDucker.shared.recoverAbandonedState()
         if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
             updateController = MacUpdateController.makeIfProduction()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
@@ -407,7 +409,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // AppState already registered for NSApplication.willTerminate
-        // and flushes its stores. Nothing extra to do here yet.
+        // and flushes its stores. Quitting mid-dictation restores the volume.
+        MacOutputVolumeDucker.shared.restoreSynchronously(reason: "app quitting")
     }
 }
 

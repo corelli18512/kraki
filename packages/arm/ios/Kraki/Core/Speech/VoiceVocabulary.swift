@@ -62,6 +62,13 @@ enum VoiceInputSettings {
     static var shareConversationContext: Bool {
         UserDefaults.standard.object(forKey: shareContextKey) as? Bool ?? true
     }
+
+    static let lowerOtherAudioKey = "voice.lowerOtherAudio"
+    /// Mac: lower the sound output while recording (iOS ducks through the
+    /// audio session and has no setting).
+    static var lowerOtherAudio: Bool {
+        UserDefaults.standard.object(forKey: lowerOtherAudioKey) as? Bool ?? true
+    }
 }
 
 /// One-time notice before the first recording: voice input is processed by
@@ -545,6 +552,8 @@ enum VoiceInputCopy {
     static let correctionFooter = String(localized: "After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider.")
     static let unavailable = String(localized: "Voice input isn't available with this relay. Your Custom Words still sync to your other devices.")
     static let context = String(localized: "Use Conversation Context")
+    static let lowerOtherAudio = String(localized: "Lower Other Sounds While Recording")
+    static let lowerOtherAudioFooter = String(localized: "Turns this Mac's sound down while you speak and back up when you stop. A volume you change yourself in the meantime is kept.")
     static let contextFooter = String(localized: "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent.")
 }
 
@@ -594,6 +603,7 @@ struct VoiceInputPane: View {
     @Environment(AppState.self) private var appState
     @AppStorage(VoiceInputSettings.correctionKey) private var correction = true
     @AppStorage(VoiceInputSettings.shareContextKey) private var shareContext = true
+    @AppStorage(VoiceInputSettings.lowerOtherAudioKey) private var lowerOtherAudio = true
 
     var body: some View {
         Form {
@@ -617,6 +627,11 @@ struct VoiceInputPane: View {
             .disabled(!correction)
             VoiceVocabularyMacSection()
                 .disabled(!correction)
+            Section {
+                Toggle(VoiceInputCopy.lowerOtherAudio, isOn: $lowerOtherAudio)
+            } footer: {
+                Text(VoiceInputCopy.lowerOtherAudioFooter).font(.footnote).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onChange(of: correction) { _, _ in appState.voiceInputController.applySettings() }
