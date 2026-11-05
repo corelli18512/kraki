@@ -227,7 +227,8 @@
     "scanAgain": "身份验证失败。请扫描新的配对二维码。",
     "reconnecting": "身份验证暂时不可用。正在重新连接…",
     "signIn": "身份验证失败。请使用 GitHub 登录或扫描配对二维码。",
-    "scan": "身份验证失败。请扫描配对二维码。"
+    "scan": "身份验证失败。请扫描配对二维码。",
+    "untrustedRedirect": "此服务器要求将你转到一个 Kraki 不信任的服务器。正在重试…"
   },
   "performanceNotice": {
     "title": "帮助改进 Kraki",
@@ -235,5 +236,11 @@
     "settingsHint": "你可以随时在设置 › 隐私中更改此选项。",
     "decline": "不共享",
     "ok": "好"
+  },
+  "dogfood": {
+    "title": "内测",
+    "builds": "版本",
+    "detail": "内部账户：你会最先收到每个新版本。",
+    "switching": "正在切换…"
   }
 }

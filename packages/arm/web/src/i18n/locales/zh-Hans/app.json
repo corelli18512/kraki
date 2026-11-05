@@ -6,9 +6,7 @@
   },
   "connection": {
     "errorTitle": "连接错误",
-    "disconnected": "已断开连接",
     "failed": "无法连接到中继服务器。请确认 head 正在运行。",
-    "lost": "与中继服务器的连接已断开。",
     "connect": "立即连接",
     "connecting": "正在连接…"
   },
@@ -41,7 +39,9 @@
     "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
     "deleteAccount": "无法删除账户。请重试。",
     "permissionSend": "无法发送。请重试。",
-    "permissionUnconfirmed": "Agent 尚未确认。请重试。"
+    "permissionUnconfirmed": "Agent 尚未确认。请重试。",
+    "replacedElsewhere": "Kraki 已在另一个标签页或窗口中打开。回到此标签页即可在这里使用。",
+    "oauthUnverified": "无法验证 GitHub 登录。请重试。"
   },
   "scanner": {
     "denied": "无法访问相机。请检查浏览器或设备设置。",
@@ -57,5 +57,25 @@
     "unavailable": "Kraki for iPhone 尚未推出。你可以改为在此浏览器中连接。",
     "getApp": "获取 Kraki for iPhone",
     "browser": "在浏览器中继续"
+  },
+  "boot": {
+    "failedTitle": "Kraki 无法加载",
+    "failed": "应用的一部分缺失，通常是因为 Kraki 刚刚更新。重新加载以获取最新版本。",
+    "reload": "重新加载"
+  },
+  "serverErrors": {
+    "generic": "服务器无法完成此操作。请重试。",
+    "deviceNotFound": "该设备已不在此账户中。",
+    "removeOnline": "此设备在线。请先断开连接再移除。",
+    "nameTooLong": "名称过长。",
+    "renameFailed": "无法重命名设备。请稍后重试。",
+    "pairingDisabled": "此服务器已关闭新设备配对。",
+    "pairingUnavailable": "配对暂时不可用。请稍后重试。",
+    "targetUnreachable": "暂时无法连接到这台电脑。请确认它在线。",
+    "createSession": "无法创建会话：{{detail}}",
+    "copySession": "无法复制会话：{{detail}}",
+    "importSession": "无法导入会话：{{detail}}",
+    "alreadyImported": "此会话已导入。",
+    "requestGeneric": "电脑无法完成此操作。请重试。"
   }
 }

@@ -1,14 +1,22 @@
 import { create } from 'zustand';
 
+/** Storage full or blocked must not break loading or the setting (K-201). */
+function read(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function write(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* kept in memory for this page */ }
+}
+
 export const useUsageShortcut = create<{ shortcut: string; enabled: boolean; recording: boolean }>(() => ({
-  shortcut: localStorage.getItem('kraki:usage.shortcut') ?? 'F6',
-  enabled: localStorage.getItem('kraki:usage.enabled') === '1',
+  shortcut: read('kraki:usage.shortcut') ?? 'F6',
+  enabled: read('kraki:usage.enabled') === '1',
   recording: false,
 }));
 
 export function setUsageShortcut(shortcut: string, enabled: boolean) {
-  localStorage.setItem('kraki:usage.shortcut', shortcut);
-  localStorage.setItem('kraki:usage.enabled', enabled ? '1' : '0');
+  write('kraki:usage.shortcut', shortcut);
+  write('kraki:usage.enabled', enabled ? '1' : '0');
   useUsageShortcut.setState({ shortcut, enabled });
 }
 

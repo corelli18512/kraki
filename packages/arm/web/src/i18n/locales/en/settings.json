@@ -227,7 +227,8 @@
     "scanAgain": "Authentication failed. Please scan a new pairing QR code.",
     "reconnecting": "Authentication temporarily unavailable. Reconnecting…",
     "signIn": "Authentication failed. Sign in with GitHub or scan a pairing QR code.",
-    "scan": "Authentication failed. Scan a pairing QR code."
+    "scan": "Authentication failed. Scan a pairing QR code.",
+    "untrustedRedirect": "This server asked to move you to a server Kraki doesn't trust. Retrying…"
   },
   "performanceNotice": {
     "title": "Help Improve Kraki",
@@ -235,5 +236,11 @@
     "settingsHint": "You can change this anytime in Settings › Privacy.",
     "decline": "Don't Share",
     "ok": "OK"
+  },
+  "dogfood": {
+    "title": "Dogfood",
+    "builds": "Builds",
+    "detail": "Internal account: you get every new build first.",
+    "switching": "Switching…"
   }
 }

@@ -6,9 +6,7 @@
   },
   "connection": {
     "errorTitle": "Connection Error",
-    "disconnected": "Disconnected",
     "failed": "Could not connect to the relay server. Make sure the head is running.",
-    "lost": "Lost connection to the relay server.",
     "connect": "Connect now",
     "connecting": "Connecting…"
   },
@@ -41,7 +39,9 @@
     "noTarget": "Cannot send: no target device for this session. Try reconnecting.",
     "deleteAccount": "Couldn't delete the account. Try again.",
     "permissionSend": "Couldn’t send. Try again.",
-    "permissionUnconfirmed": "Not confirmed by the agent. Try again."
+    "permissionUnconfirmed": "Not confirmed by the agent. Try again.",
+    "replacedElsewhere": "Kraki is open in another tab or window. Come back to this tab to use it here.",
+    "oauthUnverified": "GitHub sign-in could not be verified. Please try again."
   },
   "scanner": {
     "denied": "Camera access denied. Check your browser or device settings.",
@@ -57,5 +57,25 @@
     "unavailable": "Kraki for iPhone is not available yet. You can connect in this browser instead.",
     "getApp": "Get Kraki for iPhone",
     "browser": "Continue in browser"
+  },
+  "boot": {
+    "failedTitle": "Kraki couldn't load",
+    "failed": "Part of the app is missing, usually because Kraki was just updated. Reload to get the latest version.",
+    "reload": "Reload"
+  },
+  "serverErrors": {
+    "generic": "The server couldn't complete that. Try again.",
+    "deviceNotFound": "That device is no longer on this account.",
+    "removeOnline": "This device is online. Disconnect it before removing it.",
+    "nameTooLong": "That name is too long.",
+    "renameFailed": "Couldn't rename the device. Try again later.",
+    "pairingDisabled": "Pairing new devices is turned off on this server.",
+    "pairingUnavailable": "Pairing is temporarily unavailable. Try again later.",
+    "targetUnreachable": "That computer can't be reached right now. Check that it is online.",
+    "createSession": "Couldn't create the session: {{detail}}",
+    "copySession": "Couldn't copy the session: {{detail}}",
+    "importSession": "Couldn't import the session: {{detail}}",
+    "alreadyImported": "This session has already been imported.",
+    "requestGeneric": "The computer couldn't complete that. Try again."
   }
 }

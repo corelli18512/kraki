@@ -49,7 +49,8 @@
       "empty": "空",
       "invalidHash": "附件 ID 不是有效的内容哈希值",
       "checksumMismatch": "附件校验和不匹配",
-      "sizeMismatch": "附件大小不匹配：应为 {{expected}}，实际为 {{actual}}"
+      "sizeMismatch": "附件大小不匹配：应为 {{expected}}，实际为 {{actual}}",
+      "chunkTimeout": "接收附件超时（第 {{index}} 部分，已尝试 {{attempts}} 次）。"
     }
   },
   "bubble": {
@@ -66,7 +67,8 @@
     "edit": "编辑",
     "delete": "删除",
     "working": "Agent 正在工作",
-    "processLost": "Agent 进程已丢失"
+    "processLost": "Agent 进程已丢失",
+    "attachmentsNotKept": "附件太大，页面重新加载后未能保留。请重新添加附件，或重试以仅发送文字。"
   },
   "header": {
     "modePicker": "会话模式选择器",
