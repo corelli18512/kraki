@@ -17,6 +17,7 @@ import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } fr
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import { ChatAnnouncer } from './ChatAnnouncer';
 import { HistoryLoadStatus } from './HistoryLoadStatus';
 import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/chat/unread-entry';
 import './chat.css';
@@ -503,6 +504,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
         entranceSide={entranceSide}
       />
+      <ChatAnnouncer sessionId={sessionId} />
       {session && rows.length === 0 && !showHistoryStatus && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>
           <p>{t('view.empty')}</p>

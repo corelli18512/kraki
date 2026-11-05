@@ -69,4 +69,15 @@ describe('Copilot session import', () => {
     expect(t.fakes.get('claude')?.createSession).not.toHaveBeenCalled();
     expect(t.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', payload: expect.objectContaining({ message: expect.stringContaining('history is browsable') }) }));
   });
+
+  // K-204: the read-only notice carries the import's requestId, so the app
+  // that asked shows it (the chat hides standalone errors outside a turn).
+  it('the read-only notice names the import request', async () => {
+    const t = setup(['claude']);
+    await handleImportSession(t.client, t.msg as never);
+    expect(t.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', sessionId: t.localSessionId,
+      payload: expect.objectContaining({ message: expect.stringContaining('history is browsable'), requestId: 'r1' }),
+    }));
+  });
 });

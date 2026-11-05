@@ -10,7 +10,7 @@ import { captureMessageGeneration, isMessageGenerationCurrent } from './message-
 import { ingestChunk } from './attachments';
 import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
-import { allowAutoRead, suppressAutoRead } from './read-visibility';
+import { allowAutoRead, forgetSentRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
 import { diag } from './diag';
 
@@ -185,8 +185,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'device_greeting') {
     const greeting = (msg as DeviceGreetingMessage).payload;
     store.setDeviceOnline(msg.deviceId, true);
-    if (greeting?.agents?.length) {
-      store.setDeviceAgents(msg.deviceId, greeting.agents);
+    // A Tentacle with no coding agent leaves `agents` out: the greeting is the
+    // answer ("no coding agent"), so store it as empty, not as still unknown.
+    if (greeting) {
+      store.setDeviceAgents(msg.deviceId, greeting.agents ?? []);
     }
     if (greeting?.version) {
       store.setDeviceVersion(msg.deviceId, greeting.version);
@@ -213,15 +215,18 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
-  // A create/fork/import failure has no session yet; it is correlated by the
-  // requestId the app sent. Show it instead of failing silently.
-  if (msg.type === 'error' && !msg.sessionId) {
+  // A create/fork/import failure is correlated by the requestId the app sent
+  // (an import's carries the id of its pending page, which no session list
+  // knows yet). Show it instead of failing silently.
+  if (msg.type === 'error') {
     const reqId = (msg.payload as { requestId?: string }).requestId;
     if (reqId && ctx.cmdState.pendingCreateRequests.has(reqId)) {
       ctx.cmdState.clearRequest(reqId);
+      if (msg.sessionId) store.removePendingSession(msg.sessionId);
       store.setLastError(msg.payload.message);
+      return;
     }
-    return;
+    if (!msg.sessionId) return;
   }
 
   if (!('sessionId' in msg) || !msg.sessionId) return;
@@ -326,6 +331,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (store.pendingSessions.has(sid)) {
         store.removePendingSession(sid);
       }
+      // A request's outcome outside any turn (an import that could not reach
+      // its agent): the chat shows no standalone error, so say it here.
+      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(msg.payload.message);
       store.appendMessage(sid, msg);
       // A transient error does not own unread state. If the turn ultimately
       // fails, the Tentacle's terminal boundary + session_list creates it.
@@ -462,6 +470,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_read': {
       const readSeq = (msg as SessionReadMessage).payload?.seq;
+      // The Tentacle's own word on the read cursor (ours applied, or another
+      // device's change): a read sent from here is settled.
+      forgetSentRead(sid);
       const session = getStore().sessions.get(sid);
       if (session && typeof readSeq === 'number') {
         if (readSeq < (session.readSeq ?? 0)) suppressAutoRead(sid);

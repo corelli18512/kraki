@@ -297,7 +297,7 @@ export async function handleImportSession(client: RelayClient, msg: ConsumerMess
       client.send({
         type: 'error',
         sessionId: krakiSessionId,
-        payload: { message: 'Session imported but could not connect to agent — history is browsable, but new messages will not work.' },
+        payload: { message: 'Session imported but could not connect to agent — history is browsable, but new messages will not work.', ...(requestId && { requestId }) },
       });
     }
 

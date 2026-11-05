@@ -199,6 +199,15 @@ final class DeviceStore {
         return pendingGreetingIds.contains(deviceId) ? .connecting : .noAgents
     }
 
+    /// Online and greeted, with or without a coding agent: the device list and
+    /// page show it as Online. A computer without an agent never sends models,
+    /// so waiting for them showed "Connecting…" forever.
+    func isOnlineAndGreeted(_ deviceId: String) -> Bool {
+        guard devices[deviceId]?.online == true else { return false }
+        let availability = agentAvailability(for: deviceId)
+        return availability == .ready || availability == .noAgents
+    }
+
     func agent(_ agentId: AgentId, on deviceId: String) -> AgentCapabilities? {
         agents(for: deviceId).first { $0.id == agentId }
     }

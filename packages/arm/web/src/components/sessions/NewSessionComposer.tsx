@@ -143,6 +143,27 @@ function ChoiceRow({ title, detail, selected, enabled = true, mark, onClick }: {
   );
 }
 
+/** Space kept under the device list: the popover's padding and a margin. */
+const DEVICE_LIST_BOTTOM_GAP = 24;
+const DEVICE_LIST_MIN_HEIGHT = 120;
+
+/** The computers in the device popover; it scrolls when the window is too
+ *  short for all of them (ten computers in a 640 px window ran off-screen). */
+function DeviceList({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const fit = () => {
+      const top = ref.current?.getBoundingClientRect().top ?? 0;
+      setMaxHeight(Math.max(DEVICE_LIST_MIN_HEIGHT, Math.floor(window.innerHeight - top - DEVICE_LIST_BOTTOM_GAP)));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
+  return <div ref={ref} className="ns-device-list" style={maxHeight === undefined ? undefined : { maxHeight }}>{children}</div>;
+}
+
 function ChoiceSection({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <div className="ns-section">
@@ -175,6 +196,10 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   const [openPill, setOpenPill] = useState<Pill | null>(null);
   const [focused, setFocused] = useState(false);
   const [nudged, setNudged] = useState(false);
+  // Started, waiting for session_created. A failure or no answer puts the
+  // prompt back into the draft (CommandState.clearRequest), which ends it.
+  const [starting, setStarting] = useState(false);
+  useEffect(() => { if (text) setStarting(false); }, [text]);
   const userPickedDevice = useRef(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -188,7 +213,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   const modelName = useCallback((id: string) => modelDetails.find((d) => d.id === id)?.name ?? id, [modelDetails]);
   const detail = modelDetails.find((d) => d.id === model);
   const efforts = detail?.supportsReasoningEffort ? detail.supportedReasoningEfforts ?? [] : [];
-  const canSubmit = !!text.trim() && availability === 'ready' && !!deviceId && !!agentId && !!model;
+  const canSubmit = !!text.trim() && availability === 'ready' && !!deviceId && !!agentId && !!model && !starting;
 
   // Last-used computer if online; else this PC if online; else any online one.
   const selectDefaults = useCallback(() => {
@@ -201,10 +226,12 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
 
   // Computers come online after the composer appeared (first launch, a
   // restart, an update): until the user picks one by hand, keep the default
-  // — last used, else this PC, else any online one — current.
+  // — last used, else this PC, else any online one — current. A computer the
+  // user picked stays picked when it goes offline (the status line says so):
+  // a typed prompt never moves to another computer silently.
   const onlineKey = online.map((d) => d.id).join(',');
   useEffect(() => {
-    if (userPickedDevice.current && device?.online) return;
+    if (userPickedDevice.current && device) return;
     selectDefaults();
   }, [onlineKey, localId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -280,6 +307,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
     if (effort) writeJson(EFFORT_PREF_KEY, model, effort);
     wsClient.createSession({ targetDeviceId: deviceId, agentId, model, reasoningEffort: effort, prompt });
     setText('');
+    setStarting(true);
     onCreated?.();
   };
 
@@ -326,6 +354,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
             </PillButton>
             {openPill === 'device' && (
               <Popover onClose={close}>
+                <DeviceList>
                 <ChoiceSection title={t('composer.online')}>
                   {online.map((d) => (
                     <ChoiceRow
@@ -346,6 +375,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
                     {offline.length > 6 && <div className="ns-more">{t('composer.moreOffline', { count: offline.length - 6 })}</div>}
                   </ChoiceSection>
                 )}
+                </DeviceList>
               </Popover>
             )}
           </div>
@@ -426,6 +456,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
         </div>
       </div>
       <StatusLine
+        starting={starting}
         anyOnline={online.length > 0}
         availability={availability}
         deviceName={device?.name}
@@ -435,10 +466,13 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   );
 }
 
-function StatusLine({ anyOnline, availability, deviceName, isThisPC }: {
-  anyOnline: boolean; availability: AgentAvailability; deviceName?: string; isThisPC: boolean;
+function StatusLine({ starting, anyOnline, availability, deviceName, isThisPC }: {
+  starting: boolean; anyOnline: boolean; availability: AgentAvailability; deviceName?: string; isThisPC: boolean;
 }) {
   const { t } = useTranslation('sessions');
+  if (starting) {
+    return <div className="ns-hint" role="status"><span className="ns-spinner" />{deviceName === undefined ? t('composer.startingUnknown') : t('composer.starting', { deviceName })}</div>;
+  }
   if (!anyOnline) {
     return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{t('composer.noComputers')}</div>;
   }

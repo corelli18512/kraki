@@ -38,6 +38,8 @@ export function SessionPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
+  // Opened by Rename…: the sheet starts with the title being edited.
+  const [infoRenaming, setInfoRenaming] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ContentRef | null>(null);
   const [selectedArtifactExpanded, setSelectedArtifactExpanded] = useState(false);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
@@ -64,10 +66,12 @@ export function SessionPage() {
   useEffect(() => {
     if (!sessionId) return;
     const search = new URLSearchParams(location.search);
-    const infoRequested = search.get('info') === '1';
+    const info = search.get('info');
+    const infoRequested = info === '1' || info === 'rename';
     const notificationMarked = search.get('from') === 'notification' && notifiedEntry.current === sessionId;
     if (!infoRequested && !notificationMarked) return;
     if (infoRequested) {
+      setInfoRenaming(info === 'rename');
       setMobileInfoOpen(true);
       search.delete('info');
     }
@@ -193,6 +197,7 @@ export function SessionPage() {
               backBadge={totalOtherUnread}
               onBack={() => navigate('/')}
               onTitle={() => {
+                setInfoRenaming(false);
                 setMobileInfoOpen(true);
               }}
               onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
@@ -220,6 +225,7 @@ export function SessionPage() {
               usage={sessionUsage}
               models={deviceModels}
               modelDetails={deviceModelDetails}
+              startEditingTitle={infoRenaming}
               onClose={() => setMobileInfoOpen(false)}
             />
           </div>
