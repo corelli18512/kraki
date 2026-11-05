@@ -192,6 +192,9 @@ export function SettingsPanel({
     setError(null);
     setUsageShortcut(key, enabled);
   }
+  /** In a browser, notifications are Web Push: the switch shows whether this
+   *  browser is subscribed, not a preference that does nothing on its own. */
+  const webPush = !desktop && isPushSupported() && !!state.vapidPublicKey;
   async function updateNotifications(on: boolean) {
     setError(null);
     if (!desktop && isPushSupported() && (state.vapidPublicKey || pushEnabled)) {
@@ -415,7 +418,10 @@ export function SettingsPanel({
               type="button"
               className="kp-button"
               onClick={() => {
-                void Notification.requestPermission().then(setPermission);
+                // With a relay that pushes, allowing is turning push on: ask
+                // for the permission and subscribe in one step (K-111).
+                if (webPush) void updateNotifications(true);
+                else void Notification.requestPermission().then(setPermission);
               }}
             >
               {t('notifications.allow')}
@@ -432,7 +438,7 @@ export function SettingsPanel({
         <SettingsRow label={t('notifications.notify')}>
           <SettingsSwitch
             label={t('notifications.notify')}
-            on={notificationsEnabled}
+            on={webPush ? pushEnabled : notificationsEnabled}
             disabled={pushLoading}
             onChange={(on) => {
               void updateNotifications(on);
@@ -446,11 +452,13 @@ export function SettingsPanel({
       {!desktop && (
         <SettingsSection title={t('notifications.webPush')}>
           <p className="kp-foot" style={{ border: 0 }}>
-            {state.vapidPublicKey && isPushSupported()
-              ? pushEnabled
-                ? t('notifications.pushOn')
-                : t('notifications.pushOff')
-              : t('notifications.unavailable')}
+            {!isPushSupported()
+              ? t('notifications.unsupported')
+              : state.vapidPublicKey
+                ? pushEnabled
+                  ? t('notifications.pushOn')
+                  : t('notifications.pushOff')
+                : t('notifications.unavailable')}
           </p>
         </SettingsSection>
       )}

@@ -78,11 +78,36 @@ describe('SettingsPanel native preferences parity', () => {
     expect(useUsageShortcut.getState()).toMatchObject({ shortcut: 'F6', recording: false });
   });
   it('shows notifications independently of push support', () => {
+    push.supported = true;
     open(); tab('Notifications');
     expect(screen.getByText('System permission')).toBeInTheDocument();
     expect(screen.getByText('Push notifications aren’t available with this relay.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
     expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
+  });
+  it('K-111: says the browser, not the relay, lacks push when it does', () => {
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    expect(screen.getByText('Push notifications aren’t available in this browser.')).toBeInTheDocument();
+    expect(screen.queryByText('Push notifications aren’t available with this relay.')).not.toBeInTheDocument();
+  });
+  it('K-111: Notify me reads off in a fresh browser that is not subscribed to push', async () => {
+    push.supported = true;
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    await waitFor(() => expect(push.isPushSubscribed).toHaveBeenCalled());
+    expect(screen.getByText('Turn notifications on to receive replies and requests when this browser is closed.')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' })).toHaveAttribute('aria-checked', 'false');
+  });
+  it('K-111: Allow Notifications… subscribes to Web Push', async () => {
+    push.supported = true;
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    fireEvent.click(screen.getByRole('button', { name: 'Allow Notifications…' }));
+    await waitFor(() => expect(commands.registerPushToken).toHaveBeenCalledWith({ provider: 'web_push', token: 'subscription' }));
+    expect(push.subscribeToPush).toHaveBeenCalledWith('public-key');
+    await screen.findByText('Push notifications are on, including when this browser is closed.');
+    expect(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' })).toHaveAttribute('aria-checked', 'true');
   });
   it('notification preference controls the existing browser push subscription', async () => {
     push.supported = true;
