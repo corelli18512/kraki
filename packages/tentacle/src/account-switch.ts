@@ -79,9 +79,20 @@ export function switchAccountData(login: string): AccountDataSwitch {
   // An earlier copy for this account that was never restored stays as it is.
   if (existsSync(aside)) aside = `${aside}.${Date.now()}`;
   mkdirSync(aside, { recursive: true, mode: 0o700 });
-  for (const name of ACCOUNT_SCOPED_ENTRIES) {
-    const from = join(home, name);
-    if (existsSync(from)) renameSync(from, join(aside, name));
+  const moved: string[] = [];
+  try {
+    for (const name of ACCOUNT_SCOPED_ENTRIES) {
+      const from = join(home, name);
+      if (!existsSync(from)) continue;
+      renameSync(from, join(aside, name));
+      moved.push(name);
+    }
+  } catch (err) {
+    // Never leave one account's data half moved: put it back and fail.
+    for (const name of moved) {
+      try { renameSync(join(aside, name), join(home, name)); } catch { /* left in accounts/ */ }
+    }
+    throw err;
   }
 
   const own = join(accountsDir, loginDirName(login));

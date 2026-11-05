@@ -312,6 +312,7 @@ export async function startWorker(): Promise<WorkerResult> {
   // sessions are the previous account's. Move them aside before anything
   // reads them, so the relay registers a new device for this account.
   if (config.authMethod === 'github_token' && config.account?.login) {
+    startupPhase = 'account-switch';
     const change = switchAccountData(config.account.login);
     if (change.switched) {
       config = { ...config, device: { ...config.device, id: getOrCreateDeviceId() } };
