@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, performUpdate, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
+import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -244,5 +244,54 @@ describe('performUpdate exit code', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     await performUpdate('0.1.0');
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('npm update targets the running install (K-274)', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  function npmInstall(version: string) {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), 'kraki-npm-prefix-')));
+    const root = join(prefix, 'lib', 'node_modules', '@kraki', 'tentacle');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(join(root, 'dist', 'cli.js'), '');
+    const setVersion = (v: string) => writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@kraki/tentacle', version: v }));
+    setVersion(version);
+    return { prefix, root, script: join(root, 'dist', 'cli.js'), setVersion };
+  }
+
+  it('finds the npm prefix of a global install', () => {
+    expect(npmPrefixForPackageRoot('/opt/homebrew/lib/node_modules/@kraki/tentacle')).toBe('/opt/homebrew');
+    expect(npmPrefixForPackageRoot('/home/u/.nvm/versions/node/v22.1.0/lib/node_modules/@kraki/tentacle')).toBe('/home/u/.nvm/versions/node/v22.1.0');
+    expect(npmPrefixForPackageRoot('/repo/packages/tentacle')).toBeNull();
+  });
+
+  it('installs into the prefix this kraki runs from', async () => {
+    const install = npmInstall('0.1.0');
+    const commands: string[] = [];
+    await updateViaNpm('0.2.0', { scriptPath: install.script, exec: (cmd) => { commands.push(cmd); install.setVersion('0.2.0'); } });
+    expect(commands).toEqual([`npm install -g --prefix ${JSON.stringify(install.prefix)} @kraki/tentacle@0.2.0`]);
+  });
+
+  it('fails instead of reporting success when this kraki was not updated', async () => {
+    const install = npmInstall('0.1.0');
+    await expect(updateViaNpm('0.2.0', { scriptPath: install.script, exec: () => {} }))
+      .rejects.toThrow(/still 0\.1\.0/);
+  });
+
+  it('turns an EACCES failure into one actionable line', async () => {
+    const install = npmInstall('0.1.0');
+    const stderr = ['npm error code EACCES', 'npm error syscall mkdir', 'npm error path /usr/local/lib/node_modules/@kraki',
+      ...Array.from({ length: 35 }, (_, i) => `npm error line ${i}`), 'npm error A complete log of this run can be found in: /x.log'].join('\n');
+    const failure = await updateViaNpm('0.2.0', {
+      scriptPath: install.script,
+      exec: () => { throw Object.assign(new Error('Command failed'), { stderr }); },
+    }).catch((err: Error) => err);
+    expect((failure as Error).message).toContain('permission denied');
+    expect((failure as Error).message.split('\n')).toHaveLength(1);
+    expect(summarizeNpmError('npm error code E404\nnpm error 404 Not Found\nnpm error A complete log of this run can be found in: /x', null))
+      .toBe('npm error code E404 npm error 404 Not Found');
   });
 });
