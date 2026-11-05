@@ -9800,6 +9800,16 @@
         }
       }
     },
+    "The relay reported a new encryption key for %@. Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, sign out of Kraki on this Mac and sign in again to trust its new key." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥，因此无法向该电脑发送消息。如果你在该电脑上重新安装了 Kraki，请在这台 Mac 上退出 Kraki 账户并重新登录，以信任它的新密钥。"
+          }
+        }
+      }
+    },
     "The session device is offline and no cached conversation is available." : {
       "localizations" : {
         "zh-Hans" : {

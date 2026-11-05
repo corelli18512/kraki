@@ -455,7 +455,13 @@ final class AppState {
             return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
         }
         let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
-        return (open, String(localized: "The relay reported a new encryption key for \(names.isEmpty ? String(localized: "a computer") : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code."))
+        let computer = names.isEmpty ? String(localized: "a computer") : names
+        #if os(macOS)
+        // A Mac cannot scan a pairing code; signing in again re-pins every computer.
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, sign out of Kraki on this Mac and sign in again to trust its new key."))
+        #else
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code."))
+        #endif
     }
 
     /// True from the moment the user taps "Sign in with GitHub" until
