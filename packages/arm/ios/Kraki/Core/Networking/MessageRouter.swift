@@ -979,7 +979,8 @@ final class MessageRouter {
     }
 
     /// Tell a Tentacle (that advertised `fragments`) this app reassembles
-    /// fragments, so it may send large payloads in small parts.
+    /// fragments, so it may send large payloads in small parts, and that it
+    /// understands `question_withdrawn`.
     func declareClientFeatures(to deviceId: String) {
         guard let appState else { return }
         _ = appState.sendEncryptedMessage([
@@ -987,7 +988,7 @@ final class MessageRouter {
             "deviceId": appState.deviceId ?? "",
             "seq": 0,
             "timestamp": ISO8601.now(),
-            "payload": ["features": [PayloadFragments.feature]],
+            "payload": ["features": [PayloadFragments.feature, Self.questionWithdrawnFeature]],
         ], routingTarget: deviceId, connectionScoped: true)
     }
 

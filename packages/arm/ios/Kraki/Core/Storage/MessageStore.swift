@@ -936,7 +936,7 @@ final class MessageStore {
     /// its last card is kept until the spine reaches this seq (K-013).
     var cardEndsAtSeq: [String: Int] = [:]
     @ObservationIgnored private var lastDeltaSeq: [String: Int] = [:]
-    /// Questions the agent withdrew without an answer (`question_withdrawn`).
+    /// Questions no longer answerable here (`question_withdrawn`).
     var withdrawnQuestions: [String: Set<String>] = [:]
 
     /// Per-turn TRACE steps, lazily pulled via `turn_trace_batch` and keyed by

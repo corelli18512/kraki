@@ -506,7 +506,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
-    // Live only: the agent withdrew its open question (K-022). Never stored:
+    // Live only: the open question is no longer answerable (K-022). Never stored:
     // it carries a broadcast seq, not a spine seq.
     case 'question_withdrawn':
       store.withdrawQuestion(sid, msg.payload.questionId);

@@ -84,7 +84,7 @@ export interface AppState {
   historyCaughtUpThrough: Map<string, number>;
   /** Ephemeral session runtime state; never persisted to localStorage/IDB. */
   runtimeStatuses: Map<string, SessionRuntimeStatus>;
-  /** Questions the agent withdrew without an answer (`question_withdrawn`). In memory only. */
+  /** Questions no longer answerable here (`question_withdrawn`). In memory only. */
   withdrawnQuestions: Map<string, string[]>;
 
   // Pinned sessions (stick to top of list)
