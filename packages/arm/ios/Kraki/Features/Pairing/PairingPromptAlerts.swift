@@ -20,6 +20,8 @@ final class TopmostAlertPresenter {
     private(set) var shownID: String?
     private var wanted: (id: String, make: () -> UIAlertController)?
     private var retryScheduled = false
+    /// Counts presentations, so a carrier watch stops once its alert is replaced.
+    private var presentation = 0
     /// Tests: the window to present in (default: the app's key window).
     weak var window: UIWindow?
 
@@ -50,6 +52,30 @@ final class TopmostAlertPresenter {
         top.present(next, animated: true)
         alert = next
         shownID = wanted.id
+        presentation += 1
+        if top.presentingViewController != nil {
+            watchCarrier(top, of: next, presentation: presentation)
+        }
+    }
+
+    /// An alert shown over a sheet or cover leaves with it, unanswered — the
+    /// login scanner closes in the same pass that opens a prompt for its code.
+    /// Then the alert is shown again on what is underneath.
+    private func watchCarrier(_ carrier: UIViewController, of shown: UIAlertController, presentation: Int) {
+        weak var carrier = carrier
+        weak var shown = shown
+        func check() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, self.presentation == presentation else { return }
+                guard shown?.presentingViewController == nil else { return check() }
+                // Gone while its carrier stayed: answered, or dismissed by `show`.
+                guard carrier.map({ $0.presentingViewController == nil || $0.isBeingDismissed }) ?? true else { return }
+                self.alert = nil
+                self.shownID = nil
+                self.apply()
+            }
+        }
+        check()
     }
 
     private func scheduleRetry() {
@@ -99,33 +125,36 @@ struct PairingPromptAlerts: ViewModifier {
 
     private func makeAlert() -> UIAlertController {
         guard let prompt = appState.pendingPairingPrompt else { return keyWarningAlert() }
-        let alert = UIAlertController(title: Self.title(for: prompt), message: Self.message(for: prompt), preferredStyle: .alert)
+        let alert = UIAlertController(
+            title: Self.title(for: prompt),
+            message: Self.message(for: prompt, logoutLoss: appState.logoutLossNotice),
+            preferredStyle: .alert
+        )
         let app = appState
+        let (confirmTitle, confirmStyle, cancelTitle): (String, UIAlertAction.Style, String) = switch prompt {
+        case .confirmRelay: (String(localized: "Connect"), .default, String(localized: "Cancel"))
+        case .alreadyConnected: (String(localized: "Log Out and Connect"), .destructive, String(localized: "Keep Current"))
+        case .replaceComputerKey: (String(localized: "Pair Anyway"), .destructive, String(localized: "Cancel"))
+        }
+        alert.addAction(UIAlertAction(title: confirmTitle, style: confirmStyle) { _ in Self.confirm(prompt, app: app) })
+        alert.addAction(UIAlertAction(title: cancelTitle, style: .cancel) { _ in app.pendingPairingPrompt = nil })
+        return alert
+    }
+
+    /// The prompt's confirming answer. The prompt is cleared first: pairing
+    /// with a known computer does not clear it, and a prompt left behind would
+    /// hide every later prompt and key warning.
+    @MainActor
+    static func confirm(_ prompt: PairingLinkPrompt, app: AppState) {
+        app.pendingPairingPrompt = nil
         switch prompt {
         case .confirmRelay(let link):
-            alert.addAction(UIAlertAction(title: String(localized: "Connect"), style: .default) { _ in
-                app.openPairingLink(link, relayConfirmed: true)
-            })
-            alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { _ in
-                app.pendingPairingPrompt = nil
-            })
+            app.openPairingLink(link, relayConfirmed: true)
         case .alreadyConnected(let link, _):
-            alert.addAction(UIAlertAction(title: String(localized: "Log Out and Connect"), style: .destructive) { _ in
-                app.logoutAndPair(link)
-            })
-            alert.addAction(UIAlertAction(title: String(localized: "Keep Current"), style: .cancel) { _ in
-                app.pendingPairingPrompt = nil
-            })
+            app.logoutAndPair(link)
         case .replaceComputerKey(let link, _):
-            alert.addAction(UIAlertAction(title: String(localized: "Pair Anyway"), style: .destructive) { _ in
-                app.pendingPairingPrompt = nil
-                app.openPairingLink(link, relayConfirmed: true, keyChangeConfirmed: true)
-            })
-            alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { _ in
-                app.pendingPairingPrompt = nil
-            })
+            app.openPairingLink(link, relayConfirmed: true, keyChangeConfirmed: true)
         }
-        return alert
     }
 
     private func keyWarningAlert() -> UIAlertController {
@@ -146,13 +175,16 @@ struct PairingPromptAlerts: ViewModifier {
         }
     }
 
-    static func message(for prompt: PairingLinkPrompt) -> String {
+    /// `logoutLoss`: what "Log Out and Connect" would discard
+    /// (`AppState.logoutLossNotice`).
+    static func message(for prompt: PairingLinkPrompt, logoutLoss: [String] = []) -> String {
         switch prompt {
         case .confirmRelay(let link):
             return String(localized: "This code connects to \(link.relayHost), which is not a Kraki server. Continue only if you set up this server yourself.")
         case .alreadyConnected(_, let login):
-            return login.map { String(localized: "This iPhone is already connected as \($0). To connect a different account, log out first.") }
+            let connected = login.map { String(localized: "This iPhone is already connected as \($0). To connect a different account, log out first.") }
                 ?? String(localized: "This iPhone is already connected. To connect a different account, log out first.")
+            return ([connected] + logoutLoss).joined(separator: "\n\n")
         case .replaceComputerKey(_, let name):
             return String(localized: "This code has a different key than the one you paired with \(name). Continue only if you reinstalled Kraki there — otherwise someone may be trying to intercept your sessions.")
         }

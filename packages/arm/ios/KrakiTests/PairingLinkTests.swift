@@ -62,7 +62,8 @@ final class PairingLinkTests: XCTestCase {
         app.deviceStore.keyMismatchDeviceIds = ["pc"]
         let message = try XCTUnwrap(app.keyWarning?.message)
         XCTAssertFalse(message.contains("won't go through"), message)
-        XCTAssertTrue(message.contains("Kraki keeps encrypting to the key it trusted."), message)
+        let pc = "pc"
+        XCTAssertEqual(message, String(localized: "The relay reported a new encryption key for \(pc). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
     }
 
     func testFingerprintMatchesTentacle() {

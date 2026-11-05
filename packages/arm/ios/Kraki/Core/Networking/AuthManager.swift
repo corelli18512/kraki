@@ -629,11 +629,13 @@ final class AuthManager {
                 // just the Keychain entry: a re-pair in this process must
                 // start clean (1-07 of the 2026-10-13 review).
                 // A removed device keeps no account data, undelivered
-                // messages included — but the loss is not silent (K-308).
+                // messages and drafts included — but the loss is not silent
+                // (K-308).
                 let discarded = appState.commandSender?.unsentMessageCount ?? 0
+                let discardedDrafts = appState.unsentDraftCount
                 appState.resetIdentity(clearRelayURL: false)
                 let failure = reason ?? String(localized: "Authentication failed. Please scan a new pairing QR code.")
-                appState.onAuthFailed(error: Self.fatalAuthErrorText(failure, discardedMessages: discarded))
+                appState.onAuthFailed(error: Self.fatalAuthErrorText(failure, discardedMessages: discarded, discardedDrafts: discardedDrafts))
                 #if os(macOS)
                 if failedWithoutCLIToken {
                     Task { @MainActor [weak appState] in
@@ -663,10 +665,16 @@ final class AuthManager {
     }
 
     /// The sign-in error after the relay rejected this device for good, and
-    /// how many undelivered messages went with its data.
-    static func fatalAuthErrorText(_ reason: String, discardedMessages: Int) -> String {
-        guard discardedMessages > 0 else { return reason }
-        return reason + "\n" + String(localized: "\(discardedMessages) undelivered messages were removed from this device with its sign-in.")
+    /// how many undelivered messages and unsent drafts went with its data.
+    static func fatalAuthErrorText(_ reason: String, discardedMessages: Int, discardedDrafts: Int) -> String {
+        var lines = [reason]
+        if discardedMessages > 0 {
+            lines.append(String(localized: "\(discardedMessages) undelivered messages were removed from this device with its sign-in."))
+        }
+        if discardedDrafts > 0 {
+            lines.append(String(localized: "\(discardedDrafts) unsent drafts were removed from this device with its sign-in."))
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Credential Management

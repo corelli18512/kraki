@@ -1321,10 +1321,11 @@ final class CommandSender {
     }
 
     /// Inputs this device has not had confirmed by their computer, including
-    /// first prompts of sessions still being created. Signing out (or a
-    /// device revocation) discards them.
+    /// first prompts of sessions still being created (a fork or an empty new
+    /// session has no prompt and is not a message). Signing out (or a device
+    /// revocation) discards them.
     var unsentMessageCount: Int {
-        outbox.values.reduce(0) { $0 + $1.count } + pendingCreateRequests.count
+        outbox.values.reduce(0) { $0 + $1.count } + pendingCreateRequests.values.filter { !$0.isEmpty }.count
     }
 
     func reset() {

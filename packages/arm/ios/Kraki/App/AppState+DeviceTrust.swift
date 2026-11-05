@@ -206,6 +206,7 @@ extension AppState {
 
     /// Pair this (signed-in) app with the computer whose QR was scanned.
     func pairWithComputer(_ link: PairingLink) {
+        pendingPairingPrompt = nil
         pinFromPairingLink(link)
         if let id = link.trust?.tentacleId {
             deviceTrust.feedback = .pairing(name: deviceStore.devices[id]?.name ?? String(localized: "your computer"))

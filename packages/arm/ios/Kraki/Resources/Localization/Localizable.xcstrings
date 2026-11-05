@@ -58,6 +58,34 @@
         }
       }
     },
+    "%lld drafts haven't been sent. Logging out discards them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld draft hasn't been sent. Logging out discards it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld drafts haven't been sent. Logging out discards them."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 份草稿尚未发送，退出登录会将其丢弃。"
+          }
+        }
+      }
+    },
     "%lld messages haven't been delivered yet. Logging out discards them." : {
       "localizations" : {
         "en" : {
@@ -1093,6 +1121,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 个工具正在并行运行…"
+          }
+        }
+      }
+    },
+    "%lld unsent drafts were removed from this device with its sign-in." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent draft was removed from this device with its sign-in."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent drafts were removed from this device with its sign-in."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 份未发送的草稿已随此设备的登录信息一并移除。"
           }
         }
       }
