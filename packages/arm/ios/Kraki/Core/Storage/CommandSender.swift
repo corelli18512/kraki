@@ -1128,9 +1128,12 @@ final class CommandSender {
 
     func renameSession(sessionId: String, title: String) {
         guard let appState else { return }
-        // Optimistic
-        appState.sessionStore.setTitle(sessionId, title: title.isEmpty ? nil : title, autoTitle: nil)
-        send(["type": "rename_session", "payload": ["title": title]], sessionId: sessionId)
+        // Optimistic ("" clears the manual title; the auto title shows again).
+        guard send(["type": "rename_session", "payload": ["title": title]], sessionId: sessionId) else {
+            appState.sessionStore.setTitle(sessionId, title: title, autoTitle: nil)
+            return
+        }
+        appState.sessionStore.renameLocally(sessionId, title: title)
     }
 
     // MARK: - Archive (F2)

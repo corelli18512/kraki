@@ -608,7 +608,7 @@ final class MessageRouter {
         case "session_title_updated":
             let title = payload?["title"] as? String
             let autoTitle = payload?["autoTitle"] as? String
-            appState.sessionStore.setTitle(sessionId, title: title, autoTitle: autoTitle)
+            appState.sessionStore.applyTitleUpdate(sessionId, title: title, autoTitle: autoTitle)
 
         case "session_pinned":
             let pinned = payload?["pinned"] as? Bool ?? false
