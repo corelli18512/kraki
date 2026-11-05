@@ -64,3 +64,22 @@ export function modelDisplayName(
   }
   return model;
 }
+
+/** The tab title's count: unread messages, plus each Session waiting on an
+ *  approval or an answer that is not already counted as unread, so a pending
+ *  approval in a background tab shows (K-220). */
+export function attentionCount(
+  unreadCount: Map<string, number>,
+  sessionIds: Iterable<string>,
+  cards: Map<string, SessionCard>,
+  previews: Map<string, { type: string }>,
+): number {
+  let total = 0;
+  for (const count of unreadCount.values()) total += count;
+  for (const id of sessionIds) {
+    const type = previews.get(id)?.type;
+    const waiting = countPendingQuestions(id, cards) > 0 || type === 'permission' || type === 'question';
+    if (waiting && !((unreadCount.get(id) ?? 0) > 0)) total++;
+  }
+  return total;
+}
