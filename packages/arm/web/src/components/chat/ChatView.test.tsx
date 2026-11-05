@@ -32,7 +32,7 @@ vi.mock('../../lib/message-db', () => ({
   getMessagesInRange,
 }));
 vi.mock('./Composer', () => ({
-  composerIntent: () => 'steer',
+  composerIntent: () => 'steer', composerTarget: () => 'conversation',
   Composer: ({ canAbort }: { canAbort: boolean }) => canAbort ? <button>Stop</button> : null,
 }));
 

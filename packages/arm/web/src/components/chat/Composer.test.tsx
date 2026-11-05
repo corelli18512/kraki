@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { Composer, updateComposerScrollFade } from './Composer';
+import { Composer, composerTarget, composerTargetChanged, updateComposerScrollFade } from './Composer';
 import { useStartDictation } from './Voice';
 import { outbox } from '../../lib/chat/outbox';
 import { useStore } from '../../hooks/useStore';
@@ -170,5 +170,61 @@ describe('Composer — images in answers (Mac ComposerAnswerImages)', () => {
     expect(onSend).toHaveBeenCalledWith('Amber', undefined, 'answerQuestion');
     // Still staged for the next message.
     expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+  });
+});
+
+describe('Composer — a draft stays bound to what it was typed for (K-021)', () => {
+  const bound = { ...props, sessionId: 'composer-target' };
+  beforeEach(() => { useStore.getState().setDraft(bound.sessionId, ''); useStore.getState().setLastError(null); });
+  const type = (value: string) => fireEvent.change(screen.getByRole('textbox'), { target: { value } });
+
+  it('composerTarget names the open permission, else the open question, else the conversation', () => {
+    expect(composerTarget('p1', 'q1')).toBe('permission:p1');
+    expect(composerTarget(undefined, 'q1')).toBe('question:q1');
+    expect(composerTarget()).toBe('conversation');
+    expect(composerTargetChanged(null, 'permission:p1')).toBe(false);
+    expect(composerTargetChanged('permission:p1', 'permission:p2')).toBe(true);
+  });
+
+  it('a deny reason typed for one permission does not deny the next one without a second press', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<Composer {...bound} onSend={onSend} intent="denyPermission" target="permission:p1" />);
+    type('do not delete prod');
+    // p1 was approved on another device; p2 arrives before Send.
+    rerender(<Composer {...bound} onSend={onSend} intent="denyPermission" target="permission:p2" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox')).toHaveValue('do not delete prod');
+    expect(useStore.getState().lastError).toMatch(/request changed/);
+    // Confirmed: the second press sends it for the request now shown.
+    fireEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+    expect(onSend).toHaveBeenCalledWith('do not delete prod', undefined, 'denyPermission');
+  });
+
+  it('an answer whose question was answered elsewhere does not go out as a steer', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<Composer {...bound} busy canAbort onSend={onSend} intent="answerQuestion" target="question:q1" />);
+    type('Postgres');
+    rerender(<Composer {...bound} busy canAbort onSend={onSend} intent="steer" target="conversation" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Steer agent' }));
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('a steer typed before a permission arrives does not become its deny reason', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<Composer {...bound} busy canAbort onSend={onSend} intent="steer" target="conversation" />);
+    type('also update the docs');
+    rerender(<Composer {...bound} busy canAbort onSend={onSend} intent="denyPermission" target="permission:p1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('an unchanged target sends at once, and a prompt that becomes a steer is not a retarget', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<Composer {...bound} onSend={onSend} intent="prompt" target="conversation" />);
+    type('next step');
+    rerender(<Composer {...bound} busy canAbort onSend={onSend} intent="steer" target="conversation" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Steer agent' }));
+    expect(onSend).toHaveBeenCalledWith('next step', undefined, 'steer');
   });
 });

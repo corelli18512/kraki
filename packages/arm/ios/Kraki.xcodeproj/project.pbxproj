@@ -449,6 +449,7 @@
 		98C3956EEDC84748B933CB82 /* TKCodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83112E3D594703A611FDCA32 /* TKCodeHighlighter.swift */; };
 		990C4EB21B4E6743501CCA1E /* MacStartingVoiceChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBBDEBF428C4E7A629F6AA8 /* MacStartingVoiceChat.swift */; };
 		9914A1454DA0A4958D6DD68E /* CardTurnGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870471E45E23ABCD41260C6F /* CardTurnGateTests.swift */; };
+		9ADA9EE63A0D328361AAC278 /* ComposerDraftTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16E84F5F2B441667888A31D /* ComposerDraftTarget.swift */; };
 		9C0DB5CFA181283D2785F926 /* DeleteAccountSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5941D690801C4745401FC76 /* DeleteAccountSection.swift */; };
 		9C473CC4B148239395766AD4 /* MacSessionActivityDots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCED07CCC2115423AD55B45 /* MacSessionActivityDots.swift */; };
 		9C72DEC16861973F97419481 /* SessionCardMetadataRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56FE3464DA3DC8C37A09F34F /* SessionCardMetadataRow.swift */; };
@@ -474,6 +475,7 @@
 		A35A7E3BFEC7A3372C38DFF1 /* IOSChatScrollScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = C553FCD0F7D8F0FC58C6EB97 /* IOSChatScrollScenario.swift */; };
 		A3D6B9B95792478D6473FE2F /* MacChatScrollView+UnderfilledHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDB2824D14773A1BD33F00C /* MacChatScrollView+UnderfilledHistory.swift */; };
 		A3E3134F469688FDE3F6808E /* ChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */; };
+		A4F3025F299CAD2A2DFE7C5F /* ComposerDraftTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16E84F5F2B441667888A31D /* ComposerDraftTarget.swift */; };
 		A57C9F5E670BA7F7ECD866DD /* MacChatDocumentView+UnreadEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95A6B129DC64E725949C3252 /* MacChatDocumentView+UnreadEntry.swift */; };
 		A5D83F4EAEE78022F37C596A /* MessageRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */; };
 		A69E09D819C14CBA937D83D4 /* MacHTMLArtifactPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60FFF5CE3173503A2C9A577C /* MacHTMLArtifactPanel.swift */; };
@@ -1163,6 +1165,7 @@
 		C024AE6690757FB0A6916CEE /* MacNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotifications.swift; sourceTree = "<group>"; };
 		C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubMark.swift; sourceTree = "<group>"; };
 		C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAuthRecoveryTests.swift; sourceTree = "<group>"; };
+		C16E84F5F2B441667888A31D /* ComposerDraftTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerDraftTarget.swift; sourceTree = "<group>"; };
 		C1B2ACA651B6DE122BE92C76 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionController.swift; sourceTree = "<group>"; };
 		C4A34822755FED065BFDA075 /* TentaclePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentaclePane.swift; sourceTree = "<group>"; };
@@ -2113,6 +2116,7 @@
 				33641605B16E960C6A553E38 /* ChatView.swift */,
 				E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */,
 				4720933E0DFE557C0C481E18 /* ComposerAnswerImages.swift */,
+				C16E84F5F2B441667888A31D /* ComposerDraftTarget.swift */,
 				1EAEF4DC02E1F118077BA7C0 /* ComposerLatchSettling.swift */,
 				DC67C6FD40A88E169633BB2A /* ComposerOverlayReporting.swift */,
 				4B3276E172306B8CE408EBF5 /* ComposerScrollEdges.swift */,
@@ -2670,6 +2674,7 @@
 				011C11527B518D1977DB2289 /* CommandSender.swift in Sources */,
 				C69062BD3C2E0844DCF29E5D /* Commands.swift in Sources */,
 				EC0ECC226A08E2DE48643333 /* ComposerAnswerImages.swift in Sources */,
+				9ADA9EE63A0D328361AAC278 /* ComposerDraftTarget.swift in Sources */,
 				0E908F7871821491FAD95086 /* ComposerLatchSettling.swift in Sources */,
 				16881E6BC5940EA72BB5223D /* ComposerOverlayReporting.swift in Sources */,
 				F85512964945773051AF726F /* ComposerScrollEdges.swift in Sources */,
@@ -2964,6 +2969,7 @@
 				FA148474BFE2419BD93D7EFF /* CommandSender.swift in Sources */,
 				2A26932045F45889AB8373D9 /* Commands.swift in Sources */,
 				C4C163903C832F3E231DED3E /* ComposerAnswerImages.swift in Sources */,
+				A4F3025F299CAD2A2DFE7C5F /* ComposerDraftTarget.swift in Sources */,
 				9CCCBA038236FA73DB0A91DA /* ComposerLatchSettling.swift in Sources */,
 				740E73B05B08B70AF980FD93 /* ComposerOverlayReporting.swift in Sources */,
 				4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */,

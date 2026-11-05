@@ -115,6 +115,7 @@
   },
   "composer": {
     "imageTooLarge": "图片过大（压缩后最大 3 MB）。",
+    "targetChanged": "Agent 的请求已变化。请检查消息后再发送。",
     "sendDictation": "发送语音输入",
     "stop": "停止 Agent",
     "submitAnswer": "提交回答",
