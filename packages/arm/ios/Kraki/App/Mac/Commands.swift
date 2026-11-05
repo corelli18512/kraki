@@ -111,10 +111,10 @@ struct MacCommands: Commands {
         // Session menu — operations on the currently selected session.
         CommandMenu("Session") {
             Button("New Session") {
-                MacNewSessionRequest.request {
-                    openWindow(id: "main")
-                    MacPresenceController.shared.showMainWindow()
-                }
+                MacNewSessionRequest.request { openWindow(id: "main") }
+                // Also when the main window is hidden (login launch),
+                // minimised or behind Settings: the new Session is shown.
+                MacPresenceController.shared.showMainWindow()
             }
             .keyboardShortcut("n", modifiers: .command)
 
@@ -371,23 +371,33 @@ extension Notification.Name {
 }
 
 /// New Session (⌘N) asked for while no main window was there to receive it:
-/// the main window starts a new Session as soon as it appears.
+/// the main window starts a new Session as soon as it appears. The request
+/// expires, so a window that only appears much later (after sign-in) does not
+/// replace the Session it restored with a new one.
 @MainActor
 enum MacNewSessionRequest {
-    static var pending = false
+    static let lifetime: TimeInterval = 5
+    private(set) static var requestedAt: Date?
+
+    static var pending: Bool { requestedAt != nil }
 
     /// Session › New Session. With the main window closed (only Settings, or
     /// no window) nothing receives the notification: `openMainWindow`, which
     /// takes the request when it appears.
-    static func request(openMainWindow: () -> Void) {
-        pending = true
+    static func request(now: Date = Date(), openMainWindow: () -> Void) {
+        requestedAt = now
         NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
         if pending { openMainWindow() }
     }
 
-    static func take() -> Bool {
-        defer { pending = false }
-        return pending
+    static func take(now: Date = Date()) -> Bool {
+        defer { requestedAt = nil }
+        guard let requestedAt else { return false }
+        return now.timeIntervalSince(requestedAt) < lifetime
+    }
+
+    static func clear() {
+        requestedAt = nil
     }
 }
 

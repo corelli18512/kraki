@@ -16,16 +16,18 @@ final class MacMainWindowTests: XCTestCase {
     private var window: NSWindow?
     private var selections: [String?] = []
     private var savedInspectorShown: Any?
+    private var savedRenderBubbleTest: String?
 
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
 
     override func setUpWithError() throws {
         try super.setUpWithError()
         // Keep the shared machine-local window/zoom file out of this suite.
+        savedRenderBubbleTest = getenv("KRAKI_RENDER_BUBBLE_TEST").map { String(cString: $0) }
         setenv("KRAKI_RENDER_BUBBLE_TEST", "1", 1)
         savedInspectorShown = UserDefaults.standard.object(forKey: "mac.inspectorShown")
         UserDefaults.standard.set(false, forKey: "mac.inspectorShown")
-        MacNewSessionRequest.pending = false
+        MacNewSessionRequest.clear()
         root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-main-window-\(UUID().uuidString)")
         app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
         app.connectionStatus = .connected
@@ -44,13 +46,17 @@ final class MacMainWindowTests: XCTestCase {
         window?.contentView = nil
         window = nil
         app = nil
-        MacNewSessionRequest.pending = false
+        MacNewSessionRequest.clear()
         if let savedInspectorShown {
             UserDefaults.standard.set(savedInspectorShown, forKey: "mac.inspectorShown")
         } else {
             UserDefaults.standard.removeObject(forKey: "mac.inspectorShown")
         }
-        unsetenv("KRAKI_RENDER_BUBBLE_TEST")
+        if let savedRenderBubbleTest {
+            setenv("KRAKI_RENDER_BUBBLE_TEST", savedRenderBubbleTest, 1)
+        } else {
+            unsetenv("KRAKI_RENDER_BUBBLE_TEST")
+        }
         if let root { try? FileManager.default.removeItem(at: root) }
         super.tearDown()
     }
@@ -97,6 +103,17 @@ final class MacMainWindowTests: XCTestCase {
         XCTAssertEqual(opened, 0, "the open window received it")
         XCTAssertFalse(MacNewSessionRequest.pending)
         XCTAssertEqual(currentSelection, .some(nil))
+    }
+
+    func testAStaleNewSessionRequestIsNotTaken() {
+        let pressed = Date()
+        MacNewSessionRequest.request(now: pressed) {}
+        XCTAssertFalse(MacNewSessionRequest.take(now: pressed.addingTimeInterval(MacNewSessionRequest.lifetime + 1)),
+                       "a window appearing long after ⌘N (after sign-in) keeps its restored Session")
+        XCTAssertFalse(MacNewSessionRequest.pending, "and the expired request is dropped")
+
+        MacNewSessionRequest.request(now: pressed) {}
+        XCTAssertTrue(MacNewSessionRequest.take(now: pressed.addingTimeInterval(1)))
     }
 
     // MARK: K-247 — no chat switch behind the Delete confirmation

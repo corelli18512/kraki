@@ -324,6 +324,15 @@ struct MainWindowView: View {
         selectedSessionId = sid
     }
 
+    /// Open the Session a create/fork/import asked for, but never switch the
+    /// chat behind the Delete confirmation (K-247).
+    private func applyNavigateToSession() {
+        guard pendingDeleteSessionId == nil,
+              let target = appState.sessionStore.navigateToSession else { return }
+        selectedSessionId = target
+        appState.sessionStore.navigateToSession = nil
+    }
+
     /// ⌘1–9 and Previous/Next Session.
     private func navigateSession(from note: Notification) {
         let ordered = appState.sessionStore.navigationOrderedSessions
@@ -381,7 +390,7 @@ struct MainWindowView: View {
             pairingPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .macOpenNewSession)) { _ in
-            MacNewSessionRequest.pending = false
+            MacNewSessionRequest.clear()
             startNewSession()
         }
         .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
@@ -453,10 +462,13 @@ struct MainWindowView: View {
                 appState.sessionSubscriptionController.setDesired(nil)
             }
         }
-        .onChange(of: appState.sessionStore.navigateToSession) { _, target in
-            guard let target else { return }
-            selectedSessionId = target
-            appState.sessionStore.navigateToSession = nil
+        .onChange(of: appState.sessionStore.navigateToSession) { _, _ in
+            applyNavigateToSession()
+        }
+        .onChange(of: pendingDeleteSessionId) { _, id in
+            // A create/fork/import acknowledged behind "Delete this
+            // session?" opens its Session once the dialog is closed.
+            if id == nil { applyNavigateToSession() }
         }
         .onChange(of: appState.sessionStore.sessions) { _, sessions in
             // A deep link can cross the launch gate before the authoritative

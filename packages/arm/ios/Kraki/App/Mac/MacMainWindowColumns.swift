@@ -70,6 +70,7 @@ struct MacWindowWidthFitter: NSViewRepresentable {
     final class Coordinator {
         private var lastRequiredWidth: CGFloat?
         private var lastScale: CGFloat?
+        private var lastFrameWidth: CGFloat?
 
         func update(window: NSWindow?, requiredWidth: CGFloat, layoutWidth: CGFloat) {
             guard let window, layoutWidth > 0, !window.styleMask.contains(.fullScreen),
@@ -80,11 +81,16 @@ struct MacWindowWidthFitter: NSViewRepresentable {
             defer {
                 lastRequiredWidth = requiredWidth
                 lastScale = scale
+                lastFrameWidth = window.frame.width
             }
             // Only react to a column being asked for or to a zoom change,
-            // never to the person resizing the window.
-            guard let lastRequiredWidth, let lastScale,
-                  requiredWidth > lastRequiredWidth || abs(scale - lastScale) > 0.001 else { return }
+            // never to the window being resized (by hand, tiling or the zoom
+            // button). A zoom changes the layout width at a fixed frame width;
+            // a resize changes the frame width, and a lagging layout width
+            // must not be read as a zoom step.
+            guard let lastRequiredWidth, let lastScale, let lastFrameWidth else { return }
+            let zoomChanged = abs(scale - lastScale) > 0.001 && abs(window.frame.width - lastFrameWidth) < 0.5
+            guard requiredWidth > lastRequiredWidth || zoomChanged else { return }
             let needed = (requiredWidth * scale).rounded(.up)
             guard window.frame.width + 0.5 < needed else { return }
             var frame = window.frame
