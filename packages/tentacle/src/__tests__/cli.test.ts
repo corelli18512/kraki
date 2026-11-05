@@ -66,6 +66,10 @@ vi.mock('../daemon.js', () => ({
   runDaemonReleaseSmoke: (...args: unknown[]) => mockRunDaemonReleaseSmoke(...args),
   stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
   getCliLaunchdJobState: () => mockGetCliLaunchdJobState(),
+  daemonStartRefusal: (status: { detail?: string; pid: number | null }) =>
+    status.detail === 'unverified-pid' ? `Refusing to start: the recorded daemon PID ${status.pid} is alive but could not be verified as Kraki.`
+      : status.detail === 'untracked-launchd-job' ? 'Refusing to start: the launchd job is still loaded but no verified daemon PID is available.'
+        : null,
 }));
 
 const mockGetCliLaunchdJobState = vi.fn();
@@ -307,6 +311,55 @@ describe('CLI stop', () => {
   });
 });
 
+describe('CLI start when something already runs (K-266, K-030)', () => {
+  const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+
+  it('K-266: refuses with the reason instead of "already running (PID 1)" for an unverifiable PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 1, detail: 'unverified-pid' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('could not be verified');
+    expect(out).not.toContain('already running');
+    expect(process.exitCode).toBe(1);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    process.exitCode = 0;
+  });
+
+  it('K-266: refuses with the reason instead of "(PID null)" for a loaded launchd job without a PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('launchd job is still loaded');
+    expect(out).not.toContain('PID null');
+    process.exitCode = 0;
+  });
+
+  it('K-030: says the worker is being restarted when only its supervisor runs', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('being restarted');
+    expect(out).toContain('4242');
+    expect(out).not.toContain('PID null');
+  });
+
+  it('K-266: `kraki stop` explains a refusal to stop', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockStopDaemon.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['stop']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('Failed to stop.');
+    expect(out).toContain('launchd job is still loaded');
+  });
+});
+
 describe('CLI install mode', () => {
   it('finishes setup without starting a worker or issuing a pairing token', async () => {
     process.env.KRAKI_INSTALL = '1';
@@ -396,6 +449,18 @@ describe('CLI status', () => {
     expect(output).toContain('42');
     expect(output).toContain('relay.test');
     expect(output).toContain('normal');
+  });
+
+  it('K-030: shows a supervisor restarting its worker as restarting, not stopped', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    const output = consoleOutput.join('\n');
+    expect(output).toContain('restarting');
+    expect(output).not.toContain('stopped');
+    await runCli(['status', '--json']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.daemon).toMatchObject({ running: true, detail: 'restarting', supervisorPid: 4242 });
   });
 
   it('shows stopped status when no daemon', async () => {

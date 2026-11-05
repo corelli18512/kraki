@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { existsSync, readdirSync, statSync, renameSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 import { loadConfig, getKrakiHome, getVersion, type KrakiConfig } from '../config.js';
-import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '../daemon.js';
+import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon, daemonStartRefusal, type DaemonStatus } from '../daemon.js';
 import { runSetup } from '../setup.js';
 import { isSafeId } from '../session/text.js';
 import { disableWindowsAutostart } from '../windows-autostart.js';
@@ -145,8 +145,7 @@ export async function cmdDefault(): Promise<void> {
 
   if (config) {
     if (isDaemonRunning()) {
-      const status = getDaemonStatus();
-      console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+      printAlreadyRunning(getDaemonStatus());
       console.log();
 
       const action = await select({
@@ -347,11 +346,30 @@ export async function cmdStart(atLogin = false): Promise<void> {
   // is already running.
   if (isDaemonRunning() && !loadManagedBy()) {
     const status = getDaemonStatus();
-    console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+    printAlreadyRunning(status);
+    if (daemonStartRefusal(status)) process.exitCode = 1;
     return;
   }
 
   await silentStart(config);
+}
+
+/**
+ * Instead of starting: what is already there. Only a verified daemon has a
+ * PID to show; a crash-looping launchd job or an unverifiable PID printed
+ * "(PID null)" / "(PID 1)" where the refusal to start was meant (K-266), and
+ * a supervisor restarting its worker is not a running daemon either (K-030).
+ */
+export function printAlreadyRunning(status: DaemonStatus | undefined): void {
+  const refusal = status ? daemonStartRefusal(status) : null;
+  if (refusal) {
+    console.log(chalk.red(`  ${refusal}`));
+  } else if (status?.detail === 'restarting') {
+    console.log(chalk.yellow(`  🦑 Kraki is running, but its background worker stopped and is being restarted (supervisor PID ${status.supervisorPid}).`));
+    console.log(chalk.dim('  See `kraki logs` for why; `kraki stop` stops it.'));
+  } else {
+    console.log(chalk.green(`  🦑 Kraki is already running (PID ${status?.pid})`));
+  }
 }
 
 // ── Shared start logic ──────────────────────────────────
@@ -407,6 +425,10 @@ export function cmdStop(): void {
     console.log(`  ${chalk.green('✔')} Kraki stopped.`);
   } else {
     console.log(chalk.red('Failed to stop.'));
+    // Say why: Kraki refuses to signal what it cannot identify (K-266).
+    const status = getDaemonStatus();
+    const reason = status ? daemonStartRefusal(status) : null;
+    if (reason) console.log(chalk.dim(`  ${reason.replace(/^Refusing to start: /, '')}`));
   }
 }
 

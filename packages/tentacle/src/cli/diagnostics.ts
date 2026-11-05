@@ -30,7 +30,10 @@ export function cmdStatus(jsonOutput = false): void {
         pid: status.pid,
         // Additive fields for Kraki for Mac's onboarding and ownership logic.
         owner: managed ? managed.by : (cliJob.plistExists ? 'cli' : null),
-        supervisorPid: status.running ? (statusFile?.supervisorPid ?? null) : null,
+        supervisorPid: status.running ? (status.supervisorPid ?? statusFile?.supervisorPid ?? null) : null,
+        // Why a running daemon has no verified PID: 'restarting' (supervisor
+        // between worker restarts), 'unverified-pid', 'untracked-launchd-job'.
+        detail: status.detail ?? null,
         managedLabel: managed?.label ?? null,
         cliLaunchdJob: cliJob,
         relayState: status.running ? (statusFile?.relayState ?? null) : null,
@@ -61,7 +64,14 @@ export function cmdStatus(jsonOutput = false): void {
 
   const managedBy = loadManagedBy();
   const owner = managedBy ? `, managed by ${ownerName(managedBy.by)}` : '';
-  if (status.running) {
+  if (status.detail === 'restarting') {
+    console.log(`  Status:  ${chalk.yellow('restarting')} ${chalk.dim(`(the background worker keeps stopping; supervisor PID ${status.supervisorPid}${owner})`)}`);
+    console.log(chalk.dim('           See `kraki logs`; `kraki stop` stops it.'));
+  } else if (status.detail === 'unverified-pid') {
+    console.log(`  Status:  ${chalk.yellow('unknown')} ${chalk.dim(`(PID ${status.pid} is alive but could not be verified as Kraki${owner})`)}`);
+  } else if (status.detail === 'untracked-launchd-job') {
+    console.log(`  Status:  ${chalk.yellow('launchd job loaded, no verified daemon')} ${chalk.dim(`(it may be failing to start; see \`kraki logs\`${owner})`)}`);
+  } else if (status.running) {
     const relay = statusFile?.relayState;
     const link = relay === 'connected' ? chalk.green(', connected')
       : relay ? chalk.yellow(`, ${relay}`) : '';

@@ -35,6 +35,7 @@ import {
   clearDaemonReady,
   loadDaemonSupervisorPid,
   clearDaemonSupervisorPid,
+  getDaemonPidPath,
 } from './config.js';
 import { SUPERVISE_ENV, SUPERVISED_ENV } from './daemon-supervisor.js';
 import { getKrakiAppBundlePath, getProcessBundleIdentity, KRAKI_BUNDLE_ID } from './checks.js';
@@ -132,10 +133,32 @@ export function assertNoUntrackedLaunchdDaemon(
   uid: number | undefined = process.getuid?.(),
 ): void {
   if (!hasUntrackedLaunchdDaemon(loadDaemonPid(), platform, uid)) return;
-  throw new Error(
-    'Refusing to start: the launchd job is still loaded but no verified daemon PID is available. ' +
-    'Inspect the existing job before removing it; Kraki will not risk starting a duplicate daemon.',
-  );
+  throw new Error(untrackedLaunchdJobMessage(uid));
+}
+
+function untrackedLaunchdJobMessage(uid: number | undefined = process.getuid?.()): string {
+  const target = `gui/${uid ?? '$UID'}/${getLaunchdLabel()}`;
+  return 'Refusing to start: the launchd job is still loaded but no verified daemon PID is available ' +
+    '(the daemon may be crashing at startup; see `kraki logs`). ' +
+    'Inspect the existing job before removing it; Kraki will not risk starting a duplicate daemon. ' +
+    `Inspect: launchctl print ${target}  Remove: launchctl bootout ${target}`;
+}
+
+function unverifiedPidMessage(pid: number): string {
+  return `Refusing to start: the recorded daemon PID ${pid} is alive but could not be verified as Kraki. ` +
+    `Check that process; remove ${getDaemonPidPath()} only if it is not a Kraki daemon.`;
+}
+
+/**
+ * Why `kraki start` must not start (or report "already running") for this
+ * status, or null when it is a verified daemon / nothing at all. `isDaemonRunning`
+ * is true for these states so a duplicate is never started, but they are not
+ * a daemon one can name by PID (K-266).
+ */
+export function daemonStartRefusal(status: DaemonStatus, uid: number | undefined = process.getuid?.()): string | null {
+  if (status.detail === 'untracked-launchd-job') return untrackedLaunchdJobMessage(uid);
+  if (status.detail === 'unverified-pid' && status.pid !== null) return unverifiedPidMessage(status.pid);
+  return null;
 }
 
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
@@ -413,29 +436,41 @@ async function terminateFailedDaemon(pid: number): Promise<boolean> {
 
 // ── Status ──────────────────────────────────────────────
 
+/** Why a `running` daemon has no verified worker PID. */
+export type DaemonStatusDetail =
+  /** A live process holds the recorded PID but could not be identified. */
+  | 'unverified-pid'
+  /** The CLI's launchd job is loaded without a verified daemon PID (often a crash loop). */
+  | 'untracked-launchd-job'
+  /** `kraki start`'s supervisor is alive while its worker is down: it is restarting it. */
+  | 'restarting';
+
 export interface DaemonStatus {
   running: boolean;
   pid: number | null;
+  /** Set when `running` is true but no verified worker answers to `pid`. */
+  detail?: DaemonStatusDetail;
+  /** The supervisor's PID, for `detail: 'restarting'`. */
+  supervisorPid?: number;
 }
 
 export function isDaemonRunning(
   platform = process.platform,
   uid: number | undefined = process.getuid?.(),
 ): boolean {
-  const pid = loadDaemonPid();
-  if (pid === null) return isLaunchdAgentLoaded(platform, uid);
-  const identity = inspectDaemonProcess(pid);
-  if (identity === 'gone' || identity === 'other') {
-    if (isLaunchdAgentLoaded(platform, uid)) return true;
-    clearDaemonPid();
-    clearDaemonReady();
-    clearDaemonIdentity();
-    return false;
-  }
-  // `unknown` means the PID is alive but the OS refused command inspection.
-  // Treat it as running to avoid launching a duplicate daemon; stopDaemon()
-  // still refuses to signal it until its identity can be established.
-  return true;
+  return getDaemonStatus(platform, uid).running;
+}
+
+/**
+ * A `kraki start` supervisor between worker restarts (a worker that cannot
+ * start or keeps dying): there is no live worker PID, yet Kraki is running and
+ * will be back. Reporting it as stopped made `kraki stop` say "not running"
+ * while the supervisor restarted the worker forever (K-030).
+ */
+function supervisorRestartingStatus(): DaemonStatus | null {
+  const supervisorPid = loadDaemonSupervisorPid();
+  if (supervisorPid === null || inspectDaemonProcess(supervisorPid) !== 'daemon') return null;
+  return { running: true, pid: null, detail: 'restarting', supervisorPid };
 }
 
 export function getDaemonStatus(
@@ -444,18 +479,21 @@ export function getDaemonStatus(
 ): DaemonStatus {
   const pid = loadDaemonPid();
   if (pid === null) {
-    return isLaunchdAgentLoaded(platform, uid)
-      ? { running: true, pid: null }
-      : { running: false, pid: null };
+    if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null, detail: 'untracked-launchd-job' };
+    return supervisorRestartingStatus() ?? { running: false, pid: null };
   }
   const identity = inspectDaemonProcess(pid);
   if (identity === 'gone' || identity === 'other') {
-    if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null };
+    if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null, detail: 'untracked-launchd-job' };
     clearDaemonPid();
     clearDaemonReady();
     clearDaemonIdentity();
-    return { running: false, pid: null };
+    return supervisorRestartingStatus() ?? { running: false, pid: null };
   }
+  // `unknown` means the PID is alive but the OS refused command inspection.
+  // Treat it as running to avoid launching a duplicate daemon; stopDaemon()
+  // still refuses to signal it until its identity can be established.
+  if (identity === 'unknown') return { running: true, pid, detail: 'unverified-pid' };
   return { running: true, pid };
 }
 
@@ -729,9 +767,8 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   assertNoUntrackedLaunchdDaemon();
   // An alive PID whose identity could not be verified is deliberately left in
   // place by stopDaemon(). Do not start a second daemon beside it.
-  if (loadDaemonPid() !== null) {
-    throw new Error('Refusing to start: the recorded daemon PID is alive but could not be verified. Remove the stale daemon.pid only after checking the process.');
-  }
+  const leftPid = loadDaemonPid();
+  if (leftPid !== null) throw new Error(unverifiedPidMessage(leftPid));
   clearDaemonReady();
   clearDaemonIdentity();
 
@@ -914,7 +951,8 @@ export function stopDaemon(
   // A `kraki start` daemon runs under a supervisor; stop it first, or it would
   // restart the worker we are about to end (also when the worker is between
   // restarts and has no live PID).
-  if (stopDaemonSupervisor(platform) === 'unknown') return false;
+  const supervisor = stopDaemonSupervisor(platform);
+  if (supervisor === 'unknown') return false;
   const pid = loadDaemonPid();
   if (pid === null) {
     // A loaded launchd job without a PID is ambiguous: LaunchServices may still
@@ -926,7 +964,9 @@ export function stopDaemon(
     if (platform === 'darwin') cleanupLaunchdPlist();
     clearDaemonReady();
     clearDaemonIdentity();
-    return false;
+    // A supervisor between worker restarts was all there was: stopping it
+    // stopped Kraki.
+    return supervisor === 'stopped';
   }
 
   // Establish identity BEFORE unloading supervision. If process inspection is
