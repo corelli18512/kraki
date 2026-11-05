@@ -31,6 +31,7 @@ final class PushManager: NSObject {
     private static let enabledKey = "kraki.pushNotificationsEnabled"
     private static let pendingUnregisterKey = "kraki.pushPendingUnregister"
     private static let firstSignInPromptKey = "kraki.pushFirstSignInPrompted"
+    private static let enableWhenAllowedKey = "kraki.pushEnableWhenAllowed"
     #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
     private static let appGroup = "group.chat.kraki.ios.diag"
     #else
@@ -43,6 +44,15 @@ final class PushManager: NSObject {
     var userEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: Self.enabledKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.enabledKey) }
+    }
+
+    /// The human asked for notifications (Kraki's toggle or the first
+    /// sign-in prompt) but iOS refused. Once iOS allows them — the human
+    /// followed "tap the gear to enable" — they are switched on (K-036).
+    /// Turning Kraki's toggle off clears it.
+    var enableWhenAllowed: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.enableWhenAllowedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.enableWhenAllowedKey) }
     }
 
     /// Set when `disable()` is called but the relay couldn't be reached.
@@ -72,6 +82,7 @@ final class PushManager: NSObject {
     @ObservationIgnored private var registeredOnConnection: String?
     #if DEBUG
     private(set) var registrationsSentForTesting = 0
+    private(set) var apnsUnregistrationsForTesting = 0
     #endif
 
     // MARK: - Dependencies
@@ -126,7 +137,11 @@ final class PushManager: NSObject {
     /// or resuming the app. APNs may rotate the token at any time, so an enabled
     /// client asks UIKit to refresh it on every foreground transition.
     func handleForeground() async {
-        await refreshPermissionStatus()
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        // Adopt the human's earlier request before publishing the status, so
+        // Settings shows the switch on as soon as the gear disappears.
+        adoptSystemPermission(settings.authorizationStatus)
+        permissionStatus = settings.authorizationStatus
         if let unreadSessionIDs = appState?.sessionStore.unreadSessionIDs {
             syncApplicationBadge(unreadSessionIDs: unreadSessionIDs)
         }
@@ -145,6 +160,20 @@ final class PushManager: NSObject {
         }
     }
 
+    /// iOS reports `status`: if it now allows notifications the human asked
+    /// for earlier (and iOS refused then), turn them on.
+    func adoptSystemPermission(_ status: UNAuthorizationStatus) {
+        guard enableWhenAllowed, !userEnabled else { return }
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            userEnabled = true
+            enableWhenAllowed = false
+            KLog.d("🔔 Notifications allowed in iOS Settings — enabling as requested earlier")
+        default:
+            break
+        }
+    }
+
     /// User toggled the Settings switch ON.
     /// - Requests permission if undetermined.
     /// - Triggers `registerForRemoteNotifications`; AppDelegate completes it.
@@ -155,8 +184,10 @@ final class PushManager: NSObject {
         let granted = await requestPermissionIfNeeded()
         guard granted else {
             userEnabled = false
+            enableWhenAllowed = true
             return false
         }
+        enableWhenAllowed = false
         await MainActor.run {
             UIApplication.shared.registerForRemoteNotifications()
         }
@@ -174,6 +205,7 @@ final class PushManager: NSObject {
     /// retry on next successful auth.
     func disable() {
         userEnabled = false
+        enableWhenAllowed = false
         registeredOnConnection = nil
         pendingUnregister = true
         sendUnregister()
@@ -242,18 +274,26 @@ final class PushManager: NSObject {
     func handleSignOut() {
         if let appState, appState.connectionStatus == .connected {
             sendControl(["type": "unregister_push_token", "payload": ["provider": "apns"]])
-        } else if deviceToken != nil {
-            // Offline: the relay can't be told, and a retry after the next
-            // sign-in would belong to the new identity. Retire the APNs token
-            // instead; pushes for the old account then fail at Apple and the
-            // relay drops the token. The next sign-in registers a fresh one.
-            UIApplication.shared.unregisterForRemoteNotifications()
-            KLog.d("📭 Signed out offline — unregistered from APNs")
         }
+        // Always retire the APNs token too (K-027): the unregister frame is
+        // fire-and-forget and sign-out closes the socket right after it, so it
+        // can be lost — and offline the relay can't be told at all (a retry
+        // after the next sign-in would belong to the new identity). Pushes for
+        // the old account then fail at Apple and the relay drops the token.
+        // The next sign-in registers a fresh one.
+        unregisterFromAPNs()
+        KLog.d("📭 Signed out — unregistered from APNs")
         deviceToken = nil
         registered = false
         SessionNotifications.removeAllDelivered()
         UserDefaults(suiteName: Self.appGroup)?.removeObject(forKey: Self.unreadSessionIDsKey)
+    }
+
+    private func unregisterFromAPNs() {
+        #if DEBUG
+        apnsUnregistrationsForTesting += 1
+        #endif
+        UIApplication.shared.unregisterForRemoteNotifications()
     }
 
     private static var isAutomatedRun: Bool {

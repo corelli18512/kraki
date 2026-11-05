@@ -583,7 +583,7 @@ final class DeviceStore {
             finishUsageRefresh(id, requestId: requestId, error: payload.refreshError)
         }
         // A transport/disabled error carries a cache, not a new successful reading.
-        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accounts) }
+        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accountsOnLocalClock()) }
     }
 
     /// Online tentacles whose greeting says they predate account usage, so the app
