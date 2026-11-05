@@ -281,6 +281,17 @@ describe('npm update targets the running install (K-274)', async () => {
       .rejects.toThrow(/still 0\.1\.0/);
   });
 
+  it('does not report a pnpm update as failed because the old .pnpm version directory remains', async () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), 'kraki-pnpm-')));
+    const root = join(prefix, '.pnpm', '@kraki+tentacle@0.1.0', 'node_modules', '@kraki', 'tentacle');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(join(root, 'dist', 'cli.js'), '');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@kraki/tentacle', version: '0.1.0' }));
+    const commands: string[] = [];
+    await updateViaNpm('0.2.0', { scriptPath: join(root, 'dist', 'cli.js'), exec: (cmd) => { commands.push(cmd); } });
+    expect(commands).toEqual(['pnpm add -g @kraki/tentacle@0.2.0']);
+  });
+
   it('turns an EACCES failure into one actionable line', async () => {
     const install = npmInstall('0.1.0');
     const stderr = ['npm error code EACCES', 'npm error syscall mkdir', 'npm error path /usr/local/lib/node_modules/@kraki',

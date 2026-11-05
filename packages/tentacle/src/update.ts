@@ -593,8 +593,10 @@ export async function updateViaNpm(
     throw new Error(summarizeNpmError(`${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`, prefix));
   }
 
-  const now = packageRoot ? installedVersion(packageRoot) : null;
-  if (packageRoot && now !== null && now !== version) {
+  // pnpm keeps each version in its own .pnpm/<name>@<version> directory, so
+  // the old package root can stay at the old version after a good update.
+  const now = !usePnpm && packageRoot ? installedVersion(packageRoot) : null;
+  if (!usePnpm && packageRoot && now !== null && now !== version) {
     throw new Error(`npm installed ${version} somewhere else; this kraki (${packageRoot}) is still ${now}. `
       + `Update it with the npm that installed it: npm install -g ${NPM_PACKAGE}@${version}`);
   }
