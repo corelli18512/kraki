@@ -123,6 +123,7 @@
   },
   "composer": {
     "imageTooLarge": "Image is too large (max 3 MB after compression).",
+    "imageUnreadable": "This image can't be read here. Try a JPEG, PNG, GIF or WebP image.",
     "targetChanged": "The agent's request changed. Check your message, then send again.",
     "sendDictation": "Send dictation",
     "stop": "Stop agent",
@@ -184,6 +185,7 @@
     "actions": "Message actions",
     "copySelection": "Copy Selection",
     "copy": "Copy",
+    "copyCode": "Copy Code",
     "showSteps": "Show Steps"
   },
   "steps": {

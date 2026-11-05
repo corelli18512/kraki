@@ -12,6 +12,7 @@ import { useNarrow } from './hooks/useNarrow';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 import { desktopNeedsYou } from './lib/desktop-needs-you';
+import { attentionCount } from './lib/session-status';
 import { desktop, desktopCredentials, isDesktop } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
@@ -96,13 +97,17 @@ export function App() {
 
   const showBlockingOverlay = !wasConnectedRef.current && firstConnectFailedRef.current && status !== 'connected';
 
-  // Update document.title with total unread count
+  // document.title counts unread messages and Sessions waiting on you; the
+  // Kraki for Windows badge counts unread messages.
   const unreadCount = useStore((s) => s.unreadCount);
+  const attention = useStore((s) => attentionCount(s.unreadCount, s.sessions.keys(), s.cards, s.sessionPreviews));
   useEffect(() => {
     const BASE_TITLE = 'Kraki';
+    document.title = attention > 0 ? `(${attention}) ${BASE_TITLE}` : BASE_TITLE;
+  }, [attention]);
+  useEffect(() => {
     let total = 0;
     for (const count of unreadCount.values()) total += count;
-    document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
     desktop?.setBadge(total);
   }, [unreadCount]);
 

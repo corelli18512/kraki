@@ -35,6 +35,27 @@ function renderApp(route = '/') {
   );
 }
 
+describe('App — tab title (K-220)', () => {
+  it('counts a Session waiting on an approval, not only unread messages', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd', agent: 'pi', state: 'active', messageCount: 0 },
+      { id: 's2', deviceId: 'd', agent: 'pi', state: 'idle', messageCount: 0 },
+    ]);
+    renderApp();
+    expect(document.title).toBe('Kraki');
+    act(() => useStore.getState().setSessionPreview('s1', { text: 'Run rm -rf build?', type: 'permission', timestamp: new Date().toISOString() }));
+    expect(document.title).toBe('(1) Kraki');
+    // An unread waiting Session counts once; another unread one adds.
+    act(() => useStore.getState().incrementUnread('s1'));
+    act(() => useStore.getState().incrementUnread('s2'));
+    expect(document.title).toBe('(2) Kraki');
+    act(() => useStore.getState().setSessionPreview('s1', { text: 'Done', type: 'agent', timestamp: new Date().toISOString() }));
+    act(() => useStore.getState().clearUnread('s1'));
+    expect(document.title).toBe('(1) Kraki');
+  });
+});
+
 describe('App', () => {
   it('renders without crashing', () => {
     const { container } = renderApp();

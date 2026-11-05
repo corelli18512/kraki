@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useStore } from '../hooks/useStore';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
 import type { ChatMessage } from '../types/store';
@@ -487,5 +487,77 @@ describe('K-005: session titles are text or absent', () => {
     expect(stored?.title).toBeUndefined();
     expect(stored?.autoTitle).toBe('Auto');
     localStorage.removeItem('kraki-store');
+  });
+});
+
+describe('drafts across tabs (K-323)', () => {
+  /** Another tab's persisted store, as its storage event delivers it. */
+  function otherTabWrites(drafts: [string, string][]) {
+    const stored = JSON.parse(localStorage.getItem('kraki-store') ?? '{"state":{},"version":0}');
+    stored.state.drafts = { __type: 'Map', entries: drafts };
+    const newValue = JSON.stringify(stored);
+    localStorage.setItem('kraki-store', newValue);
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kraki-store', newValue, storageArea: localStorage }));
+  }
+  const storedDrafts = () => JSON.parse(localStorage.getItem('kraki-store')!).state.drafts.entries;
+
+  it("keeps another tab's draft when this tab types one", () => {
+    otherTabWrites([['sess-a', 'draft in tab A']]);
+    expect(useStore.getState().drafts.get('sess-a')).toBe('draft in tab A');
+    useStore.getState().setDraft('sess-b', 'draft in tab B');
+    expect(storedDrafts()).toEqual([['sess-a', 'draft in tab A'], ['sess-b', 'draft in tab B']]);
+  });
+
+  it("follows another tab's sent (cleared) draft and does not echo the write", () => {
+    useStore.getState().setDraft('sess-a', 'typed');
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    otherTabWrites([]);
+    expect(useStore.getState().drafts.size).toBe(0);
+    // Only the other tab's own write: this tab does not write back over it.
+    expect(write).toHaveBeenCalledTimes(1);
+    write.mockRestore();
+    expect(storedDrafts()).toEqual([]);
+  });
+
+  it("never takes characters out of the draft this tab is typing", () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      useStore.getState().setActiveSessionId('sess-x');
+      useStore.getState().setDraft('sess-x', 'hello');
+      // A background tab's write that crossed this tab's last keystrokes.
+      otherTabWrites([['sess-x', 'hel'], ['sess-y', 'b']]);
+      expect(useStore.getState().drafts.get('sess-x')).toBe('hello');
+      expect(useStore.getState().drafts.get('sess-y')).toBe('b');
+    } finally { focus.mockRestore(); }
+  });
+
+  it("a write keeps drafts stored by another tab even when their event never arrived", () => {
+    // Another tab stored a draft; this tab (frozen, say) never saw the event.
+    const stored = JSON.parse(localStorage.getItem('kraki-store') ?? '{"state":{},"version":0}');
+    stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'b']] };
+    localStorage.setItem('kraki-store', JSON.stringify(stored));
+    useStore.getState().setDraft('sess-x', 'a');
+    expect(storedDrafts()).toEqual([['sess-y', 'b'], ['sess-x', 'a']]);
+    // Nor does another persisted change carry this tab's stale copy of them.
+    stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'bc'], ['sess-x', 'a']] };
+    localStorage.setItem('kraki-store', JSON.stringify(stored));
+    useStore.getState().togglePin('sess-z');
+    expect(storedDrafts()).toEqual([['sess-y', 'bc'], ['sess-x', 'a']]);
+    useStore.getState().setDraft('sess-x', '');
+    expect(storedDrafts()).toEqual([['sess-y', 'bc']]);
+  });
+
+  it('signing out clears every stored draft', () => {
+    otherTabWrites([['sess-y', 'b']]);
+    useStore.getState().setDraft('sess-x', 'a');
+    useStore.getState().reset();
+    expect(storedDrafts()).toEqual([]);
+  });
+
+  it('ignores other keys and unreadable values', () => {
+    useStore.getState().setDraft('sess-a', 'typed');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'other', newValue: '{}', storageArea: localStorage }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kraki-store', newValue: 'not json', storageArea: localStorage }));
+    expect(useStore.getState().drafts.get('sess-a')).toBe('typed');
   });
 });
