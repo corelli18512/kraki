@@ -2,7 +2,7 @@ import { t } from '../i18n';
 import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
-import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
+import { desktop, desktopCredentials, setDesktopCredentialsRefused, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
@@ -40,6 +40,9 @@ const LIVE_LINK_QUIET_MS = 12_000;
  *  retransmission backoff alone leaves multi-second gaps): not a stall.
  *  Same window as the native apps (`CommandSender.busyLinkWindow`). */
 const DELIVERY_FLOWING_MS = 30_000;
+/** Answers to the desktop's `github_token` sign-in that refuse the token
+ *  itself; a passing outage comes back as `service_unavailable` instead. */
+const DESKTOP_TOKEN_REFUSED = new Set(['auth_rejected', 'unknown_auth_method']);
 
 /** Commands that act on whatever is running when the Tentacle receives them
  *  (Stop has no turn id). An unacknowledged one must die with its Head
@@ -91,6 +94,8 @@ export class KrakiWSClient {
   private deviceFeatures = new Map<string, Set<string>>();
   /** Last time pulse delivered anything (a whole payload or a fragment). */
   private lastDeliveryAt = 0;
+  /** The built-in Kraki's token this socket signed in with (Kraki for Windows). */
+  private desktopTokenSent: string | undefined;
   private attachmentPulls = new AttachmentPullQueue(({ sessionId, id, index }) => {
     if (getStore().status !== 'connected' && !this.localLink?.isLinked(getStore().sessions.get(sessionId)?.deviceId)) return false;
     const deviceId = getStore().deviceId;
@@ -173,6 +178,22 @@ export class KrakiWSClient {
     getStore().setStatus('connecting');
     this.endConnectionScope();
     this.transport.redirectToRelay(creds.relay);
+    return true;
+  }
+
+  /** Kraki for Windows: the relay refused the built-in Kraki's token. Every
+   *  retry with it is refused again, and each one brought the dashboard back
+   *  ("Disconnected") between two "Sign in again" pages. Stop here; setup
+   *  connects again once the built-in Kraki is signed in again. */
+  private desktopTokenRefused(code: string | undefined): boolean {
+    const token = this.desktopTokenSent;
+    if (!token || !code || !DESKTOP_TOKEN_REFUSED.has(code)) return false;
+    logger.warn('Relay refused the built-in Kraki\'s sign-in', { code });
+    setDesktopCredentialsRefused(token);
+    this.disconnect();
+    const store = getStore();
+    store.setLastError(null);
+    store.setStatus('awaiting_login');
     return true;
   }
 
@@ -1235,6 +1256,9 @@ export class KrakiWSClient {
   // --- Internal ---
 
   private async authenticate(): Promise<void> {
+    // Same choice as sendAuth: a pairing token or OAuth code goes first.
+    this.desktopTokenSent = this.transport.pairingToken || this.transport.githubCode
+      ? undefined : desktopCredentials()?.token ?? undefined;
     const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode
       || desktopCredentials();
 
@@ -1334,6 +1358,9 @@ export class KrakiWSClient {
         break;
       }
       case 'auth_ok':
+        // Only a refusal of the sign-in itself counts; later auth errors in
+        // this session are not about the built-in token.
+        this.desktopTokenSent = undefined;
         this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
@@ -1372,6 +1399,7 @@ export class KrakiWSClient {
 
       case 'auth_error':
         if ((msg as { code?: string }).code === 'account_deleted') { this.accountWasDeleted(); break; }
+        if (this.desktopTokenRefused((msg as { code?: string }).code)) break;
         processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
           clearStoredDeviceId: () => { diag.phase('logout'); this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },

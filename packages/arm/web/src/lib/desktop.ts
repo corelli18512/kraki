@@ -146,14 +146,33 @@ export const hasWindowsTitleBar = desktop?.platform === 'win32' && !!desktop.tit
 
 const SIGNED_OUT_KEY = 'kraki-desktop.signedOut';
 
+/** The built-in Kraki's token the relay refused (`auth_rejected`). Signing in
+ *  with it again can only be refused again, so until the built-in Kraki has
+ *  another token (or the user signs in again) the app has no credentials and
+ *  stays on "Sign in again". */
+let refusedDesktopToken: string | null = null;
+
 /**
  * The account of the Kraki built into the desktop app, unless the user signed
- * the app out (then setup asks to sign in again, like Kraki for Mac).
+ * the app out or the relay refused its token (then setup asks to sign in
+ * again, like Kraki for Mac).
  */
 export function desktopCredentials(): { relay: string; token: string | null } | null {
   if (!desktop?.builtIn) return null;
   if (localStorage.getItem(SIGNED_OUT_KEY) === '1') return null;
-  return desktop.builtIn.credentials();
+  const creds = desktop.builtIn.credentials();
+  if (creds?.token && creds.token === refusedDesktopToken) return null;
+  return creds;
+}
+
+export function setDesktopCredentialsRefused(token: string | null): void {
+  refusedDesktopToken = token;
+}
+
+/** The relay refused the token the built-in Kraki still has. */
+export function isDesktopCredentialsRefused(): boolean {
+  if (!desktop?.builtIn || refusedDesktopToken === null) return false;
+  return desktop.builtIn.credentials()?.token === refusedDesktopToken;
 }
 
 export function setDesktopSignedOut(signedOut: boolean): void {

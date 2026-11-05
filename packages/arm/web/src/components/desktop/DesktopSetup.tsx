@@ -17,7 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { t as translate } from '../../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KrakiLogo } from '../KrakiLogo';
-import { isDesktopSignedOut, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
+import { isDesktopCredentialsRefused, isDesktopSignedOut, setDesktopCredentialsRefused, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
 import { wsClient } from '../../lib/ws-client';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
 import { AccountDeletedNotice } from '../layout/DeleteAccount';
@@ -64,7 +64,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
     || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
   // Signed out of the app, or the relay refused the built-in Kraki's sign-in.
   const [again, setAgain] = useState<'expired' | 'signedOut' | null>(
-    () => (isDesktopSignedOut() ? 'signedOut' : triedCredentials ? 'expired' : null));
+    () => (isDesktopSignedOut() ? 'signedOut' : triedCredentials || isDesktopCredentialsRefused() ? 'expired' : null));
   const signInAgain = again !== null;
 
   // Keep the same object while nothing changed: the poll must not re-render
@@ -129,7 +129,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
             <SignInStep
               builtIn={builtIn}
               again={again}
-              onDone={() => { triedCredentials = false; setDesktopSignedOut(false); setAgain(null); void refresh(); }}
+              onDone={() => { triedCredentials = false; setDesktopCredentialsRefused(null); setDesktopSignedOut(false); setAgain(null); void refresh(); }}
             />
           )}
           {step === 'background' && <BackgroundStep builtIn={builtIn} onStarted={refresh} />}
