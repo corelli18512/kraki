@@ -230,9 +230,10 @@ export class RelayClient {
 
   activeInputTurnIds = new Map<string, string>();
   nextInputTurnAnchors = new Map<string, number>();
-  /** Turn id ('' when none) whose Stop is awaiting the adapter, per session:
-   *  a second Stop for the same turn joins it instead of settling again. */
-  abortsInFlight = new Map<string, string>();
+  /** Stop awaiting the adapter, per session: its turn id ('' when none), when
+   *  it was sent, and the once-only settle of that turn. A second Stop for the
+   *  same turn joins it instead of settling again. */
+  abortsInFlight = new Map<string, { turnKey: string; startedAt: number; settle: () => void }>();
 
   // ── Push preview state ─────────────────────────────
   /** Final reply of the CURRENT turn per session (for the turn-end push).

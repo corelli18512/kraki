@@ -348,10 +348,22 @@ export function settleAdapterIdle(client: RelayClient, sessionId: string, event?
 /** A turn that ended on tool calls with no closing prose is relayed as-is:
  *  it has Steps but no reply. Give those Steps a spine anchor (protocol
  *  SystemMessage kind `no_reply`, which clients render as a steps-only
- *  section) — for every agent alike, instead of each adapter improvising. */
+ *  section) — for every agent alike, instead of each adapter improvising.
+ *  A turn whose only words were streamed (no reply event, no step) keeps
+ *  them as its reply. Either way the live draft ends with the turn: a stale
+ *  one would surface in the next turn's Stopped/Turn failed row. */
 export function anchorStepsOnlyTurn(client: RelayClient, sessionId: string): void {
-  if (client.turnHasOutcome.has(sessionId)) return;
-  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) return;
+  const draft = client.card.state(sessionId).draft;
+  if (client.turnHasOutcome.has(sessionId)) {
+    if (draft) client.card.onBubble(sessionId);
+    return;
+  }
+  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) {
+    if (!draft.trim()) return;
+    client.card.onBubble(sessionId);
+    client.send({ type: 'agent_message', sessionId, payload: { content: draft } });
+    return;
+  }
   client.card.onBubble(sessionId);
   client.send({ type: 'system_message', sessionId, payload: { kind: 'no_reply' } });
 }
