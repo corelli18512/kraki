@@ -194,8 +194,10 @@ describe('Composer — dropping an image (K-120)', () => {
     const restore = stubImageDecoding();
     render(<Composer {...props} />);
     const composer = document.querySelector('.kcomposer')!;
-    const over = fireEvent.dragOver(composer, { dataTransfer: files(new File(['x'], 'a.png', { type: 'image/png' })) });
+    const overData = files(new File(['x'], 'a.png', { type: 'image/png' }));
+    const over = fireEvent.dragOver(composer, { dataTransfer: overData });
     expect(over).toBe(false); // default prevented: the browser does not open the file
+    expect(overData.dropEffect).toBe('copy'); // the page-wide guard leaves the composer's own answer
     await act(async () => {
       fireEvent.drop(composer, { dataTransfer: files(new File(['x'], 'a.png', { type: 'image/png' })) });
       await new Promise((r) => setTimeout(r, 20));
@@ -211,6 +213,11 @@ describe('Composer — dropping an image (K-120)', () => {
     outside.dataTransfer = files(new File(['x'], 'a.png', { type: 'image/png' }));
     window.dispatchEvent(outside);
     expect(outside.defaultPrevented).toBe(true);
+    const overOutside = new Event('dragover', { cancelable: true, bubbles: true }) as Event & { dataTransfer: { dropEffect: string } };
+    overOutside.dataTransfer = { ...files(new File(['x'], 'a.png', { type: 'image/png' })), dropEffect: 'copy' };
+    document.body.dispatchEvent(overOutside);
+    expect(overOutside.defaultPrevented).toBe(true);
+    expect(overOutside.dataTransfer.dropEffect).toBe('none'); // nothing outside the composer takes the file
     await act(async () => {
       fireEvent.drop(document.querySelector('.kcomposer')!, { dataTransfer: files(new File(['x'], 'a.png', { type: 'image/png' })) });
       await new Promise((r) => setTimeout(r, 20));

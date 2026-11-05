@@ -93,8 +93,29 @@ final class MacComposerDropTests: XCTestCase {
         editor.concludeDragOperation(drag)
         drain(100)
         XCTAssertNil(app.sessionStore.stagedImages["voice-a"], "a text file is not an image")
-        XCTAssertTrue(editor.string.contains(note.lastPathComponent) || editor.string.isEmpty,
+        XCTAssertTrue(editor.string.contains(note.lastPathComponent),
                       "dropped as text, as before: \(editor.string)")
+    }
+
+    /// The attach button says "paste or drop one": the composer box outside
+    /// the editor takes image drops with the same rule.
+    func testComposerBoxTakesImageDropsOnly() throws {
+        var offered: [NSImage] = []
+        let image = MacComposerImageDrop(pasteboard: drag([try pngFile()]).draggingPasteboard) { offered.append($0); return true }
+        XCTAssertTrue(image.accepts())
+        XCTAssertTrue(image.drop())
+        XCTAssertEqual(offered.count, 1)
+
+        let note = FileManager.default.temporaryDirectory.appendingPathComponent("drop-\(UUID().uuidString).txt")
+        try "hello".write(to: note, atomically: true, encoding: .utf8)
+        files.append(note)
+        let text = MacComposerImageDrop(pasteboard: drag([note]).draggingPasteboard) { offered.append($0); return true }
+        XCTAssertFalse(text.accepts())
+        XCTAssertFalse(text.drop())
+        XCTAssertEqual(offered.count, 1, "a text file is not offered as an image")
+
+        let refused = MacComposerImageDrop(pasteboard: drag([try pngFile()]).draggingPasteboard) { _ in false }
+        XCTAssertFalse(refused.drop(), "a busy composer refuses the drop")
     }
 }
 

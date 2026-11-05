@@ -195,9 +195,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   useEffect(() => { if (trailingError) setAbortPending(false); }, [trailingError]);
   useEffect(() => { setImage(null); }, [sessionId]);
 
-  // A file dropped outside the composer must not navigate the tab away to it.
+  // A file dropped outside the composer must not navigate the tab away to it,
+  // and the cursor there shows that nothing takes it.
   useEffect(() => {
-    const keepPage = (e: DragEvent) => { if (carriesFiles(e.dataTransfer)) e.preventDefault(); };
+    const keepPage = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      const inComposer = e.target instanceof Element && e.target.closest('.kcomposer');
+      if (e.type === 'dragover' && !inComposer && e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+    };
     window.addEventListener('dragover', keepPage);
     window.addEventListener('drop', keepPage);
     return () => {
