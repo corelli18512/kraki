@@ -1,4 +1,4 @@
-import { formatDateTime, formatRelativeDays } from '../../i18n/format';
+import { formatClockTime, formatRelativeDays } from '../../i18n/format';
 import { t } from '../../i18n';
 import type { PendingInput } from './outbox';
 /**
@@ -45,14 +45,14 @@ export function sessionTimestamp(previewTimestamp?: string, createdAt?: string):
   return createdAt && Number.isFinite(Date.parse(createdAt)) ? createdAt : '';
 }
 
-/** Local HH:mm today, lowercase yesterday, then elapsed calendar days (Mac). */
+/** Local time today (user's 12/24-hour cycle), lowercase yesterday, then elapsed calendar days (Mac). */
 export function sessionTimeLabel(iso: string, now = new Date()): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((day(now) - day(date)) / 86_400_000);
-  if (days === 0) return formatDateTime(date, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (days === 0) return formatClockTime(date);
   if (days === 1) return formatRelativeDays(1);
   const elapsedDays = days - ((now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000) < (date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds() + date.getMilliseconds() / 1000) ? 1 : 0);
   return formatRelativeDays(Math.max(elapsedDays, 2));
