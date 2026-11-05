@@ -213,7 +213,11 @@ async function main(): Promise<void> {
       await cmdSetupHeadless(args);
     } else if (args.includes('--json')) {
       const { runSetupJson } = await import('./setup-json.js');
-      process.exitCode = await runSetupJson(args);
+      const code = await runSetupJson(args);
+      // One-shot like `agents --json`: the caller may keep stdin (the OAuth
+      // callback pipe) open, which kept the process alive after its final
+      // event (K-273). Exit once that event has been written out.
+      process.stdout.write('', () => gracefulExit(code));
     } else {
       const managed = loadManagedBy();
       if (managed) {

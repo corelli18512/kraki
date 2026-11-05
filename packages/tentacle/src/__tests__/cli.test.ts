@@ -102,6 +102,11 @@ vi.mock('../setup.js', () => ({
   showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
 }));
 
+const mockRunSetupJson = vi.fn();
+vi.mock('../setup-json.js', () => ({
+  runSetupJson: (...args: unknown[]) => mockRunSetupJson(...args),
+}));
+
 vi.mock('../update.js', () => ({
   checkForUpdate: vi.fn().mockResolvedValue(null),
 }));
@@ -163,8 +168,10 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
-  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown, ...rest: unknown[]) => {
     stdoutOutput.push(String(chunk));
+    const callback = rest.find((arg) => typeof arg === 'function') as (() => void) | undefined;
+    callback?.();
     return true;
   }) as never);
   vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
@@ -578,6 +585,20 @@ describe('CLI relay-info', () => {
     await runCli(['relay-info', `ws://127.0.0.1:${port}`]);
     await vi.waitFor(() => expect(stdoutOutput.join('')).toContain('"ok":false'), { timeout: 6000 });
     expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('CLI setup --json', () => {
+  it('exits with the setup result once its last event is written, even while stdin stays open (K-273)', async () => {
+    mockRunSetupJson.mockResolvedValue(1);
+    await runCli(['setup', '--json', '--oauth']);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(1));
+  });
+
+  it('exits 0 after a successful setup', async () => {
+    mockRunSetupJson.mockResolvedValue(0);
+    await runCli(['setup', '--json']);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(0));
   });
 });
 
