@@ -111,7 +111,7 @@ struct SettingsView: View {
                     }
                     Button("Cancel", role: .cancel) { }
                 } message: {
-                    Text("You'll need to scan a pairing QR or sign in again to reconnect.")
+                    Text(appState.logoutConfirmationMessage)
                 }
             } else {
                 Text("Not signed in")

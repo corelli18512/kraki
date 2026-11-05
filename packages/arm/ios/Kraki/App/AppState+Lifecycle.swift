@@ -111,6 +111,25 @@ extension AppState {
         resetIdentity(clearRelayURL: true)
     }
 
+    /// The "Log out?" alert's message: logging out discards what this device
+    /// has not delivered yet, so say so (K-037).
+    var logoutConfirmationMessage: String {
+        let working = sessionStore.sessions.values.filter { $0.state == .active || $0.state == .compacting }.count
+        return Self.logoutConfirmationMessage(unsent: commandSender?.unsentMessageCount ?? 0, working: working)
+    }
+
+    static func logoutConfirmationMessage(unsent: Int, working: Int) -> String {
+        var parts: [String] = []
+        if unsent > 0 {
+            parts.append(String(localized: "\(unsent) messages haven't been delivered yet. Logging out discards them."))
+        }
+        if working > 0 {
+            parts.append(String(localized: "\(working) sessions are still working. They keep running on your computer."))
+        }
+        parts.append(String(localized: "You'll need to scan a pairing QR or sign in again to reconnect."))
+        return parts.joined(separator: "\n\n")
+    }
+
     /// Drop everything tied to the current device identity: credentials, the
     /// decrypt pipeline (its router caches the old private key), Pulse
     /// streams, and the per-account stores and outbox. Used by sign-out and

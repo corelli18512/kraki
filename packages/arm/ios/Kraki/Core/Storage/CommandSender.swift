@@ -1320,6 +1320,13 @@ final class CommandSender {
         forkSources.removeValue(forKey: requestId)
     }
 
+    /// Inputs this device has not had confirmed by their computer, including
+    /// first prompts of sessions still being created. Signing out (or a
+    /// device revocation) discards them.
+    var unsentMessageCount: Int {
+        outbox.values.reduce(0) { $0 + $1.count } + pendingCreateRequests.count
+    }
+
     func reset() {
         confirmationTasks.values.forEach { $0.cancel() }
         confirmationTasks.removeAll()

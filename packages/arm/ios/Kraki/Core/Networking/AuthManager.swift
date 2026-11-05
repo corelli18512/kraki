@@ -629,10 +629,12 @@ final class AuthManager {
                 // Retire the whole identity (decryptor, Pulse, stores), not
                 // just the Keychain entry: a re-pair in this process must
                 // start clean (1-07 of the 2026-10-13 review).
+                // A removed device keeps no account data, undelivered
+                // messages included — but the loss is not silent (K-308).
+                let discarded = appState.commandSender?.unsentMessageCount ?? 0
                 appState.resetIdentity(clearRelayURL: false)
-                appState.onAuthFailed(
-                    error: reason ?? String(localized: "Authentication failed. Please scan a new pairing QR code.")
-                )
+                let failure = reason ?? String(localized: "Authentication failed. Please scan a new pairing QR code.")
+                appState.onAuthFailed(error: Self.fatalAuthErrorText(failure, discardedMessages: discarded))
                 #if os(macOS)
                 if failedWithoutCLIToken {
                     Task { @MainActor [weak appState] in
@@ -659,6 +661,13 @@ final class AuthManager {
                 requestAuthInfo()
             }
         }
+    }
+
+    /// The sign-in error after the relay rejected this device for good, and
+    /// how many undelivered messages went with its data.
+    static func fatalAuthErrorText(_ reason: String, discardedMessages: Int) -> String {
+        guard discardedMessages > 0 else { return reason }
+        return reason + "\n" + String(localized: "\(discardedMessages) undelivered messages were removed from this device with its sign-in.")
     }
 
     // MARK: - Credential Management
