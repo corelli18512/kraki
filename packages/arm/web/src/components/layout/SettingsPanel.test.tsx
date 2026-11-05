@@ -20,7 +20,7 @@ beforeEach(() => {
   push.isPushSubscribed.mockResolvedValue(false);
   push.subscribeToPush.mockResolvedValue('subscription');
   push.unsubscribeFromPush.mockResolvedValue(true);
-  commands.registerPushToken.mockResolvedValue(true);
+  commands.registerPushToken.mockResolvedValue('registered');
   localStorage.removeItem('kraki:notifications.enabled');
   useStore.getState().reset();
   useStore.setState({ status: 'connected', user: { id: 'u1', login: 'tester', provider: 'open' }, deviceId: 'self', archiveInfo: new Map([['computer', { count: 0, days: 14 }]]) });
@@ -103,7 +103,7 @@ describe('SettingsPanel native preferences parity', () => {
   it('K-227: a push token the relay refuses does not read as on and gives a localized error', async () => {
     push.supported = true;
     push.isPushSubscribed.mockResolvedValue(false);
-    commands.registerPushToken.mockResolvedValue(false);
+    commands.registerPushToken.mockResolvedValue('refused');
     localStorage.setItem('kraki:notifications.enabled', '0');
     useStore.setState({ vapidPublicKey: 'public-key' });
     open(); tab('Notifications');
@@ -112,6 +112,19 @@ describe('SettingsPanel native preferences parity', () => {
     expect(push.unsubscribeFromPush).toHaveBeenCalled();
     expect(screen.queryByText('Push notifications are on, including when this browser is closed.')).not.toBeInTheDocument();
     expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
+  });
+  it('K-227: offline or unanswered, push is not reported as refused and the subscription stays', async () => {
+    push.supported = true;
+    push.isPushSubscribed.mockResolvedValue(false);
+    commands.registerPushToken.mockResolvedValue('unconfirmed');
+    localStorage.setItem('kraki:notifications.enabled', '0');
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await screen.findByText('Couldn’t update push notifications.');
+    expect(push.unsubscribeFromPush).not.toHaveBeenCalled();
+    expect(screen.queryByText(/didn’t accept push/)).not.toBeInTheDocument();
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
   });
   it('shows open-auth identity and retains two-stage account deletion safety', () => {
     open(); tab('Account');

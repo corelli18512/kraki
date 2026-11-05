@@ -32,6 +32,10 @@ import { ForegroundActivity } from './foreground-activity';
 const logger = createLogger('ws-client');
 /** How long Settings waits for the relay to confirm a push token. */
 export const PUSH_REGISTRATION_TIMEOUT_MS = 30_000;
+/** `registered`: the relay stored the token. `refused`: it rejected it.
+ *  `unconfirmed`: not connected, no answer in time, or a newer registration
+ *  took over; a queued registration may still land later. */
+export type PushRegistrationResult = 'registered' | 'refused' | 'unconfirmed';
 
 
 /** No frame for longer than a ping round (10 s + slack) → the link is not
@@ -80,7 +84,7 @@ export class KrakiWSClient {
   /** Bumped on every Head socket close; scopes CONNECTION_SCOPED sends. */
   private connectionEpoch = 0;
   /** A push token sent to the relay, waiting for its answer. */
-  private pushRegistration: { provider: string; resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> } | null = null;
+  private pushRegistration: { provider: string; resolve: (result: PushRegistrationResult) => void; timer: ReturnType<typeof setTimeout> } | null = null;
   private subscription: SessionSubscriptionController;
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
@@ -966,22 +970,24 @@ export class KrakiWSClient {
   renameDevice(deviceId: string, name: string): void {
     this.sendToHead({ type: 'rename_device', deviceId, name });
   }
-  /** Resolves true when the relay stored the token (`push_token_registered`),
-   *  false when it refused it (`server_error`) or did not answer in time. */
-  registerPushToken(payload: { provider: string; token: string }): Promise<boolean> {
-    this.settlePushRegistration(false);
+  /** Answered by `push_token_registered`, by the relay's refusal
+   *  (`server_error`), or `unconfirmed` (see `PushRegistrationResult`). */
+  registerPushToken(payload: { provider: string; token: string }): Promise<PushRegistrationResult> {
+    this.settlePushRegistration('unconfirmed');
+    // Offline, the send would queue and land after Settings gave up on it.
+    if (getStore().status !== 'connected') return Promise.resolve('unconfirmed');
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.settlePushRegistration(false), PUSH_REGISTRATION_TIMEOUT_MS);
+      const timer = setTimeout(() => this.settlePushRegistration('unconfirmed'), PUSH_REGISTRATION_TIMEOUT_MS);
       this.pushRegistration = { provider: payload.provider, resolve, timer };
       this.sendToHead({ type: 'register_push_token', payload });
     });
   }
-  private settlePushRegistration(ok: boolean): boolean {
+  private settlePushRegistration(result: PushRegistrationResult): boolean {
     const pending = this.pushRegistration;
     if (!pending) return false;
     this.pushRegistration = null;
     clearTimeout(pending.timer);
-    pending.resolve(ok);
+    pending.resolve(result);
     return true;
   }
   unregisterPushToken(payload: { provider: string }): void {
@@ -1477,14 +1483,14 @@ export class KrakiWSClient {
           this.cmdState.clearRequest(ref);
         }
         // A refused push token is answered in Settings, in the user's language.
-        if (!ref && /^(Invalid push token|Not authenticated)/.test(serverErr.message ?? '') && this.settlePushRegistration(false)) break;
+        if (!ref && /^Invalid push token/.test(serverErr.message ?? '') && this.settlePushRegistration('refused')) break;
         getStore().setLastError(serverErr.message);
         break;
       }
 
       case 'push_token_registered': {
         const registered = msg as { payload?: { provider?: string } };
-        if (this.pushRegistration?.provider === registered.payload?.provider) this.settlePushRegistration(true);
+        if (this.pushRegistration?.provider === registered.payload?.provider) this.settlePushRegistration('registered');
         break;
       }
 

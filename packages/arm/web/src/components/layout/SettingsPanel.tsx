@@ -210,15 +210,21 @@ export function SettingsPanel({
             setError({ key: 'blockedNotifications' });
             return;
           }
-          if (await wsClient.registerPushToken({ provider: 'web_push', token })) {
+          const registration = await wsClient.registerPushToken({ provider: 'web_push', token });
+          if (registration === 'registered') {
             setPushEnabled(true);
-          } else {
-            // The relay refused it (or never answered): no pushes will come,
-            // so don't keep a subscription that reads as "on". In-app
-            // notifications still turn on.
+          } else if (registration === 'refused') {
+            // No pushes will come, so don't keep a subscription that reads
+            // as "on". In-app notifications still turn on.
             await unsubscribeFromPush().catch(() => false);
             setPushEnabled(false);
             setError({ key: 'pushRefused' });
+          } else {
+            // Offline or no answer: not a refusal. Keep the subscription (a
+            // queued registration may still land) and let the user retry.
+            setPushEnabled(false);
+            setError({ key: 'updatePush' });
+            return;
           }
         }
       } catch {

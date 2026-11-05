@@ -3,7 +3,7 @@ import type { SessionLiveSnapshot } from '@kraki/protocol';
 import { useAccountDeletion } from './account-deletion';
 import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import type { CardActionState } from '@kraki/protocol';
-import { KrakiWSClient, wsClient } from '../lib/ws-client';
+import { KrakiWSClient, PUSH_REGISTRATION_TIMEOUT_MS, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
@@ -1454,8 +1454,25 @@ describe('KrakiWSClient', () => {
       await connectAndAuth(client);
       const answer = client.registerPushToken({ provider: 'web_push', token: 'bad' });
       lastWsInstance._receive({ type: 'server_error', message: 'Invalid push token: unsupported Web Push subscription' });
-      await expect(answer).resolves.toBe(false);
+      await expect(answer).resolves.toBe('refused');
       expect(useStore.getState().lastError).toBeNull();
+    });
+
+    it('K-227: offline or unanswered, a push token is unconfirmed, not refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        // Offline: nothing is sent (it would queue and land after Settings gave up).
+        await expect(client.registerPushToken({ provider: 'web_push', token: 'tok' })).resolves.toBe('unconfirmed');
+        await connectAndAuth(client);
+        const sent = lastWsInstance.sentMessages.length;
+        const answer = client.registerPushToken({ provider: 'web_push', token: 'tok' });
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(sent);
+        await vi.advanceTimersByTimeAsync(PUSH_REGISTRATION_TIMEOUT_MS);
+        await expect(answer).resolves.toBe('unconfirmed');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('K-227: push_token_registered confirms the token; unrelated errors still show', async () => {
@@ -1465,7 +1482,7 @@ describe('KrakiWSClient', () => {
       lastWsInstance._receive({ type: 'server_error', message: 'unicast target is not reachable' });
       expect(useStore.getState().lastError).toBe('unicast target is not reachable');
       lastWsInstance._receive({ type: 'push_token_registered', payload: { provider: 'web_push' } });
-      await expect(answer).resolves.toBe(true);
+      await expect(answer).resolves.toBe('registered');
     });
 
     it('clears pending prompt on server_error with matching requestId', async () => {
