@@ -6,6 +6,7 @@ import { useAttachmentText } from '../../hooks/useAttachment';
 import { withMermaidRuntime } from '../../lib/report-mermaid';
 import { prepareReportPreview } from '../../lib/report-preview';
 import { desktop } from '../../lib/desktop';
+import { isIOSBrowser } from '../../lib/pairing-link';
 import { formatReportBytes, htmlArtifactTitle } from './Attachments';
 import { X, Maximize2, Minimize2, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
 import { RichTextDocumentIcon } from './RichTextDocumentIcon';
@@ -25,6 +26,36 @@ export function withArtifactCsp(html: string): string {
   return doctype ? `${doctype[1]}${csp}${body.slice(doctype[0].length)}` : `${csp}${body}`;
 }
 
+/** Download name: NFC first (macOS hands out decomposed names, whose combining
+ *  marks would otherwise be replaced), then only letters, marks and digits. */
+function reportFileName(name: string): string {
+  return `${name.normalize('NFC').replace(/[^\p{L}\p{M}\p{N}._ -]/gu, '_').replace(/\.html?$/i, '') || 'Report'}.html`;
+}
+
+/** iOS Safari cannot open a downloaded HTML file, so "Open in Browser" shows
+ *  the report in a new tab instead. The tab is same-origin (about:blank), so
+ *  the report runs in a sandboxed frame with an opaque origin, as in the
+ *  in-app preview. Must run synchronously inside the click (popup blocker). */
+function openReportTab(html: string, fileName: string): void {
+  const tab = window.open('', '_blank');
+  if (!tab) throw new Error(t('chat:report.openFailed'));
+  tab.opener = null;
+  const doc = tab.document;
+  doc.title = fileName;
+  const viewport = doc.createElement('meta');
+  viewport.name = 'viewport';
+  viewport.content = 'width=device-width, initial-scale=1';
+  doc.head.append(viewport);
+  doc.body.style.margin = '0';
+  const frame = doc.createElement('iframe');
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.referrerPolicy = 'no-referrer';
+  frame.title = fileName;
+  frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:#fff';
+  frame.srcdoc = withArtifactCsp(html);
+  doc.body.append(frame);
+}
+
 /** Browser copies keep the original HTML, with a self-contained Mermaid runtime. */
 export async function exportHtmlReport(html: string, name: string): Promise<void> {
   if (desktop?.exportHtmlReport) {
@@ -32,10 +63,15 @@ export async function exportHtmlReport(html: string, name: string): Promise<void
     if (!result.ok) throw new Error(result.error || t('chat:report.openFailed'));
     return;
   }
+  const fileName = reportFileName(name);
+  if (isIOSBrowser(navigator.userAgent, navigator.maxTouchPoints)) {
+    openReportTab(html, fileName);
+    return;
+  }
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${name.replace(/[^\p{L}\p{N}._ -]/gu, '_').replace(/\.html?$/i, '') || 'Report'}.html`;
+  link.download = fileName;
   link.click();
   // Keep the object alive until the browser has started the download.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);

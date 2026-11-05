@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { prepareReportPreview } from '../../lib/report-preview';
 import { HtmlArtifactPanel, exportHtmlReport, withArtifactCsp } from './HtmlArtifactPanel';
@@ -159,6 +160,37 @@ describe('HtmlArtifactPanel', () => {
     expect(anchor.download).toBe('.._.._report.html');
     expect(anchor.href).toBe('blob:report');
     click.mockRestore();
+  });
+  it('K-230: keeps a decomposed (NFD) Japanese report name intact (NFC) on download', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await exportHtmlReport('<title>R</title>', 'レポート-がぎ.html'.normalize('NFD'));
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('レポート-がぎ.html'.normalize('NFC'));
+    await exportHtmlReport('<title>R</title>', 'Café re\u0301sume\u0301.html');
+    expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('Café résumé.html'.normalize('NFC'));
+    click.mockRestore();
+  });
+  it('K-235: on iPhone opens the report in a new tab (sandboxed, opaque origin) instead of only downloading', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const tabDocument = document.implementation.createHTMLDocument('');
+    const tab = { document: tabDocument, opener: window } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab);
+    await exportHtmlReport('<title>Original</title><script>run()</script>', 'Quarterly report.html');
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(click).not.toHaveBeenCalled();
+    expect(tab.opener).toBeNull();
+    expect(tabDocument.title).toBe('Quarterly report.html');
+    const frame = tabDocument.querySelector('iframe')!;
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.srcdoc).toMatch(/^<meta http-equiv="Content-Security-Policy"/);
+    expect(frame.srcdoc).toContain('<script>run()</script>');
+    open.mockReturnValue(null);
+    await expect(exportHtmlReport('<p>x</p>', 'r.html')).rejects.toThrow('Couldn’t open this report in the browser.');
+    vi.restoreAllMocks();
+  });
+  it('K-235: report header buttons get a 44 pt tall touch target on touch screens', () => {
+    const css = readFileSync('src/components/chat/chat.css', 'utf8');
+    expect(css).toMatch(/@media \(pointer: coarse\) \{[^@]*\.kreport-header button::after \{[^}]*inset: -9px -4px;/);
   });
   it('prepends restrictive CSP before scripts; later report policies can only tighten it', () => {
     const html = withArtifactCsp('<head><script>run()</script><meta http-equiv="Content-Security-Policy" content="default-src *"></head>');
