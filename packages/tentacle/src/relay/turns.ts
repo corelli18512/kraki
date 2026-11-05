@@ -27,8 +27,7 @@ export function beginAdapterTurn(client: RelayClient, sessionId: string, turnId?
  * The turn behaves like a prompted one from here: `active` (sleep guard,
  * session list), its steps/narration/reply pass the turn fence, and its
  * closing idle marks unread, pushes the reply preview and may title the
- * session. Its steps are recorded under the last user_message's turn in
- * trace.jsonl (there is no user_message to start a new trace turn).
+ * session. Its trace has its own key (SessionManager.beginAgentTurn).
  */
 export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string): string | undefined {
   const meta = client.sessionManager.getMeta(sessionId);
@@ -54,10 +53,12 @@ export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string):
   client.lastAgentContent.delete(sessionId);
   client.pendingTerminalErrors.delete(sessionId);
   client.errorPersistedForTurn.delete(sessionId);
+  // Steps and artifacts from here on belong to this turn, not the last prompt's.
+  const traceStartSeq = client.sessionManager.beginAgentTurn(sessionId);
   client.send({ type: 'active', sessionId, payload: {} });
   client.sessionManager.markActive(sessionId);
   beginAdapterTurn(client, sessionId, turnId);
-  traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'AGENT-INITIATED-TURN', sessionId, turnId, previousTurnId: activeTurnId });
+  traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'AGENT-INITIATED-TURN', sessionId, turnId, previousTurnId: activeTurnId, traceStartSeq });
   return turnId;
 }
 

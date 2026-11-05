@@ -55,7 +55,8 @@ export async function resumeDisconnectedSessions(client: RelayClient): Promise<v
 
 /**
  * A session left `active` by the previous daemon process (restart or update
- * mid-turn) whose spine ends with the user's prompt never got an outcome:
+ * mid-turn) whose spine ends with the user's prompt (or whose agent-started
+ * turn wrote no row yet) never got an outcome:
  * the conversation would just stop after the user's message. Record the
  * turn as failed so every app shows why. A session waiting on an agent
  * question is left alone — its answer can still resume it.
@@ -67,10 +68,16 @@ export async function resumeDisconnectedSessions(client: RelayClient): Promise<v
  * it disappears from the chat.
  */
 export function closeTurnLostInRestart(client: RelayClient, sessionId: string): void {
-  const lastSeq = client.sessionManager.getMeta(sessionId)?.lastSeq ?? 0;
-  if (lastSeq <= 0) return;
-  const [last] = client.sessionManager.getMessagesAfterSeq(sessionId, lastSeq - 1, 1);
-  if (last?.type !== 'user_message') return;
+  const meta = client.sessionManager.getMeta(sessionId);
+  const lastSeq = meta?.lastSeq ?? 0;
+  // A turn the agent started itself (no user_message) that wrote no spine row
+  // yet is in the same position as a prompt with no outcome.
+  const agentTurnWithoutRows = (meta?.agentTurnStartSeqs?.at(-1) ?? 0) > lastSeq;
+  if (!agentTurnWithoutRows) {
+    if (lastSeq <= 0) return;
+    const [last] = client.sessionManager.getMessagesAfterSeq(sessionId, lastSeq - 1, 1);
+    if (last?.type !== 'user_message') return;
+  }
   finishTurnWithStatus(client, sessionId, {
     type: 'failed',
     payload: {

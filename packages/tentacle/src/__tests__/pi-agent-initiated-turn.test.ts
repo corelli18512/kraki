@@ -12,16 +12,18 @@
  * RelayClient path end to end on a real SessionManager.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiAdapter } from '../adapters/pi.js';
 import { handleEvent } from '../adapters/pi-events.js';
 import type { PiSession } from '../adapters/pi-session.js';
 import { SessionManager } from '../session-manager.js';
+import { AttachmentStore } from '../attachment-store.js';
 import { RelayClient } from '../relay-client.js';
 import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { beginAdapterTurn } from '../relay/turns.js';
+import { closeTurnLostInRestart } from '../relay/session-resume.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 
 vi.mock('../logger.js', () => ({
@@ -330,7 +332,7 @@ describe('RelayClient: a pi wake run after the hold timed out', () => {
 
   function build() {
     const sm = new SessionManager(dir);
-    const adapter = new PiAdapter({ cliPath: '/unused', promptWatchdog: { ackGraceMs: 5, intervalMs: 5 } });
+    const adapter = new PiAdapter({ cliPath: '/unused', promptWatchdog: { ackGraceMs: 5, intervalMs: 5 }, attachmentStore: new AttachmentStore(dir) });
     adapter.generateTitle = async () => null;
     (adapter as unknown as { refreshUsage: () => Promise<void> }).refreshUsage = async () => {};
     const client = new RelayClient(adapter, sm, {
@@ -471,5 +473,93 @@ describe('RelayClient: a pi wake run after the hold timed out', () => {
     expect(t.client.activeInputTurnIds.get(t.sessionId)).toBe(`${t.sessionId}:99`);
     expect(t.session.turn.isSettled).toBe(true);
     expect(t.sm.getMeta(t.sessionId)?.state).toBe('idle');
+  });
+
+  // ── Wake turn W after a prompted turn T1 ──
+
+  const bash = async (t: ReturnType<typeof build>, id: string, command: string) => {
+    await t.emit({ type: 'tool_execution_start', toolCallId: id, toolName: 'bash', args: { command } });
+    await t.emit({ type: 'tool_execution_end', toolCallId: id, toolName: 'bash', isError: false, result: { content: [{ type: 'text', text: 'ok' }] } });
+  };
+  const reply = async (t: ReturnType<typeof build>, text: string) => {
+    await t.emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' } });
+    await t.emit({ type: 'agent_end', willRetry: false });
+    await t.emit({ type: 'agent_settled' });
+  };
+  const commands = (entries: unknown[]) => entries
+    .filter(e => (e as { type: string }).type === 'tool_start')
+    .map(e => ((e as { payload: { args?: { command?: string } } }).payload.args?.command));
+  /** W starts: pi woke the agent on its own after T1 went idle. */
+  const startWake = async (t: ReturnType<typeof build>) => {
+    const before = t.client.activeInputTurnIds.get(t.sessionId);
+    await t.emit({ type: 'agent_start' });
+    const wakeTurnId = t.client.activeInputTurnIds.get(t.sessionId)!;
+    expect(wakeTurnId).not.toBe(before);
+    return wakeTurnId;
+  };
+
+  it('W has its own trace key: T1\'s Steps are unchanged, W\'s Steps are only W\'s, W\'s report is a turn artifact', async () => {
+    const t = build();
+    await idleAfterPrompt(t); // T1: bash `ls`, reply `ok`
+    const t1Reply = t.rows().find(r => r.type === 'agent_message')!;
+    const t1Before = t.sm.readTurnTrace(t.sessionId, t1Reply.seq);
+    expect(commands(t1Before.entries)).toEqual(['ls']);
+
+    await startWake(t);
+    await bash(t, 'B', 'gh pr list');
+    const html = join(dir, 'report.html');
+    writeFileSync(html, '<html><body>355 issues</body></html>');
+    await t.emit({ type: 'tool_execution_start', toolCallId: 'R', toolName: 'show_report', args: { path: html } });
+    await t.emit({ type: 'tool_execution_end', toolCallId: 'R', toolName: 'show_report', isError: false, result: {
+      content: [{ type: 'text', text: 'Report shown.' }], details: { htmlPath: html, title: 'Summary', name: 'summary.html' },
+    } });
+    await reply(t, '355 issues handled.');
+
+    const spine = t.rows();
+    expect(spine.map(r => r.type)).toEqual(['user_message', 'agent_message', 'idle', 'agent_message', 'idle']);
+    const wReply = spine[3];
+    const wTrace = t.sm.readTurnTrace(t.sessionId, wReply.seq);
+    expect(commands(wTrace.entries)).toEqual(['gh pr list', undefined]);
+    expect(wTrace.entries.map(e => (e as { payload: { toolName: string } }).payload.toolName)).toEqual(['bash', 'bash', 'show_report', 'show_report']);
+    expect(wTrace.complete).toBe(true);
+    expect(wReply.payload.steps).toBe(2);
+    // T1's trace (pulled again after W) is exactly what it was.
+    expect(t.sm.readTurnTrace(t.sessionId, t1Reply.seq)).toEqual(t1Before);
+    // W's closing idle carries W's report.
+    expect(spine[4].payload.turnArtifacts).toEqual([expect.objectContaining({ type: 'content_ref', mimeType: 'text/html', name: 'summary.html' })]);
+    expect(spine[2].payload.turnArtifacts).toBeUndefined();
+
+    // The next prompt starts a new trace turn again.
+    handleConsumerMessage(t.client, { type: 'send_input', sessionId: t.sessionId, deviceId: 'app-1', payload: { text: 'thanks', clientId: 'cid-2' } });
+    await vi.waitFor(() => expect(t.rows().at(-1)?.type).toBe('user_message'));
+    await t.emit({ type: 'agent_start' });
+    await bash(t, 'C', 'echo bye');
+    await reply(t, 'bye');
+    const t3Reply = t.rows().at(-2)!;
+    expect(commands(t.sm.readTurnTrace(t.sessionId, t3Reply.seq).entries)).toEqual(['echo bye']);
+    expect(commands(t.sm.readTurnTrace(t.sessionId, wReply.seq).entries)).toEqual(['gh pr list', undefined]);
+
+    // The turn starts survive a restart (meta on disk).
+    const reloaded = new SessionManager(dir);
+    expect(reloaded.getMeta(t.sessionId)?.agentTurnStartSeqs).toEqual([wTrace.turnStartSeq]);
+    expect(reloaded.readTurnTrace(t.sessionId, wReply.seq).entries).toEqual(wTrace.entries);
+    expect(reloaded.readTurnTrace(t.sessionId, t1Reply.seq)).toEqual(t1Before);
+  });
+
+  it('a W turn lost in a restart before writing any row is closed as failed, with its Steps', async () => {
+    const t = build();
+    await idleAfterPrompt(t);
+    await startWake(t);
+    await bash(t, 'B', 'gh pr list');
+    // The daemon dies here; the next process normalises the session.
+    const sm = new SessionManager(dir);
+    const client = new RelayClient(t.adapter, sm, { relayUrl: 'ws://unused', authMethod: 'open', device: { name: 'Test', role: 'tentacle' } });
+    vi.spyOn(client, 'sendEncrypted').mockImplementation(() => {});
+    expect(sm.getMeta(t.sessionId)?.state).toBe('active');
+    closeTurnLostInRestart(client, t.sessionId);
+    const spine = sm.getMessagesAfterSeq(t.sessionId, 0).map(m => m.type);
+    expect(spine).toEqual(['user_message', 'agent_message', 'idle', 'turn_status', 'idle']);
+    const failed = sm.getMessagesAfterSeq(t.sessionId, 0)[3];
+    expect(commands(sm.readTurnTrace(t.sessionId, failed.seq).entries)).toEqual(['gh pr list']);
   });
 });

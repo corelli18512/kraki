@@ -344,6 +344,7 @@ export class SessionManager {
       mode: sourceMeta.mode ?? DEFAULT_SESSION_MODE,
       ...(sourceMeta.idleSeqs && { idleSeqs: [...sourceMeta.idleSeqs] }),
       ...(sourceMeta.currentTurnStartSeq !== undefined && { currentTurnStartSeq: sourceMeta.currentTurnStartSeq }),
+      ...(sourceMeta.agentTurnStartSeqs && { agentTurnStartSeqs: [...sourceMeta.agentTurnStartSeqs] }),
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: throughSeq,
@@ -959,11 +960,31 @@ export class SessionManager {
   }
 
   /**
+   * A turn the agent started itself begins now, without a user_message. Its
+   * start is the seq its first spine row will take; trace entries recorded
+   * until the next turn start are tagged with it, and {@link readTurnTrace}
+   * resolves its bubbles to it. Returns that start seq.
+   */
+  beginAgentTurn(sessionId: string): number | undefined {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return undefined;
+    this.reconcileLastSeq(sessionId, meta);
+    const startSeq = (meta.lastSeq ?? 0) + 1;
+    meta.currentTurnStartSeq = startSeq;
+    const starts = meta.agentTurnStartSeqs ?? [];
+    if (starts.at(-1) !== startSeq) meta.agentTurnStartSeqs = [...starts, startSeq];
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+    return startSeq;
+  }
+
+  /**
    * Read one turn's tool trace, keyed by the concluding bubble's spine seq.
    *
-   * The turn is resolved as "the greatest user_message seq <= bubbleSeq" —
-   * the user_message that began the turn — and all trace entries tagged with
-   * that start seq are returned in recorded order. `complete` is true once the
+   * The turn is resolved as the greatest turn start <= bubbleSeq — the
+   * user_message that began the turn, or the start of a turn the agent began
+   * itself (agentTurnStartSeqs) — and all trace entries tagged with that
+   * start seq are returned in recorded order. `complete` is true once the
    * turn has gone idle (an idle exists at/after the bubble); while still
    * running it is false and the live client keeps appending from broadcasts.
    */
@@ -971,8 +992,11 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
 
-    // Resolve the turn start: greatest turn-starting user_message seq <= bubbleSeq.
+    // Resolve the turn start: greatest turn start <= bubbleSeq.
     let turnStartSeq = 0;
+    for (const start of meta.agentTurnStartSeqs ?? []) {
+      if (start <= bubbleSeq && start > turnStartSeq) turnStartSeq = start;
+    }
     for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
       if (m.type !== 'user_message' || m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
       if (!userMessageStartsTurn(m.payload)) continue;
