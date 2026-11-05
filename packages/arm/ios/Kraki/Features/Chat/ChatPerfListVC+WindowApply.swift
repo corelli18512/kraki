@@ -687,6 +687,25 @@ extension ChatPerfListVC {
         return recorded.count
     }
 
+    /// An open question's row becomes its answered/closed row (same seq, the
+    /// `#q-open` identity suffix gone): its choices go away.
+    static func questionCloses(old: String, new: String) -> Bool {
+        old.hasSuffix("#q-open") && !new.hasSuffix("#q-open") && new.hasPrefix(String(old.dropLast("#q-open".count)))
+    }
+
+    /// The choices fade out into the answered state instead of vanishing in
+    /// one frame (K-168): a crossfade from the open row to the closed one.
+    func fadeChoicesOut(_ cell: UICollectionViewCell) {
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = Self.choicesFadeDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        // Core Animation files every CATransition under `kCATransition`.
+        cell.layer.add(fade, forKey: kCATransition)
+    }
+
+    static let choicesFadeDuration: CFTimeInterval = 0.2
+
     /// The rows of a catch-up burst land in place: drop entrances not yet shown
     /// and stop the ones (and the glide) already started by its first applies.
     func cancelEntrances(_ ids: [String]) {
@@ -807,6 +826,7 @@ extension ChatPerfListVC {
             for index in prefix..<(prefix + replaced) {
                 let indexPath = IndexPath(item: index, section: 0)
                 guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
+                if Self.questionCloses(old: old[index], new: new[index]) { fadeChoicesOut(cell) }
                 configureCell(cell, at: indexPath)
                 cell.setNeedsLayout()
             }
