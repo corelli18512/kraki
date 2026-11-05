@@ -1053,6 +1053,7 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+  static SUBAGENT_HOLD_IDLE_MS = 30 * 60_000;
 
   // ── Permission handler ────────────────────────────
 
