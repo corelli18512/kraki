@@ -569,7 +569,8 @@ export class HeadServer {
       return;
     }
 
-    this.sendError(ws, `Unknown message type: ${msg.type}`);
+    // The type is the sender's: bound what is echoed back (and logged).
+    this.sendError(ws, `Unknown message type: ${String(msg.type).slice(0, 64)}`);
   }
 
   // --- Voice lease issuance ---

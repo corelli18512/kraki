@@ -26,6 +26,19 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   }
   const msg = checked.message;
   noteAppAlive(client, msg.deviceId);
+  // set_session_subscription — atomically replace this Arm's one current
+  // session and return the bounded live-ready snapshot in the ACK. Handled
+  // before the unsafe-id drop below: an id no session has (unsafe ones
+  // included) must still be answered (session_not_found), or the app waits
+  // for an ACK forever. Its id is only compared, never used as a path.
+  if (msg.type === 'set_session_subscription') {
+    if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) unarchiveOnUse(client, msg.payload.sessionId);
+    const rid = (msg.payload as { requestId?: unknown }).requestId;
+    const requestId = typeof rid === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(rid) ? rid : undefined;
+    handleSetSessionSubscription(client, msg.deviceId, msg.payload.sessionId, requestId);
+    return;
+  }
+
   // Session/attachment ids become filesystem paths. Reject anything that is
   // not one of our id shapes before it reaches a handler.
   const p = (msg as { payload?: Record<string, unknown> }).payload ?? {};
@@ -70,16 +83,6 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   // the concluding bubble's spine seq.
   if (msg.type === 'request_turn_trace') {
     handleTurnTrace(client, msg.deviceId, msg.payload.sessionId, msg.payload.bubbleSeq);
-    return;
-  }
-
-  // set_session_subscription — atomically replace this Arm's one current
-  // session and return the bounded live-ready snapshot in the ACK.
-  if (msg.type === 'set_session_subscription') {
-    if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) unarchiveOnUse(client, msg.payload.sessionId);
-    const rid = (msg.payload as { requestId?: unknown }).requestId;
-    const requestId = typeof rid === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(rid) ? rid : undefined;
-    handleSetSessionSubscription(client, msg.deviceId, msg.payload.sessionId, requestId);
     return;
   }
 

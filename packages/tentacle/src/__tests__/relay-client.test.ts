@@ -4650,6 +4650,22 @@ describe('RelayClient pending-question digest', () => {
     expect(ack?.payload?.snapshot?.card?.action ?? null).toBeNull();
   });
 
+  it('answers a subscription to an unsafe session id with session_not_found instead of silence (K-299)', () => {
+    const { client, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', relaySeq: 9003,
+      device: { id: 'app-fresh-3', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+    })));
+    ws.sent.length = 0;
+    handleConsumerMessage(client, {
+      type: 'set_session_subscription', deviceId: 'app-fresh-3', seq: 1, timestamp: '',
+      payload: { sessionId: '../../etc', requestId: 'req-9' },
+    });
+    const ack = decodePulseSends(ws.sent).find((m) => m.type === 'session_subscription_set');
+    expect(ack?.payload).toMatchObject({ accepted: false, requestId: 'req-9', error: { code: 'session_not_found' } });
+    expect(client.currentSessionByArm.get('app-fresh-3')).not.toBe('../../etc');
+  });
+
   it('does not push a card snapshot for sessions with no active card', () => {
     const { ws } = buildClient();
     ws.sent.length = 0;
