@@ -364,7 +364,8 @@ async function githubDeviceFlow(clientId: string): Promise<{ token: string; user
   throw new Error('The GitHub code expired. Run `kraki` to try again.');
 }
 
-async function githubLogin(token: string): Promise<string | null> {
+/** The GitHub login a token belongs to, or null when GitHub can't say. */
+export async function githubLogin(token: string): Promise<string | null> {
   try {
     const res = await fetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'kraki-tentacle' },

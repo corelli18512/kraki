@@ -321,6 +321,9 @@ export async function startWorker(): Promise<WorkerResult> {
         { from: change.from, to: change.to, restored: change.restored, deviceId: config.device.id },
         'Signed in with another account — set the previous account\'s device and sessions aside',
       );
+      if (change.restoreError) {
+        logger.warn({ to: change.to, err: change.restoreError }, 'Could not restore all of this account\'s earlier data; the rest stays in accounts/');
+      }
     }
   }
 

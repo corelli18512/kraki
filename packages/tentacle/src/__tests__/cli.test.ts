@@ -37,6 +37,11 @@ const mockShowPairingQr = vi.fn();
 const mockStartWorker = vi.fn();
 const mockPrepareDaemonWorkerBootstrap = vi.fn();
 const mockRunDaemonReleaseSmoke = vi.fn();
+const mockSaveGitHubToken = vi.fn();
+const mockLoadGitHubToken = vi.fn();
+const mockGithubLogin = vi.fn();
+const mockLoadAccountDataOwner = vi.fn();
+const mockAdoptAccountDataOwner = vi.fn();
 
 vi.mock('../config.js', () => ({
   configExists: (...args: unknown[]) => mockConfigExists(...args),
@@ -49,8 +54,8 @@ vi.mock('../config.js', () => ({
   getVersion: vi.fn(() => '1.2.3'),
   loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
   getOrCreateDeviceId: vi.fn(() => 'dev_test'),
-  saveGitHubToken: vi.fn(),
-  loadGitHubToken: vi.fn(() => null),
+  saveGitHubToken: (...args: unknown[]) => mockSaveGitHubToken(...args),
+  loadGitHubToken: (...args: unknown[]) => mockLoadGitHubToken(...args),
   loadDaemonPid: vi.fn(() => null),
   loadDaemonIdentity: vi.fn(() => null),
   DEFAULT_LOG_VERBOSITY: 'normal',
@@ -96,6 +101,12 @@ vi.mock('../setup.js', () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
   resolveRelay: (...args: unknown[]) => mockResolveRelay(...args),
   showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
+  githubLogin: (...args: unknown[]) => mockGithubLogin(...args),
+}));
+
+vi.mock('../account-switch.js', () => ({
+  loadAccountDataOwner: (...args: unknown[]) => mockLoadAccountDataOwner(...args),
+  adoptAccountDataOwner: (...args: unknown[]) => mockAdoptAccountDataOwner(...args),
 }));
 
 vi.mock('../update.js', () => ({
@@ -557,6 +568,30 @@ describe('CLI setup --headless', () => {
     const json = JSON.parse(stdoutOutput.join('').trim());
     expect(json.ok).toBe(true);
     expect(json.agents).toEqual(['claude']);
+  });
+
+  it('K-028: records the account a new --github-token signs in as', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github_token', device: { name: 'box', id: 'dev_old' } });
+    mockLoadAccountDataOwner.mockReturnValue(null);
+    mockLoadGitHubToken.mockReturnValue('gho_alice');
+    mockGithubLogin.mockImplementation(async (token: string) => (token === 'gho_bob' ? 'bob' : 'alice'));
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--github-token', 'gho_bob']);
+    // The data in place belongs to the previous token's account…
+    expect(mockAdoptAccountDataOwner).toHaveBeenCalledWith('alice');
+    // …and the config names the new one, so the daemon sets alice's data aside.
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ account: { login: 'bob' } }));
+    expect(mockSaveGitHubToken).toHaveBeenCalledWith('gho_bob');
+    expect(mockAdoptAccountDataOwner.mock.invocationCallOrder[0])
+      .toBeLessThan(mockSaveGitHubToken.mock.invocationCallOrder[0]);
+  });
+
+  it('K-028: records the saved token\'s account when no token is passed', async () => {
+    mockLoadGitHubToken.mockReturnValue('gho_alice');
+    mockGithubLogin.mockResolvedValue('alice');
+    await runCli(['setup', '--headless', '--relay', 'wss://r']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ account: { login: 'alice' } }));
+    expect(mockSaveGitHubToken).not.toHaveBeenCalled();
+    expect(mockAdoptAccountDataOwner).not.toHaveBeenCalled();
   });
 
   it('omits agents (auto) when --agent is auto', async () => {

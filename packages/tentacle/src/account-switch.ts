@@ -58,7 +58,7 @@ export function adoptAccountDataOwner(login: string): void {
 
 export type AccountDataSwitch =
   | { switched: false }
-  | { switched: true; from: string; to: string; restored: boolean };
+  | { switched: true; from: string; to: string; restored: boolean; restoreError?: string };
 
 /**
  * Make the data in place belong to `login`: move the previous account's
@@ -95,20 +95,30 @@ export function switchAccountData(login: string): AccountDataSwitch {
     throw err;
   }
 
+  // The previous account's data is safely aside: from here on the data in
+  // place is `login`'s, even if restoring its own data below fails.
+  saveAccountDataOwner(login);
+
   const own = join(accountsDir, loginDirName(login));
   let restored = false;
+  let restoreError: string | undefined;
   if (existsSync(own)) {
-    for (const name of ACCOUNT_SCOPED_ENTRIES) {
-      const from = join(own, name);
-      if (existsSync(from)) {
-        renameSync(from, join(home, name));
-        restored = true;
+    try {
+      for (const name of ACCOUNT_SCOPED_ENTRIES) {
+        const from = join(own, name);
+        // Never overwrite: whatever is in place already belongs to `login`.
+        if (existsSync(from) && !existsSync(join(home, name))) {
+          renameSync(from, join(home, name));
+          restored = true;
+        }
       }
+    } catch (err) {
+      // What was not restored stays in accounts/<login>/; nothing is lost.
+      restoreError = (err as Error).message;
     }
     try {
       if (readdirSync(own).length === 0) rmdirSync(own);
     } catch { /* leave it */ }
   }
-  saveAccountDataOwner(login);
-  return { switched: true, from: owner, to: login, restored };
+  return { switched: true, from: owner, to: login, restored, ...(restoreError && { restoreError }) };
 }

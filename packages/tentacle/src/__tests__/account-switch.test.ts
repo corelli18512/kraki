@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -73,6 +73,27 @@ describe('K-028 account switch', () => {
     expect(existsSync(join(home, 'sessions', 'sess_a', 'meta.json'))).toBe(true);
     expect(existsSync(join(home, 'accounts', 'alice'))).toBe(false);
     expect(readFileSync(join(home, 'accounts', 'bob', 'device-id'), 'utf8')).toBe(bobDevice);
+  });
+
+  it('records the new owner even when restoring its earlier data fails, so nothing is set aside under the wrong account', () => {
+    seedAccount('dev_accountA', 'sess_a');
+    adoptAccountDataOwner('alice');
+    switchAccountData('bob');
+    const bobDevice = getOrCreateDeviceId();
+    const aliceAside = join(home, 'accounts', 'alice');
+    chmodSync(aliceAside, 0o500); // its entries cannot be moved out
+    try {
+      const change = switchAccountData('alice');
+      expect(change).toMatchObject({ switched: true, from: 'bob', to: 'alice', restored: false });
+      expect(change.switched && change.restoreError).toBeTruthy();
+    } finally {
+      chmodSync(aliceAside, 0o700);
+    }
+    expect(loadAccountDataOwner()).toBe('alice');
+    expect(readFileSync(join(home, 'accounts', 'bob', 'device-id'), 'utf8')).toBe(bobDevice);
+    expect(readFileSync(join(aliceAside, 'device-id'), 'utf8')).toBe('dev_accountA');
+    // The next start for alice does not move anything again.
+    expect(switchAccountData('alice')).toEqual({ switched: false });
   });
 
   it('never overrides a recorded owner by adoption', () => {
