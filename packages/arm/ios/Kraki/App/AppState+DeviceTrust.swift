@@ -68,6 +68,10 @@ final class DeviceTrustModel {
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
     @ObservationIgnored var retryScheduled = false
+    #if DEBUG
+    /// Tests: reconnects asked for after a saved connection was reset.
+    @ObservationIgnored var resyncRequestsForTesting = 0
+    #endif
     static let retryInterval: TimeInterval = 10
 
     init() {
@@ -118,7 +122,7 @@ enum PairingFailureText {
         case "no_local_enrollment": return String(localized: "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again.")
         case "stale", "from_future": return String(localized: "This device's clock is off. Check the date and time, then scan again.")
         case "trust_required": return String(localized: "This computer only accepts paired devices. Scan its code to pair.")
-        case "revoked": return String(localized: "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust.")
+        case "revoked": return String(localized: "This device's pairing was revoked. Reset the saved connection to keep using the computer with your account, or scan its code to pair again.")
         case "policy_conflict": return String(localized: "The setting was just changed on the computer or another device. Check it and try again.")
         case "policy_unconfirmed": return String(localized: "The computer didn't confirm the change. Check that it's online, then try again.")
         case "local_keys_missing": return String(localized: "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again.")
@@ -453,8 +457,9 @@ extension AppState {
     /// there): forget its keys and go back to the unpaired connection. If the
     /// computer still signs, tell it to forget this app too.
     func forgetPairing(_ tentacleId: String) {
-        if TentacleTrustStore.shared.pairedPin(tentacleId) != nil, !deviceTrust.stoppedSigning.contains(tentacleId),
-           let selfId = deviceId {
+        let computerStillTrustsUs = TentacleTrustStore.shared.pairedPin(tentacleId) != nil
+            && !deviceTrust.stoppedSigning.contains(tentacleId)
+        if computerStillTrustsUs, let selfId = deviceId {
             revokeTrustedDevice(selfId, on: tentacleId)
         }
         TentacleTrustStore.shared.update(tentacleId) { $0 = nil }
@@ -464,6 +469,21 @@ extension AppState {
         deviceTrust.pairingRequired.remove(tentacleId)
         deviceTrust.clearPairRequest(tentacleId)
         KLog.d("🔓 device trust: forgot pairing with \(tentacleId.prefix(12))")
+        // What the computer sent unsigned while it was pinned was dropped,
+        // and its sessions wait for those messages: only a fresh session list
+        // brings them back (K-182). A computer told to revoke us sends one;
+        // otherwise reconnect, so it greets this device again.
+        if !computerStillTrustsUs { resyncAfterTrustReset() }
+    }
+
+    private func resyncAfterTrustReset() {
+        // Not connected: the next connection resyncs anyway.
+        guard connectionStatus == .connected else { return }
+        #if DEBUG
+        deviceTrust.resyncRequestsForTesting += 1
+        #endif
+        KLog.d("🔄 device trust: reconnecting to resync after a saved-connection reset")
+        wsClient?.recover(reason: "device_trust_reset")
     }
 
     /// Logout / account deletion: computers must pair this install again.

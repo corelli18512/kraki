@@ -48,6 +48,16 @@
         }
       }
     },
+    "%@ revoked this device's pairing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已撤销此设备的配对"
+          }
+        }
+      }
+    },
     "%lld messages haven't been delivered yet. Logging out discards them." : {
       "localizations" : {
         "en" : {
@@ -162,6 +172,16 @@
         }
       }
     },
+    "Its replies are no longer signed for this device, so Kraki holds them back. Reset the saved connection to keep using %@ with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的回复不再为此设备签名，因此 Kraki 暂不显示。重置已保存的连接即可继续通过你的账户使用 %@，或扫描它的二维码重新配对。"
+          }
+        }
+      }
+    },
     "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
       "localizations" : {
         "zh-Hans" : {
@@ -178,6 +198,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此设备的相机无法用于扫码。请改为输入终端中显示的配对 URL。"
+          }
+        }
+      }
+    },
+    "This device's clock is off. Check the date and time, then scan the code again, or reset the saved connection to use %@ without pairing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的时钟不准确。请检查日期和时间后重新扫码，或重置已保存的连接，在不配对的情况下使用 %@。"
+          }
+        }
+      }
+    },
+    "This device's pairing was revoked. Reset the saved connection to keep using the computer with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的配对已被撤销。重置已保存的连接即可继续通过你的账户使用这台电脑，或扫描它的二维码重新配对。"
           }
         }
       }
@@ -10180,16 +10220,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此设备的时钟不准确。请检查日期和时间后重新扫码。"
-          }
-        }
-      }
-    },
-    "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此设备的配对已被撤销。请扫描电脑的二维码重新配对，或选择“忘记配对”，以在不使用设备信任的情况下连接。"
           }
         }
       }
