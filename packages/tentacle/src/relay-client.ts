@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import { type SessionManager, type PendingHumanAction } from './session-manager.js';
+import { type SessionManager, type PendingHumanAction, isSafeId } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import type { AccountUsage, UsageHistorySample } from '@kraki/protocol';
 import { EventsWatcher } from './events-watcher.js';
@@ -27,7 +27,7 @@ import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
 import { TrustStore } from './trust-store.js';
-import { DeviceTrust, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
+import { DeviceTrust, NO_RSA_KEY, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
 import { restoreAccountAccess } from './account-access.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
 import { wireAdapterEvents } from './relay/adapter-events.js';
@@ -121,6 +121,18 @@ export class RelayClient {
   localLink: LocalLinkServer | null = null;
   /** Accepted in-memory single-session subscription for each connected Arm. */
   currentSessionByArm = new Map<string, string | null>();
+  private static readonly TRUST_REJECTED_NOTICE_INTERVAL_MS = 5_000;
+  /** Most apps one multicast envelope may name: the Head's
+   *  `MAX_MULTICAST_TARGETS` (packages/head/src/server/shared.ts). */
+  private static readonly MULTICAST_TARGET_LIMIT = 64;
+  /** Largest payload sent whole through the Head. Its default WebSocket
+   *  message limit is 10 MiB (`DEFAULT_MAX_PAYLOAD`, head server/shared.ts);
+   *  the payload travels base64-encoded inside a Pulse frame (4/3 larger) plus
+   *  the envelope and up to 64 target ids. */
+  private static readonly MAX_WHOLE_PAYLOAD_BYTES = 7 * 1024 * 1024;
+  /** Largest payload an app reassembles from fragments (the default budget of
+   *  `PayloadAssembler`); larger sets are discarded on arrival. */
+  private static readonly MAX_FRAGMENTED_PAYLOAD_BYTES = 48 * 1024 * 1024;
   /** High-frequency live card types filtered by current session subscription. */
   private static readonly SUBSCRIBER_ONLY_TYPES = new Set(['agent_message_delta', 'card_action']);
 
@@ -1373,6 +1385,12 @@ export class RelayClient {
    * a slow link keeps showing progress) and whole to the others. Parts never
    * carry the coalesce key (a superseded part must not be dropped from a set);
    * a large coalesced payload therefore trades supersession for progress.
+   *
+   * A multicast names at most {@link RelayClient.MULTICAST_TARGET_LIMIT} apps
+   * (the Head rejects more), so a larger set is sent as several envelopes.
+   * A payload the Head or the app cannot accept is not sent to that app: a
+   * whole frame over the Head's message limit closes the Tentacle's socket and
+   * would be retransmitted on every reconnect.
    */
   private sendPayload(payloadJson: string, target: string | string[], durable: boolean, coalesceKey: string | undefined, stream: number): void {
     let targets = Array.isArray(target) ? target : [target];
@@ -1388,16 +1406,32 @@ export class RelayClient {
         target = Array.isArray(target) ? targets : targets[0];
       }
     }
-    const fragmenting = targets.filter((t) => this.appFeatures.get(t)?.has(PAYLOAD_FRAGMENT_FEATURE));
-    const parts = fragmenting.length > 0 ? fragmentPayload(payloadJson, randomUUID()) : null;
-    if (!parts) {
-      this.pulse.send(payloadJson, target, durable, coalesceKey, stream);
+    if (Array.isArray(target) && targets.length > RelayClient.MULTICAST_TARGET_LIMIT) {
+      // Pulse coalescing ignores targets, so each slice needs its own key or a
+      // later slice would supersede an earlier one in the retransmit outbox.
+      for (let i = 0; i * RelayClient.MULTICAST_TARGET_LIMIT < targets.length; i++) {
+        const slice = targets.slice(i * RelayClient.MULTICAST_TARGET_LIMIT, (i + 1) * RelayClient.MULTICAST_TARGET_LIMIT);
+        const sliceKey = coalesceKey !== undefined && i > 0 ? `${coalesceKey}:${i}` : coalesceKey;
+        this.sendPayload(payloadJson, slice, durable, sliceKey, stream);
+      }
       return;
     }
+    const fragmenting = targets.filter((t) => this.appFeatures.get(t)?.has(PAYLOAD_FRAGMENT_FEATURE));
+    const parts = fragmenting.length > 0 ? fragmentPayload(payloadJson, randomUUID()) : null;
     // Same envelope shape as before (unicast string / multicast array).
     const shape = (ids: string[]): string | string[] => (Array.isArray(target) ? ids : ids[0]);
-    const whole = targets.filter((t) => !fragmenting.includes(t));
+    let whole = parts ? targets.filter((t) => !fragmenting.includes(t)) : targets;
+    const bytes = Buffer.byteLength(payloadJson);
+    if (whole.length > 0 && bytes > RelayClient.MAX_WHOLE_PAYLOAD_BYTES) {
+      logger.warn({ bytes, targets: whole, fragmentsSupported: false }, 'Payload too large to send whole through the relay; not sent to these apps');
+      whole = [];
+    }
     if (whole.length > 0) this.pulse.send(payloadJson, shape(whole), durable, coalesceKey, stream);
+    if (!parts) return;
+    if (bytes > RelayClient.MAX_FRAGMENTED_PAYLOAD_BYTES) {
+      logger.warn({ bytes, targets: fragmenting, fragmentsSupported: true }, 'Payload larger than an app reassembles; not sent to these apps');
+      return;
+    }
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
@@ -1451,7 +1485,10 @@ export class RelayClient {
       // against the key pinned at pairing) decides who sent a message; the
       // Head's `src` stamp must only agree with it.
       const opened = this.deviceTrust!.open(parsed as Record<string, unknown>, sender);
-      if (opened.kind === 'rejected') return;
+      if (opened.kind === 'rejected') {
+        if (opened.notify) this.notifyTrustRejected(opened.notify.appId, opened.reason, opened.notify.inner);
+        return;
+      }
       if (opened.kind === 'pair_request') {
         this.handlePairRequest(opened.signed, opened.inner);
         return;
@@ -1518,6 +1555,71 @@ export class RelayClient {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
       return 0;
     }
+  }
+
+  /** Last time each app was told a command of it was refused, per session
+   *  or request (see notifyTrustRejected). */
+  private trustRejectedNoticeAt = new Map<string, number>();
+
+  /** Commands a user starts by hand. Only these are answered when device
+   *  trust refuses them: background traffic (subscriptions, feature
+   *  declarations, history reads) would otherwise use up the notice slot and
+   *  persist error rows the user never asked about. */
+  private static readonly TRUST_REJECTED_NOTICE_TYPES: ReadonlySet<string> = new Set([
+    'send_input', 'approve', 'deny', 'always_allow', 'abort_session', 'kill_session',
+    'delete_session', 'archive_session', 'rename_session', 'set_session_mode', 'set_session_model',
+    'pin_session', 'create_session', 'fork_session', 'import_session',
+  ]);
+
+  /**
+   * Tell a paired app that a command it signed was refused by device trust
+   * (its clock is off, it was delivered long after it was signed, this
+   * computer recently lost its replay state, or it could not record it), so
+   * it shows an error instead of waiting forever.
+   *
+   * - A command on a session known here: an `error` on that session through
+   *   send(), like every other session error (spine seq, persisted, every app).
+   * - A sessionless command with a requestId: a full `error` envelope
+   *   (`sessionId: ''`, seq, timestamp, deviceId) to the sender only, so its
+   *   placeholder fails.
+   * - Anything else: nothing.
+   *
+   * At most one notice per app and session (or request) every few seconds: an
+   * app retrying with a skewed clock would otherwise get one per attempt.
+   */
+  private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
+    if (typeof inner.type !== 'string' || !RelayClient.TRUST_REJECTED_NOTICE_TYPES.has(inner.type)) return;
+    const sessionId = isSafeId(inner.sessionId) && this.sessionManager.getMeta(inner.sessionId) ? inner.sessionId : undefined;
+    const rawRequestId = (inner.payload as { requestId?: unknown } | undefined)?.requestId;
+    const requestId = typeof rawRequestId === 'string' && rawRequestId !== '' && rawRequestId.length <= 128 ? rawRequestId : undefined;
+    if (!sessionId && !requestId) return;
+    const now = Date.now();
+    const key = `${appId}\n${sessionId ?? `req:${requestId}`}`;
+    if (now - (this.trustRejectedNoticeAt.get(key) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
+    if (this.trustRejectedNoticeAt.size >= 256) {
+      for (const [k, at] of this.trustRejectedNoticeAt) {
+        if (now - at >= RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) this.trustRejectedNoticeAt.delete(k);
+      }
+    }
+    this.trustRejectedNoticeAt.set(key, now);
+    const message = reason === 'from_future'
+      ? 'This computer refused the request because this device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
+      : reason === 'stale'
+        ? 'This computer refused the request because it was signed too long ago, or this device\'s clock is behind, or this computer recently reset its security state. Check the date and time; if they are right, wait a few minutes and try again.'
+        : 'This computer could not record the request securely, so it was not run. Check that Kraki on the computer can write to its data folder, then try again.';
+    logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
+    if (sessionId) {
+      this.send({ type: 'error', sessionId, payload: { message } });
+      return;
+    }
+    this.sendReliableUnicastTo(appId, this.consumerKeys.get(appId) ?? NO_RSA_KEY, {
+      type: 'error',
+      sessionId: '',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { message, requestId },
+    });
   }
 
   /** Which hop a unicast to `deviceId` takes right now (for logs). */
@@ -1937,6 +2039,7 @@ export class RelayClient {
     // its confirmed subscription: when the Head replaces our old socket it
     // sends the App no device_left, so the App never re-subscribes. Keep it.
     const previousSubs = this.currentSessionByArm;
+    const previousFeatures = this.appFeatures;
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
     this.appFeatures = keptFeatures;
@@ -1966,6 +2069,10 @@ export class RelayClient {
           if (d.online) {
             this.onlineConsumers.add(d.id);
             this.currentSessionByArm.set(d.id, previousSubs.get(d.id) ?? null);
+            // Likewise its `client_features`: it re-declares only after our
+            // greeting, and a large reply sent before then would go whole.
+            const features = previousFeatures.get(d.id);
+            if (features) this.appFeatures.set(d.id, features);
           }
         }
       }

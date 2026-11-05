@@ -588,11 +588,14 @@ export class CopilotAdapter extends AgentAdapter {
     };
     const tempFiles: string[] = [];
 
-    // Convert image attachments to files in the SDK session directory
+    // Convert image attachments to files the SDK attaches by path. They are
+    // kept for the session's life (its history refers to them) in the Kraki
+    // session directory, which deleting the session removes; Copilot's own
+    // session-state directory is never cleaned by Kraki.
     if (attachments?.length) {
       const entry = this.sessions.get(sessionId);
       const sdkFilesDir = entry
-        ? join(homedir(), '.copilot', 'session-state', sessionId, 'files')
+        ? join(getKrakiHome(), 'sessions', sessionId, 'copilot-images')
         : tmpdir();
       const sdkAttachments: Array<{ type: 'file'; path: string; displayName?: string }> = [];
       for (const att of attachments) {
