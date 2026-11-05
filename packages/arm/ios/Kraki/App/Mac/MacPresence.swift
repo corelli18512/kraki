@@ -196,6 +196,22 @@ enum MacMenuBarIcon {
 
     static let size = NSSize(width: 18, height: 18)
 
+    /// Kraki Dev runs beside the release app; its icon carries a "D" so the
+    /// two menu bar items can be told apart.
+    static var isDevBuild: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// What VoiceOver reads for the status item: the app and whether this
+    /// Mac is online.
+    static func accessibilityLabel(status: MacOnlineStatus, isDevBuild: Bool = isDevBuild) -> String {
+        isDevBuild ? String(localized: "Kraki Dev – \(status.title)") : String(localized: "Kraki – \(status.title)")
+    }
+
     static func badge(for status: MacOnlineStatus, needsYou: Bool) -> Badge {
         if status.needsFixing { return .problem }
         if needsYou { return .attention }
@@ -214,12 +230,13 @@ enum MacMenuBarIcon {
     /// them for light/dark menu bars and the highlighted state); badges need
     /// color, so those images draw the silhouette in the label color of the
     /// appearance they are drawn in.
-    static func image(status: MacOnlineStatus, needsYou: Bool) -> NSImage {
+    static func image(status: MacOnlineStatus, needsYou: Bool, isDevBuild: Bool = isDevBuild) -> NSImage {
         let base = NSImage(named: "MenuBarKraki") ?? NSImage(size: size)
         let alpha = alpha(for: status)
         let badge = badge(for: status, needsYou: needsYou)
         let image = NSImage(size: size, flipped: false) { rect in
             draw(base: base, in: rect, alpha: alpha, tinted: badge != .none)
+            if isDevBuild { drawDevMark(in: rect, tinted: badge != .none) }
             switch badge {
             case .none: break
             case .attention:
@@ -232,8 +249,23 @@ enum MacMenuBarIcon {
             return true
         }
         image.isTemplate = badge == .none
-        image.accessibilityDescription = String(localized: "Kraki – \(status.title)")
+        image.accessibilityDescription = accessibilityLabel(status: status, isDevBuild: isDevBuild)
         return image
+    }
+
+    /// A small "D" in the lower left, cut out of the silhouette. Drawn in the
+    /// silhouette's color, so a plain icon stays a template image.
+    private static func drawDevMark(in rect: NSRect, tinted: Bool) {
+        let font = NSFont.systemFont(ofSize: 7.5, weight: .black)
+        let color = tinted ? NSColor.labelColor : NSColor.black
+        let text = NSAttributedString(string: "D", attributes: [.font: font, .foregroundColor: color])
+        let textSize = text.size()
+        let origin = NSPoint(x: rect.minX, y: rect.minY - 0.5)
+        NSGraphicsContext.current?.compositingOperation = .clear
+        NSBezierPath(roundedRect: NSRect(x: origin.x - 1, y: rect.minY, width: textSize.width + 2,
+                                         height: textSize.height - 1), xRadius: 1.5, yRadius: 1.5).fill()
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+        text.draw(at: origin)
     }
 
     private static func draw(base: NSImage, in rect: NSRect, alpha: CGFloat, tinted: Bool) {

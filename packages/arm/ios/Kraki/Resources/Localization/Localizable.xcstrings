@@ -5005,6 +5005,16 @@
         }
       }
     },
+    "Kraki Dev – %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki Dev – %@"
+          }
+        }
+      }
+    },
     "Kraki didn't answer. Check the connection and try again." : {
       "localizations" : {
         "zh-Hans" : {

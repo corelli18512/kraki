@@ -138,7 +138,51 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertNotNil(NSImage(named: "MenuBarKraki"), "logo silhouette asset missing")
     }
 
+    /// K-250: VoiceOver read the status item only as "Kraki".
+    func testStatusItemLabelSaysWhetherThisMacIsOnline() {
+        XCTAssertEqual(MacMenuBarIcon.accessibilityLabel(status: .online, isDevBuild: false),
+                       "Kraki – \(MacOnlineStatus.online.title)")
+        XCTAssertEqual(MacMenuBarIcon.accessibilityLabel(status: .offline, isDevBuild: false),
+                       "Kraki – \(MacOnlineStatus.offline.title)")
+        XCTAssertEqual(MacMenuBarIcon.image(status: .offline, needsYou: false, isDevBuild: false).accessibilityDescription,
+                       "Kraki – \(MacOnlineStatus.offline.title)")
+    }
+
+    /// K-359: Kraki Dev's status item looked exactly like the release app's.
+    func testDevBuildIconIsMarkedAndStaysATemplate() throws {
+        func pixels(_ image: NSImage) throws -> Data {
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        }
+        let release = MacMenuBarIcon.image(status: .online, needsYou: false, isDevBuild: false)
+        let dev = MacMenuBarIcon.image(status: .online, needsYou: false, isDevBuild: true)
+        XCTAssertTrue(dev.isTemplate, "tinted by macOS like the release icon")
+        XCTAssertNotEqual(try pixels(dev), try pixels(release), "the Dev icon carries a mark")
+        XCTAssertTrue(MacMenuBarIcon.accessibilityLabel(status: .online, isDevBuild: true).hasPrefix("Kraki Dev"))
+        XCTAssertTrue(MacMenuBarIcon.isDevBuild, "this test host is Kraki Dev")
+    }
+
+    /// K-249: the status row opened Settings on whichever tab was used last.
+    func testStatusRowOpensSettingsOnThisMac() {
+        PreferencesTabSelection.shared.tab = .about
+        MenuBarExtraView.selectThisMacSettingsTab()
+        XCTAssertEqual(PreferencesTabSelection.shared.tab, .thisMac)
+        PreferencesTabSelection.shared.tab = .general
+    }
+
     // MARK: Needs you
+
+    /// K-251: a title long enough to wrap pushed the reason line out of the menu.
+    func testNeedsYouTitleFitsOneMenuLine() {
+        let long = String(repeating: "Refactor the session list reconciliation ", count: 4)
+        let items = MenuBarNeedsYou.items(
+            titles: ["a": long],
+            previews: ["a": SessionPreview(text: "?", type: "question", timestamp: "2026-10-07T10:00:00Z")])
+        let title = items.first?.title ?? ""
+        XCTAssertLessThanOrEqual(title.count, 48)
+        XCTAssertTrue(title.hasSuffix("…"))
+        XCTAssertEqual(items.first?.reason, "Asked you a question")
+    }
 
     func testNeedsYouListsOnlyPermissionsAndQuestionsOfLiveSessions() {
         let previews: [String: SessionPreview] = [
