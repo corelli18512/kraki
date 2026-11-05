@@ -2,7 +2,7 @@
 // pairing interstitial below is already in the user's language.
 import './i18n';
 import './index.css';
-import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
+import { CONFIRMED_RELAY_KEY, decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 import { renderDesktopAuthCallback } from './lib/desktop-auth-callback';
 
 // Pairing QR opened in a browser: on iPhone offer the app first (don't spend
@@ -15,12 +15,21 @@ const rootElement = document.getElementById('root')!;
 /** Same key as the relay client's stored device (lib/transport.ts STORAGE_KEY),
  *  read directly: this file must not import the app. */
 function hasStoredDevice(): boolean {
-  try { return !!localStorage.getItem('kraki_device'); } catch { return false; }
+  try {
+    const stored = JSON.parse(localStorage.getItem('kraki_device') ?? 'null') as { deviceId?: unknown } | null;
+    return typeof stored?.deviceId === 'string' && stored.deviceId !== '';
+  } catch { return false; }
+}
+
+function confirmedRelay(): string | null {
+  try { return sessionStorage.getItem(CONFIRMED_RELAY_KEY); } catch { return null; }
 }
 
 if (!renderDesktopAuthCallback(rootElement)) {
-  const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints, hasStoredDevice());
+  const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints, hasStoredDevice(), confirmedRelay());
   if (!renderPairingInterstitial(pairingDecision, rootElement)) {
+    // The confirmation covers this one opening of the link.
+    try { sessionStorage.removeItem(CONFIRMED_RELAY_KEY); } catch { /* ignore */ }
     void import('./boot').then(({ boot }) => boot(rootElement));
   }
 }
