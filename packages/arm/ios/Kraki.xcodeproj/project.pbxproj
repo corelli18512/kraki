@@ -667,6 +667,7 @@
 		E19D79C84A9086A2D90B4A8E /* MacForkNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26348DF65A230EA0AF062C36 /* MacForkNavigationTests.swift */; };
 		E20452B0E5882CADE0F375AE /* SessionSplitLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FDC9412C3D53E4A3120ED3D /* SessionSplitLayoutTests.swift */; };
 		E22BA231CFC349EA61E2981F /* LocalAgentsCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */; };
+		E24867F6CCF05BE8A69FEECD /* BidiControlRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC45B98BA8E8818702141B6 /* BidiControlRenderingTests.swift */; };
 		E258FB9E7CCA508B1EE30AB2 /* ChatTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C53C8A022BE56BE5CC38B95 /* ChatTable.swift */; };
 		E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E168D723AE41346C13EB32 /* DiagRecorder.swift */; };
 		E2A780DD481070F9FF4B6FA8 /* ReconnectRound2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFBB790DF1D20B3FABDFBA9 /* ReconnectRound2Tests.swift */; };
@@ -825,6 +826,7 @@
 		0B6120A0345B12D686F876C7 /* ForegroundActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundActivityTests.swift; sourceTree = "<group>"; };
 		0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionControllerTests.swift; sourceTree = "<group>"; };
 		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
+		0CC45B98BA8E8818702141B6 /* BidiControlRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BidiControlRenderingTests.swift; sourceTree = "<group>"; };
 		0CCED07CCC2115423AD55B45 /* MacSessionActivityDots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSessionActivityDots.swift; sourceTree = "<group>"; };
 		0E6FEB24831FDD84C765A2FE /* TransientScrollIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransientScrollIndicator.swift; sourceTree = "<group>"; };
 		0E80769CD696851C28434036 /* AppColorScheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColorScheme.swift; sourceTree = "<group>"; };
@@ -2027,6 +2029,7 @@
 				7155B0057D71BDD112CB0B8E /* AttachmentSchedulerTests.swift */,
 				4C21B6CC53EA6648C670E4D1 /* BackgroundGraceRound2Tests.swift */,
 				1E254833E8916A34AD087E56 /* BackgroundReconnectingTests.swift */,
+				0CC45B98BA8E8818702141B6 /* BidiControlRenderingTests.swift */,
 				98DCFE83552E9C0CD7A9240F /* BubbleImageReuseTests.swift */,
 				CBB7A51954B5ECF760DF289F /* BuildInfoTests.swift */,
 				870471E45E23ABCD41260C6F /* CardTurnGateTests.swift */,
@@ -2547,6 +2550,7 @@
 				EBBE7FD227990872EBFAFA2C /* AttachmentSchedulerTests.swift in Sources */,
 				C7BC764120E8A87C68DF56E1 /* BackgroundGraceRound2Tests.swift in Sources */,
 				C7D6ED3B20B8C9D217AC5EDF /* BackgroundReconnectingTests.swift in Sources */,
+				E24867F6CCF05BE8A69FEECD /* BidiControlRenderingTests.swift in Sources */,
 				0DD9F4003EAF25381AF7BC92 /* BubbleImageReuseTests.swift in Sources */,
 				617005785EDB83753DF51AE8 /* BuildInfoTests.swift in Sources */,
 				9914A1454DA0A4958D6DD68E /* CardTurnGateTests.swift in Sources */,

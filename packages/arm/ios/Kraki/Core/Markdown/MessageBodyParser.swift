@@ -425,6 +425,21 @@ enum MarkdownCodeSyntax {
     ]
 }
 
+/// Explicit bidirectional embeddings, overrides and isolates (U+202A–U+202E,
+/// U+2066–U+2069) let message text reorder what it displays — `txt.exe`
+/// shown as `exe.txt` inside a bubble (K-164). The bidi algorithm lays out
+/// real right-to-left text without them, so they are removed before
+/// rendering. The plain marks (LRM/RLM/ALM) can't reverse text and stay.
+func neutralizingBidiControls(_ text: String) -> String {
+    func isControl(_ scalar: Unicode.Scalar) -> Bool {
+        (0x202A...0x202E).contains(scalar.value) || (0x2066...0x2069).contains(scalar.value)
+    }
+    guard text.unicodeScalars.contains(where: isControl) else { return text }
+    var kept = String.UnicodeScalarView()
+    kept.append(contentsOf: text.unicodeScalars.filter { !isControl($0) })
+    return String(kept)
+}
+
 /// Splits a message body into inline text, blockquote, fenced
 /// code-block, and GFM table segments. Blockquote lines start with
 /// `> `. Code blocks are fenced with triple backticks. Tables follow
@@ -457,7 +472,7 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
         }
     }
 
-    let lines = text.components(separatedBy: "\n")
+    let lines = neutralizingBidiControls(text).components(separatedBy: "\n")
     var i = 0
     while i < lines.count {
         let line = lines[i]
