@@ -192,12 +192,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // Measure wrapping at the one-row width even when the controls are stacked.
   // The editor stays mounted so wrapping never loses focus, selection or IME.
+  // `flex: none` while measuring: the textarea is a flex item, so otherwise its
+  // laid-out width (wide when stacked, narrow in one row) overrides the
+  // measuring width, and a draft that fits only the stacked width flips the
+  // layout back and forth until React aborts (K-316).
   useLayoutEffect(() => {
     const el = fieldRef.current;
     const box = boxRef.current;
     if (!el || !box) return;
     const fit = () => {
       const desktop = window.matchMedia('(min-width: 768px)').matches;
+      el.style.flex = 'none';
       const micWidth = box.querySelector('.kmic') ? (desktop ? 32 : 44) : 0;
       const clearWidth = desktop && (text.trim() || image) ? 26 : 0;
       el.style.width = `${Math.max(1, box.clientWidth - (desktop ? 5 : 0) - 44 - clearWidth - micWidth)}px`;
@@ -210,10 +215,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setMultiline(stacked);
       el.style.padding = '';
       if (desktop) el.style.width = `${Math.max(1, box.clientWidth - 5 - (stacked ? 12 : 44 + (text.trim() || image ? 26 : 0) + (box.querySelector('.kmic') ? 32 : 0)))}px`;
-      if (!desktop) el.style.width = '';
+      if (!desktop) { el.style.width = ''; el.style.flex = ''; }
       const fittedPadding = desktop ? padding : stacked ? 17 : 28;
       el.style.height = `${Math.min(Math.max(el.scrollHeight, line + fittedPadding), desktop ? 3 * line + padding : 168)}px`;
       el.style.width = '';
+      el.style.flex = '';
       updateComposerScrollFade(el);
     };
     fit();
