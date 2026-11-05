@@ -157,7 +157,22 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
   };
 }
 
-export const useStore = create<Store>()(persist((set) => ({
+/** A device removed from the account takes its sessions with it: sidebar,
+ *  unread count and cached history (K-317). They stay on the computer and come
+ *  back if it signs in again, and so do unsent drafts: this can follow from
+ *  the relay's list alone, with no user action, so typed text is kept. */
+function forgetDeviceSessions(get: () => Store, set: (partial: Partial<Store>) => void, deviceId: string): void {
+  const kept = new Map<string, string>();
+  for (const session of [...get().sessions.values()]) {
+    if (session.deviceId !== deviceId) continue;
+    const draft = get().drafts.get(session.id);
+    if (draft !== undefined) kept.set(session.id, draft);
+    get().removeSession(session.id);
+  }
+  if (kept.size > 0) set({ drafts: new Map([...get().drafts, ...kept]) });
+}
+
+export const useStore = create<Store>()(persist((set, get) => ({
   ...initialState,
 
   setStatus: (status) => set({ status }),
@@ -250,12 +265,18 @@ export const useStore = create<Store>()(persist((set) => ({
 
   // The device list is authoritative for names: a computer renamed while this
   // app was offline must relabel its persisted sessions (as Swift does).
-  setDevices: (devices) =>
+  // A computer we knew that is missing from the list was removed from the
+  // account while this app was away: its sessions go too (K-317).
+  setDevices: (devices) => {
+    const listed = new Set(devices.map((d) => d.id));
+    const removed = [...get().devices.keys()].filter((id) => !listed.has(id));
+    for (const id of removed) forgetDeviceSessions(get, set, id);
     set((state) => {
       let sessions = state.sessions;
       for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
       return { devices: new Map(devices.map((d) => [d.id, d])), sessions };
-    }),
+    });
+  },
 
   upsertDevice: (device) =>
     set((state) => {
@@ -264,12 +285,14 @@ export const useStore = create<Store>()(persist((set) => ({
       return { devices: next, sessions: relabelSessions(state.sessions, device.id, device.name) };
     }),
 
-  removeDevice: (deviceId) =>
+  removeDevice: (deviceId) => {
+    forgetDeviceSessions(get, set, deviceId);
     set((state) => {
       const next = new Map(state.devices);
       next.delete(deviceId);
       return { devices: next };
-    }),
+    });
+  },
 
   renameDevice: (deviceId, name, defaultName) =>
     set((state) => {

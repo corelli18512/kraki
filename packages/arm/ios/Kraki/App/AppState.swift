@@ -257,6 +257,9 @@ final class AppState {
                 commandSender?.resendPendingInputs(reason: "reconnected")
             } else {
                 deviceStore.interruptUsageRefreshes()
+                // Settings › About shows the version of the relay this app is
+                // connected to: none while it is not (K-192). Auth sets it again.
+                relayVersion = nil
             }
             updateReconnectingIndicator()
             guard let store = attachmentStore else { return }

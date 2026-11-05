@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { UsageRing } from './UsagePanel';
+import { UsageRing, devicesNeedingUsageUpdate } from './UsagePanel';
+import type { DeviceSummary } from '@kraki/protocol';
 
 const quota = (remainingPercent: number) => ({ id: 'weekly', kind: 'weekly', remainingPercent });
 
@@ -23,5 +24,15 @@ describe('UsageRing native dark amber gradient', () => {
     const { container } = render(<><UsageRing window={quota(24)} stale={false} size={88} lineWidth={8} animateIn={false} /><UsageRing window={quota(40)} stale={false} size={88} lineWidth={8} animateIn={false} /></>);
     const ids = [...container.querySelectorAll('linearGradient')].map(e => e.id);
     expect(new Set(ids).size).toBe(4);
+  });
+});
+
+describe('devicesNeedingUsageUpdate (K-084)', () => {
+  const device = (id: string, name: string): DeviceSummary => ({ id, name, role: 'tentacle', online: true });
+  it('does not tell a computer with account usage turned off to update', () => {
+    const devices = new Map([['old', device('old', 'Old Mac')], ['off', device('off', 'Usage Off')], ['new', device('new', 'New Mac')]]);
+    const features: Record<string, string[]> = { old: [], off: ['account_usage_off'], new: ['account_usage'] };
+    const outdated = devicesNeedingUsageUpdate(devices.values(), new Map(), (id, f) => features[id]?.includes(f));
+    expect(outdated.map((d) => d.id)).toEqual(['old']);
   });
 });

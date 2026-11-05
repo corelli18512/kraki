@@ -110,7 +110,8 @@ history view; no credentials or emails are stored there.
   with its timer, enforces a 60-second per-source minimum, and honors 429
   `Retry-After` even when the same account's token rotates.
 - `request_usage_history` / `usage_history`: local readings for a history view.
-- The greeting advertises `account_usage` when enabled, and
+- The greeting advertises `account_usage` when enabled (`account_usage_off`
+  when turned off, so apps do not advise updating), and
   `account_usage_refresh` when its refresh handler is installed. New fields are
   optional; older apps ignore them. Head only forwards encrypted envelopes and
   requires no deployment for this feature.

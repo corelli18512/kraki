@@ -33,6 +33,7 @@ extension MessageRouter {
             if let deviceId = json["deviceId"] as? String {
                 appState?.deviceStore.removeDevice(deviceId)
                 appState?.sessionSubscriptionController.onTentacleUnavailable(deviceId)
+                appState?.forgetSessions(onDevice: deviceId)
             }
 
         case "device_renamed":

@@ -20,6 +20,19 @@ struct DeviceListView: View {
         tentacles.filter { !$0.online }
     }
 
+    /// Computers that share their name with another one (K-191): their rows
+    /// show a short id, and the list suggests renaming one.
+    static func sameNameDeviceIds(_ devices: [DeviceSummary]) -> Set<String> {
+        Set(Dictionary(grouping: devices, by: \.name).values.filter { $0.count > 1 }.flatMap { $0.map(\.id) })
+    }
+
+    @ViewBuilder
+    private func sameNameHint(_ sameName: Set<String>) -> some View {
+        if !sameName.isEmpty {
+            Text("Some computers have the same name. Open one and tap its name to rename it.")
+        }
+    }
+
     var body: some View {
         Group {
             if tentacles.isEmpty {
@@ -32,41 +45,54 @@ struct DeviceListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color.surfacePrimary)
         .navigationDestination(for: DeviceNavID.self) { nav in
-            if let device = appState.deviceStore.devices[nav.id] {
-                DeviceDetailView(device: device)
-            }
+            // Always the page, also once the device is removed: it closes
+            // itself then. A blank destination stranded the user with only
+            // Back and no tab bar (K-193).
+            DeviceDetailView(device: appState.deviceStore.devices[nav.id]
+                ?? DeviceSummary(id: nav.id, name: "", role: .tentacle, online: false))
         }
     }
 
     // MARK: - Device List
 
     private var deviceList: some View {
-        List {
+        let sameName = Self.sameNameDeviceIds(tentacles)
+        return List {
             if !onlineDevices.isEmpty {
-                Section("Online") {
+                Section {
                     ForEach(onlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
                                 device: device,
                                 isSelf: device.id == appState.deviceId,
-                                hasGreeting: !appState.deviceStore.agents(for: device.id).isEmpty
+                                hasGreeting: !appState.deviceStore.agents(for: device.id).isEmpty,
+                                sharesName: sameName.contains(device.id)
                             )
                         }
                     }
+                } header: {
+                    Text("Online")
+                } footer: {
+                    if offlineDevices.isEmpty { sameNameHint(sameName) }
                 }
             }
 
             if !offlineDevices.isEmpty {
-                Section("Offline") {
+                Section {
                     ForEach(offlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
                                 device: device,
                                 isSelf: device.id == appState.deviceId,
-                                hasGreeting: false
+                                hasGreeting: false,
+                                sharesName: sameName.contains(device.id)
                             )
                         }
                     }
+                } header: {
+                    Text("Offline")
+                } footer: {
+                    sameNameHint(sameName)
                 }
             }
 
@@ -139,6 +165,8 @@ private struct DeviceRow: View {
     let device: DeviceSummary
     let isSelf: Bool
     let hasGreeting: Bool
+    /// Another computer has the same name: show a short id to tell them apart.
+    var sharesName = false
 
     private var dotColor: Color {
         // When the iOS client itself is not connected to the relay we
@@ -160,6 +188,12 @@ private struct DeviceRow: View {
                 .font(.body)
 
             Spacer()
+
+            if sharesName {
+                Text(verbatim: String(device.id.suffix(6)))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
 
             if isSelf {
                 Text("You")

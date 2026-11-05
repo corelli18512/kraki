@@ -582,6 +582,12 @@ struct ModelPickerCard: View {
     /// Optional — NewSessionSheet uses it to persist the last-used effort.
     var onEffortChange: ((ReasoningEffort) -> Void)? = nil
 
+    /// A row shows the model's name as its agent reports it, like Session
+    /// Info and the session list (K-176); its id when there is none.
+    static func rowTitle(_ model: String, details: [ModelDetail]) -> String {
+        details.first { $0.id == model }?.name ?? model
+    }
+
     private func supportedEfforts(for model: String) -> [ReasoningEffort]? {
         guard let detail = modelDetails.first(where: { $0.id == model }),
               detail.supportsReasoningEffort else { return nil }
@@ -606,7 +612,7 @@ struct ModelPickerCard: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text(model).foregroundStyle(Color.primary)
+                            Text(verbatim: Self.rowTitle(model, details: modelDetails)).foregroundStyle(Color.primary)
                             Spacer()
                             if model == selectedModel {
                                 Image(systemName: "checkmark")

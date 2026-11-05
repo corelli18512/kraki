@@ -66,3 +66,25 @@ describe('create/fork failures (release review A5)', () => {
     expect(useStore.getState().lastError).toBeNull();
   });
 });
+
+describe('remote update race (K-322)', () => {
+  const status = (payload: Record<string, unknown>) => handleDataMessage({
+    type: 'device_update_status', deviceId: 'pc', seq: 1, timestamp: new Date().toISOString(), payload,
+  } as unknown as InnerMessage, { cmdState: new CommandState(), messageProvider } as never);
+
+  it("another app's refused request does not replace the running update", () => {
+    status({ phase: 'downloading', requestId: 'winner', from: '0.38.9', to: '0.38.10', progress: 0.4 });
+    status({ phase: 'failed', requestId: 'loser', error: 'An update is already in progress.' });
+    expect(useStore.getState().updateProgress.get('pc')).toMatchObject({ phase: 'downloading', requestId: 'winner' });
+  });
+
+  it('the requesting app still sees its own refusal, and the running update its own failure', () => {
+    useStore.getState().setUpdateProgress('pc', { phase: 'requested', requestId: 'loser', at: Date.now() });
+    status({ phase: 'failed', requestId: 'loser', error: 'An update is already in progress.' });
+    expect(useStore.getState().updateProgress.get('pc')).toMatchObject({ phase: 'failed', requestId: 'loser' });
+
+    status({ phase: 'downloading', requestId: 'winner', progress: 0.1 });
+    status({ phase: 'failed', requestId: 'winner', error: 'Download failed' });
+    expect(useStore.getState().updateProgress.get('pc')).toMatchObject({ phase: 'failed', error: 'Download failed' });
+  });
+});
