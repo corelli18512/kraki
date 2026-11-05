@@ -289,9 +289,9 @@ export async function cmdDoctor(): Promise<void> {
   } = await import('../checks.js');
   const { loadDaemonPid, loadDaemonIdentity } = await import('../config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
-  // multi-adapter logger (created at module load) defaults to info-level
-  // stdout (dev) which would interleave pino lines into the output, so
-  // force it silent before importing the module.
+  // multi-adapter logger (created at module load) logs at info level (to
+  // stderr outside the daemon, K-129); keep it silent so callers that merge
+  // stderr see only the JSON.
   const prevLogLevel = process.env.LOG_LEVEL;
   process.env.LOG_LEVEL = 'silent';
   const { detectAvailableAgents } = await import('../adapters/multi.js');

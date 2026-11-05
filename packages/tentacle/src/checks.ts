@@ -437,6 +437,10 @@ export async function probeFdaDetailed(): Promise<FdaProbeResult> {
   return blocked ? { status: 'denied', blockedPath: blocked.rel, code: blocked.code } : { status: 'missing' };
 }
 
+/** `kraki fda` flag for the bundle instance probeFdaAsApp starts: probe
+ *  in-process instead of launching the bundle again. */
+export const FDA_IN_PROCESS_FLAG = '--in-process';
+
 /**
  * Poll Full Disk Access at regular intervals until granted or the signal
  * is aborted. Never triggers a system dialog — uses the same multi-path
@@ -452,10 +456,6 @@ export async function probeFdaDetailed(): Promise<FdaProbeResult> {
  * LaunchServices gives the probe Kraki's bundle identity, exactly like the
  * daemon. Falls back to the in-process probe when not running from a bundle.
  */
-/** `kraki fda` flag for the bundle instance probeFdaAsApp starts: probe
- *  in-process instead of launching the bundle again. */
-export const FDA_IN_PROCESS_FLAG = '--in-process';
-
 export async function probeFdaAsApp(): Promise<FdaStatus> {
   const app = platform() === 'darwin' ? getKrakiAppBundlePath() : null;
   if (!app) return probeFda();
