@@ -33,6 +33,7 @@ final class ThemeSyncTests: XCTestCase {
     func testOfflineThemeChangeSurvivesReconnect() {
         let app = AppState.makeUnitTestHost()
         let prefs = app.usePreferencesManagerForTesting(defaults: defaults)
+        app.hasStoredCredentials = true
         app.connectionStatus = .disconnected
         defaults.set("dark", forKey: "colorScheme") // the picker's @AppStorage
         prefs.sendTheme(.dark)
@@ -56,9 +57,27 @@ final class ThemeSyncTests: XCTestCase {
     func testSignOutDropsAnUnsentThemeChange() {
         let app = AppState.makeUnitTestHost()
         let prefs = app.usePreferencesManagerForTesting(defaults: defaults)
+        app.hasStoredCredentials = true
         app.connectionStatus = .disconnected
         prefs.sendTheme(.light)
+        XCTAssertEqual(prefs.pendingTheme, .light)
         app.resetIdentity(clearRelayURL: false)
         XCTAssertNil(prefs.pendingTheme)
+    }
+
+    /// The theme pickers echo the sign-out reset back through `sendTheme`;
+    /// signed out, that is not kept for the next account.
+    func testThemeChangeWhileSignedOutIsNotKeptForTheNextAccount() {
+        let app = AppState.makeUnitTestHost()
+        let prefs = app.usePreferencesManagerForTesting(defaults: defaults)
+        app.hasStoredCredentials = true
+        app.resetIdentity(clearRelayURL: false)
+        // What AuthManager.clearStoredCredentials does (the unit host has none).
+        app.hasStoredCredentials = false
+        prefs.sendTheme(.system)
+        XCTAssertNil(prefs.pendingTheme)
+        defaults.set("dark", forKey: "colorScheme")
+        prefs.applyAuthPreferences(["theme": "light"])
+        XCTAssertEqual(defaults.string(forKey: "colorScheme"), "light", "the next account's theme applies")
     }
 }

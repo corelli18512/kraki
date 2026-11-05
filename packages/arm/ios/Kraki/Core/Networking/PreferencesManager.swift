@@ -139,6 +139,9 @@ final class PreferencesManager {
         // Offline: keep it for the next sign-in instead of dropping it, or
         // the account's stored theme would silently revert it (K-081).
         guard appState?.connectionStatus == .connected else {
+            // Signed out: there is no account to send it to, and keeping it
+            // would overwrite the next account's theme (K-080).
+            guard appState?.hasStoredCredentials == true else { return }
             pendingTheme = scheme
             return
         }
