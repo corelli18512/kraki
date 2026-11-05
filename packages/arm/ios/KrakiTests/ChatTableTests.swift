@@ -42,6 +42,76 @@ final class ChatTableTests: XCTestCase {
         XCTAssertEqual(labelled.first?.link?.absoluteString, "https://kraki.chat/docs")
     }
 
+    // MARK: K-161 parser gaps
+
+    func testTildeAndLongerFencesAreCodeBlocks() {
+        let tilde = splitMessageBody("before\n~~~python\nprint(1)\n~~~\nafter")
+        XCTAssertEqual(tilde.count, 3)
+        guard tilde.count == 3, case .codeBlock(let language, let code) = tilde[1] else { return XCTFail("\(tilde)") }
+        XCTAssertEqual(language, "python")
+        XCTAssertEqual(code, "print(1)")
+        // A 4-backtick fence wraps a 3-backtick example; ``` does not close it.
+        let outer = splitMessageBody("````md\n```js\nx\n```\n````")
+        XCTAssertEqual(outer.count, 1)
+        guard case .codeBlock(_, let nested) = outer[0] else { return XCTFail("\(outer)") }
+        XCTAssertEqual(nested, "```js\nx\n```")
+    }
+
+    func testStrongEmphasisAndLiteralDelimiterRuns() {
+        let both = parseMarkdownInline("a ***b*** c")
+        XCTAssertEqual(both.map(\.text).joined(), "a b c")
+        XCTAssertTrue(both.contains { $0.text == "b" && $0.bold && $0.italic })
+        XCTAssertEqual(parseMarkdownInline("a *** b").map(\.text).joined(), "a *** b", "a lone run is text")
+        XCTAssertEqual(parseMarkdownInline("done***").map(\.text).joined(), "done***")
+    }
+
+    func testEmphasisDoesNotCloseInsideCodeSpans() {
+        let runs = parseMarkdownInline("*see `a*b` here*")
+        XCTAssertEqual(runs.map(\.text).joined(), "see a*b here")
+        XCTAssertTrue(runs.allSatisfy(\.italic), "\(runs)")
+        XCTAssertTrue(runs.contains { $0.code && $0.text == "a*b" })
+    }
+
+    func testNestedQuotesAndFencesInQuotesDoNotLeakMarkers() {
+        let nested = splitMessageBody("> outer\n> > inner\n>> deeper")
+        XCTAssertEqual(nested.count, 1)
+        guard case .blockquote(let text) = nested[0] else { return XCTFail("\(nested)") }
+        XCTAssertEqual(text, "outer\ninner\ndeeper")
+
+        let fenced = splitMessageBody("> Run:\n> ```sh\n> make test\n> ```\n> Done.\nafter")
+        XCTAssertEqual(fenced.count, 4, "\(fenced)")
+        guard case .codeBlock(let language, let code) = fenced[1] else { return XCTFail("\(fenced)") }
+        XCTAssertEqual(language, "sh")
+        XCTAssertEqual(code, "make test")
+        guard case .blockquote(let rest) = fenced[2] else { return XCTFail("\(fenced)") }
+        XCTAssertEqual(rest, "Done.")
+        // An unclosed quoted fence ends with the quote.
+        let open = splitMessageBody("> ```\n> x\nplain")
+        guard case .codeBlock(_, let openCode) = open[0], case .inline(let after) = open[1] else {
+            return XCTFail("\(open)")
+        }
+        XCTAssertEqual(openCode, "x")
+        XCTAssertEqual(after, "plain")
+    }
+
+    func testImageSyntaxRendersItsAltTextAsALink() {
+        let runs = parseMarkdownInline("Chart: ![latency chart](https://kraki.chat/c.png) done")
+        XCTAssertEqual(runs.map(\.text).joined(), "Chart: latency chart done")
+        XCTAssertEqual(runs.first { $0.text == "latency chart" }?.link?.absoluteString, "https://kraki.chat/c.png")
+    }
+
+    func testLinkDestinationKeepsBalancedParentheses() {
+        let runs = parseMarkdownInline("[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) after")
+        XCTAssertEqual(runs.first?.link?.absoluteString, "https://en.wikipedia.org/wiki/Foo_(bar)")
+        XCTAssertEqual(runs.map(\.text).joined(), "Foo after")
+    }
+
+    func testMailAutolinks() {
+        let runs = parseMarkdownInline("Write <mailto:team@kraki.chat> or <team@kraki.chat>.")
+        XCTAssertEqual(runs.compactMap(\.link).map(\.absoluteString), ["mailto:team@kraki.chat", "mailto:team@kraki.chat"])
+        XCTAssertNil(parseMarkdownInline("<not an address>").first?.link)
+    }
+
     // MARK: Row splitting
 
     func testPipesInsideCodeAndEscapedPipesStayInOneCell() {
@@ -119,6 +189,41 @@ final class ChatTableTests: XCTestCase {
                        "empty cells sink to the bottom")
         XCTAssertEqual(table.sorted(by: 0, ascending: true).plainBody.map { $0[0] }, ["a", "b", "c", "d"])
         XCTAssertEqual(table.sorted(by: nil, ascending: true).plainBody.map { $0[0] }, ["b", "a", "c", "d"])
+    }
+
+    /// K-160: header taps cycle first direction → other direction → off, and
+    /// off restores the message's own row order.
+    func testHeaderTapsCycleBothDirectionsAndOffRestoresOriginalOrder() {
+        let table = ChatTable(rows: [["Name", "Calls"], ["b", "1,200"], ["a", "90"], ["c", "—"], ["d", "15,000"]],
+                              alignments: [.leading, .leading])
+        let names = { (t: ChatTable) in t.plainBody.map { $0[0] } }
+        // Numbers: largest first, then ascending, then off.
+        let numeric1 = table.nextSort(tappingColumn: 1)
+        XCTAssertEqual(names(numeric1), ["d", "b", "a", "c"])
+        let numeric2 = numeric1.nextSort(tappingColumn: 1)
+        XCTAssertEqual(names(numeric2), ["a", "b", "d", "c"], "numeric columns can ascend")
+        let off = numeric2.nextSort(tappingColumn: 1)
+        XCTAssertNil(off.sortColumn)
+        XCTAssertEqual(names(off), ["b", "a", "c", "d"], "off restores the original order")
+        // Text: A→Z, Z→A, off.
+        let text1 = off.nextSort(tappingColumn: 0)
+        XCTAssertEqual(names(text1), ["a", "b", "c", "d"])
+        let text2 = text1.nextSort(tappingColumn: 0)
+        XCTAssertEqual(names(text2), ["d", "c", "b", "a"])
+        XCTAssertEqual(names(text2.nextSort(tappingColumn: 0)), ["b", "a", "c", "d"])
+        // Switching columns from a sorted state sorts the source rows.
+        XCTAssertEqual(names(text2.nextSort(tappingColumn: 1)), ["d", "b", "a", "c"])
+        XCTAssertEqual(table.sorted(by: 1, ascending: false).sorted(by: nil, ascending: true).markdown(), table.markdown())
+    }
+
+    /// K-160: Copy Table keeps an already-escaped `\|` as one escape.
+    func testCopyTableDoesNotDoubleEscapeEscapedPipes() {
+        let cell = parseTableRow("| x \\| y | `a | b` |")
+        let table = ChatTable(rows: [["A", "B"], cell], alignments: [.leading, .leading])
+        XCTAssertEqual(table.markdown(), "| A | B |\n| --- | --- |\n| x \\| y | `a \\| b` |")
+        // The copied Markdown parses back to the same cells.
+        let lines = table.markdown().components(separatedBy: "\n")
+        XCTAssertEqual(parseTableRow(lines[2]), cell)
     }
 
     func testExportKeepsMarkdownAndProducesTabSeparatedValues() {
