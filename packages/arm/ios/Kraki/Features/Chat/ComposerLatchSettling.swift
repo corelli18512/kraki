@@ -11,8 +11,8 @@ extension View {
     /// session's newest message is an `error`: a rejected Stop or an input the
     /// computer could not deliver leaves the state unchanged, and the composer
     /// must not stay busy or keep Stop disabled. `onStopRejected` gets the
-    /// text to show when that error ended a pending Stop (the agent refused to
-    /// stop; the turn goes on).
+    /// text to show when that error is the pending Stop's own failure (the
+    /// agent refused to stop; the turn goes on).
     func settlesComposerLatches(sessionId: String, state: SessionState?,
                                 awaitingActive: Binding<Bool>, abortPending: Binding<Bool>,
                                 onStopRejected: ((String) -> Void)? = nil) -> some View {
@@ -27,10 +27,12 @@ enum StopRejectionNotice {
     /// Tentacle's `error` for a failed `abort_session`.
     static let tentaclePrefix = "Failed to abort session: "
 
-    static func text(errorMessage: String) -> String {
-        let reason = errorMessage.hasPrefix(tentaclePrefix)
-            ? String(errorMessage.dropFirst(tentaclePrefix.count)) : errorMessage
-        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// `nil` unless the error is the Stop's own failure: any other session
+    /// error (a failed steer, an agent API error) may land while Stop is in
+    /// flight and says nothing about whether the Stop worked.
+    static func text(errorMessage: String) -> String? {
+        guard errorMessage.hasPrefix(tentaclePrefix) else { return nil }
+        let trimmed = errorMessage.dropFirst(tentaclePrefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? String(localized: "Couldn't stop the agent.") : String(localized: "Couldn't stop: \(trimmed)")
     }
 }
@@ -77,7 +79,9 @@ private struct ComposerLatchSettling: ViewModifier {
                 let stopWasPending = abortPending
                 awaitingActive = false
                 abortPending = false
-                if stopWasPending { onStopRejected?(StopRejectionNotice.text(errorMessage: trailingErrorMessage)) }
+                if stopWasPending, let notice = StopRejectionNotice.text(errorMessage: trailingErrorMessage) {
+                    onStopRejected?(notice)
+                }
             }
     }
 }

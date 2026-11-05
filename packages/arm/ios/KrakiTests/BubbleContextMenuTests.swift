@@ -64,8 +64,17 @@ final class BubbleContextMenuTests: XCTestCase {
         let content = TKBubbleContent.live(card: MessageStore.SessionCard(text: "", action: failed), agent: "pi",
                                            sessionId: "s", steps: 0, isFrozen: true)
         let cell = cell(content)
-        let copyError = try XCTUnwrap(cell.messageActions().first { $0.title == String(localized: "Copy Error") },
-                                      "menu: \(cell.messageActions().map(\.title))")
+        try host(cell)
+        cell.layoutIfNeeded()
+        // The long-press lands on the reason itself (the action slot).
+        let slot = cell.actionFrameForRegression
+        XCTAssertGreaterThan(slot.height, 0)
+        let configuration = try XCTUnwrap(cell.contextMenuInteraction(try interaction(cell),
+                                                                      configurationForMenuAtLocation: CGPoint(x: slot.midX, y: slot.midY)),
+                                          "no menu on the reason")
+        let actions = try menuActions(configuration)
+        let copyError = try XCTUnwrap(actions.first { $0.title == String(localized: "Copy Error") },
+                                      "menu: \(actions.map(\.title))")
         UIPasteboard.general.string = ""
         perform(copyError)
         XCTAssertEqual(UIPasteboard.general.string, reason)
@@ -120,6 +129,11 @@ final class BubbleContextMenuTests: XCTestCase {
         XCTAssertEqual(path.bounds.minX, cell.bubbleFrameForRegression.minX, accuracy: 0.5)
         XCTAssertEqual(path.bounds.width, cell.bubbleFrameForRegression.width, accuracy: 0.5)
         XCTAssertEqual(preview.parameters.backgroundColor, .clear)
+        // Each corner keeps the bubble's own radius: an agent bubble has a
+        // 4 pt top-leading corner and 16 pt elsewhere.
+        let bubble = cell.bubbleFrameForRegression
+        XCTAssertTrue(path.contains(CGPoint(x: bubble.minX + 2, y: bubble.minY + 2)), "4 pt top-leading corner")
+        XCTAssertFalse(path.contains(CGPoint(x: bubble.maxX - 2, y: bubble.minY + 2)), "16 pt top-trailing corner")
     }
 }
 #endif

@@ -29,11 +29,10 @@ private final class TKRoundedView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
+    /// The bubble outline: `rect` with each corner's own radius.
+    static func path(in r: CGRect, radii: (CGFloat, CGFloat, CGFloat, CGFloat)) -> UIBezierPath {
         let (tl, tr, bl, br) = radii
         let path = UIBezierPath()
-        let r = bounds
         path.move(to: CGPoint(x: r.minX + tl, y: r.minY))
         path.addLine(to: CGPoint(x: r.maxX - tr, y: r.minY))
         path.addArc(withCenter: CGPoint(x: r.maxX - tr, y: r.minY + tr),
@@ -48,7 +47,12 @@ private final class TKRoundedView: UIView {
         path.addArc(withCenter: CGPoint(x: r.minX + tl, y: r.minY + tl),
                     radius: tl, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
         path.close()
-        let newPath = path.cgPath
+        return path
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let newPath = Self.path(in: bounds, radii: radii).cgPath
         let oldPath = shape.presentation()?.path ?? shape.path
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1017,8 +1021,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         guard !visible.isNull, visible.height > 1 else { return nil }
         let parameters = UIPreviewParameters()
         parameters.backgroundColor = .clear
-        let radii = bubbleBG.radii
-        parameters.visiblePath = UIBezierPath(roundedRect: visible, cornerRadius: min(radii.0, radii.1, radii.2, radii.3))
+        let outline = TKRoundedView.path(in: bubbleBG.frame, radii: bubbleBG.radii).cgPath
+        parameters.visiblePath = UIBezierPath(cgPath: outline.intersection(CGPath(rect: visible, transform: nil)))
         return UITargetedPreview(view: renderClipView, parameters: parameters)
     }
 
