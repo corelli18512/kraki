@@ -103,6 +103,17 @@ describe('repeated session_list (Tentacle re-broadcast after each reply)', () =>
     messageProvider.clear();
   });
 
+  it('K-231: the first (cold) list writes the persisted store once, not once per store update', async () => {
+    const persistWrites = countPersistWrites();
+    apply(sessionList(Array.from({ length: SESSIONS }, (_, i) => digest(i))));
+    expect(useStore.getState().sessions.size).toBe(SESSIONS);
+    await Promise.resolve();
+    console.log(`SESSION_LIST_COLD persistWrites=${persistWrites()}`);
+    expect(persistWrites()).toBe(1);
+    expect(JSON.parse(localStorage.getItem('kraki-store')!).state.sessions.entries).toHaveLength(SESSIONS);
+    await settle();
+  });
+
   it('an unchanged list reads no IndexedDB rows and notifies no store subscriber', async () => {
     const list = sessionList(Array.from({ length: SESSIONS }, (_, i) => digest(i)));
     apply(list);
