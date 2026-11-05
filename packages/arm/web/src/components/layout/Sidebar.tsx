@@ -30,6 +30,9 @@ function Brand() {
   );
 }
 
+/** Longest the New Session sheet waits for the created session to open. */
+const NEW_SESSION_WAIT_MS = 10_000;
+
 function useSortedSessions(query: string) {
   const sessions = useStore((s) => s.sessions);
   const pinned = useStore((s) => s.pinnedSessions);
@@ -74,6 +77,17 @@ export function Sidebar() {
   const reconnecting = useShowsReconnecting();
   const [query, setQuery] = useState('');
   const [newOpen, setNewOpen] = useState(false);
+  // After Start the sheet stays up until the new session's route renders
+  // (closing first showed the list for a frame, K-240); a session that never
+  // arrives (error, offline) still releases it.
+  const [awaitingCreated, setAwaitingCreated] = useState<string | undefined | null>(null);
+  useEffect(() => {
+    if (awaitingCreated === null) return;
+    const done = () => { setAwaitingCreated(null); setNewOpen(false); };
+    if (sessionId && sessionId !== awaitingCreated) { done(); return; }
+    const timer = setTimeout(done, NEW_SESSION_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [awaitingCreated, sessionId]);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
@@ -140,7 +154,7 @@ export function Sidebar() {
 
   const dialogs = (
     <>
-      <NewSessionDialog open={newOpen} onClose={() => setNewOpen(false)} />
+      <NewSessionDialog open={newOpen} onClose={() => { setAwaitingCreated(null); setNewOpen(false); }} onCreated={() => setAwaitingCreated(sessionId)} />
       <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
     </>
   );
