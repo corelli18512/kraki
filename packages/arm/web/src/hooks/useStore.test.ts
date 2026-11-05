@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useStore } from '../hooks/useStore';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
 import type { ChatMessage } from '../types/store';
@@ -462,5 +462,42 @@ describe('live card: resolved permission', () => {
     useStore.getState().setCardAction('s2', { ...permission, payload: { ...permission.payload, decision: undefined } } as never);
     useStore.getState().setCardAction('s2', null);
     expect(useStore.getState().cards.get('s2')?.action).toBeNull();
+  });
+});
+
+describe('drafts across tabs (K-323)', () => {
+  /** Another tab's persisted store, as its storage event delivers it. */
+  function otherTabWrites(drafts: [string, string][]) {
+    const stored = JSON.parse(localStorage.getItem('kraki-store') ?? '{"state":{},"version":0}');
+    stored.state.drafts = { __type: 'Map', entries: drafts };
+    const newValue = JSON.stringify(stored);
+    localStorage.setItem('kraki-store', newValue);
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kraki-store', newValue, storageArea: localStorage }));
+  }
+  const storedDrafts = () => JSON.parse(localStorage.getItem('kraki-store')!).state.drafts.entries;
+
+  it("keeps another tab's draft when this tab types one", () => {
+    otherTabWrites([['sess-a', 'draft in tab A']]);
+    expect(useStore.getState().drafts.get('sess-a')).toBe('draft in tab A');
+    useStore.getState().setDraft('sess-b', 'draft in tab B');
+    expect(storedDrafts()).toEqual([['sess-a', 'draft in tab A'], ['sess-b', 'draft in tab B']]);
+  });
+
+  it("follows another tab's sent (cleared) draft and does not echo the write", () => {
+    useStore.getState().setDraft('sess-a', 'typed');
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    otherTabWrites([]);
+    expect(useStore.getState().drafts.size).toBe(0);
+    // Only the other tab's own write: this tab does not write back over it.
+    expect(write).toHaveBeenCalledTimes(1);
+    write.mockRestore();
+    expect(storedDrafts()).toEqual([]);
+  });
+
+  it('ignores other keys and unreadable values', () => {
+    useStore.getState().setDraft('sess-a', 'typed');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'other', newValue: '{}', storageArea: localStorage }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kraki-store', newValue: 'not json', storageArea: localStorage }));
+    expect(useStore.getState().drafts.get('sess-a')).toBe('typed');
   });
 });

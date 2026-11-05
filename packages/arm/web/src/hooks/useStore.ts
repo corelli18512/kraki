@@ -101,6 +101,9 @@ const initialState = {
 
 // --- Persistence ---
 
+/** The localStorage key of the persisted store. */
+const STORE_KEY = 'kraki-store';
+
 type PersistedStore = Pick<Store, 'sessions' | 'devices' | 'unreadCount' | 'pinnedSessions' | 'sessionModes' | 'sessionPreviews' | 'drafts'>;
 
 let persistedSessionsSource: Store['sessions'] | undefined;
@@ -132,6 +135,9 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
   return next;
 }
 
+/** Set while drafts from another tab's write are applied (adoptStoredDrafts). */
+let adoptingDrafts = false;
+
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
@@ -147,7 +153,9 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
     getItem: (name) => storage.getItem(name),
     setItem: (name, value) => {
       if (unchanged(value)) return;
-      storage.setItem(name, value);
+      // Drafts adopted from another tab's write are already stored; echoing
+      // them would put this tab's other slices over that tab's.
+      if (!adoptingDrafts) storage.setItem(name, value);
       written = value;
     },
     removeItem: (name) => {
@@ -862,7 +870,7 @@ export const useStore = create<Store>()(persist((set) => ({
     nextReconnectDelayMs: null,
   })),
 }), {
-  name: 'kraki-store',
+  name: STORE_KEY,
   storage: unchangedSkippingStorage(createJSONStorage<PersistedStore>(() => localStorage, {
     replacer,
     reviver,
@@ -883,4 +891,33 @@ export const useStore = create<Store>()(persist((set) => ({
 // browser console or a Playwright probe.
 if (typeof window !== 'undefined' && (import.meta.env.DEV || window.location.hostname === 'localhost')) {
   (window as unknown as { __krakiStore: typeof useStore }).__krakiStore = useStore;
+}
+
+/** Another tab persisted the store: adopt its drafts. Every tab writes its
+ *  whole drafts map, so a tab that never saw another tab's draft overwrote it
+ *  on its next keystroke (K-323). Following each write keeps the tabs' maps
+ *  equal; a draft edited in two tabs at once still goes to the last writer. */
+export function adoptStoredDrafts(stored: string | null): void {
+  if (!stored) return;
+  let drafts: unknown;
+  try {
+    drafts = (JSON.parse(stored, reviver) as { state?: { drafts?: unknown } }).state?.drafts;
+  } catch {
+    return;
+  }
+  if (!(drafts instanceof Map)) return;
+  const current = useStore.getState().drafts;
+  if (current.size === drafts.size && [...drafts].every(([id, text]) => current.get(id) === text)) return;
+  adoptingDrafts = true;
+  try {
+    useStore.setState({ drafts: drafts as Map<string, string> });
+  } finally {
+    adoptingDrafts = false;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORE_KEY && event.storageArea === localStorage) adoptStoredDrafts(event.newValue);
+  });
 }
