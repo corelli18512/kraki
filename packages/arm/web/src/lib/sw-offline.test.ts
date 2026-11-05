@@ -28,7 +28,9 @@ function loadWorker() {
   let online = true;
   const fetch = vi.fn(async (req: { url: string }) => {
     if (!online) throw new TypeError('Failed to fetch');
-    const res = new Response(`body of ${keyOf(req)}`, { status: 200 });
+    const path = keyOf(req);
+    const contentType = path.endsWith('.js') ? 'text/javascript' : 'text/html';
+    const res = new Response(`body of ${path}`, { status: 200, headers: { 'content-type': contentType } });
     Object.defineProperty(res, 'type', { value: 'basic' });
     return res;
   });
@@ -54,6 +56,21 @@ describe('K-112: offline app shell', () => {
     sw.setOnline(false);
     const offline = await sw.request('https://kraki.chat/session/abc', 'navigate');
     expect(await offline!.text()).toBe('body of /');
+  });
+
+  it('a static page seen online (the privacy policy) never becomes the offline shell', async () => {
+    const sw = loadWorker();
+    await sw.request('https://kraki.chat/', 'navigate');
+    expect(await sw.request('https://kraki.chat/privacy/', 'navigate')).toBeUndefined();
+    expect(await sw.request('https://kraki.chat/privacy', 'navigate')).toBeUndefined();
+    sw.setOnline(false);
+    expect(await (await sw.request('https://kraki.chat/session/x', 'navigate'))!.text()).toBe('body of /');
+  });
+
+  it('files opened in a tab (install.sh) are not taken over as pages', async () => {
+    const sw = loadWorker();
+    expect(await sw.request('https://kraki.chat/install.sh', 'navigate')).toBeUndefined();
+    expect(await sw.request('https://kraki.chat/install.ps1', 'navigate')).toBeUndefined();
   });
 
   it('pages are network-first: online loads always get the current deploy', async () => {

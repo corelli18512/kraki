@@ -182,6 +182,10 @@ self.addEventListener('notificationclick', (event) => {
 const SHELL_CACHE = 'kraki-shell-v1';
 const SHELL_KEY = '/';
 const MAX_ASSETS = 120;
+// Same-origin pages that are not the app (the privacy policy, files such as
+// install.sh opened in a tab): left to the network and never stored as the
+// shell, so an offline launch always gets Kraki.
+const NOT_APP_PAGE = /^\/(privacy(\/|$)|\.well-known\/)|\.[a-z0-9]+$/i;
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(caches.keys().then((keys) => Promise.all(
@@ -193,7 +197,8 @@ async function pageResponse(request) {
   const cache = await caches.open(SHELL_CACHE);
   try {
     const response = await fetch(request);
-    if (response.ok && response.type === 'basic') await cache.put(SHELL_KEY, response.clone());
+    const html = (response.headers.get('content-type') || '').includes('text/html');
+    if (response.ok && response.type === 'basic' && html) await cache.put(SHELL_KEY, response.clone());
     return response;
   } catch (err) {
     const shell = await cache.match(SHELL_KEY);
@@ -221,6 +226,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (request.mode === 'navigate') {
+    if (NOT_APP_PAGE.test(url.pathname)) return;
     event.respondWith(pageResponse(request));
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith(assetResponse(request));
