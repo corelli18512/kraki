@@ -136,6 +136,12 @@ vi.mock("../pair.js", () => ({
   renderQrToTerminal: vi.fn().mockResolvedValue("[QR CODE]"),
 }));
 
+const mockUnsupportedProxy = vi.fn<() => string | null>(() => null);
+vi.mock("../proxy.js", async () => ({
+  ...await vi.importActual<typeof import("../proxy.js")>("../proxy.js"),
+  unsupportedProxy: () => mockUnsupportedProxy(),
+}));
+
 import { runSetup, relayAuthToken } from "../setup.js";
 
 let originalFetch: typeof globalThis.fetch;
@@ -384,6 +390,19 @@ describe("relayAuthToken — open (self-hosted) relay", () => {
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
     mockChannelKey.mockReturnValueOnce("");
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
+  });
+});
+
+describe("runSetup — unsupported proxy (K-328)", () => {
+  it("warns before signing in when the network uses a PAC or SOCKS proxy", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://lab:4600";
+    mockRelayMethods = ['open'];
+    mockUnsupportedProxy.mockReturnValueOnce("automatic proxy configuration (PAC)");
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
+    await runSetup();
+    const logged = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.flat().join("\n");
+    expect(logged).toContain("automatic proxy configuration (PAC), which Kraki cannot use");
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
   });
 });
 

@@ -74,3 +74,40 @@ describe('parseWindowsProxy', async () => {
     expect(parseWindowsProxy(out)?.https).toBe('http://proxy.corp:8080');
   });
 });
+
+describe('unsupported proxies are named, not silently ignored (K-328)', async () => {
+  const { parseScutilUnsupported, parseWindowsUnsupported, unsupportedProxy, unsupportedProxyMessage } = await import('../proxy.js');
+
+  it('names a PAC-only or SOCKS-only macOS system proxy', () => {
+    expect(parseScutilUnsupported('<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://wpad/proxy.pac\n}'))
+      .toBe('automatic proxy configuration (PAC)');
+    expect(parseScutilUnsupported('<dictionary> {\n  SOCKSEnable : 1\n  SOCKSPort : 7891\n  SOCKSProxy : 127.0.0.1\n}'))
+      .toBe('SOCKS proxy');
+  });
+
+  it('says nothing when a web proxy is set or no proxy at all', () => {
+    expect(parseScutilUnsupported(`${SCUTIL.slice(0, -1)}  SOCKSEnable : 1\n}`)).toBeNull();
+    expect(parseScutilUnsupported('<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 0\n}')).toBeNull();
+  });
+
+  it('names a PAC or SOCKS-only Windows proxy', () => {
+    const head = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n';
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x0\r\n    AutoConfigURL    REG_SZ    http://corp/proxy.pac\r\n`))
+      .toBe('automatic proxy configuration (PAC)');
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    socks=127.0.0.1:7891\r\n`))
+      .toBe('SOCKS proxy');
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n`)).toBeNull();
+  });
+
+  it('ignores ALL_PROXY=socks5://… (no raw Node SOCKS warning, no broken WebSocket agent) and names it', () => {
+    expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891' }, 'linux')).toBeNull();
+    expect(unsupportedProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891' }, 'linux')).toBe('SOCKS proxy (ALL_PROXY)');
+    expect(unsupportedProxyMessage('SOCKS proxy (ALL_PROXY)')).toContain('HTTPS_PROXY=http://');
+  });
+
+  it('keeps an HTTP proxy next to a SOCKS ALL_PROXY', () => {
+    expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux'))
+      .toEqual({ https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', noProxy: [], source: 'env' });
+    expect(unsupportedProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux')).toBeNull();
+  });
+});

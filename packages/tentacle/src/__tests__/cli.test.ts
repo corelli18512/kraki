@@ -102,6 +102,12 @@ vi.mock('../setup.js', () => ({
   showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
 }));
 
+const mockUnsupportedProxy = vi.fn<() => string | null>(() => null);
+vi.mock('../proxy.js', async () => ({
+  ...await vi.importActual<typeof import('../proxy.js')>('../proxy.js'),
+  unsupportedProxy: () => mockUnsupportedProxy(),
+}));
+
 const mockRunSetupJson = vi.fn();
 vi.mock('../setup-json.js', () => ({
   runSetupJson: (...args: unknown[]) => mockRunSetupJson(...args),
@@ -423,6 +429,18 @@ describe('CLI status', () => {
     expect(output).toContain('42');
     expect(output).toContain('relay.test');
     expect(output).toContain('normal');
+  });
+
+  it('warns about a PAC or SOCKS proxy Kraki cannot use (K-328)', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    mockLoadConfig.mockReturnValue(null);
+    mockUnsupportedProxy.mockReturnValue('SOCKS proxy (ALL_PROXY)');
+    await runCli(['status']);
+    expect(consoleOutput.join('\n')).toContain('SOCKS proxy (ALL_PROXY), which Kraki cannot use');
+    consoleOutput = [];
+    stdoutOutput = [];
+    await runCli(['status', '--json']);
+    expect(JSON.parse(stdoutOutput.join('').trim()).unsupportedProxy).toBe('SOCKS proxy (ALL_PROXY)');
   });
 
   it('shows stopped status when no daemon', async () => {

@@ -5,7 +5,7 @@
  * device naming, and agent verification.
  */
 
-import { wsProxyOptions } from './proxy.js';
+import { unsupportedProxy, unsupportedProxyMessage, wsProxyOptions } from './proxy.js';
 import { select, input, confirm, password } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -670,6 +670,11 @@ function printDone(lines: { user?: string; relay: string; region?: string; devic
 export async function runSetup(): Promise<KrakiConfig> {
   await printAnimatedBanner();
   await confirmDespiteMacApp();
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) {
+    console.log(chalk.yellow(`  ⚠ ${unsupportedProxyMessage(ignoredProxy)}`));
+    console.log('');
+  }
 
   // Self-hosted relay override — skip login-first routing
   const customRelay = process.env.KRAKI_RELAY_URL;

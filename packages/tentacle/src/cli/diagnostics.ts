@@ -1,6 +1,6 @@
 /** status, logs, fda, permissions, doctor, relay-info: looking at what Kraki is doing. */
 
-import { wsProxyOptions } from '../proxy.js';
+import { unsupportedProxy, unsupportedProxyMessage, wsProxyOptions } from '../proxy.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -50,6 +50,8 @@ export function cmdStatus(jsonOutput = false): void {
             remoteUpdate: config.remoteUpdate !== false,
           }
         : { exists: false },
+      // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+      unsupportedProxy: unsupportedProxy(),
     };
     process.stdout.write(JSON.stringify(payload) + '\n');
     return;
@@ -73,6 +75,8 @@ export function cmdStatus(jsonOutput = false): void {
   } else {
     console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) console.log(chalk.yellow(`  Proxy:   ${unsupportedProxyMessage(ignoredProxy)}`));
 
   if (config) {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
@@ -342,6 +346,8 @@ export async function cmdDoctor(): Promise<void> {
     // Agents that can actually be started right now (SDK importable + CLI present).
     available,
     pinnedAgents: config?.agents ?? null,
+    // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+    unsupportedProxy: unsupportedProxy(),
   };
 
   process.stdout.write(JSON.stringify(result) + '\n');
