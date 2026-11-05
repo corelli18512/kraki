@@ -157,6 +157,21 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         // change (typically WS connection state) to make SwiftUI
         // re-evaluate and re-apply.
         applySnapshot(animated: false)
+        // Midnight (or a time zone change): relative time labels move on
+        // ("14:05" → "yesterday") without any Session change.
+        NotificationCenter.default.addObserver(self, selector: #selector(dayChanged),
+                                               name: UIApplication.significantTimeChangeNotification, object: nil)
+    }
+
+    /// Bumped at midnight: rows are rebuilt (`.id`) so their cards read the
+    /// clock again. Nothing in the store changes, so nothing else redraws them.
+    private(set) var timeLabelEpoch = 0
+    private var reconfiguresAllRows = false
+
+    @objc func dayChanged() {
+        timeLabelEpoch += 1
+        reconfiguresAllRows = true
+        applySnapshot(animated: false)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -234,6 +249,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
+        let archivedSwipe = UIPanGestureRecognizer(target: nil, action: nil)
+        archivedSwipe.delegate = self
+        tableView.addGestureRecognizer(archivedSwipe)
         applyTopInset(previous: 0)
         scrollIndicator.attach(to: tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
@@ -272,6 +290,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                 // the store (e.g. unread / readSeq mutations).
                 SessionRowContent(sessionId: rowSessionId, isLast: isLast)
                     .environment(appState)
+                    .id(self.timeLabelEpoch)
             }
             .margins(.all, 0)
             cell.backgroundColor = Self.rowBackground(selected: rowSessionId == self.selectedSessionId)
@@ -369,11 +388,15 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         // both diff work and an avoidable layout pass — without
         // changing what the user sees.
         // A new Session never scrolls the list: the user is already inside it.
-        if didApplyInitialSnapshot && changedIds.isEmpty && ids == lastAppliedIds {
+        if didApplyInitialSnapshot && changedIds.isEmpty && ids == lastAppliedIds && !reconfiguresAllRows {
             return
         }
 
-        if !changedIds.isEmpty {
+        if reconfiguresAllRows {
+            reconfiguresAllRows = false
+            // Every row, archived ones too (the header is already listed).
+            snapshot.reconfigureItems(snapshot.itemIdentifiers.filter { $0 != Self.archivedHeaderId })
+        } else if !changedIds.isEmpty {
             snapshot.reconfigureItems(changedIds)
         }
 
@@ -469,6 +492,15 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         KLog.chat("👆 [session-list] tap session=\(id.prefix(12))")
         onCellTapped?(id)
+    }
+
+    /// Archived rows have no swipe actions, so nothing claims a sideways
+    /// swipe on them and UIKit ends it as a tap — which opens the Session and
+    /// unarchives it. A pan that does nothing claims those swipes (cancelling
+    /// the tap); live rows keep their swipe actions, vertical drags scroll.
+    static func claimsSwipe(onItem id: String?, velocity: CGPoint) -> Bool {
+        guard let id, id.hasPrefix(archivedPrefix) else { return false }
+        return abs(velocity.x) > abs(velocity.y)
     }
 
     func tableView(_ tableView: UITableView, willBeginEditingRowAt indexPath: IndexPath) {
@@ -569,6 +601,17 @@ struct SessionRowContent: View {
             }
         }
     }
+}
+
+extension SessionTableController: UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = recognizer as? UIPanGestureRecognizer, let tableView = pan.view as? UITableView,
+              let path = tableView.indexPathForRow(at: pan.location(in: tableView)) else { return false }
+        return Self.claimsSwipe(onItem: dataSource.itemIdentifier(for: path), velocity: pan.velocity(in: tableView))
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 // MARK: - Lucide icon → UIImage for swipe actions
