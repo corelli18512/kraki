@@ -94,7 +94,9 @@ struct MessageInputView: View {
         guard hasText, restingWidth > 1 else { return false }
         let oneRowText = restingWidth - 48 - (showsClear ? Self.clearWidth : 0)
             - (canShowVoiceToggle ? Self.micWidth : 0) - 6
-        return IOSComposerTextMetrics.height(text, width: oneRowText, maxHeight: .greatestFiniteMagnitude)
+        // Only "more than one line" matters: capped at two lines, a huge draft
+        // is never measured in full.
+        return IOSComposerTextMetrics.height(text, width: oneRowText, maxHeight: IOSComposerTextMetrics.lineHeight * 2)
             > IOSComposerTextMetrics.lineHeight + 0.5
     }
     @State private var transcriptWidth: CGFloat = 0

@@ -62,8 +62,9 @@ struct NotificationsPane: View {
     }
 
     private func requestPermission() async {
-        _ = try? await UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .badge, .sound])
+        let granted = (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        if granted { MacDockBadge.reapply() }
         await refreshStatus()
     }
 

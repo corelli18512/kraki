@@ -93,7 +93,10 @@ struct MacCommands: Commands {
             } label: {
                 Label("Zoom In", systemImage: "plus.magnifyingglass")
             }
-            .keyboardShortcut("=", modifiers: .command)   // ⌘+
+            // ⌘+ as typed on every layout (a German keyboard has its own +
+            // key; the layout-mapped "=" became ⌘*). ⌘= also zooms in, as in
+            // browsers (MacZoomShortcut).
+            .keyboardShortcut("+", modifiers: .command, localization: .custom)
             Button {
                 NotificationCenter.default.post(name: .macZoomOut, object: nil)
             } label: {
@@ -140,9 +143,10 @@ struct MacCommands: Commands {
 
             Divider()
 
-            // ⌘1–⌘9 open the first nine sessions in sidebar order, by title.
-            // The list is sorted once per menu update (not once per item).
-            let firstNine = Array(appState.sessionStore.navigationOrderedSessions.prefix(9))
+            // ⌘1–⌘9 open the first nine sessions the sidebar shows (search and
+            // computer filter applied), by title. The list is sorted once per
+            // menu update (not once per item).
+            let firstNine = Array(appState.sessionStore.filteredNavigationSessions.prefix(9))
             ForEach(Array(firstNine.enumerated()), id: \.element.id) { index, session in
                 Button(Self.menuTitle(session.displayTitle)) {
                     NotificationCenter.default.post(

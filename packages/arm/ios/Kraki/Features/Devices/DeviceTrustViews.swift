@@ -26,20 +26,33 @@ struct AccountAccessUpgradeBanner: View {
     var body: some View {
         if let device = appState.computersNeedingPairing.first,
            let notice = AccountAccessNotice(state: appState.trustState(for: device.id)) {
-            VStack(alignment: .leading, spacing: 4) {
-                if notice == .updateComputer {
-                    Text("Update Kraki on \(device.name)").font(.headline)
-                    Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Check saved connection to \(device.name)").font(.headline)
-                    Text("Kraki could not verify the saved connection. Update Kraki on this computer first. Only reset if you changed or reinstalled it; otherwise keep the saved keys and investigate.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Reset Saved Connection…") { resetting = device }
-                        .accessibilityIdentifier("accountAccess.resetConnection")
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if notice == .updateComputer {
+                        Text("Update Kraki on \(device.name)").font(.headline)
+                        Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Check saved connection to \(device.name)").font(.headline)
+                        Text("Kraki could not verify the saved connection. Update Kraki on this computer first. Only reset if you changed or reinstalled it; otherwise keep the saved keys and investigate.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Reset Saved Connection…") { resetting = device }
+                            .accessibilityIdentifier("accountAccess.resetConnection")
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Hidden until the app restarts or the computer's state changes
+                // (as the pairing banner).
+                Button {
+                    appState.deviceTrust.dismissedBanners.insert(device.id)
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss")
+                .accessibilityIdentifier("accountAccess.dismiss")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
             .accessibilityIdentifier(notice == .updateComputer ? "accountAccess.updateComputer" : "accountAccess.checkConnection")
             .confirmationDialog(

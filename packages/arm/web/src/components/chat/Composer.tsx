@@ -34,6 +34,15 @@ export function answerImagesAllowed(agent: string | undefined): boolean {
   return agent?.toLowerCase() === 'pi';
 }
 
+/** A drag that carries files (from Finder or the desktop). */
+function carriesFiles(data: DataTransfer | null): boolean {
+  return !!data && Array.from(data.types ?? []).includes('Files');
+}
+
+function firstImageFile(files: FileList | File[] | undefined): File | undefined {
+  return files ? Array.from(files).find((f) => f.type.startsWith('image/')) : undefined;
+}
+
 export type ComposerIntent = 'prompt' | 'steer' | 'answerQuestion' | 'denyPermission';
 
 /** iOS/Mac `MessageComposerPolicy`: a waiting permission turns the composer
@@ -309,6 +318,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [sessionId, setImage]);
   useStopDictationOnLeave(sessionId);
 
+  // A file dropped outside the composer must not navigate the tab away to it,
+  // and the cursor there shows that nothing takes it.
+  useEffect(() => {
+    const keepPage = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      const inComposer = e.target instanceof Element && e.target.closest('.kcomposer');
+      if (e.type === 'dragover' && !inComposer && e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+    };
+    window.addEventListener('dragover', keepPage);
+    window.addEventListener('drop', keepPage);
+    return () => {
+      window.removeEventListener('dragover', keepPage);
+      window.removeEventListener('drop', keepPage);
+    };
+  }, []);
+
   useEffect(() => {
     if (shouldAutoFocusTextInput()) fieldRef.current?.focus({ preventScroll: true });
   }, [sessionId]);
@@ -393,7 +419,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     : intent === 'steer' ? t('composer.steer') : t('composer.send');
 
   return (
-    <div className="kcomposer">
+    <div
+      className="kcomposer"
+      onDragOver={(e) => {
+        if (!carriesFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = canAttach && !dictation.active ? 'copy' : 'none';
+      }}
+      onDrop={(e) => {
+        if (!carriesFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        if (!dictation.active) void pickImage(firstImageFile(e.dataTransfer.files));
+      }}
+    >
       <VoiceError owner={sessionId} />
       <div ref={boxRef} className={`kcomposer-field${multiline && !dictation.active ? ' is-multiline' : ''}${dictation.active ? ' is-dictating' : ''}`}>
         {dictation.active ? (

@@ -885,7 +885,7 @@ final class MessageRouter {
             updatePreview(
                 sessionId,
                 text: String(localized: "Session created"),
-                type: "session_created",
+                type: SessionStore.createdPlaceholderPreviewType,
                 timestamp: timestamp,
                 notify: false
             )

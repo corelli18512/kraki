@@ -292,6 +292,16 @@ final class SessionStore {
         sortedSessions
     }
 
+    /// The filter of the visible session list (Mac sidebar search and
+    /// computer filter). Keyboard navigation (⌘1–9, Previous/Next Session)
+    /// walks `filteredNavigationSessions`, so it never opens a hidden Session.
+    var navigationFilter = SessionListFilter()
+
+    var filteredNavigationSessions: [SessionInfo] {
+        filteredSessions(navigationOrderedSessions, deviceId: navigationFilter.deviceId,
+                         matching: navigationFilter.query)
+    }
+
     // MARK: - Disk snapshot
 
     /// On-disk snapshot of session metadata + previews. Hydrated
@@ -656,6 +666,7 @@ final class SessionStore {
     }
 
     private static let attentionPreviewTypes: Set<String> = ["question", "permission"]
+    static let createdPlaceholderPreviewType = "session_created"
 
     /// Resolve one preview update without allowing an older websocket snapshot
     /// to move a Session backwards. Authoritative snapshots may still clear a
@@ -678,6 +689,13 @@ final class SessionStore {
             return nil
         }
         guard let existing else { return incoming }
+        // "Session created" is a local placeholder (MessageRouter), not
+        // content: any real preview replaces it, whatever its timestamp. An
+        // imported or prompt-started session's first line can predate the
+        // session_created envelope the placeholder was stamped with.
+        if existing.type == Self.createdPlaceholderPreviewType, incoming.type != existing.type {
+            return incoming
+        }
         let oldDate = ISO8601.parse(existing.timestamp)
         let newDate = ISO8601.parse(incoming.timestamp)
         switch (oldDate, newDate) {

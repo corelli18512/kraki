@@ -405,7 +405,7 @@ struct MainWindowView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .macNavigateSession)) { note in
-            let ordered = appState.sessionStore.navigationOrderedSessions
+            let ordered = appState.sessionStore.filteredNavigationSessions
             guard !ordered.isEmpty else { return }
             let targetIndex: Int
             if let index = note.userInfo?["index"] as? Int {
@@ -541,8 +541,10 @@ struct MainWindowView: View {
                 appState.endViewingSession(selectedSessionId)
             }
         }
-        .onChange(of: appState.sessionStore.totalUnread) { _, total in
-            NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : ""
+        // Initial too: unread restored from the saved session list before the
+        // window opened never changed afterwards, so the Dock had no badge.
+        .onChange(of: appState.sessionStore.totalUnread, initial: true) { _, total in
+            MacDockBadge.show(unread: total)
         }
     }
 

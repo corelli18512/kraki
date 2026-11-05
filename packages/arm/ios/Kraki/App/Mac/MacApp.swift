@@ -338,6 +338,69 @@ final class MacLaunchCoordinator {
     }
 }
 
+/// One Kraki per Mac account. A second copy (another app bundle, `open -n`)
+/// handed the built-in tentacle back and forth with the first and added a
+/// second menu bar item. A later launch shows the running one instead.
+enum MacSingleInstance {
+    struct Candidate: Equatable {
+        let pid: pid_t
+        let isTerminated: Bool
+    }
+
+    /// Passed by "Relaunch Now" (`AppLanguage.relaunch`) with its own pid:
+    /// the copy it starts replaces it instead of handing back to it.
+    static let relaunchedFromArgument = "--kraki-relaunched-from"
+
+    static func relaunchedFromPID(arguments: [String]) -> pid_t? {
+        guard let flag = arguments.firstIndex(of: relaunchedFromArgument),
+              arguments.indices.contains(flag + 1) else { return nil }
+        return pid_t(arguments[flag + 1])
+    }
+
+    /// The instance already running, if any: never this process, one that
+    /// has exited, or the one this launch replaces (`ignoring`).
+    static func runningInstance(among candidates: [Candidate], currentPID: pid_t, ignoring: pid_t? = nil) -> Candidate? {
+        candidates.first { $0.pid != currentPID && $0.pid != ignoring && !$0.isTerminated }
+    }
+
+    /// Posted by a second launch; the running instance shows its window.
+    static func showWindowNotification(bundleId: String) -> Notification.Name {
+        Notification.Name("\(bundleId).showMainWindow")
+    }
+
+    /// Called first thing at launch. Debug harnesses (KRAKI_* environment)
+    /// and tests run beside a developer's own Kraki Dev on purpose.
+    @MainActor
+    static func handOffToRunningInstanceIfNeeded() {
+        #if DEBUG
+        if NativeTestRuntime.isRunningTests { return }
+        if ProcessInfo.processInfo.environment.keys.contains(where: { $0.hasPrefix("KRAKI_") }) { return }
+        #endif
+        guard let bundleId = Bundle.main.bundleIdentifier else { return }
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+        let candidates = apps.map { Candidate(pid: $0.processIdentifier, isTerminated: $0.isTerminated) }
+        guard let running = runningInstance(among: candidates, currentPID: getpid(),
+                                            ignoring: relaunchedFromPID(arguments: CommandLine.arguments)),
+              let app = apps.first(where: { $0.processIdentifier == running.pid }) else { return }
+        KLog.d("second launch: showing the running instance (pid \(running.pid)) and exiting")
+        // Brings an open window forward.
+        DistributedNotificationCenter.default().postNotificationName(
+            showWindowNotification(bundleId: bundleId), object: nil, userInfo: nil, deliverImmediately: true)
+        // Opening it again, as Finder does, sends the reopen event: a copy
+        // that only lives in the menu bar creates its window
+        // (applicationShouldHandleReopen), older builds included.
+        if let url = app.bundleURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = false
+            let reopened = DispatchSemaphore(value: 0)
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in reopened.signal() }
+            _ = reopened.wait(timeout: .now() + 5)
+        }
+        app.activate()
+        exit(0)
+    }
+}
+
 @main
 struct MacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
@@ -348,6 +411,7 @@ struct MacApp: App {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
     init() {
+        MacSingleInstance.handOffToRunningInstanceIfNeeded()
         // Two launch modes (selected via the `KRAKI_DEV_LOCAL` scheme
         // env var):
         //

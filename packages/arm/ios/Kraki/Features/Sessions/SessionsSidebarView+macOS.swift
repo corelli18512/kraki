@@ -245,6 +245,11 @@ struct SessionsSidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Keyboard navigation follows what this list shows.
+        .onChange(of: SessionListFilter(deviceId: selectedDeviceFilter, query: searchText), initial: true) { _, filter in
+            appState.sessionStore.navigationFilter = filter
+        }
+        .onDisappear { appState.sessionStore.navigationFilter = SessionListFilter() }
         // Solid, opaque canvas — no native sidebar vibrancy/glass. One
         // flat plane; the 1px seam separating sidebar from detail is
         // drawn by the parent HStack (MainWindowView), not here, so the
