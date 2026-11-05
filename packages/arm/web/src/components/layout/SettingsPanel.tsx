@@ -27,7 +27,8 @@ import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { DeviceNameEditor } from '../devices/DeviceNameEditor';
 import { signOut } from './ProfileBar';
-import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
+import { setUsageShortcut, shortcutFromEvent, shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
+import { isMacBrowser } from '../../lib/macDownload';
 import './settings.css';
 import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
@@ -284,7 +285,7 @@ export function SettingsPanel({
       </SettingsSection>
       <LanguageSettingsRow />
       <SettingsSection title={t('general.accountUsage')}>
-        <SettingsRow label={t('general.holdUsage', { shortcut: shortcut.shortcut })}>
+        <SettingsRow label={t('general.holdUsage', { shortcut: shortcutLabel(shortcut.shortcut) })}>
           <SettingsSwitch
             label={t('general.peekUsage')}
             on={shortcut.enabled}
@@ -298,7 +299,12 @@ export function SettingsPanel({
             type="button"
             className={`kp-button kp-shortcut${shortcut.recording ? ' is-recording' : ''}`}
             style={isWindows ? undefined : { width: 230, height: 26 }}
-            onClick={() => useUsageShortcut.setState({ recording: true })}
+            onClick={(e) => {
+              // Safari does not focus a clicked button; without focus its
+              // keydown never arrives and nothing can be recorded.
+              e.currentTarget.focus();
+              useUsageShortcut.setState({ recording: true });
+            }}
             onBlur={() => useUsageShortcut.setState({ recording: false })}
             onKeyDown={(e) => {
               if (!shortcut.recording) return;
@@ -315,11 +321,11 @@ export function SettingsPanel({
               }
             }}
           >
-            {shortcut.recording ? t('general.recordShortcut') : shortcut.shortcut}
+            {shortcut.recording ? t('general.recordShortcut') : shortcutLabel(shortcut.shortcut)}
           </button>
         </SettingsRow>
         <p className="kp-foot">
-          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : 'general.shortcutFooterSidebar')}
+          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : isMacBrowser() ? 'general.shortcutFooterSidebarMac' : 'general.shortcutFooterSidebar')}
         </p>
       </SettingsSection>
       {state.archiveInfo.size > 0 && <section className="kp-section">

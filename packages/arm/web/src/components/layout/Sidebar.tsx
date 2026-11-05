@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
-import { useUsageShortcut } from '../../lib/usage-shortcut';
+import { shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
@@ -178,7 +178,7 @@ export function Sidebar() {
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
               <div className="ksb-plus-menu ksb-app-menu" role="menu">
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> {t('tabs.devices')}</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: usageShortcut }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: shortcutLabel(usageShortcut) }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> {t('sidebar.settings')}</button>
                 <ProfileBar menu />
               </div>

@@ -65,6 +65,22 @@ describe('SettingsPanel native preferences parity', () => {
     expect(useUsageShortcut.getState()).toMatchObject({ shortcut: 'F8', recording: false });
     expect(screen.getByRole('button', { name: 'F8' })).not.toHaveClass('is-recording');
   });
+  it('focuses the recorder on click so Safari delivers the keys (K-226)', () => {
+    open();
+    const recorder = screen.getByRole('button', { name: 'F6' });
+    // Like Safari, a synthetic click does not focus a button by itself.
+    fireEvent.click(recorder);
+    expect(recorder).toHaveFocus();
+  });
+  it('shows the Command key as Cmd in a Mac browser, not Super (K-226)', () => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15');
+    useUsageShortcut.setState({ shortcut: 'Super+Shift+J' });
+    open();
+    expect(screen.getByRole('button', { name: 'Cmd+Shift+J' })).toBeInTheDocument();
+    expect(screen.getByText('Hold Cmd+Shift+J to peek at account usage')).toBeInTheDocument();
+    expect(screen.getByText(/combination with Control, Option or Command/)).toBeInTheDocument();
+    ua.mockRestore();
+  });
   it('clears the active recorder indication on blur and Escape without saving', () => {
     open();
     const recorder = screen.getByRole('button', { name: 'F6' });
