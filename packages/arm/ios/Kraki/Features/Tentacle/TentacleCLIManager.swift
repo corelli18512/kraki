@@ -394,9 +394,6 @@ final class TentacleCLIManager {
                 }
             }
             notRunningVerdict = Self.registeredButNotRunningState(down: down, launchdDomainStuck: stuck)
-            if case .error = notRunningVerdict, !helperFailedToStart {
-                KLog.diag("[Tentacle] built-in daemon registered but still not running after \(Int(down))s")
-            }
         } else if running {
             notRunningSince = nil
             lastKickstartAt = nil
@@ -418,7 +415,7 @@ final class TentacleCLIManager {
             // user spammed buttons. Trust the JSON here.
             daemonState = notRunningVerdict
         }
-        if case .error = notRunningVerdict { helperFailedToStart = true } else { helperFailedToStart = false }
+        noteHelperStartFailure(daemonState)
 
         if let cfg = json["config"] as? [String: Any] {
             let exists = (cfg["exists"] as? Bool) ?? false
@@ -494,13 +491,6 @@ final class TentacleCLIManager {
         }
     }
 
-    /// Quit Kraki and go offline: stop the daemon and never start it again
-    /// in this process (see quittingOffline).
-    func goOfflineForQuit() async {
-        quittingOffline = true
-        await stopDaemon()
-    }
-
     func stopDaemon() async {
         guard case .available(let path, _) = installState else { return }
         daemonState = .stopping
@@ -550,25 +540,6 @@ final class TentacleCLIManager {
         } catch {
             daemonState = .error(String(localized: "Couldn't reconnect this Mac: \(error.localizedDescription)"))
         }
-    }
-
-    nonisolated static let launchdStuckMessage =
-        String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
-
-    nonisolated static let helperDidNotStartMessage =
-        String(localized: "Kraki didn't start on this Mac. Try again, or open the logs to see why.")
-
-    /// How long a registered built-in job may stay down (while it is
-    /// kickstarted and re-registered) before the user is told it failed.
-    nonisolated static let builtInStartGrace: TimeInterval = 45
-
-    /// State for a built-in job that is registered and should run but does
-    /// not: offline while it may still come up, then a problem with a reason
-    /// (it was shown as a plain "offline" forever, e.g. launchd "spawn
-    /// failed" exit 78 after the app was renamed or moved).
-    nonisolated static func registeredButNotRunningState(down: TimeInterval, launchdDomainStuck: Bool) -> DaemonState {
-        guard down > builtInStartGrace else { return .stopped }
-        return .error(launchdDomainStuck ? launchdStuckMessage : helperDidNotStartMessage)
     }
 
     /// True while the user's launchd domain only spawns jobs on explicit
@@ -629,18 +600,7 @@ final class TentacleCLIManager {
         if case .running = daemonState, builtIn.ownershipMarkerExists,
            builtIn.service.status == .enabled { return }
 
-        if helperFailedToStart {
-            // Try Again after the job failed to come up: repair the
-            // registration now (what relaunching the app used to do), and
-            // give it the full grace period again.
-            KLog.diag("[Tentacle] retrying a built-in daemon that did not start; re-registering")
-            helperFailedToStart = false
-            notRunningSince = nil
-            lastKickstartAt = nil
-            reRegisteredThisLaunch = true
-            daemonState = .starting
-            await reRegisterBuiltIn()
-        }
+        await repairHelperThatDidNotStart()
 
         guard !quittingOffline else { return }
         daemonState = .starting
@@ -782,6 +742,59 @@ struct TentacleCLIError: Error, LocalizedError {
     let message: String
     init(_ m: String) { message = m }
     var errorDescription: String? { message }
+}
+
+// MARK: - Built-in job that does not start, quitting offline
+
+extension TentacleCLIManager {
+    nonisolated static let launchdStuckMessage =
+        String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
+
+    nonisolated static let helperDidNotStartMessage =
+        String(localized: "Kraki didn't start on this Mac. Try again, or open the logs to see why.")
+
+    /// How long a registered built-in job may stay down (while it is
+    /// kickstarted and re-registered) before the user is told it failed.
+    nonisolated static let builtInStartGrace: TimeInterval = 45
+
+    /// State for a built-in job that is registered and should run but does
+    /// not: offline while it may still come up, then a problem with a reason
+    /// (it was shown as a plain "offline" forever, e.g. launchd "spawn
+    /// failed" exit 78 after the app was renamed or moved).
+    nonisolated static func registeredButNotRunningState(down: TimeInterval, launchdDomainStuck: Bool) -> DaemonState {
+        guard down > builtInStartGrace else { return .stopped }
+        return .error(launchdDomainStuck ? launchdStuckMessage : helperDidNotStartMessage)
+    }
+
+    /// Quit Kraki and go offline: stop the daemon and never start it again
+    /// in this process (see quittingOffline).
+    func goOfflineForQuit() async {
+        quittingOffline = true
+        await stopDaemon()
+    }
+
+    /// Try Again after the built-in job failed to come up: repair the
+    /// registration now (what relaunching the app used to do), and give it the
+    /// full grace period again.
+    private func repairHelperThatDidNotStart() async {
+        guard helperFailedToStart else { return }
+        KLog.diag("[Tentacle] retrying a built-in daemon that did not start; re-registering")
+        helperFailedToStart = false
+        notRunningSince = nil
+        lastKickstartAt = nil
+        reRegisteredThisLaunch = true
+        daemonState = .starting
+        await reRegisterBuiltIn()
+    }
+
+    /// Remember that the built-in job failed to come up (Try Again repairs
+    /// it), logging it once.
+    private func noteHelperStartFailure(_ state: DaemonState) {
+        let failed: Bool
+        if case .error = state { failed = true } else { failed = false }
+        if failed, !helperFailedToStart { KLog.diag("[Tentacle] built-in daemon registered but still not running") }
+        helperFailedToStart = failed
+    }
 }
 
 // MARK: - Restart a daemon left behind by an app update

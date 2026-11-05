@@ -35,20 +35,20 @@ final class MessageCacheWriteFailureTests: XCTestCase {
         let url = root.appendingPathComponent("m.sqlite")
         let store = MessageStore(db: try MessageDatabase(databaseURL: url))
         store.persist("S", [message(1)])
-        XCTAssertFalse(store.cacheWritesFailing)
+        XCTAssertFalse(store.cacheWrites.failing)
 
         // The disk is full: every insert fails.
         try exec("CREATE TRIGGER disk_full BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END;", on: url)
         store.persist("S", [message(2)])
-        XCTAssertTrue(store.cacheWritesFailing)
+        XCTAssertTrue(store.cacheWrites.failing)
         store.append("S", message(3))
-        XCTAssertTrue(store.cacheWritesFailing)
+        XCTAssertTrue(store.cacheWrites.failing)
         XCTAssertEqual(store.persistedHead("S"), 1, "the gap stays so the history is fetched again")
 
         // Space is back.
         try exec("DROP TRIGGER disk_full;", on: url)
         store.persist("S", [message(2), message(3)])
-        XCTAssertFalse(store.cacheWritesFailing)
+        XCTAssertFalse(store.cacheWrites.failing)
         XCTAssertEqual(store.persistedHead("S"), 3)
     }
 }

@@ -33,7 +33,7 @@ final class RelayOutageReconnectTests: XCTestCase {
         websocket.autoReplyPing = true
         parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
         parameters.allowLocalEndpointReuse = true
-        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+        let listener = try NWListener(using: parameters, on: try XCTUnwrap(NWEndpoint.Port(rawValue: port)))
         var connections: [NWConnection] = []
         listener.newConnectionHandler = { connection in
             connections.append(connection)
