@@ -19,7 +19,12 @@ enum IOSComposerTextMetrics {
     static let measuredPrefixLength = 4_096
 
     static func height(_ text: String, width: CGFloat, maxHeight: CGFloat) -> CGFloat {
-        guard width > 1 else { return 0 }
+        measure(text, width: width, maxHeight: maxHeight).height
+    }
+
+    /// The height, and how many UTF-16 units were laid out to find it.
+    static func measure(_ text: String, width: CGFloat, maxHeight: CGFloat) -> (height: CGFloat, measuredLength: Int) {
+        guard width > 1 else { return (0, 0) }
         let utf16 = text as NSString
         if utf16.length > measuredPrefixLength {
             // Text only adds lines, so a prefix that already fills the cap
@@ -27,9 +32,9 @@ enum IOSComposerTextMetrics {
             let prefixEnd = utf16.rangeOfComposedCharacterSequence(at: measuredPrefixLength).location
             let prefix = utf16.substring(to: prefixEnd)
             let prefixHeight = lineCount(prefix, width: width) * lineHeight
-            if prefixHeight >= maxHeight { return maxHeight }
+            if prefixHeight >= maxHeight { return (maxHeight, prefixEnd) }
         }
-        return min(lineCount(text, width: width) * lineHeight, maxHeight)
+        return (min(lineCount(text, width: width) * lineHeight, maxHeight), utf16.length)
     }
 
     private static func lineCount(_ text: String, width: CGFloat) -> CGFloat {

@@ -24,16 +24,15 @@ final class IOSComposerTextMetricsTests: XCTestCase {
         XCTAssertGreaterThan(height, line * 5)
     }
 
-    func testAMegabyteDraftIsMeasuredWithinAFrame() {
+    func testAMegabyteDraftOnlyMeasuresAPrefix() {
         let line = IOSComposerTextMetrics.lineHeight
         let huge = String(repeating: "The quick brown fox jumps over the lazy dog. ", count: 24_000) // ~1 MB
-        let started = CFAbsoluteTimeGetCurrent()
-        let typing = IOSComposerTextMetrics.height(huge, width: width, maxHeight: line * 5)
-        let wraps = IOSComposerTextMetrics.height(huge, width: width, maxHeight: line * 2)
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        XCTAssertEqual(typing, line * 5)
-        XCTAssertEqual(wraps, line * 2)
-        XCTAssertLessThan(elapsed, 0.1, "measuring a 1 MB draft took \(elapsed)s")
+        let typing = IOSComposerTextMetrics.measure(huge, width: width, maxHeight: line * 5)
+        let wraps = IOSComposerTextMetrics.measure(huge, width: width, maxHeight: line * 2)
+        XCTAssertEqual(typing.height, line * 5)
+        XCTAssertEqual(wraps.height, line * 2)
+        XCTAssertLessThanOrEqual(typing.measuredLength, IOSComposerTextMetrics.measuredPrefixLength)
+        XCTAssertLessThanOrEqual(wraps.measuredLength, IOSComposerTextMetrics.measuredPrefixLength)
     }
 }
 #endif
