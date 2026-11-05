@@ -46,6 +46,36 @@ final class ForkNavigationTests: XCTestCase {
         XCTAssertTrue(app.sessionStore.navigationReplacesPlaceholder)
     }
 
+    /// K-009: the computer reports a failed fork as `error` with an empty
+    /// sessionId and the requestId. It must fail the placeholder at once with
+    /// that reason, not leave it spinning until the 30 s timeout.
+    func testForkFailureFromComputerShowsItsReason() throws {
+        let app = makeApp()
+        app.commandSender?.forkSession(sessionId: "src")
+        let rid = try requestId(app)
+        let placeholder = try XCTUnwrap(app.commandSender?.pendingPlaceholderIds[rid])
+        app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+            "type": "error", "sessionId": "", "deviceId": "d", "seq": 0,
+            "payload": ["message": "Couldn't copy the session: disk full", "requestId": rid],
+        ]))
+        XCTAssertEqual(app.sessionStore.pendingSessionErrors[placeholder], "Couldn't copy the session: disk full")
+        XCTAssertNil(app.commandSender?.pendingPlaceholderIds[rid])
+        XCTAssertEqual(app.sessionStore.navigateToSession, placeholder, "the fast failure is shown")
+    }
+
+    /// K-009: same for a failed create (e.g. the agent is not installed).
+    func testCreateFailureFromComputerShowsItsReason() throws {
+        let app = makeApp()
+        let rid = try XCTUnwrap(app.commandSender?.createSession(targetDeviceId: "d", agentId: "pi", model: "m"))
+        let placeholder = try XCTUnwrap(app.commandSender?.pendingPlaceholderIds[rid])
+        app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+            "type": "error", "sessionId": "", "deviceId": "d", "seq": 0,
+            "payload": ["message": "Couldn't create the session: pi is not installed", "requestId": rid],
+        ]))
+        XCTAssertEqual(app.sessionStore.pendingSessionErrors[placeholder], "Couldn't create the session: pi is not installed")
+        XCTAssertNil(app.commandSender?.pendingPlaceholderIds[rid])
+    }
+
     func testForkAnnouncementKeepsListStateAndSeedsHistory() throws {
         let app = makeApp()
         let rows = (1...3).map { ChatMessage(type: $0 == 2 ? "agent_message" : "user_message", seq: $0, sessionId: "src",

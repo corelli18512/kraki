@@ -350,6 +350,18 @@ final class MessageRouter {
             return
         }
 
+        // A create/fork/import failure has no session yet (sessionId ""): it
+        // is correlated by the requestId the app sent. Fail the placeholder
+        // now with the computer's reason instead of a timeout 30 s later.
+        if type == "error", (dict["sessionId"] as? String ?? "").isEmpty {
+            let payload = dict["payload"] as? [String: Any]
+            if let requestId = payload?["requestId"] as? String,
+               let sender = appState.commandSender, sender.pendingPlaceholderIds[requestId] != nil {
+                sender.failPendingRequest(requestId, reason: payload?["message"] as? String ?? String(localized: "Error"))
+            }
+            return
+        }
+
         // ── All remaining messages require a sessionId ───────────────────
 
         guard let sessionId = dict["sessionId"] as? String else { return }
