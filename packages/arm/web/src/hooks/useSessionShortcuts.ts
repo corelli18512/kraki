@@ -2,10 +2,21 @@ import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useStore } from './useStore';
 import { requestComposerFocus } from '../components/sessions/NewSessionComposer';
+import { sortSessionsForList } from '../lib/chat/session-card';
+
+/** Inside a text field Cmd/Ctrl+Up/Down first moves the caret to the start or
+ *  end; only once it is there does the shortcut switch session. */
+function caretCanMove(target: EventTarget | null, key: string): boolean {
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return false;
+  const { selectionStart, selectionEnd, value } = target;
+  if (selectionStart === null || selectionEnd === null) return false;
+  return key === 'ArrowUp' ? selectionEnd > 0 : selectionStart < value.length;
+}
 
 /**
  * Cmd+Up / Cmd+Down (Mac) or Ctrl+Up / Ctrl+Down (Windows/Linux)
- * to switch between sessions in the sorted session list order.
+ * to switch between sessions in the sidebar order.
  */
 export function useSessionShortcuts() {
   const navigate = useNavigate();
@@ -24,17 +35,10 @@ export function useSessionShortcuts() {
         if (params.sessionId) navigate('/');
         return;
       }
-      if (!mod || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      if (!mod || e.shiftKey || e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      if (caretCanMove(e.target, e.key)) return;
 
-      const sorted = [...sessions.values()].sort((a, b) => {
-        const aPinned = pinnedSessions.has(a.id) ? 0 : 1;
-        const bPinned = pinnedSessions.has(b.id) ? 0 : 1;
-        if (aPinned !== bPinned) return aPinned - bPinned;
-        const aTs = sessionPreviews.get(a.id)?.timestamp ?? '';
-        const bTs = sessionPreviews.get(b.id)?.timestamp ?? '';
-        if (aTs !== bTs) return bTs.localeCompare(aTs);
-        return a.id.localeCompare(b.id);
-      });
+      const sorted = sortSessionsForList(sessions.values(), pinnedSessions, sessionPreviews);
 
       if (sorted.length === 0) return;
 

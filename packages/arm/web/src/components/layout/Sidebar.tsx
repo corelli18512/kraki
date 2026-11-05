@@ -17,7 +17,7 @@ import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
 import { desktop } from '../../lib/desktop';
-import { sessionTimestamp } from '../../lib/chat/session-card';
+import { sortSessionsForList } from '../../lib/chat/session-card';
 import './sidebar.css';
 
 function Brand() {
@@ -36,26 +36,12 @@ function useSortedSessions(query: string) {
   const previews = useStore((s) => s.sessionPreviews);
   return useMemo(() => {
     const q = query.trim().toLowerCase();
-    return [...sessions.values()]
-      .filter((s) => {
-        if (!q) return true;
-        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
-        return hay.includes(q);
-      })
-      .map((session) => ({
-        session,
-        timestamp: Date.parse(sessionTimestamp(previews.get(session.id)?.timestamp, session.createdAt)) || 0,
-        createdAt: Date.parse(session.createdAt ?? '') || 0,
-      }))
-      .sort((a, b) => {
-        const pa = pinned.has(a.session.id) ? 0 : 1;
-        const pb = pinned.has(b.session.id) ? 0 : 1;
-        if (pa !== pb) return pa - pb;
-        if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
-        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-        return a.session.id.localeCompare(b.session.id);
-      })
-      .map(({ session }) => session);
+    const matching = [...sessions.values()].filter((s) => {
+      if (!q) return true;
+      const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+    return sortSessionsForList(matching, pinned, previews);
   }, [sessions, pinned, previews, query]);
 }
 
