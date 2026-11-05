@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
@@ -30,16 +30,21 @@ function Brand() {
   );
 }
 
+/** Case- and accent-insensitive form for search (iOS/Mac localizedStandardContains). */
+function searchFold(text: string): string {
+  return text.normalize('NFD').replace(/\p{Mn}/gu, '').toLocaleLowerCase();
+}
+
 function useSortedSessions(query: string) {
   const sessions = useStore((s) => s.sessions);
   const pinned = useStore((s) => s.pinnedSessions);
   const previews = useStore((s) => s.sessionPreviews);
   return useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = searchFold(query.trim());
     return [...sessions.values()]
       .filter((s) => {
         if (!q) return true;
-        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
+        const hay = searchFold(`${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`);
         return hay.includes(q);
       })
       .map((session) => ({
@@ -86,7 +91,11 @@ export function Sidebar() {
   const pinned = useStore((s) => s.pinnedSessions);
   const status = useStore((s) => s.status);
   const reconnecting = useShowsReconnecting();
+  // The field shows what is typed; the list filters on `query`, which an open
+  // IME composition (raw pinyin/kana) does not update until it is committed.
+  const [searchText, setSearchText] = useState('');
   const [query, setQuery] = useState('');
+  const composingSearch = useRef(false);
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
@@ -177,7 +186,14 @@ export function Sidebar() {
           </div>
           <label className="ksb-search">
             <Search aria-hidden />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('sidebar.search')} aria-label={t('sidebar.searchSessions')} />
+            <input
+              value={searchText}
+              onChange={(e) => { setSearchText(e.target.value); if (!composingSearch.current) setQuery(e.target.value); }}
+              onCompositionStart={() => { composingSearch.current = true; }}
+              onCompositionEnd={(e) => { composingSearch.current = false; setQuery(e.currentTarget.value); }}
+              placeholder={t('sidebar.search')}
+              aria-label={t('sidebar.searchSessions')}
+            />
           </label>
           <div className="ksb-plus-wrap">
             <button

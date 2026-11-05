@@ -110,6 +110,41 @@ describe('Sidebar native search and ordering', () => {
     expect(screen.queryByText('Other model')).toBeNull();
     expect(screen.queryByTestId('sidebar-no-results')).toBeNull();
   });
+  // K-210: diacritics are ignored (as iOS/Mac localizedStandardContains) and
+  // an open IME composition does not filter on its raw pinyin.
+  it('ignores accents and case both ways (K-210)', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'cafe', title: 'Café menu' },
+      { ...base, id: 'resume', title: 'Resume parser' },
+      { ...base, id: 'other', title: 'Other' },
+    ]);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const search = screen.getByLabelText('Search sessions');
+    fireEvent.change(search, { target: { value: 'cafe' } });
+    expect(screen.getByText('Café menu')).toBeInTheDocument();
+    expect(screen.queryByText('Other')).toBeNull();
+    fireEvent.change(search, { target: { value: 'RÉSUMÉ' } });
+    expect(screen.getByText('Resume parser')).toBeInTheDocument();
+    expect(screen.queryByText('Café menu')).toBeNull();
+  });
+  it('does not filter while an IME composition is open; the committed text filters (K-210)', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'zh', title: '测试会话' },
+      { ...base, id: 'other', title: 'Other' },
+    ]);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const search = screen.getByLabelText('Search sessions') as HTMLInputElement;
+    fireEvent.compositionStart(search);
+    fireEvent.change(search, { target: { value: 'ceshi' } });
+    expect(search.value).toBe('ceshi');
+    expect(screen.getByText('测试会话')).toBeInTheDocument();
+    expect(screen.getByText('Other')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-no-results')).toBeNull();
+    fireEvent.change(search, { target: { value: '测试' } });
+    fireEvent.compositionEnd(search);
+    expect(screen.getByText('测试会话')).toBeInTheDocument();
+    expect(screen.queryByText('Other')).toBeNull();
+  });
   it('sorts new/restored empty rows using creation when preview is absent, empty or invalid', () => {
     useStore.getState().setSessions([
       { ...base, id: 'old', title: 'Old conversation', createdAt: '2026-06-01T00:00:00Z' },
