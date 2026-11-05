@@ -46,4 +46,25 @@ describe('send_input on a full disk (K-122)', () => {
     expect(last[2]).toEqual({ persist: false });
     expect(adapter.sendMessage).not.toHaveBeenCalled();
   });
+
+  it('a resend with the same clientId runs once the disk has space again', async () => {
+    const sm = new SessionManager(dir);
+    const adapter = { isTurnSettled: vi.fn(() => false), sendMessage: vi.fn(async () => {}) };
+    const client = new RelayClient(adapter as unknown as AgentAdapter, sm, {
+      relayUrl: 'ws://unused', authMethod: 'open', device: { name: 'Test', role: 'tentacle' },
+    });
+    const { sessionId } = sm.createSession('claude');
+    const append = vi.spyOn(sm, 'appendMessage').mockImplementationOnce(enospc);
+    vi.spyOn(client, 'send');
+    const input = { type: 'send_input' as const, sessionId, deviceId: 'app-1', payload: { text: 'hello', clientId: 'cid-1' } };
+
+    handleConsumerMessage(client, input);
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+
+    // The ledger kept the reservation; the retry must not be taken for a
+    // duplicate of an input that is already running.
+    handleConsumerMessage(client, input);
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(append.mock.calls.filter(([, type]) => type === 'user_message')).toHaveLength(2);
+  });
 });

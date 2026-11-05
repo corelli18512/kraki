@@ -584,8 +584,22 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     }
   } catch (err) {
     logger.error({ err, sessionId, type: msg.type }, 'handleConsumerMessage failed');
-    if (msg.type === 'send_input') reportInputNotAccepted(client, sessionId, err);
+    if (msg.type === 'send_input') {
+      releaseUnstoredInput(client, sessionId, msg.payload.clientId as string | undefined);
+      reportInputNotAccepted(client, sessionId, err);
+    }
   }
+}
+
+/** An input whose user_message was never stored stays `pending` in the
+ *  ledger: forget that this process admitted it, so the app's resend with the
+ *  same clientId is a fresh attempt, not a duplicate that is only re-echoed
+ *  (K-122). A stored one keeps its admission (at-most-once). */
+function releaseUnstoredInput(client: RelayClient, sessionId: string, clientId: string | undefined): void {
+  if (!clientId) return;
+  const entry = client.sessionManager.getInputLedgerEntry(sessionId, clientId);
+  if (entry && entry.status !== 'pending') return;
+  client.admittedInputs.delete(`${sessionId}\u0000${clientId}`);
 }
 
 /** The app's message could not be taken (a write failed, e.g. the disk is

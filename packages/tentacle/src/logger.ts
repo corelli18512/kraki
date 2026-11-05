@@ -23,7 +23,7 @@ export const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 export const LOG_ROTATE_KEEP = 5;
 export const LOG_ROTATE_MAX_AGE_MS = 7 * 24 * 3600_000;
 const ROTATE_CHECK_MS = 60_000;
-const LOG_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
+const LOG_BUFFER_MAX_BYTES = 1024 * 1024; // per destination; there is one per module
 
 /** Time of the file's first entry (pino's epoch-ms `time`), else its birth
  *  time when the platform records one. */
