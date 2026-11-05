@@ -129,6 +129,26 @@ describe('App', () => {
     act(() => { useStore.getState().setStatus('connected'); });
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
+
+  it('K-087: a failed first attempt followed by sign-in and pairing shows no connect-failure dialog', () => {
+    renderApp('/session/s1');
+    act(() => { useStore.getState().setStatus('error'); });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('awaiting_login'); });
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('K-087: the first-connect dialog says why when the relay answered and asked to retry', () => {
+    renderApp('/session/s1');
+    act(() => {
+      useStore.getState().setLastError('Authentication temporarily unavailable. Reconnecting…');
+      useStore.getState().setStatus('disconnected');
+    });
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Authentication temporarily unavailable. Reconnecting…')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Could not connect to the relay server. Make sure the head is running.')).not.toBeInTheDocument();
+  });
 });
 
 describe('K-005: a sidebar render error stays inside the sidebar', () => {

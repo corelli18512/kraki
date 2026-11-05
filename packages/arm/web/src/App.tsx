@@ -24,6 +24,9 @@ import { PerformanceNoticeHost } from './components/diag/PerformanceNotice';
  *  connection that could not be made, never a lost one (K-087). */
 function RelayBlockingOverlay({ connecting }: { connecting: boolean }) {
   const { t } = useTranslation('app');
+  // The relay answered but is retrying on the backoff (for example a
+  // transient auth error, K-198): say that, not "make sure the head is running".
+  const lastError = useStore((s) => s.lastError);
 
   return (
     <div
@@ -38,7 +41,7 @@ function RelayBlockingOverlay({ connecting }: { connecting: boolean }) {
           {t('connection.errorTitle')}
         </h2>
         <p className="mt-2 text-sm text-text-secondary">
-          {t('connection.failed')}
+          {lastError || t('connection.failed')}
         </p>
         <p className="mt-4 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted">
           {wsClient.url}
@@ -87,6 +90,9 @@ export function App() {
   const firstConnectFailedRef = useRef(false);
   if (status === 'connected') wasConnectedRef.current = true;
   if (!wasConnectedRef.current && (status === 'error' || status === 'disconnected')) firstConnectFailedRef.current = true;
+  // The relay was reached and asks for sign-in: a pairing that follows must
+  // not start under the failed-connect dialog.
+  if (status === 'awaiting_login') firstConnectFailedRef.current = false;
 
   const showBlockingOverlay = !wasConnectedRef.current && firstConnectFailedRef.current && status !== 'connected';
 
