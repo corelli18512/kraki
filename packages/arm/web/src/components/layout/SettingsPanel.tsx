@@ -19,7 +19,7 @@ import {
   unsubscribeFromPush,
   getPushPermission,
 } from '../../lib/push';
-import { getCurrentChannel } from '../../lib/auth';
+import { channelSwitchFailed, getCurrentChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
@@ -44,6 +44,12 @@ const tabKeys = {
   'This PC': 'thisPC', Devices: 'devices', About: 'about',
 } as const;
 type SettingsTab = typeof tabs[number];
+/** "This PC" runs agents on this computer: the Windows app's own service, or
+ *  (in a Windows browser) the hint to install it. A Mac, iPhone or Linux
+ *  browser has nothing to show there. */
+const settingsTabs = (): readonly SettingsTab[] => (desktop?.builtIn || desktop?.platform === 'win32' || /Windows/.test(navigator.userAgent)
+  ? tabs
+  : tabs.filter((name) => name !== 'This PC'));
 
 /** Same section, copy and default (on) as Mac DiagSettingsSection. */
 export function performanceDataFooter() { return translate('settings:performance.footer'); }
@@ -91,6 +97,9 @@ export function SettingsPanel({
   const { theme, setTheme } = useTheme();
   const state = useStore();
   const [tab, setTab] = useState<SettingsTab>('General');
+  const visibleTabs = settingsTabs();
+  // Settings opens on General every time, like the native apps.
+  useEffect(() => { if (!open) setTab('General'); }, [open]);
   const [diagCopied, setDiagCopied] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
@@ -228,12 +237,13 @@ export function SettingsPanel({
   const diagnostics = (english = false) => {
     const labels = english ? i18next.getFixedT('en', 'settings') : t;
     return [
-      [labels('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
+      ...(desktop ? [[labels('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—']] : []),
       [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
       ...[...state.devices.values()]
         .filter((d) => d.role === 'tentacle')
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : labels('about.offlineSuffix')}`]),
+        // An offline computer not seen since this page loaded has no version.
+        .map((d) => [d.name, `Kraki${state.deviceVersions.has(d.id) ? ` ${state.deviceVersions.get(d.id)}` : d.online ? ' —' : ''}${d.online ? '' : labels('about.offlineSuffix')}`]),
       [labels('about.relay'), `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
       ...(state.deviceId ? [[labels('about.deviceId'), state.deviceId]] : []),
     ];
@@ -584,7 +594,7 @@ export function SettingsPanel({
         <div className={isWindows ? 'kp-navigation' : undefined} style={isWindows ? undefined : { display: 'contents' }}>
           {isWindows && <><div className="kp-nav-brand"><KrakiLogo className="kp-nav-logo" /><span>Kraki</span></div><p className="kp-nav-label">{t('title')}</p></>}
           <div className="kp-tabs" role="tablist" aria-label={t('title')} aria-orientation={isWindows ? 'vertical' : undefined}>
-            {tabs.map((name) => (
+            {visibleTabs.map((name) => (
               <button
                 type="button"
                 role="tab"
@@ -603,7 +613,7 @@ export function SettingsPanel({
                       : e.key === 'End'
                         ? buttons.length - 1
                         : (index + (e.key === nextKey ? 1 : -1) + buttons.length) % buttons.length;
-                  setTab(tabs[next]);
+                  setTab(visibleTabs[next]);
                   buttons[next].focus();
                 }}
                 aria-controls="settings-pane"
@@ -661,7 +671,7 @@ export function SettingsPanel({
           {tab === 'General' && !desktop && state.user?.preferences?.internal === true && (
             <SettingsSection title="Dogfood">
               <SettingsRow label="Builds" detail="Internal account: you get every new build first.">
-                <span data-testid="release-channel">{isBeta ? 'Dogfood' : 'Switching…'}</span>
+                <span data-testid="release-channel">{isBeta ? 'Dogfood' : channelSwitchFailed() ? t('dogfood.switchFailed') : 'Switching…'}</span>
               </SettingsRow>
             </SettingsSection>
           )}

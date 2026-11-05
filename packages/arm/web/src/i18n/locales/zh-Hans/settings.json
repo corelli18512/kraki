@@ -236,5 +236,8 @@
     "settingsHint": "你可以随时在设置 › 隐私中更改此选项。",
     "decline": "不共享",
     "ok": "好"
+  },
+  "dogfood": {
+    "switchFailed": "无法在此浏览器中切换"
   }
 }

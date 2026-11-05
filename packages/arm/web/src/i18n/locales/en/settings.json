@@ -236,5 +236,8 @@
     "settingsHint": "You can change this anytime in Settings › Privacy.",
     "decline": "Don't Share",
     "ok": "OK"
+  },
+  "dogfood": {
+    "switchFailed": "Couldn’t switch in this browser"
   }
 }
