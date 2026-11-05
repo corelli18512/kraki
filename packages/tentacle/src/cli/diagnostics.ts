@@ -37,6 +37,7 @@ export function cmdStatus(jsonOutput = false): void {
         managedLabel: managed?.label ?? null,
         cliLaunchdJob: cliJob,
         relayState: status.running ? (statusFile?.relayState ?? null) : null,
+        relayIssue: status.running ? (statusFile?.relayIssue ?? null) : null,
         daemonVersion: status.running ? (statusFile?.version ?? null) : null,
         fda: status.running ? (statusFile?.fda ?? null) : null,
         fdaCheckedAt: status.running ? (statusFile?.fdaCheckedAt ?? null) : null,
@@ -76,6 +77,10 @@ export function cmdStatus(jsonOutput = false): void {
     const link = relay === 'connected' ? chalk.green(', connected')
       : relay ? chalk.yellow(`, ${relay}`) : '';
     console.log(`  Status:  ${chalk.green('running')}${link} ${chalk.dim(`(PID ${status.pid}${owner})`)}`);
+    if (statusFile?.relayIssue === 'device_replaced') {
+      console.log(chalk.yellow('  Offline: another Kraki connected with this computer\'s identity (a second daemon, or a'));
+      console.log(chalk.yellow('           copy of this Kraki folder on another computer). Stop that copy, then `kraki restart`.'));
+    }
     const daemonVersion = statusFile?.version;
     if (daemonVersion && daemonVersion !== getVersion()) {
       console.log(chalk.yellow(`  Running: ${daemonVersion} (installed ${getVersion()}; run \`kraki restart\` to switch)`));

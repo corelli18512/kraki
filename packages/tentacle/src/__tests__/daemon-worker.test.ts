@@ -411,6 +411,18 @@ describe('daemon-worker: startWorker()', () => {
     }
   });
 
+  it('K-123: records in status.json why it stays offline after another copy replaced it, until it connects again', async () => {
+    const { readStatusFile } = await import('../status-file.js');
+    const { shutdown } = await startWorker();
+    const relay = mockRelay as unknown as { onDeviceReplaced: (() => void) | null };
+    expect(relay.onDeviceReplaced).toBeTypeOf('function');
+    relay.onDeviceReplaced!();
+    expect(readStatusFile()?.relayIssue).toBe('device_replaced');
+    mockRelay.onAuthenticated!({ deviceId: 'dev_1', devices: [] });
+    expect(readStatusFile()?.relayIssue).toBeUndefined();
+    await shutdown();
+  });
+
   it('reports an unclean previous run at startup', async () => {
     mockRunStart = {
       previous: { pid: 32140, version: '0.38.10', startedAt: '2026-10-16T15:21:50.000Z', lastSeenAt: '2026-10-19T17:22:00.000Z' },

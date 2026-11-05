@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // Suppress the unhandled rejection from cli.ts's main().catch() handler.
 // When we mock process.exit as a no-op, Vitest's own interceptor still fires
@@ -461,6 +463,22 @@ describe('CLI status', () => {
     await runCli(['status', '--json']);
     const json = JSON.parse(stdoutOutput.join('').trim());
     expect(json.daemon).toMatchObject({ running: true, detail: 'restarting', supervisorPid: 4242 });
+  });
+
+  it('K-123: says why a running daemon stays offline when another copy took its connection', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fs = await import('node:fs');
+    vi.mocked(fs.existsSync).mockImplementation((p) => String(p).endsWith('status.json'));
+    mkdirSync(process.env.KRAKI_HOME ?? tmpdir(), { recursive: true });
+    const home = mkdtempSync(join(process.env.KRAKI_HOME ?? tmpdir(), 'status-'));
+    mockGetKrakiHome.mockReturnValue(home);
+    writeFileSync(join(home, 'status.json'), JSON.stringify({ relayState: 'disconnected', relayIssue: 'device_replaced' }));
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 42 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    expect(consoleOutput.join('\n')).toContain("another Kraki connected with this computer's identity");
+    await runCli(['status', '--json']);
+    expect(JSON.parse(stdoutOutput.join('').trim()).daemon.relayIssue).toBe('device_replaced');
   });
 
   it('shows stopped status when no daemon', async () => {

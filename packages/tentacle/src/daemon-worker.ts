@@ -50,7 +50,7 @@ import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
-import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
+import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity, updateRelayIssue } from './status-file.js';
 import { appManagedWorkerOwner, isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
 import { beginRun, endRun, noteRunFda, RUN_HEARTBEAT_MS, touchRun } from './run-record.js';
@@ -506,8 +506,13 @@ export async function startWorker(): Promise<WorkerResult> {
     if (info.user?.region) {
       updateRegion(info.user.region);
     }
+    updateRelayIssue(null);
     announceUpdateResult();
   };
+
+  // Another daemon with this device id took the connection; this one stays
+  // offline (see RelayClient.deviceReplaced) and `kraki status` says why.
+  relay.onDeviceReplaced = () => updateRelayIssue('device_replaced');
 
   relay.onAccountDeleted = () => {
     logger.warn('The Kraki account was deleted — signing this computer out and stopping');

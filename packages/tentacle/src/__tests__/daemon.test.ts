@@ -42,6 +42,8 @@ const mockExistsSync = vi.fn(() => false);
 const mockUnlinkSync = vi.fn();
 const mockWriteFileSync = vi.fn();
 const mockChmodSync = vi.fn();
+const mockReadFileSync = vi.fn();
+const mockStatSync = vi.fn();
 
 vi.mock('node:fs', () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
@@ -51,6 +53,8 @@ vi.mock('node:fs', () => ({
   unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
   chmodSync: (...args: unknown[]) => mockChmodSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  statSync: (...args: unknown[]) => mockStatSync(...args),
 }));
 
 vi.mock('node:os', () => ({
@@ -556,6 +560,37 @@ describe('startDaemon()', () => {
     expect(mockUnlinkSync).not.toHaveBeenCalled();
     expect(mockClearDaemonPid).not.toHaveBeenCalled();
     expect(mockClearDaemonReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('K-123: refuses while another `kraki start` holds the start lock, so two starts never launch two daemons', async () => {
+    mockWriteFileSync.mockImplementation((path: string, _data: unknown, opts?: { flag?: string }) => {
+      if (String(path).endsWith('daemon-start.lock') && opts?.flag === 'wx') throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+    });
+    mockReadFileSync.mockReturnValue(`${process.ppid}\n`); // a live process
+    mockStatSync.mockReturnValue({ mtimeMs: Date.now() });
+
+    await expect(startDaemon(fakeConfig)).rejects.toThrow(`Another \`kraki start\` (PID ${process.ppid})`);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockUnlinkSync).not.toHaveBeenCalledWith(expect.stringContaining('daemon-start.lock'));
+  });
+
+  it('K-123: takes over a start lock left by a `kraki start` that died, and releases it afterwards', async () => {
+    let lockHeld = true;
+    mockWriteFileSync.mockImplementation((path: string, _data: unknown, opts?: { flag?: string }) => {
+      if (String(path).endsWith('daemon-start.lock') && opts?.flag === 'wx') {
+        if (lockHeld) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+        lockHeld = true;
+      }
+    });
+    mockReadFileSync.mockImplementation(() => (lockHeld && mockSpawn.mock.calls.length === 0 && !mockUnlinkSync.mock.calls.length ? '999999999\n' : `${process.pid}\n`));
+    mockStatSync.mockReturnValue({ mtimeMs: Date.now() });
+    mockUnlinkSync.mockImplementation((path: string) => { if (String(path).endsWith('daemon-start.lock')) lockHeld = false; });
+    mockSpawn.mockImplementation(() => { throw new Error('spawn stopped here'); });
+
+    await expect(startDaemon(fakeConfig)).rejects.toThrow('spawn stopped here');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // Released again after the attempt.
+    expect(lockHeld).toBe(false);
   });
 
   it('launches the worker under a supervisor and returns the worker PID once it is ready', async () => {

@@ -15,7 +15,7 @@
 import { killProcessTree } from './process-tree.js';
 import { enableWindowsAutostart } from './windows-autostart.js';
 import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync, readFileSync, statSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isSea } from 'node:sea';
@@ -762,7 +762,60 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** A start lock older than this belongs to a `kraki start` that died. */
+const START_LOCK_STALE_MS = 2 * 60_000;
+
+/**
+ * One start at a time per Kraki home. startDaemon stops whatever runs and then
+ * launches a new daemon; two concurrent `kraki start`s each stopped nothing,
+ * then each launched one, and the two daemons (same device id) replaced each
+ * other at the relay forever (K-123). Returns the release function.
+ */
+function acquireStartLock(): () => void {
+  const path = join(getKrakiHome(), 'daemon-start.lock');
+  mkdirSync(dirname(path), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(path, `${process.pid}\n`, { flag: 'wx' });
+      return () => {
+        try {
+          if (readFileSync(path, 'utf8').trim() === String(process.pid)) unlinkSync(path);
+        } catch { /* already gone */ }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+    let holder = 0;
+    let ageMs = Infinity;
+    try {
+      holder = parseInt(readFileSync(path, 'utf8').trim(), 10);
+      ageMs = Date.now() - statSync(path).mtimeMs;
+    } catch { /* vanished or unreadable: stale */ }
+    let alive = false;
+    if (holder > 0 && holder !== process.pid) {
+      try { process.kill(holder, 0); alive = true; } catch (err) { alive = (err as NodeJS.ErrnoException).code === 'EPERM'; }
+    }
+    if (alive && ageMs < START_LOCK_STALE_MS) {
+      throw new Error(
+        `Another \`kraki start\` (PID ${holder}) is starting Kraki right now. ` +
+        'Wait for it to finish, then check with `kraki status`.',
+      );
+    }
+    try { unlinkSync(path); } catch { /* raced with another cleanup */ }
+  }
+  throw new Error('Another `kraki start` is starting Kraki right now. Try again in a moment.');
+}
+
 export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
+  const releaseStartLock = acquireStartLock();
+  try {
+    return await startDaemonLocked(config, cliEntryPath);
+  } finally {
+    releaseStartLock();
+  }
+}
+
+async function startDaemonLocked(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
   stopDaemon();
   assertNoUntrackedLaunchdDaemon();
   // An alive PID whose identity could not be verified is deliberately left in

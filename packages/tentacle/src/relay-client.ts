@@ -8,7 +8,7 @@
 
 import { wsProxyOptions } from './proxy.js';
 import { WebSocket } from 'ws';
-import { ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
+import { ACCOUNT_DELETED_CLOSE_CODE, DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import type { AgentCapabilities, ProducerMessage, DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod, BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender } from '@kraki/protocol';
@@ -480,6 +480,10 @@ export class RelayClient {
         this.accountDeleted();
         return;
       }
+      if (code === DEVICE_REPLACED_CLOSE_CODE && !this.intentionalDisconnect) {
+        this.deviceReplaced();
+        return;
+      }
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -563,6 +567,28 @@ export class RelayClient {
   }
 
   private accountDeletedHandled = false;
+
+  /**
+   * The relay closed this connection because the same device id signed in on
+   * a newer one: a second daemon on this Kraki home, or a copy of it on
+   * another computer (Migration Assistant, a restored backup). Reconnecting
+   * would evict that one, which would reconnect and evict this one, about
+   * once a second forever, losing undelivered messages each time (K-123).
+   * Stay offline, as the web app does, until this daemon is restarted.
+   */
+  private deviceReplaced(): void {
+    logger.error(
+      { deviceId: this.options.device.deviceId },
+      'Another Kraki connected with this computer\'s identity, so the relay closed this connection. ' +
+      'Not reconnecting: two copies would keep replacing each other. Stop the other copy ' +
+      '(a second daemon, or a copied Kraki folder on another computer), then run `kraki restart`.',
+    );
+    this.onDeviceReplaced?.();
+  }
+
+  /** Called when the relay replaced this connection with another one of the
+   *  same device id; the client stays disconnected until connect() is called. */
+  onDeviceReplaced: (() => void) | null = null;
 
   /** Called once when the relay reports that the account was deleted. */
   onAccountDeleted: (() => void) | null = null;
