@@ -9,7 +9,7 @@ import { wsClient } from '../../lib/ws-client';
 
 vi.mock('../chat/Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(),
+  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(), useStopDictationOnLeave: () => {},
 }));
 
 beforeEach(() => { useStore.getState().reset(); localStorage.clear(); });

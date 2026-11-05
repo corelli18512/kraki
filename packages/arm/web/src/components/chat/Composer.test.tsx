@@ -7,7 +7,7 @@ import { useStore } from '../../hooks/useStore';
 
 vi.mock('./Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: vi.fn(() => vi.fn()),
+  useDictation: () => ({ active: false }), useStartDictation: vi.fn(() => vi.fn()), useStopDictationOnLeave: () => {},
 }));
 
 const props = { sessionId: 'composer-test', intent: 'prompt' as const, canAbort: false, reachable: true, busy: false, onSend: vi.fn(), onAbort: vi.fn() };

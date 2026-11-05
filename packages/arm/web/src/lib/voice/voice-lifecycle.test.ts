@@ -92,6 +92,31 @@ describe('K-224 voice lifecycle gaps', () => {
     expect(useVoice.getState().error).toBeNull();
     expect(useVoice.getState().phase).not.toBe('failed');
   });
+  it('starting dictation elsewhere keeps what the left session was still finishing into its draft', async () => {
+    const leftFinal = vi.fn(), nextFinal = vi.fn();
+    await startDictation('a', { fields: {}, vocabulary: [] }, leftFinal);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'half a thought ' });
+    finishDictation('edit');
+    await startDictation('b', { fields: {}, vocabulary: [] }, nextFinal);
+    expect(leftFinal).toHaveBeenCalledExactlyOnceWith('half a thought', 'edit');
+    expect(useVoice.getState()).toMatchObject({ owner: 'b' });
+    expect(nextFinal).not.toHaveBeenCalled();
+  });
+  it('starting again after a staged send or a still-recording dictation does not deliver it as a draft', async () => {
+    const stagedFinal = vi.fn(), stage = { update: vi.fn(), complete: vi.fn() };
+    await startDictation('a', { fields: {}, vocabulary: [] }, stagedFinal, () => stage);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'raw' });
+    finishDictation('send');
+    const recordingFinal = vi.fn();
+    await startDictation('b', { fields: {}, vocabulary: [] }, recordingFinal);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'still talking' });
+    await startDictation('c', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(stagedFinal).not.toHaveBeenCalled();
+    expect(recordingFinal).not.toHaveBeenCalled();
+  });
   it('a gateway that never authorizes fails as unreachable instead of Listening forever', async () => {
     await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
     expect(useVoice.getState().phase).toBe('recording');

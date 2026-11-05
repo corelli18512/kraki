@@ -4,8 +4,8 @@ import { ArrowUp, CornerRightUp, ImagePlus, Square, X, CircleX } from 'lucide-re
 import type { Attachment } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { enterSendsMessage, shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from './Voice';
-import { cancelDictation, finishDictation, useVoice, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
+import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation, useStopDictationOnLeave } from './Voice';
+import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { sessionContext } from '../../lib/voice/context';
 import type { PendingInput } from '../../lib/chat/outbox';
 import { mergeVoiceDraft, stagedVoice } from '../../lib/voice/staged-input';
@@ -186,14 +186,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   useEffect(() => { if (!reachable) setAbortPending(false); }, [reachable]);
   useEffect(() => { if (trailingError) setAbortPending(false); }, [trailingError]);
   useEffect(() => { setImage(null); }, [sessionId]);
-  // Leaving the session (its composer unmounts) must not leave the microphone
-  // streaming with no indicator: what was heard goes to this session's draft.
-  useEffect(() => () => {
-    const voice = useVoice.getState();
-    if (voice.owner !== sessionId || voice.staged) return;
-    if (voice.phase === 'connecting') cancelDictation();
-    else if (voice.phase === 'recording') finishDictation('edit');
-  }, [sessionId]);
+  useStopDictationOnLeave(sessionId);
 
   useEffect(() => {
     if (shouldAutoFocusTextInput()) fieldRef.current?.focus({ preventScroll: true });

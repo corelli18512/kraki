@@ -237,7 +237,13 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.unavailable') }); return true;
   }
   if (!voiceSettings.consented) { useVoice.setState({ consentPending: true, owner }); return false; }
-  if (rec) cancelDictation();
+  if (rec) {
+    // A dictation still finishing into another composer's draft (its session
+    // was left, K-224) keeps what was heard instead of being dropped.
+    const previous = rec;
+    if (previous.finishMode === 'edit' && !previous.staged && previous.rawText.trim()) previous.onFinal(previous.rawText.trim(), 'edit');
+    cancelDictation();
+  }
   // Web opens a fresh broker socket for every attempt; a cached lease is not a warm connection.
   diag.voices.begin(false, voiceSettings.correction);
   if (!transport?.connected()) {
