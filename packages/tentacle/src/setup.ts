@@ -129,7 +129,7 @@ async function runFullDiskAccess(): Promise<void> {
   console.log('    Agents read and edit files across your projects. Allow it once and macOS');
   console.log("    won't interrupt them with permission prompts.");
   console.log('');
-  console.log(`    ${chalk.bold('Turn on “Kraki CLI” in the list that opens.')} ${chalk.dim('If it is not there, drag it in')}`);
+  console.log(`    ${chalk.bold('Turn on “Kraki” in the list that opens.')} ${chalk.dim('If it is not there, drag it in')}`);
   console.log(chalk.dim('    from the Finder window that opens next to it.'));
   console.log('');
   // macOS never lists an app under Full Disk Access by itself, and Kraki.app

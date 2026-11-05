@@ -10,6 +10,7 @@ import { getCliLaunchdJobState, isDaemonRunning, getDaemonStatus } from '../daem
 import { readStatusFile } from '../status-file.js';
 import { loadManagedBy, ownerName } from '../managed.js';
 import { gracefulExit } from './exit.js';
+import type { FdaStatus } from '../checks.js';
 
 export function cmdStatus(jsonOutput = false): void {
   const status = getDaemonStatus();
@@ -156,9 +157,26 @@ export function cmdLogs(follow: boolean): void {
 
 // ── kraki fda — macOS Full Disk Access status ───────────
 
+/**
+ * Full Disk Access of Kraki itself. Run from a terminal (or over ssh), an
+ * in-process probe reports the terminal's access, so `kraki fda --watch`
+ * never turned "granted" after the user enabled Kraki (K-356). Probe through
+ * the Kraki app bundle like setup does; only the instance Launch Services
+ * started as that bundle (or Kraki for Mac's helper, whose access is the
+ * app's) probes in-process.
+ */
+async function probeKrakiFda(args: string[]): Promise<FdaStatus> {
+  const { probeFda, probeFdaAsApp, KRAKI_BUNDLE_ID, FDA_IN_PROCESS_FLAG } = await import('../checks.js');
+  const { isEmbeddedMacHelper } = await import('./lifecycle.js');
+  if (args.includes(FDA_IN_PROCESS_FLAG) || process.env.__CFBundleIdentifier === KRAKI_BUNDLE_ID || isEmbeddedMacHelper()) {
+    return probeFda();
+  }
+  return probeFdaAsApp();
+}
+
 export async function cmdFda(args: string[]): Promise<void> {
   const watch = args.includes('--watch');
-  const { probeFda } = await import('../checks.js');
+  const probeFda = () => probeKrakiFda(args);
 
   if (process.platform !== 'darwin') {
     process.stdout.write(JSON.stringify({ ok: true, status: 'not_applicable', platform: process.platform }) + '\n');

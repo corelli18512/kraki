@@ -452,12 +452,16 @@ export async function probeFdaDetailed(): Promise<FdaProbeResult> {
  * LaunchServices gives the probe Kraki's bundle identity, exactly like the
  * daemon. Falls back to the in-process probe when not running from a bundle.
  */
+/** `kraki fda` flag for the bundle instance probeFdaAsApp starts: probe
+ *  in-process instead of launching the bundle again. */
+export const FDA_IN_PROCESS_FLAG = '--in-process';
+
 export async function probeFdaAsApp(): Promise<FdaStatus> {
   const app = platform() === 'darwin' ? getKrakiAppBundlePath() : null;
   if (!app) return probeFda();
   const out = join(tmpdir(), `kraki-fda-${process.pid}-${Date.now()}.json`);
   try {
-    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json'], {
+    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json', FDA_IN_PROCESS_FLAG], {
       stdio: 'ignore',
       timeout: 15_000,
     });
