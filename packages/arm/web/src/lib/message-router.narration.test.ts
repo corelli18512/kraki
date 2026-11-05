@@ -57,6 +57,17 @@ describe('handleDataMessage card messages', () => {
     expect(useStore.getState().cards.get('s1')?.text).toBe('thinking about it');
   });
 
+  it('records a withdrawn question without storing it on the spine (K-022)', () => {
+    seedSession('s1');
+    handleDataMessage({
+      type: 'question_withdrawn', deviceId: 'dev-tentacle', seq: 900, timestamp: new Date().toISOString(),
+      sessionId: 's1', payload: { questionId: 'q1' },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+    expect(useStore.getState().withdrawnQuestions.get('s1')).toEqual(['q1']);
+    expect(useStore.getState().messages.get('s1') ?? []).toEqual([]);
+    expect(putMessage).not.toHaveBeenCalled();
+  });
+
   it('honors agent_message_delta reset', () => {
     seedSession('s1');
     handleDataMessage(cardMessage('s1', 5, 'old'), {
