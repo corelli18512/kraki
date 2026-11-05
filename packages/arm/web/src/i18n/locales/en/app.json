@@ -55,5 +55,10 @@
     "unavailable": "Kraki for iPhone is not available yet. You can connect in this browser instead.",
     "getApp": "Get Kraki for iPhone",
     "browser": "Continue in browser"
+  },
+  "boot": {
+    "failedTitle": "Kraki couldn't load",
+    "failed": "Part of the app is missing, usually because Kraki was just updated. Reload to get the latest version.",
+    "reload": "Reload"
   }
 }

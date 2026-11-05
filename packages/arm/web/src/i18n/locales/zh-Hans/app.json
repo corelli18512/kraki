@@ -55,5 +55,10 @@
     "unavailable": "Kraki for iPhone 尚未推出。你可以改为在此浏览器中连接。",
     "getApp": "获取 Kraki for iPhone",
     "browser": "在浏览器中继续"
+  },
+  "boot": {
+    "failedTitle": "Kraki 无法加载",
+    "failed": "应用的一部分缺失，通常是因为 Kraki 刚刚更新。重新加载以获取最新版本。",
+    "reload": "重新加载"
   }
 }
