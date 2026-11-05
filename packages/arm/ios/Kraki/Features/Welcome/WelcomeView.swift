@@ -352,11 +352,12 @@ struct WelcomeView: View {
     static let cliInstallCommand = "curl -fsSL https://app.kraki.chat/install.sh | bash"
 
     /// Problems with the built-in tentacle that need the user even while
-    /// remote sessions keep working: it was turned off in Login Items, or Full
-    /// Disk Access is still missing.
+    /// remote sessions keep working: it was turned off in Login Items, it
+    /// couldn't start, or Full Disk Access is still missing.
     private var builtInAttentionCard: AnyView? {
         guard tentacleCLI.mode == .builtIn, BuiltInTentacle.thisMacRole != .remoteOnly else { return nil }
         if case .needsApproval = tentacleCLI.daemonState { return AnyView(loginItemsCard) }
+        if case .error(let message) = tentacleCLI.daemonState { return AnyView(daemonErrorCard(message)) }
         if case .running = tentacleCLI.daemonState, tentacleCLI.fdaStatus == "denied", !fdaReminderDismissed {
             return AnyView(fullDiskAccessCard)
         }

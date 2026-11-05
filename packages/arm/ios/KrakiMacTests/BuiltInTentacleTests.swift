@@ -287,4 +287,46 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertNil(merged[0].hint)
         XCTAssertEqual(merged[1].status, .needsLogin) // served but without models
     }
+
+    // MARK: Daemon left on another version (K-357)
+
+    /// A helper that never reports the shipped version used to be restarted
+    /// (killing its running turns) on every app launch: the "already
+    /// restarted" mark only lived in memory.
+    func testVersionRestartHappensOncePerShippedVersionAcrossLaunches() throws {
+        let domain = "chat.kraki.tests.versionrestart"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.removePersistentDomain(forName: domain)
+        defer { defaults.removePersistentDomain(forName: domain) }
+
+        XCTAssertFalse(TentacleCLIManager.claimVersionRestart(shipped: "0.2.92", live: "0.2.92", defaults: defaults))
+        XCTAssertFalse(TentacleCLIManager.claimVersionRestart(shipped: "0.2.92", live: nil, defaults: defaults))
+        XCTAssertTrue(TentacleCLIManager.claimVersionRestart(shipped: "0.2.92", live: "0.2.91", defaults: defaults))
+        // The next launch reads the same defaults: no second restart.
+        XCTAssertFalse(TentacleCLIManager.claimVersionRestart(shipped: "0.2.92", live: "0.2.91", defaults: defaults))
+        // An update ships a new version: restart once for it.
+        XCTAssertTrue(TentacleCLIManager.claimVersionRestart(shipped: "0.2.93", live: "0.2.91", defaults: defaults))
+        XCTAssertFalse(TentacleCLIManager.claimVersionRestart(shipped: "0.2.93", live: "0.2.91", defaults: defaults))
+    }
+
+    // MARK: Built-in job that never starts (K-119)
+
+    /// launchd "spawn failed" (exit 78 after a rename, a move, a legacy
+    /// helper path): the job is registered but never runs. Offline while it
+    /// may still come up, then a problem the user can act on, not a plain
+    /// "offline" forever.
+    func testARegisteredJobThatNeverRunsBecomesAProblem() {
+        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 0, launchdDomainStuck: false), .stopped)
+        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 30, launchdDomainStuck: false), .stopped)
+        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 46, launchdDomainStuck: false),
+                       .error(TentacleCLIManager.helperDidNotStartMessage))
+        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 46, launchdDomainStuck: true),
+                       .error(TentacleCLIManager.launchdStuckMessage))
+        let status = MacOnlineStatus.resolve(
+            installState: .available(path: "/x/kraki", version: "1"),
+            daemonState: TentacleCLIManager.registeredButNotRunningState(down: 60, launchdDomainStuck: false),
+            mode: .builtIn, role: .runsAgents)
+        XCTAssertTrue(status.needsFixing, "the menu bar badges it and Bring This Mac Online retries")
+        XCTAssertEqual(status.detail, TentacleCLIManager.helperDidNotStartMessage)
+    }
 }

@@ -89,13 +89,20 @@ final class TentacleCLIManager {
     private(set) var runningDaemonVersion: String?
 
     @ObservationIgnored let builtIn = BuiltInTentacle()
-    @ObservationIgnored private var restartedForVersion: String?
     @ObservationIgnored private var restartedForStaleBinary = false
     @ObservationIgnored private var notRunningSince: Date?
     @ObservationIgnored private var lastKickstartAt: Date?
     @ObservationIgnored private var onDemandCheckedAt: Date?
     @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
+    /// The built-in job is registered but did not come up in time (see
+    /// registeredButNotRunningState): Try Again repairs the registration.
+    @ObservationIgnored private var helperFailedToStart = false
+    /// Set when the user quits Kraki to take this Mac offline. From then on
+    /// nothing in this process registers the built-in job again: a launch
+    /// that was still bringing the Mac online would otherwise register it
+    /// after the quit stopped it, leaving the Mac online with no app.
+    @ObservationIgnored private(set) var quittingOffline = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
     @ObservationIgnored private var registeredHelperThisLaunch = false
 
@@ -329,11 +336,11 @@ final class TentacleCLIManager {
             if !checkedLegacyHelperPath, builtIn.ownershipMarkerExists,
                builtIn.service.status == .enabled {
                 checkedLegacyHelperPath = true
-                if !reRegisteredThisLaunch,
-                   let program = await registeredProgramIdentifier(),
+                // Not counted as the self-heal's re-register below: if the job
+                // still doesn't come up after this, that one runs too.
+                if let program = await registeredProgramIdentifier(),
                    Self.isLegacyHelperProgram(program) {
-                    reRegisteredThisLaunch = true
-                    restartedForVersion = builtIn.version
+                    if let shipped = builtIn.version { Self.recordVersionRestart(shipped: shipped) }
                     KLog.diag("[Tentacle] built-in job points at \(program); re-registering")
                     Task { await self.reRegisterBuiltIn() }
                     daemonState = .starting
@@ -348,7 +355,7 @@ final class TentacleCLIManager {
         // re-signed helper: "Requesting repair LWCR update", exit 78 forever).
         // Re-registering records the current binary. Once per app launch, and
         // only after the job had time to come up on its own.
-        var stuck = false
+        var notRunningVerdict: DaemonState = .stopped
         if mode == .builtIn, !running, builtIn.ownershipMarkerExists,
            BuiltInTentacle.thisMacRole != .remoteOnly,
            builtIn.service.status == .enabled {
@@ -375,7 +382,8 @@ final class TentacleCLIManager {
                 Task { await self.reRegisterBuiltIn() }
             }
             // Still down: tell the user why instead of spinning forever.
-            if down > 45 {
+            var stuck = false
+            if down > Self.builtInStartGrace {
                 if let checked = onDemandCheckedAt, now.timeIntervalSince(checked) < 30 {
                     stuck = launchdDomainStuck
                 } else {
@@ -384,6 +392,10 @@ final class TentacleCLIManager {
                     stuck = launchdDomainStuck
                     if stuck { KLog.diag("[Tentacle] launchd domain is in on-demand-only mode; daemon cannot start") }
                 }
+            }
+            notRunningVerdict = Self.registeredButNotRunningState(down: down, launchdDomainStuck: stuck)
+            if case .error = notRunningVerdict, !helperFailedToStart {
+                KLog.diag("[Tentacle] built-in daemon registered but still not running after \(Int(down))s")
             }
         } else if running {
             notRunningSince = nil
@@ -404,8 +416,9 @@ final class TentacleCLIManager {
         } else {
             // Avoid flapping .stopping → .stopped → .starting if the
             // user spammed buttons. Trust the JSON here.
-            daemonState = stuck ? .error(Self.launchdStuckMessage) : .stopped
+            daemonState = notRunningVerdict
         }
+        if case .error = notRunningVerdict { helperFailedToStart = true } else { helperFailedToStart = false }
 
         if let cfg = json["config"] as? [String: Any] {
             let exists = (cfg["exists"] as? Bool) ?? false
@@ -481,6 +494,13 @@ final class TentacleCLIManager {
         }
     }
 
+    /// Quit Kraki and go offline: stop the daemon and never start it again
+    /// in this process (see quittingOffline).
+    func goOfflineForQuit() async {
+        quittingOffline = true
+        await stopDaemon()
+    }
+
     func stopDaemon() async {
         guard case .available(let path, _) = installState else { return }
         daemonState = .stopping
@@ -521,6 +541,7 @@ final class TentacleCLIManager {
             KLog.diag("[Tentacle] unregister before re-register failed: \(error.localizedDescription)")
         }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+        guard !quittingOffline else { return }
         do {
             _ = try builtIn.enable()
             // Registration alone does not spawn the job in on-demand-only mode.
@@ -531,8 +552,24 @@ final class TentacleCLIManager {
         }
     }
 
-    static let launchdStuckMessage =
+    nonisolated static let launchdStuckMessage =
         String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
+
+    nonisolated static let helperDidNotStartMessage =
+        String(localized: "Kraki didn't start on this Mac. Try again, or open the logs to see why.")
+
+    /// How long a registered built-in job may stay down (while it is
+    /// kickstarted and re-registered) before the user is told it failed.
+    nonisolated static let builtInStartGrace: TimeInterval = 45
+
+    /// State for a built-in job that is registered and should run but does
+    /// not: offline while it may still come up, then a problem with a reason
+    /// (it was shown as a plain "offline" forever, e.g. launchd "spawn
+    /// failed" exit 78 after the app was renamed or moved).
+    nonisolated static func registeredButNotRunningState(down: TimeInterval, launchdDomainStuck: Bool) -> DaemonState {
+        guard down > builtInStartGrace else { return .stopped }
+        return .error(launchdDomainStuck ? launchdStuckMessage : helperDidNotStartMessage)
+    }
 
     /// True while the user's launchd domain only spawns jobs on explicit
     /// demand (`on-demand count` > 0 in `launchctl print gui/<uid>`): the
@@ -592,6 +629,20 @@ final class TentacleCLIManager {
         if case .running = daemonState, builtIn.ownershipMarkerExists,
            builtIn.service.status == .enabled { return }
 
+        if helperFailedToStart {
+            // Try Again after the job failed to come up: repair the
+            // registration now (what relaunching the app used to do), and
+            // give it the full grace period again.
+            KLog.diag("[Tentacle] retrying a built-in daemon that did not start; re-registering")
+            helperFailedToStart = false
+            notRunningSince = nil
+            lastKickstartAt = nil
+            reRegisteredThisLaunch = true
+            daemonState = .starting
+            await reRegisterBuiltIn()
+        }
+
+        guard !quittingOffline else { return }
         daemonState = .starting
         do {
             let status = try builtIn.enable()
@@ -745,10 +796,8 @@ extension TentacleCLIManager {
     /// executable ("Failed to create attribution chain").
     func restartDaemonIfOutdated(_ daemon: [String: Any]?, pid: Int?) {
         guard builtIn.ownershipMarkerExists else { return }
-        if let shipped = builtIn.version, let live = runningDaemonVersion,
-           shipped != live, restartedForVersion != shipped {
-            restartedForVersion = shipped
-            KLog.diag("[Tentacle] restarting built-in daemon \(live) → \(shipped)")
+        if Self.claimVersionRestart(shipped: builtIn.version, live: runningDaemonVersion) {
+            KLog.diag("[Tentacle] restarting built-in daemon \(runningDaemonVersion ?? "?") → \(builtIn.version ?? "?")")
             builtIn.kickstart()
             return
         }
@@ -759,6 +808,25 @@ extension TentacleCLIManager {
             KLog.diag("[Tentacle] built-in daemon runs a replaced binary (\(stale)); restarting")
             builtIn.kickstart()
         }
+    }
+
+    nonisolated static let restartedForVersionKey = "tentacle.restartedForVersion"
+
+    /// True once per shipped tentacle version when the running daemon reports
+    /// another version. Remembered across launches: a helper that never
+    /// reports the shipped version must not be restarted (killing its turns)
+    /// on every app launch.
+    nonisolated static func claimVersionRestart(
+        shipped: String?, live: String?, defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard let shipped, let live, shipped != live,
+              defaults.string(forKey: restartedForVersionKey) != shipped else { return false }
+        recordVersionRestart(shipped: shipped, defaults: defaults)
+        return true
+    }
+
+    nonisolated static func recordVersionRestart(shipped: String, defaults: UserDefaults = .standard) {
+        defaults.set(shipped, forKey: restartedForVersionKey)
     }
 
     /// Executable path of a live process, or nil when it can't be resolved.

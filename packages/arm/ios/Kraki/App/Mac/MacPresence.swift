@@ -324,7 +324,7 @@ final class MacPresenceController {
     func takeOfflineForQuit() async {
         isQuittingOffline = true
         KLog.diag("[Presence] quitting; taking this Mac offline")
-        await tentacle?.goOffline()
+        await tentacle?.goOfflineForQuit()
         if UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) {
             try? await SMAppService.mainApp.unregister()
             UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
