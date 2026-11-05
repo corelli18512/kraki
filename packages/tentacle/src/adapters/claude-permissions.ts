@@ -162,6 +162,8 @@ export function handleAskUserQuestion(
   });
 }
 
+const MULTI_SELECT_HINT = 'You can choose more than one: type them separated by commas.';
+
 /**
  * Emit a single AskUserQuestion card (question[index]) to the app and record
  * a pending entry. Shared by the initial emit and the serial advance in
@@ -188,10 +190,14 @@ export function emitQuestionCard(
     choicesCount: choices?.length ?? 0,
   }, 'question requested');
 
+  // Kraki's choices are single-tap shortcuts. A multi-select question says
+  // so in its text, so the human can answer several in free text. Only the
+  // shown text changes: the answer stays keyed by the original question.
+  const question = q?.question ?? 'The agent has a question';
   adapter.onQuestionRequest?.(sessionId, {
     ...adapter.lifecycleEvent(adapter.sessions.get(sessionId)),
     id: qId,
-    question: q?.question ?? 'The agent has a question',
+    question: q?.multiSelect && choices?.length ? `${question}\n\n${MULTI_SELECT_HINT}` : question,
     choices,
   });
 
