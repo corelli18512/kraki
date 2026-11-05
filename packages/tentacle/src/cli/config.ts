@@ -203,7 +203,9 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
   };
 
   const relayArg = getArgValue(args, '--relay')?.trim();
-  const auth = getArgValue(args, '--auth') ?? 'github_token';
+  // `--auth github` is the relay's spelling (head README, docs/self-hosting.md).
+  const authArg = getArgValue(args, '--auth') ?? 'github_token';
+  const auth = authArg === 'github' ? 'github_token' : authArg;
   const apiKey = getArgValue(args, '--api-key')?.trim();
   const deviceName = getArgValue(args, '--device-name');
   const githubToken = getArgValue(args, '--github-token');

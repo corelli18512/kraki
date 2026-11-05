@@ -679,6 +679,11 @@ describe('CLI setup --headless', () => {
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
+  it('accepts --auth github, the relay\'s spelling, as github_token (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'github']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'github_token' }));
+  });
+
   for (const relay of ['https://relay.example', 'wss://', 'wss://relay example', 'ws:// ']) {
     it(`rejects --relay "${relay}" without saving a config (K-272)`, async () => {
       await runCli(['setup', '--headless', '--relay', relay]);
