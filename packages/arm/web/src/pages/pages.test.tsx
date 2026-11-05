@@ -161,6 +161,21 @@ describe('SessionPage', () => {
     expect(screen.getByText('session list')).toBeInTheDocument();
   });
 
+  it('K-089: offline, the wait for a session link has a way back to the list', async () => {
+    useStore.getState().setStatus('disconnected');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '← Back to sessions' }));
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
   it('K-089: signed out, a session link goes to the sign-in on the home page', () => {
     useStore.getState().setStatus('awaiting_login');
     render(

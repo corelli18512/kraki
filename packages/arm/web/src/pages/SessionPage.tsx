@@ -185,6 +185,14 @@ export function SessionPage() {
         <div className="text-center">
           <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
           <p className="mt-3 text-sm text-text-secondary">{status === 'connected' ? t('session.loading') : t('session.connecting')}</p>
+          {/* Offline, this can last: the narrow layout hides the sidebar and a
+              standalone PWA has no browser Back. */}
+          <button
+            onClick={() => navigate('/')}
+            className="mt-3 text-xs font-medium text-kraki-500 hover:text-kraki-400"
+          >
+            {t('session.back')}
+          </button>
         </div>
       </div>
     );
