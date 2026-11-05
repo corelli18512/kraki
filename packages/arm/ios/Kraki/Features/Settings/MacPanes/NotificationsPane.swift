@@ -41,6 +41,10 @@ struct NotificationsPane: View {
         }
         .formStyle(.grouped)
         .task { await refreshStatus() }
+        // Coming back from System Settings › Notifications.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshStatus() }
+        }
     }
 
     private var statusText: String {

@@ -1349,16 +1349,6 @@
         }
       }
     },
-    "All" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部"
-          }
-        }
-      }
-    },
     "All Computers" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6257,16 +6247,6 @@
         }
       }
     },
-    "No sessions for this device" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此设备上没有会话"
-          }
-        }
-      }
-    },
     "No sessions on this computer" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8662,16 +8642,6 @@
         }
       }
     },
-    "Show all devices" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示所有设备"
-          }
-        }
-      }
-    },
     "Show Code…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8728,26 +8698,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在访达中显示日志"
-          }
-        }
-      }
-    },
-    "Show sessions on %@" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示 %@ 上的会话"
-          }
-        }
-      }
-    },
-    "Show sessions on all devices" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示所有设备上的会话"
           }
         }
       }
@@ -11497,6 +11447,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台 Mac 只接收正式版。"
+          }
+        }
+      }
+    },
+    "%@ is not the kraki command-line tool." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不是 kraki 命令行工具。"
+          }
+        }
+      }
+    },
+    "To run agents with the kraki command-line tool instead, install it first." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要改用 kraki 命令行工具运行 Agent，请先安装它。"
+          }
+        }
+      }
+    },
+    "Kraki is set to run agents with the kraki command-line tool, which is not installed. Install it in Terminal, or choose Kraki (built in) in Settings › This Mac." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 已设为用 kraki 命令行工具运行 Agent，但它尚未安装。请在终端中安装，或在“设置 › 这台 Mac”中选择 Kraki（内置）。"
           }
         }
       }
