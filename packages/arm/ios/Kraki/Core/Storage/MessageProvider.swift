@@ -58,6 +58,12 @@ final class MessageProvider {
     /// fill the hole (legacy seq gaps, or the computer lost the rows), the
     /// next page is taken from the DB as is instead of asking forever.
     private var olderHoleAsked: [String: Set<Int>] = [:]
+    /// Sessions whose older-hole request was answered with no row this
+    /// device did not already have: their gaps are legacy seq gaps (replayed
+    /// rows need not be integer-adjacent) or rows the Tentacle lost. Older
+    /// pages of these sessions come from the DB for the rest of the run, so a
+    /// legacy session costs at most one round trip, not one per page.
+    private var olderHolesUnfillable: Set<String> = []
 
     /// Per-turn trace pulls already issued or in flight (dedup).
     private var traceRequests = TurnTraceRequestLedger()
@@ -648,6 +654,7 @@ final class MessageProvider {
     /// adjacent, Tentacle unreachable, or this hole was already asked.
     private func askTentacleToFillHole(_ sessionId: String, topSeq: Int, page: [ChatMessage]) -> Bool {
         guard let appState, let pageTop = page.last?.seq, pageTop < topSeq - 1 else { return false }
+        if olderHolesUnfillable.contains(sessionId) { return false }
         if olderHoleAsked[sessionId]?.contains(topSeq) == true { return false }
         if hasSlot(sessionId, where: { if case .before = $0 { return true }; return false }) { return true }
         guard let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId, !deviceId.isEmpty,
@@ -760,6 +767,12 @@ final class MessageProvider {
         // Rows this device did not have. A reply made only of cached rows
         // (a legacy seq gap the Tentacle cannot fill) ends the bridge walk.
         let bringsNewRows = messages.contains { !appState.messageStore.hasInDB(sessionId, seq: $0.seq) }
+
+        if case .before(let requestedBefore) = removedKind,
+           olderHoleAsked[sessionId]?.contains(requestedBefore) == true, !bringsNewRows {
+            olderHolesUnfillable.insert(sessionId)
+            KLog.diag("🕳️ [2/history older hole] session=\(sessionId.prefix(12)) beforeSeq=\(requestedBefore) — Tentacle had nothing new; DB pages from now on")
+        }
 
         if !messages.isEmpty {
             appState.messageStore.ingestBatch(sessionId, messages)
@@ -1169,6 +1182,7 @@ final class MessageProvider {
     func clear() {
         headDropped.removeAll()
         olderHoleAsked.removeAll()
+        olderHolesUnfillable.removeAll()
         for (_, slots) in outstanding {
             for s in slots { s.timeout.cancel() }
         }
@@ -1197,6 +1211,7 @@ extension MessageProvider {
         sessionGeneration[sessionId, default: 0] += 1
         headDropped.remove(sessionId)
         olderHoleAsked.removeValue(forKey: sessionId)
+        olderHolesUnfillable.remove(sessionId)
         if let slots = outstanding[sessionId] {
             for s in slots { s.timeout.cancel() }
         }

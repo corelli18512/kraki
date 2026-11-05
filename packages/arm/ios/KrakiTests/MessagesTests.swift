@@ -715,6 +715,50 @@ final class MessageProviderCacheHoleTests: XCTestCase {
         XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 11)
     }
 
+    /// Review of K-019: a legacy session whose replayed rows are not
+    /// seq-adjacent has a "hole" under every page. Once the Tentacle answers
+    /// a hole request with only rows the DB already had, later pages come
+    /// straight from the DB instead of a round trip each.
+    func testLegacySeqGapsCostOnlyOneTentacleRoundTrip() async throws {
+        let db = MessageDatabase(inMemory: ())
+        let legacy = Array(stride(from: 1, through: 199, by: 2))
+        try db.insert(sid, legacy.map(row))
+        let app = AppState(testDatabase: db)
+        defer { app.disconnect() }
+        app.sessionStore.sessions[sid] = SessionInfo(
+            id: sid, deviceId: "d", deviceName: "d", agent: "pi", model: "m", title: "t", state: .idle,
+            mode: .auto, lastSeq: 199, readSeq: 199, messageCount: 0, createdAt: Date(), pinned: false)
+        app.deviceStore.devices["d"] = DeviceSummary(
+            id: "d", name: "d", role: .tentacle, kind: .desktop, publicKey: nil, encryptionKey: nil,
+            online: true, lastSeen: nil, createdAt: nil)
+        app.connectionStatus = .connected
+        var befores: [Int] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "request_session_messages",
+               let before = (message["payload"] as? [String: Any])?["beforeSeq"] as? Int {
+                befores.append(before)
+            }
+            return true
+        }
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 199, deviceId: "d")
+        _ = app.messageStore.loadInitialWindow(sid)
+        let firstTop = try XCTUnwrap(app.messageStore.windowState(sid)?.topSeq)
+        XCTAssertGreaterThan(firstTop, 21)
+        _ = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertEqual(befores, [firstTop], "the first gap is asked of the Tentacle")
+        // The Tentacle replays the same legacy rows the DB already has.
+        let replay = legacy.filter { $0 < firstTop }.suffix(10)
+        provider.handleBatch(sessionId: sid, messages: replay.map(row), lastSeq: replay.last ?? 0,
+                             totalLastSeq: 199, containsHead: false)
+        let secondTop = try XCTUnwrap(app.messageStore.windowState(sid)?.topSeq)
+        XCTAssertLessThan(secondTop, firstTop)
+        let grew = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertTrue(grew, "the next older page comes from the DB")
+        XCTAssertLessThan(app.messageStore.windowState(sid)?.topSeq ?? .max, secondTop)
+        XCTAssertEqual(befores, [firstTop], "no second round trip")
+    }
+
     func testGapBridgeKeepsWalkingUntilTheHoleIsClosed() throws {
         let (app, provider, befores) = try fixture(lateCached: false)
         defer { app.disconnect() }
