@@ -47,3 +47,37 @@ it('uses complete rollback sentences with and without a previous version', async
   await act(async () => { await i18next.changeLanguage('en'); });
   expect(screen.getByText('The new version didn’t start on My PC, so it went back to the previous version.')).toBeInTheDocument();
 });
+
+// K-225: a request the computer never answers ends in an error, and a computer
+// that came back online on the old version without a status no longer says
+// "isn't back online yet" forever.
+it('a request the computer never answers ends with an error that can be dismissed (K-225)', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setUpdateProgress('pc', { phase: 'requested', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    expect(screen.getByText('Asking My PC to update…')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(65_000); });
+    expect(screen.queryByText('Asking My PC to update…')).not.toBeInTheDocument();
+    expect(screen.getByText('Couldn’t update')).toBeInTheDocument();
+    expect(screen.getByText('My PC didn’t answer', { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(useStore.getState().updateProgress.has('pc')).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+it('a computer back online on the old version without a status shows the update did not take (K-225)', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.40.0', to: '0.41.0', at: Date.now() });
+    const view = render(<DeviceUpdateBox device={{ ...device, online: false }} />);
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.getByText('My PC isn’t back online yet')).toBeInTheDocument();
+    view.rerender(<DeviceUpdateBox device={device} />);
+    expect(screen.queryByText('My PC isn’t back online yet')).not.toBeInTheDocument();
+    expect(screen.getByText('Update didn’t work, so nothing changed')).toBeInTheDocument();
+    expect(screen.getByText('The new version didn’t start on My PC, so it went back to 0.40.0.', { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(useStore.getState().updateProgress.has('pc')).toBe(false);
+  } finally { vi.useRealTimers(); }
+});

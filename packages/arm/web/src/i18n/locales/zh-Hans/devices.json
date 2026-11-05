@@ -110,6 +110,7 @@
     "offlineHint": "{{name}} 上线后即可更新。",
     "disabled": "那台电脑已关闭通过其他设备更新的功能。{{howTo}}",
     "requested": "正在请求 {{name}} 更新…",
+    "noAnswer": "{{name}} 没有响应。请确认那台电脑上的 Kraki 正在运行，然后重试。",
     "busy_other": "有 {{count}} 个会话正在运行",
     "stopsSessions": "更新会重启 {{name}} 上的 Kraki，并停止这些会话。",
     "idleDetail": "所有会话结束后，Kraki{{version}} 将立即安装到 {{name}} 上。",

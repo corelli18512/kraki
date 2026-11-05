@@ -111,6 +111,7 @@
     "offlineHint": "Available when {{name}} is online.",
     "disabled": "Updating from other devices is turned off on that computer. {{howTo}}",
     "requested": "Asking {{name}} to update…",
+    "noAnswer": "{{name}} didn’t answer. Check that Kraki is running there, then try again.",
     "busy_one": "{{count}} session is running",
     "busy_other": "{{count}} sessions are running",
     "stopsSessions": "Updating restarts Kraki on {{name}} and stops these sessions.",
