@@ -1,5 +1,8 @@
 /** Frames with unchanged geometry before a follow loop stops. */
 const SETTLED_FRAMES = 8;
+/** Shortest follow loop: iOS may start panning several frames after focus,
+ *  so a still start must not end the loop before the pan begins. */
+const MIN_FOLLOW_MS = 500;
 /** Upper bound for one follow loop (the iOS keyboard animates in ~0.3 s). */
 const FOLLOW_MS = 1000;
 
@@ -31,15 +34,20 @@ export function trackVisualViewport(): () => void {
   // app stayed scrolled away for the whole animation. Sample every frame
   // from the first sign of movement until the geometry is stable.
   let frame = 0;
+  let minUntil = 0;
   let deadline = 0;
   let still = 0;
   const step = () => {
     still = apply() ? 0 : still + 1;
-    frame = still < SETTLED_FRAMES && performance.now() < deadline ? requestAnimationFrame(step) : 0;
+    const now = performance.now();
+    const settled = still >= SETTLED_FRAMES && now >= minUntil;
+    frame = !settled && now < deadline ? requestAnimationFrame(step) : 0;
   };
   const follow = () => {
     apply();
-    deadline = performance.now() + FOLLOW_MS;
+    const now = performance.now();
+    minUntil = now + MIN_FOLLOW_MS;
+    deadline = now + FOLLOW_MS;
     still = 0;
     if (!frame) frame = requestAnimationFrame(step);
   };

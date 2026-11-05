@@ -5,19 +5,23 @@ class FakeVisualViewport extends EventTarget { height = 800; offsetTop = 0; }
 
 let vv: FakeVisualViewport;
 let frames: FrameRequestCallback[];
-const runFrame = () => { const due = frames; frames = []; due.forEach((cb) => cb(performance.now())); };
+let clock: number;
+/** One 60 Hz frame. */
+const runFrame = () => { clock += 16; const due = frames; frames = []; due.forEach((cb) => cb(clock)); };
 const vvt = () => document.documentElement.style.getPropertyValue('--kraki-vvt');
 const vvh = () => document.documentElement.style.getPropertyValue('--kraki-vvh');
 
 beforeEach(() => {
   vv = new FakeVisualViewport();
   frames = [];
+  clock = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => clock);
   vi.stubGlobal('visualViewport', vv);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
   vi.stubGlobal('cancelAnimationFrame', () => { frames = []; });
 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('trackVisualViewport (K-234)', () => {
   it('follows the iOS keyboard pan frame by frame before Safari sends any viewport event', () => {
@@ -38,11 +42,28 @@ describe('trackVisualViewport (K-234)', () => {
     field.remove();
   });
 
+  it('still follows a pan that starts after 10 still frames', () => {
+    const stop = trackVisualViewport();
+    const field = document.body.appendChild(document.createElement('textarea'));
+    field.focus();
+    for (let i = 0; i < 10; i++) runFrame();
+    expect(frames).toHaveLength(1);
+    vv.offsetTop = 200;
+    runFrame();
+    expect(vvt()).toBe('200px');
+    stop();
+    field.remove();
+  });
+
   it('stops sampling once the geometry has settled', () => {
     const stop = trackVisualViewport();
     vv.dispatchEvent(new Event('resize'));
-    for (let i = 0; i < 20 && frames.length; i++) runFrame();
+    let ran = 0;
+    for (; ran < 120 && frames.length; ran++) runFrame();
     expect(frames).toHaveLength(0);
+    // At least the minimum window (500 ms ≈ 31 frames), well before the 1 s cap.
+    expect(ran).toBeGreaterThanOrEqual(31);
+    expect(ran).toBeLessThan(62);
     stop();
   });
 });
