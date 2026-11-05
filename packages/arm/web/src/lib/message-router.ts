@@ -215,15 +215,18 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
-  // A create/fork/import failure has no session yet; it is correlated by the
-  // requestId the app sent. Show it instead of failing silently.
-  if (msg.type === 'error' && !msg.sessionId) {
+  // A create/fork/import failure is correlated by the requestId the app sent
+  // (an import's carries the id of its pending page, which no session list
+  // knows yet). Show it instead of failing silently.
+  if (msg.type === 'error') {
     const reqId = (msg.payload as { requestId?: string }).requestId;
     if (reqId && ctx.cmdState.pendingCreateRequests.has(reqId)) {
       ctx.cmdState.clearRequest(reqId);
+      if (msg.sessionId) store.removePendingSession(msg.sessionId);
       store.setLastError(msg.payload.message);
+      return;
     }
-    return;
+    if (!msg.sessionId) return;
   }
 
   if (!('sessionId' in msg) || !msg.sessionId) return;
@@ -328,6 +331,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (store.pendingSessions.has(sid)) {
         store.removePendingSession(sid);
       }
+      // A request's outcome outside any turn (an import that could not reach
+      // its agent): the chat shows no standalone error, so say it here.
+      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(msg.payload.message);
       store.appendMessage(sid, msg);
       // A transient error does not own unread state. If the turn ultimately
       // fails, the Tentacle's terminal boundary + session_list creates it.

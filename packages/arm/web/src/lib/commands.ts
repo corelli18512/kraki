@@ -1,5 +1,10 @@
 import { toWireSessionMode, type SessionMode } from '@kraki/protocol';
+import { t } from '../i18n';
 import { getStore } from './store-adapter';
+
+/** No session_created or error for a create/import this long: give up on it
+ *  (iOS/Mac CommandSender.schedulePendingTimeout). */
+export const CREATE_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Instance-scoped tracking for create_session requests. */
 export class CommandState {
@@ -44,6 +49,20 @@ export class CommandState {
     this.pendingPrompts.delete(requestId);
     this.pendingCreateRequests.delete(requestId);
     this.forkSources.delete(requestId);
+  }
+
+  /** A create/import still unanswered after CREATE_REQUEST_TIMEOUT_MS: its
+   *  first message goes back to the draft (clearRequest), an import's pending
+   *  page goes away, and the user is told. A late session_created still adds
+   *  the session to the list, without sending the prompt or navigating. */
+  expireRequestLater(requestId: string, pendingSessionId?: string): void {
+    setTimeout(() => {
+      if (!this.pendingCreateRequests.has(requestId)) return;
+      this.clearRequest(requestId);
+      const store = getStore();
+      if (pendingSessionId) store.removePendingSession(pendingSessionId);
+      store.setLastError(t('app:errors.requestTimedOut'));
+    }, CREATE_REQUEST_TIMEOUT_MS);
   }
 
   /** Track an outgoing mode change so the echo can be suppressed. */
@@ -173,6 +192,7 @@ export function createSession(
   if (opts.prompt) {
     state.pendingPrompts.set(requestId, opts.prompt);
   }
+  state.expireRequestLater(requestId);
   send({
     type: 'create_session',
     payload: {
@@ -317,6 +337,7 @@ export function importSession(
   const store = getStore();
   store.addPendingSession(localSessionId);
   store.setNavigateToSession(localSessionId);
+  state.expireRequestLater(requestId, localSessionId);
   send({
     type: 'import_session',
     payload: { requestId, localSessionId, targetDeviceId, ...(meta && { meta }) },

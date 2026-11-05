@@ -175,6 +175,10 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   const [openPill, setOpenPill] = useState<Pill | null>(null);
   const [focused, setFocused] = useState(false);
   const [nudged, setNudged] = useState(false);
+  // Started, waiting for session_created. A failure or no answer puts the
+  // prompt back into the draft (CommandState.clearRequest), which ends it.
+  const [starting, setStarting] = useState(false);
+  useEffect(() => { if (text) setStarting(false); }, [text]);
   const userPickedDevice = useRef(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -188,7 +192,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   const modelName = useCallback((id: string) => modelDetails.find((d) => d.id === id)?.name ?? id, [modelDetails]);
   const detail = modelDetails.find((d) => d.id === model);
   const efforts = detail?.supportsReasoningEffort ? detail.supportedReasoningEfforts ?? [] : [];
-  const canSubmit = !!text.trim() && availability === 'ready' && !!deviceId && !!agentId && !!model;
+  const canSubmit = !!text.trim() && availability === 'ready' && !!deviceId && !!agentId && !!model && !starting;
 
   // Last-used computer if online; else this PC if online; else any online one.
   const selectDefaults = useCallback(() => {
@@ -282,6 +286,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
     if (effort) writeJson(EFFORT_PREF_KEY, model, effort);
     wsClient.createSession({ targetDeviceId: deviceId, agentId, model, reasoningEffort: effort, prompt });
     setText('');
+    setStarting(true);
     onCreated?.();
   };
 
@@ -428,6 +433,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
         </div>
       </div>
       <StatusLine
+        starting={starting}
         anyOnline={online.length > 0}
         availability={availability}
         deviceName={device?.name}
@@ -437,10 +443,13 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   );
 }
 
-function StatusLine({ anyOnline, availability, deviceName, isThisPC }: {
-  anyOnline: boolean; availability: AgentAvailability; deviceName?: string; isThisPC: boolean;
+function StatusLine({ starting, anyOnline, availability, deviceName, isThisPC }: {
+  starting: boolean; anyOnline: boolean; availability: AgentAvailability; deviceName?: string; isThisPC: boolean;
 }) {
   const { t } = useTranslation('sessions');
+  if (starting) {
+    return <div className="ns-hint" role="status"><span className="ns-spinner" />{deviceName === undefined ? t('composer.startingUnknown') : t('composer.starting', { deviceName })}</div>;
+  }
   if (!anyOnline) {
     return <div className="ns-hint"><MoonStar className="ns-hint-icon" />{t('composer.noComputers')}</div>;
   }

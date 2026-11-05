@@ -148,3 +148,27 @@ describe('NewSessionComposer picked computer goes offline (K-097)', () => {
     expect(screen.getByTestId('new-session-create')).toBeDisabled();
   });
 });
+
+// K-206: after Start the composer shows that the session is starting (and
+// cannot start it twice); a failure or no answer brings the prompt back.
+describe('NewSessionComposer pending start (K-206)', () => {
+  it('shows a starting state until the prompt comes back', async () => {
+    const { wsClient } = await import('../../lib/ws-client');
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    try {
+      useStore.getState().setDevices([{ id: 'a', name: 'Computer A', role: 'tentacle', online: true }]);
+      useStore.getState().setDeviceAgents('a', [{ type: 'code', id: 'pi', models: ['m'] }]);
+      render(<NewSessionComposer />);
+      const text = screen.getByTestId('new-session-text');
+      fireEvent.change(text, { target: { value: 'Fix the flaky test' } });
+      fireEvent.click(screen.getByTestId('new-session-create'));
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Starting the session on Computer A…')).toBeInTheDocument();
+      expect(screen.getByTestId('new-session-create')).toBeDisabled();
+      // No answer / failure: the prompt is returned to the draft.
+      act(() => { useStore.getState().setDraft('kraki.new-session-draft', 'Fix the flaky test'); });
+      expect(screen.queryByText('Starting the session on Computer A…')).not.toBeInTheDocument();
+      expect(screen.getByTestId('new-session-create')).not.toBeDisabled();
+    } finally { create.mockRestore(); }
+  });
+});
