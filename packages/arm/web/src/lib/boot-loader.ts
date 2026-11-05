@@ -1,4 +1,5 @@
 import { t } from '../i18n';
+import { isMemoryStorage } from './storage-guard';
 /**
  * The first steps of the web page that must work even when the app itself
  * cannot load. Kept free of the app's modules (main.tsx imports this
@@ -26,7 +27,10 @@ export async function loadApp(
   root: HTMLElement,
   env: BootLoaderEnv = {},
 ): Promise<void> {
-  const storage = env.storage ?? safeSessionStorage();
+  // The reload marker must survive the reload; storage kept only in memory
+  // (site data blocked, K-201) would reload forever, so it counts as none.
+  const candidate = env.storage ?? safeSessionStorage();
+  const storage = candidate && !isMemoryStorage(candidate) ? candidate : undefined;
   const reload = env.reload ?? (() => window.location.reload());
   let boot: (root: HTMLElement) => void;
   try {
@@ -68,5 +72,10 @@ export function loadWordmarkFont(doc: Document = document): void {
   const link = doc.createElement('link');
   link.rel = 'stylesheet';
   link.href = WORDMARK_FONT_URL;
+  // A non-matching media keeps the pending stylesheet from blocking paint in
+  // every engine (WebKit may block on a script-added one too); it applies
+  // once loaded.
+  link.media = 'print';
+  link.onload = () => { link.media = 'all'; };
   doc.head.appendChild(link);
 }

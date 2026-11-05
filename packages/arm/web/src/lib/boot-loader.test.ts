@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOOT_RELOAD_KEY, WORDMARK_FONT_URL, loadApp, loadWordmarkFont } from './boot-loader';
+import { memoryStorage as pageMemoryStorage } from './storage-guard';
 
 function memoryStorage() {
   const map = new Map<string, string>();
@@ -39,6 +40,13 @@ describe('K-091: the app chunk fails to load (stale deploy)', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it('with site storage blocked (memory-only storage) shows the message at once instead of reloading forever', async () => {
+    const reload = vi.fn();
+    await loadApp(missingChunk, root, { storage: pageMemoryStorage(), reload });
+    expect(reload).not.toHaveBeenCalled();
+    expect(root.querySelector('[role="alert"]')?.textContent).toContain("Kraki couldn't load");
+  });
+
   it('a successful load boots the app and clears the reload marker', async () => {
     const storage = memoryStorage();
     storage.setItem(BOOT_RELOAD_KEY, '1');
@@ -64,6 +72,11 @@ describe('K-090: the Google Fonts stylesheet never blocks the first paint', () =
     loadWordmarkFont(doc);
     const links = doc.head.querySelectorAll(`link[href="${WORDMARK_FONT_URL}"]`);
     expect(links).toHaveLength(1);
-    expect((links[0] as HTMLLinkElement).rel).toBe('stylesheet');
+    const link = links[0] as HTMLLinkElement;
+    expect(link.rel).toBe('stylesheet');
+    // Not applied (so never render-blocking) until it has loaded.
+    expect(link.media).toBe('print');
+    link.dispatchEvent(new Event('load'));
+    expect(link.media).toBe('all');
   });
 });

@@ -63,7 +63,8 @@ describe('pairing link (release review A10 / D5)', () => {
     const guard = readFileSync(resolve(__dirname, 'storage-guard.ts'), 'utf8');
     expect([...guard.matchAll(/^import\s/gm)]).toEqual([]);
     const loader = readFileSync(resolve(__dirname, 'boot-loader.ts'), 'utf8');
-    expect([...loader.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n']);
+    // storage-guard has no imports at all (checked above).
+    expect([...loader.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n', './storage-guard']);
     const callback = readFileSync(resolve(__dirname, 'desktop-auth-callback.ts'), 'utf8');
     expect([...callback.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n']);
     // Localization loads before the gate, so it must stay app-free: only

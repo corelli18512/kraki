@@ -5,9 +5,17 @@
  * one for this page, so the app runs and simply forgets on reload (K-201).
  * Imported first by main.tsx, before any module that touches storage.
  */
+const memoryBacked = new WeakSet<object>();
+
+/** True for a replacement made here: it does not survive a reload, so code
+ *  that relies on a value across reloads must treat it as no storage. */
+export function isMemoryStorage(storage: object): boolean {
+  return memoryBacked.has(storage);
+}
+
 export function memoryStorage(): Storage {
   const items = new Map<string, string>();
-  return {
+  const storage: Storage = {
     get length() { return items.size; },
     clear: () => items.clear(),
     getItem: (key: string) => items.get(String(key)) ?? null,
@@ -15,6 +23,8 @@ export function memoryStorage(): Storage {
     removeItem: (key: string) => { items.delete(String(key)); },
     setItem: (key: string, value: string) => { items.set(String(key), String(value)); },
   };
+  memoryBacked.add(storage);
+  return storage;
 }
 
 function usable(target: Window, name: 'localStorage' | 'sessionStorage'): boolean {
