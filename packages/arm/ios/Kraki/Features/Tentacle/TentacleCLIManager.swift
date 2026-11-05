@@ -562,14 +562,6 @@ final class TentacleCLIManager {
         return Self.onDemandCount(fromLaunchctlPrint: result.stdout) > 0
     }
 
-    nonisolated static func onDemandCount(fromLaunchctlPrint text: String) -> Int {
-        for line in text.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("on-demand count = "), let n = Int(t.dropFirst("on-demand count = ".count)) { return n }
-        }
-        return 0
-    }
-
     /// The bundle-relative program launchd recorded for the built-in job
     /// (`program identifier = …` in `launchctl print`), or nil if unknown.
     private func registeredProgramIdentifier() async -> String? {
@@ -577,21 +569,6 @@ final class TentacleCLIManager {
             binary: "/bin/launchctl", args: ["print", "gui/\(getuid())/\(builtIn.label)"]
         ), result.exitCode == 0 else { return nil }
         return Self.programIdentifier(fromLaunchctlPrint: result.stdout)
-    }
-
-    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("program identifier = ") else { continue }
-            var value = String(trimmed.dropFirst("program identifier = ".count))
-            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
-            return value
-        }
-        return nil
-    }
-
-    nonisolated static func isLegacyHelperProgram(_ program: String) -> Bool {
-        program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
     }
 
     /// Register the built-in daemon with SMAppService.
@@ -756,6 +733,33 @@ struct TentacleCLIError: Error, LocalizedError {
     let message: String
     init(_ m: String) { message = m }
     var errorDescription: String? { message }
+}
+
+// MARK: - Reading `launchctl print`
+
+extension TentacleCLIManager {
+    nonisolated static func onDemandCount(fromLaunchctlPrint text: String) -> Int {
+        for line in text.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("on-demand count = "), let n = Int(t.dropFirst("on-demand count = ".count)) { return n }
+        }
+        return 0
+    }
+
+    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("program identifier = ") else { continue }
+            var value = String(trimmed.dropFirst("program identifier = ".count))
+            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
+            return value
+        }
+        return nil
+    }
+
+    nonisolated static func isLegacyHelperProgram(_ program: String) -> Bool {
+        program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
+    }
 }
 
 // MARK: - Built-in job that does not start, quitting offline
