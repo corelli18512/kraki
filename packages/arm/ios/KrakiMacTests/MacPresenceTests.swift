@@ -241,13 +241,18 @@ final class MacPresenceTests: XCTestCase {
     func testLoginItemOnlyForAnInstalledMacThatRunsAgents() {
         typealias P = MacPresenceController
         let installed = "/Applications/Kraki.app"
-        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: installed))
-        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, bundlePath: installed))
-        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: false, role: .remoteOnly, bundlePath: installed))
-        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: "/Volumes/Kraki/Kraki.app"))
-        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents,
+        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true, bundlePath: installed))
+        // First launch: no role chosen and nothing set up yet (K-333).
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: false, bundlePath: installed))
+        // An install from before the role step runs agents and keeps opening at login.
+        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: true, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: false, role: .remoteOnly, configured: true, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true,
+                                                 bundlePath: "/Volumes/Kraki/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true,
                                                  bundlePath: "/private/var/folders/x/AppTranslocation/A/d/Kraki.app"))
-        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: "/Users/me/.Trash/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: true,
+                                                 bundlePath: "/Users/me/.Trash/Kraki.app"))
     }
 
     /// K-256: Debug KRAKI_MAC_FORCE_SIGNED_OUT survives app activation.

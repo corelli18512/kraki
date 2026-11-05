@@ -469,6 +469,7 @@ final class MacPresenceController {
         guard Self.shouldRegisterLoginItem(
             managesPresence: managesPresence,
             role: BuiltInTentacle.thisMacRole,
+            configured: tentacle?.configInfo?.exists == true,
             bundlePath: Bundle.main.bundlePath
         ) else { return }
         let service = SMAppService.mainApp
@@ -482,15 +483,23 @@ final class MacPresenceController {
         }
     }
 
-    /// Only once the user chose to run agents here, and only from a copy that
-    /// stays: a login item added from the disk image, a translocated copy or
-    /// the Trash outlives that copy and points macOS at the wrong app.
+    /// Only once this Mac runs agents, and only from a copy that stays: a
+    /// login item added from the disk image, a translocated copy or the Trash
+    /// outlives that copy and points macOS at the wrong app. An undecided role
+    /// counts when Kraki is already set up: installs from before the role step
+    /// run agents (managesOnlinePresence) and setup skips the step for them.
     nonisolated static func shouldRegisterLoginItem(
         managesPresence: Bool,
         role: BuiltInTentacle.ThisMacRole,
+        configured: Bool,
         bundlePath: String
     ) -> Bool {
-        managesPresence && role == .runsAgents && AppInstallLocation.isPermanent(bundlePath: bundlePath)
+        guard managesPresence, AppInstallLocation.isPermanent(bundlePath: bundlePath) else { return false }
+        switch role {
+        case .runsAgents: return true
+        case .undecided: return configured
+        case .remoteOnly: return false
+        }
     }
 
     /// This Mac stopped running agents (remote-only): drop the login item we added.
