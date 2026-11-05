@@ -811,7 +811,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmWindow()
         pager.resume()
         setVisibleBodiesInteractive(true)
-        scrollPolicy.endUserInteraction()
+        scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
         settleEdges()
     }
 
@@ -826,7 +826,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             warmWindow()
             pager.resume()
             setVisibleBodiesInteractive(true)
-            scrollPolicy.endUserInteraction()
+            scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
             settleEdges()
             // `isDragging` can still read true inside this callback.
             DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility() }

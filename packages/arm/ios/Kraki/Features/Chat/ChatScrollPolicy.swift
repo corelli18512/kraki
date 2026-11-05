@@ -173,8 +173,17 @@ struct ChatScrollPolicy: Equatable {
         }
     }
 
-    mutating func endUserInteraction() {
+    /// Ends the native interaction. `restingDistanceToBottom` is the settled
+    /// distance to the newest tail: a view resting on the tail follows it
+    /// whatever the last movement was. A rubber-band bounce back from
+    /// overscroll past the tail (the keyboard inset shrinking under a drag at
+    /// the tail) reads as older movement but ends on the tail. Older intent
+    /// that stopped short of the tail still wins over the bottom tolerance.
+    mutating func endUserInteraction(restingDistanceToBottom: CGFloat? = nil) {
         interactionActive = false
+        if let restingDistanceToBottom, restingDistanceToBottom <= movementEpsilon {
+            setFollowingTail(true)
+        }
     }
 
     /// Records native content-offset movement. Both adapters use coordinates

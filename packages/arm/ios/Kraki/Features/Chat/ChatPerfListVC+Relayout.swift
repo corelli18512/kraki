@@ -38,8 +38,10 @@ extension ChatPerfListVC {
         // Per list: another open chat may already have refreshed the key.
         guard laidOutTextSize != TKTextSize.key, collectionView != nil else { return }
         laidOutTextSize = TKTextSize.key
-        // Nothing on screen to anchor to (e.g. mid-reload): the newest message.
-        relayoutLoadedWindow(keeping: followingBottom ? .newest : currentReadingAnchor() ?? .newest, reason: "text-size")
+        // At the tail (following it, or resting on it): stay there. Nothing on
+        // screen to anchor to (e.g. mid-reload): the newest message.
+        let atTail = followingBottom || tailFollowDistance() <= scrollPolicy.movementEpsilon
+        relayoutLoadedWindow(keeping: atTail ? .newest : currentReadingAnchor() ?? .newest, reason: "text-size")
         chatPerfLog.log("[text-size] relayout size=\(TKTextSize.key) items=\(items.count)")
     }
 
