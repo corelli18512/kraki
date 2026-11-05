@@ -173,6 +173,21 @@ function base64UrlEncode(bytes: Uint8Array): string {
 }
 
 /**
+ * Whether github.com answers at all. Where it is blocked (China), sending the
+ * browser to GitHub's authorize page ended on a browser error page (K-324);
+ * check first and say so on the sign-in page instead. An opaque no-cors
+ * request: any answer means reachable.
+ */
+export async function canReachGitHub(fetcher: typeof fetch = fetch, timeoutMs = 5000): Promise<boolean> {
+  try {
+    await fetcher('https://github.com/favicon.ico', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Start the GitHub OAuth flow.
  *
  * Builds a CSRF state + PKCE verifier/challenge, persists both, and

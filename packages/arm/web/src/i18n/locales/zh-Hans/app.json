@@ -29,7 +29,8 @@
     "downloadMac": "想使用这台 Mac 上的编程 Agent？下载 Kraki for Mac",
     "connecting": "正在连接中继服务器…",
     "selectSession": "从侧边栏选择一个会话以开始使用",
-    "generateQr": "运行 <command>kraki connect</command> 以生成二维码。"
+    "generateQr": "运行 <command>kraki connect</command> 以生成二维码。",
+    "githubUnreachable": "无法连接 github.com。请检查网络连接或代理设置后重试，或改为扫描二维码。"
   },
   "errors": {
     "dismiss": "关闭错误提示",

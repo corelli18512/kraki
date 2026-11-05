@@ -58,6 +58,40 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Scan QR Code')).toBeInTheDocument();
   });
 
+  it('says github.com is unreachable instead of sending the browser to an error page (K-324)', async () => {
+    useStore.getState().setStatus('awaiting_login');
+    useStore.getState().setGithubClientId('github-client-id');
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const href = window.location.href;
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      await userEvent.click(screen.getByRole('button', { name: 'Sign in with GitHub' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach github.com');
+      expect(fetchMock).toHaveBeenCalledWith('https://github.com/favicon.ico', expect.objectContaining({ mode: 'no-cors' }));
+      expect(window.location.href).toBe(href);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('does not ask GitHub for the Mac download on every load of the sign-in page (K-324)', () => {
+    useStore.getState().setStatus('awaiting_login');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)');
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      expect(screen.getByText("Use this Mac's coding agents? Download Kraki for Mac")).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      agent.mockRestore();
+    }
+  });
+
   it('shows only pairing copy when oauth login is unavailable', () => {
     vi.stubEnv('VITE_GITHUB_CLIENT_ID', '');
     useStore.getState().setStatus('awaiting_login');
