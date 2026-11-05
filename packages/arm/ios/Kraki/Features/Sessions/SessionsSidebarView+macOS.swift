@@ -42,14 +42,23 @@ final class MacSidebarScrollAnchor {
     func listWillReorder(from old: [String], to new: [String]) {
         pending = nil
         guard let scrollView else { return }
-        let offset = scrollView.contentView.bounds.minY
-        guard offset > 1,
-              let anchor = old.first(where: { (rowTops[$0] ?? -.greatestFiniteMagnitude) >= offset }),
-              let top = rowTops[anchor],
-              let oldIndex = old.firstIndex(of: anchor),
-              let newIndex = new.firstIndex(of: anchor),
-              oldIndex != newIndex else { return }
-        pending = (anchor, top - offset, Date().addingTimeInterval(1))
+        let viewport = scrollView.contentView.bounds
+        let offset = viewport.minY
+        // Rows off screen do not report: the old tops of rows that move are
+        // dropped below and recorded again when they are laid out.
+        let anchor = offset > 1
+            ? old.first(where: { rowTops[$0].map { offset <= $0 && $0 < viewport.maxY } ?? false })
+            : nil
+        if let anchor, let top = rowTops[anchor],
+           let oldIndex = old.firstIndex(of: anchor),
+           let newIndex = new.firstIndex(of: anchor),
+           oldIndex != newIndex {
+            pending = (anchor, top - offset, Date().addingTimeInterval(1))
+        }
+        let newIndexes = Dictionary(new.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        for (oldIndex, id) in old.enumerated() where newIndexes[id] != oldIndex {
+            rowTops[id] = nil
+        }
     }
 
     /// A row's new position: when it is the remembered row, scroll by the
@@ -60,7 +69,8 @@ final class MacSidebarScrollAnchor {
         self.pending = nil
         guard Date() < pending.until, let scrollView else { return }
         let clip = scrollView.contentView
-        let target = top - pending.distance
+        let maxOffset = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+        let target = min(max(top - pending.distance, 0), maxOffset)
         guard abs(target - clip.bounds.minY) > 0.5 else { return }
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
         scrollView.reflectScrolledClipView(clip)
@@ -310,7 +320,9 @@ struct SessionsSidebarView: View {
             .onChange(of: selectedSessionId) { _, id in
                 // ⌘1–9, Previous/Next, Needs You and notifications select
                 // rows that can be anywhere: follow them (minimal scroll).
-                guard let id else { return }
+                // Archived rows and rows hidden by Search are not in this
+                // list: a request for them would linger and move it later.
+                guard let id, filteredSessionIDs.contains(id) else { return }
                 appState.sessionStore.sessionListRevealId = id
             }
             .onChange(of: filteredSessionIDs) { old, new in

@@ -114,6 +114,15 @@ final class MacSessionSidebarScrollTests: XCTestCase {
         XCTAssertEqual(sv.contentView.bounds.minY, before, accuracy: 1, "already visible: no scroll")
     }
 
+    func testSelectingARowNotInTheListLeavesNoRevealRequestBehind() throws {
+        let (app, selection, _) = try makeSidebar()
+        // An archived row, or a notification for a Session Search hides.
+        selection.id = "not-in-the-list"
+        drain(300)
+        XCTAssertNil(app.sessionStore.sessionListRevealId,
+                     "no request lingers to move the list when Search is cleared or the row unarchived")
+    }
+
     func testUnpinningTheOpenSessionKeepsItsRowInView() throws {
         let (app, selection, sv) = try makeSidebar()
         // s-30 is pinned (so on top) and open; the list sits at the top.
@@ -143,6 +152,22 @@ final class MacSessionSidebarScrollTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.navigationOrderedSessions.first?.id, "s-38", "fixture: reordered")
         XCTAssertEqual(sv.contentView.bounds.minY, before + h, accuracy: 2,
                        "the rows on screen stay where they were (one row was added above them)")
+    }
+
+    func testSuccessiveReordersKeepTheRowsBeingReadInPlace() throws {
+        let (app, _, sv) = try makeSidebar()
+        let h = rowHeight(sv)
+        // Rows 30–39 are laid out (and their tops recorded) on the way down.
+        scroll(sv, to: (sv.documentView?.frame.height ?? 0) - sv.contentView.bounds.height)
+        scroll(sv, to: h * 12 + 20)
+        let before = sv.contentView.bounds.minY
+        for (n, moved) in [35, 36].enumerated() {
+            app.sessionStore.upsertSession(session(moved, createdAt: Date()))
+            drain(700)
+            XCTAssertEqual(app.sessionStore.navigationOrderedSessions.first?.id, "s-\(moved)", "fixture: reordered")
+            XCTAssertEqual(sv.contentView.bounds.minY, before + CGFloat(n + 1) * h, accuracy: 2,
+                           "reorder \(n + 1): the rows on screen stay where they were")
+        }
     }
 
     func testAtTheTopTheRowThatMovedUpIsShown() throws {
