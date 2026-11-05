@@ -305,7 +305,26 @@ export class KrakiTransport {
     }
   }
 
+  /** This tab still holds a device identity that is no longer the stored
+   *  one: another tab signed out (or paired again) meanwhile, maybe while
+   *  this tab missed the `storage` event (frozen, in bfcache). Connecting
+   *  would sign the old identity in again and save it (K-318). */
+  private identitySignedOutElsewhere(): boolean {
+    if (!this.storedDeviceId || this.pairingToken || this.githubCode) return false;
+    return loadStoredDevice()?.deviceId !== this.storedDeviceId;
+  }
+
   connect() {
+    if (this.identitySignedOutElsewhere()) {
+      logger.info('Not connecting: signed out in another tab');
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+      this.callbacks.onSignedOutElsewhere?.();
+      return;
+    }
     if (this.storedDeviceId || this.pairingToken || this.githubCode) {
       getStore().setStatus('connecting');
     }
@@ -442,14 +461,6 @@ export class KrakiTransport {
   /** Take the connection back after this tab was replaced elsewhere. */
   private reclaim(reason: string) {
     if (!this.replacedElsewhere) return;
-    if (this.storedDeviceId && loadStoredDevice()?.deviceId !== this.storedDeviceId) {
-      // Reconnecting would sign the old identity in again and save it (K-318).
-      logger.info('Not reclaiming: signed out in another tab');
-      this.replacedElsewhere = false;
-      if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
-      this.callbacks.onSignedOutElsewhere?.();
-      return;
-    }
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
     if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);

@@ -8,7 +8,7 @@ import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionS
 import { outbox } from './chat/outbox';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
 import { clearDeviceKeys, createAppKeyStore } from './e2e';
-import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
+import { KrakiTransport, loadStoredDevice, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
@@ -184,6 +184,12 @@ export class KrakiWSClient {
    *  reconnecting later with the signed-out identity and saving it again. */
   private signedOutElsewhere(): void {
     if (!this.transport.storedDeviceId) return;
+    if (loadStoredDevice()?.deviceId) {
+      // The other tab already paired again: start over with that identity.
+      logger.info('Paired again in another tab');
+      window.location.reload();
+      return;
+    }
     logger.info('Signed out in another tab');
     diag.phase('logout');
     const savedClientId = getStore().githubClientId;
