@@ -306,9 +306,9 @@ struct MacChatComposer: View {
             }
             .background {
                 MacComposerPasteProbe(
-                    enabled: isFocused && canAttachImage,
+                    enabled: isFocused,
                     onPasteImage: { image in
-                        attachImage(image)
+                        guard offerImage(image) else { return }
                         requestComposerFocus()
                     }
                 )
@@ -455,7 +455,12 @@ struct MacChatComposer: View {
                 onRequestFocus: requestComposerFocus,
                 onSubmit: handleModeSubmit,
                 onSelection: { selection = $0 },
-                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) }
+                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) },
+                onDropImage: { image in
+                    guard offerImage(image) else { return false }
+                    requestComposerFocus()
+                    return true
+                }
             )
             .padding(.leading, 0)
             .padding(.trailing, MacComposerMetrics.textTrailingInset)
@@ -845,6 +850,20 @@ struct MacChatComposer: View {
         guard let image = MacComposerPastePolicy.image(from: .general) else { return }
         attachImage(image)
         isFocused = true
+    }
+
+    /// A pasted or dropped image: attached, or an alert says why not (while
+    /// the agent was busy a pasted image used to vanish without a word).
+    private func offerImage(_ image: NSImage) -> Bool {
+        guard canAttachImage else {
+            imageAttachError = MacControlHelp.attachImage(
+                blocked: .of(voice: false, canAttach: false, answering: submissionIntent == .answerQuestion,
+                             agent: session?.agent),
+                hasImage: false)
+            return false
+        }
+        attachImage(image)
+        return true
     }
 
     private func attachImage(_ image: NSImage) {
