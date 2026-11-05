@@ -731,7 +731,22 @@ extension IOSChatScrollProductionTests {
     /// as older movement. Resting on the tail again must keep following it, so
     /// the next keyboard or text-size change keeps the last turn visible.
     func testBounceBackToTheTailAfterADragKeepsFollowing() throws {
+        try assertBounceBackToTheTailKeepsFollowing(legacyHeadPastStoredRows: false)
+    }
+
+    /// A legacy Session whose Tentacle head counts seqs clients never store
+    /// (`markCaughtUp` past the last stored row): the last stored row is still
+    /// the tail, so following and the K-055 tail-keeping work there too.
+    func testBounceBackToTheTailOfALegacySessionKeepsFollowing() throws {
+        try assertBounceBackToTheTailKeepsFollowing(legacyHeadPastStoredRows: true)
+    }
+
+    private func assertBounceBackToTheTailKeepsFollowing(legacyHeadPastStoredRows: Bool) throws {
         let fixture = try makeFixture(totalMessages: 80, bodyRepeats: 1)
+        if legacyHeadPastStoredRows {
+            fixture.appState.messageStore.markCaughtUp(fixture.sessionId, through: 92)
+            XCTAssertFalse(fixture.viewController.vm.hasNewerLocalRows, "no stored row is newer than the window")
+        }
         let viewController = fixture.viewController
         let collectionView = fixture.collectionView
         drainMainRunLoop(milliseconds: 900)
