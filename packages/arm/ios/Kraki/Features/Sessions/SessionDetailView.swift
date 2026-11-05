@@ -231,11 +231,16 @@ struct SessionDetailView: View {
             .disabled(!opensInfo)
             .accessibilityAddTraits(.isHeader)
             .accessibilityHint(opensInfo ? String(localized: "Shows session info") : "")
-            .animation(.easeInOut(duration: 0.2), value: title)
+        // A new title (the auto-title arriving) resizes the capsule. The
+        // animation must cover the glass and the capsule's frame too: scoped
+        // to the label only, the glass snapped to the new width and the old
+        // text jumped to the new centre before the cross-fade.
         if #available(iOS 26.0, *) {
             button.glassEffect(.regular.interactive(), in: Capsule())
+                .animation(.easeInOut(duration: 0.2), value: title)
         } else {
             button.background(.ultraThinMaterial, in: Capsule())
+                .animation(.easeInOut(duration: 0.2), value: title)
         }
     }
 
