@@ -47,6 +47,16 @@ describe('HtmlArtifactPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('K-213: an Escape that cancels an IME candidate leaves the mode menu open', () => {
+    render(<ChatHeader title="Session" mode="auto" narrow={false} onMode={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('leaves the report open when Escape belongs to an image preview above it', () => {
     const onClose = vi.fn();
     const { rerender } = render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><div className="kimage-viewer" /></>);

@@ -48,8 +48,9 @@ export function ChatHeader({
     if (hasWindowsTitleBar) popupRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
     // Capture phase + preventDefault: the open menu owns this Escape, so the
     // report panel (and other window Escape handlers) must not close too.
+    // An Escape that cancels an IME candidate in the composer is not ours.
     const esc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         setMenu(false);
         if (hasWindowsTitleBar) triggerRef.current?.focus();
