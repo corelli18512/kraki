@@ -148,11 +148,17 @@ describe('SessionPage', () => {
     expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'safe');
   });
 
-  it('an offline device shows a banner and messages still queue', () => {
-    withSession('idle', false);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText(/offline/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+  it('an offline device shows a banner (after the grace) and messages still queue', () => {
+    vi.useFakeTimers();
+    try {
+      withSession('idle', false);
+      renderWithRoute('/session/s1', <SessionPage />);
+      act(() => { vi.advanceTimersByTime(2_000); });
+      expect(screen.getByText(/offline/)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

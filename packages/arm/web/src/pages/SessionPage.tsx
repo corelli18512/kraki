@@ -5,7 +5,7 @@ import { sessionDisplayTitle } from '../lib/session-status';
 import { useParams, useNavigate, useLocation } from 'react-router';
 import { diag } from '../lib/diag';
 import { useStore } from '../hooks/useStore';
-import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
+import { RECONNECTING_DEBOUNCE_MS, useShowsReconnecting } from '../hooks/useShowsReconnecting';
 import { ChatView } from '../components/chat/ChatView';
 import { ChatHeader, HEADER_HEIGHT, type SessionMode } from '../components/chat/ChatHeader';
 import { wsClient } from '../lib/ws-client';
@@ -28,6 +28,15 @@ export function SessionPage() {
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
   const status = useStore((s) => s.status);
   const isReconnecting = useShowsReconnecting();
+  // A computer restart takes it offline for a moment: like "Reconnecting…",
+  // the offline banner waits out a blip instead of flashing (K-214).
+  const deviceOffline = !isReconnecting && !isDeviceOnline;
+  const [showsOffline, setShowsOffline] = useState(false);
+  useEffect(() => {
+    if (!deviceOffline) { setShowsOffline(false); return; }
+    const timer = setTimeout(() => setShowsOffline(true), RECONNECTING_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [deviceOffline]);
   const totalOtherUnread = useStore((s) => {
     let count = 0;
     for (const [sid, n] of s.unreadCount) {
@@ -197,7 +206,7 @@ export function SessionPage() {
               }}
               onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
             />
-            {!isReconnecting && !isDeviceOnline && (
+            {deviceOffline && showsOffline && (
               <div className="kchat-banner" style={{ top: topInset }}>
                 {t('session.offline', { device: session.deviceName ?? t('session.device') })}
               </div>
