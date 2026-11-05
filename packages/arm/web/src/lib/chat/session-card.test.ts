@@ -22,9 +22,10 @@ describe('sessionTimeLabel (SessionTimeFormatter)', () => {
     expect(sessionTimeLabel(new Date(2026, 5, 1, 9).toISOString(), now)).toBe('9d ago');
   });
   it('clamps timestamps from the future (clock skew) to today instead of days ago (K-326)', () => {
-    expect(sessionTimeLabel(new Date(2026, 5, 11, 0, 30).toISOString(), now)).toBe('00:30');
-    expect(sessionTimeLabel(new Date(2026, 5, 12, 8, 15).toISOString(), now)).toBe('08:15');
-    expect(sessionTimeLabel(new Date(2026, 5, 10, 13, 0).toISOString(), now)).toBe('13:00');
+    // Shown as today's clock time, in the user's 12/24-hour cycle.
+    for (const future of [new Date(2026, 5, 11, 0, 30), new Date(2026, 5, 12, 8, 15), new Date(2026, 5, 10, 13, 0)]) {
+      expect(sessionTimeLabel(future.toISOString(), now)).toBe(formatClockTime(future));
+    }
   });
   it('rejects empty or invalid timestamps', () => {
     expect(sessionTimeLabel('', now)).toBe('');
