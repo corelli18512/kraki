@@ -79,13 +79,32 @@ struct AccountPane: View {
     }
 
     private func initials(for user: UserInfo) -> String {
-        let source = user.email ?? user.login
+        Self.initials(from: user.email ?? user.login)
+    }
+
+    static func initials(from source: String) -> String {
         let parts = source.split(separator: "@").first.map(String.init) ?? source
+        // Chinese, Japanese and Korean names: one character. Two would split
+        // the given name ("王小明" is not "王小").
+        if let first = parts.first, first.unicodeScalars.first.map(Self.isCJK) == true {
+            return String(first)
+        }
         let chunks = parts.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
         if let first = chunks.first?.first, let second = chunks.dropFirst().first?.first {
             return String([first, second]).uppercased()
         }
         return String(parts.prefix(2)).uppercased()
+    }
+
+    private static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isIdeographic { return true }
+        switch scalar.value {
+        case 0x3040...0x30FF, 0x31F0...0x31FF, // kana
+             0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF: // hangul
+            return true
+        default:
+            return false
+        }
     }
 
     private func providerLabel(for user: UserInfo) -> String {

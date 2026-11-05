@@ -97,6 +97,9 @@ final class TentacleSetupRunner {
             String(localized: "GitHub sign-in could not be verified. Try again.")
         case "oauth_unavailable":
             String(localized: "Browser sign-in is not available yet.")
+        case "home_not_writable":
+            // Usually a ~/.kraki folder created by `sudo kraki`.
+            String(localized: "Kraki can't save its settings in the .kraki folder in your home folder. If you ran kraki with sudo, run this in Terminal, then try again: sudo chown -R \"$USER\" ~/.kraki")
         default:
             String(localized: "Sign-in did not finish. Try again.")
         }

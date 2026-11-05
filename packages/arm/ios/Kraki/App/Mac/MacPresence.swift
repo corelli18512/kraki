@@ -325,10 +325,7 @@ final class MacPresenceController {
         isQuittingOffline = true
         KLog.diag("[Presence] quitting; taking this Mac offline")
         await tentacle?.goOffline()
-        if UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) {
-            try? await SMAppService.mainApp.unregister()
-            UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
-        }
+        await dropAddedLoginItem()
     }
 
     /// Set when Sparkle is about to replace the app (MacUpdateController).
@@ -469,7 +466,12 @@ final class MacPresenceController {
     /// While this Mac is online, Kraki opens at login so the menu bar shows
     /// it. Only a login item we added is removed again (on quit).
     func syncLoginItem() {
-        guard managesPresence else { return }
+        guard Self.shouldRegisterLoginItem(
+            managesPresence: managesPresence,
+            role: BuiltInTentacle.thisMacRole,
+            configured: tentacle?.configInfo?.exists == true,
+            bundlePath: Bundle.main.bundlePath
+        ) else { return }
         let service = SMAppService.mainApp
         guard service.status != .enabled, service.status != .requiresApproval else { return }
         do {
@@ -479,6 +481,33 @@ final class MacPresenceController {
         } catch {
             KLog.diag("[Presence] login item registration failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Only once this Mac runs agents, and only from a copy that stays: a
+    /// login item added from the disk image, a translocated copy or the Trash
+    /// outlives that copy and points macOS at the wrong app. An undecided role
+    /// counts when Kraki is already set up: installs from before the role step
+    /// run agents (managesOnlinePresence) and setup skips the step for them.
+    nonisolated static func shouldRegisterLoginItem(
+        managesPresence: Bool,
+        role: BuiltInTentacle.ThisMacRole,
+        configured: Bool,
+        bundlePath: String
+    ) -> Bool {
+        guard managesPresence, AppInstallLocation.isPermanent(bundlePath: bundlePath) else { return false }
+        switch role {
+        case .runsAgents: return true
+        case .undecided: return configured
+        case .remoteOnly: return false
+        }
+    }
+
+    /// This Mac stopped running agents (remote-only): drop the login item we added.
+    func dropAddedLoginItem() async {
+        guard UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) else { return }
+        try? await SMAppService.mainApp.unregister()
+        UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
+        KLog.diag("[Presence] removed login item")
     }
 }
 

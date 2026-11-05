@@ -364,7 +364,8 @@ async function githubDeviceFlow(clientId: string): Promise<{ token: string; user
   throw new Error('The GitHub code expired. Run `kraki` to try again.');
 }
 
-async function githubLogin(token: string): Promise<string | null> {
+/** The GitHub login a token belongs to, or null when GitHub can't say. */
+export async function githubLogin(token: string): Promise<string | null> {
   try {
     const res = await fetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'kraki-tentacle' },
@@ -701,6 +702,7 @@ export async function runSetup(): Promise<KrakiConfig> {
   const config: KrakiConfig = {
     relay,
     authMethod: 'github_token',
+    ...(username !== 'unknown' && { account: { login: username } }),
     device: { name, id: getOrCreateDeviceId() },
     logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };
@@ -788,6 +790,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
   const config: KrakiConfig = {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
+    ...(user && user !== 'unknown' && { account: { login: user } }),
     device: { name, id: getOrCreateDeviceId() },
     logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };

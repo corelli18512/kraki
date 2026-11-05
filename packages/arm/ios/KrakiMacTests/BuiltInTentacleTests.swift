@@ -287,4 +287,78 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertNil(merged[0].hint)
         XCTAssertEqual(merged[1].status, .needsLogin) // served but without models
     }
+
+    // MARK: QA fixes (mac-lifecycle-a)
+
+    /// K-331: only an installed copy may register login items or restart the daemon.
+    func testOnlyAnInstalledCopyIsPermanent() {
+        XCTAssertTrue(AppInstallLocation.isPermanent(bundlePath: "/Applications/Kraki.app"))
+        XCTAssertFalse(AppInstallLocation.isPermanent(bundlePath: "/Volumes/Kraki/Kraki.app"))
+        XCTAssertFalse(AppInstallLocation.isPermanent(bundlePath: "/private/var/folders/x/AppTranslocation/ABC/d/Kraki.app"))
+        XCTAssertFalse(AppInstallLocation.isPermanent(bundlePath: "/Users/me/.Trash/Kraki.app"))
+    }
+
+    /// K-332: after sign-in, setup keeps the window while this Mac is being
+    /// brought online and while the Login Items / couldn't-start card shows.
+    func testSetupHoldsTheWindowUntilThisMacIsOnlineOrTheUserMovesOn() {
+        typealias V = BuiltInSetupView
+        func holds(finished: Bool = false, phase: TentacleSetupRunner.Phase = .done(username: "a"),
+                   bringingOnline: Bool = false, step: V.Step = .background,
+                   daemon: TentacleCLIManager.DaemonState = .needsApproval) -> Bool {
+            V.holdsSignIn(finished: finished, runnerPhase: phase, bringingOnline: bringingOnline, step: step, daemonState: daemon)
+        }
+        XCTAssertTrue(holds(phase: .configuring(username: "a"), step: .signIn, daemon: .stopped))
+        XCTAssertTrue(holds(bringingOnline: true, daemon: .starting))
+        XCTAssertTrue(holds(daemon: .needsApproval))
+        XCTAssertTrue(holds(daemon: .error("boom")))
+        // Nothing to act on: the main window may take over.
+        XCTAssertFalse(holds(daemon: .stopped))
+        XCTAssertFalse(holds(step: .done, daemon: .running(pid: 1)))
+        XCTAssertFalse(holds(finished: true))
+        XCTAssertFalse(holds(phase: .idle, step: .signIn, daemon: .stopped))
+    }
+
+    /// K-355: a Kraki folder the user can't write to says how to fix it.
+    func testUnwritableKrakiFolderSaysHowToFixIt() {
+        let phase = TentacleSetupRunner.phase(after: .starting, line: #"{"event":"error","code":"home_not_writable","message":"EACCES"}"#)
+        guard case .failed(let message)? = phase else { return XCTFail("expected a failure, got \(String(describing: phase))") }
+        XCTAssertTrue(message.contains("sudo chown -R"), message)
+    }
+
+    /// K-355: a translocated copy may already sit in Applications (moved with `mv`).
+    func testTranslocatedCopyDoesNotAssumeItIsInDownloads() {
+        let detail = BuiltInSetupView.moveToApplicationsDetail(.translocated)
+        XCTAssertFalse(detail.contains("Downloads"), detail)
+        XCTAssertTrue(detail.contains("already there"), detail)
+    }
+
+    /// K-348: results arriving out of display order are added below the rows
+    /// already shown, and Check Again keeps the rows while it runs.
+    func testAgentRowsKeepTheirPlaceWhileResultsStreamIn() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agents-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("kraki")
+        try """
+        #!/bin/sh
+        echo '{"event":"agent","id":"codex","name":"Codex","status":"ready","models":3}'
+        sleep 0.3
+        echo '{"event":"agent","id":"claude","name":"Claude Code","status":"ready","models":2}'
+        echo '{"event":"agent","id":"copilot","name":"GitHub Copilot CLI","status":"not_installed"}'
+        echo '{"event":"agent","id":"pi","name":"Pi","status":"not_installed"}'
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let check = LocalAgentsCheck()
+        check.run(binaryPath: script.path)
+        let deadline = Date().addingTimeInterval(10)
+        while check.isRunning, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(check.installedAgents.map(\.id), ["codex", "claude"])
+
+        check.run(binaryPath: script.path)
+        XCTAssertEqual(check.installedAgents.map(\.id), ["codex", "claude"], "Check Again keeps the rows")
+        let again = Date().addingTimeInterval(10)
+        while check.isRunning, Date() < again { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(check.installedAgents.map(\.id), ["codex", "claude"])
+    }
 }

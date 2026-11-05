@@ -51,6 +51,15 @@ final class MacLaunchCoordinator {
     @ObservationIgnored private var hasCommittedLaunchActivity = false
     @ObservationIgnored private var isFinishingAuthenticatedSurface = false
     @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
+    /// Debug `KRAKI_MAC_FORCE_SIGNED_OUT=1`: stay on the signed-out page until
+    /// the user signs in, also across app activations.
+    @ObservationIgnored var forceSignedOut: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KRAKI_MAC_FORCE_SIGNED_OUT"] == "1"
+        #else
+        false
+        #endif
+    }()
 
     /// Startup ran (or is running) for this process.
     var bootstrapStarted: Bool { hasStarted }
@@ -114,12 +123,6 @@ final class MacLaunchCoordinator {
                 MacPresenceController.shared.syncLoginItem()
             }
         }
-
-        #if DEBUG
-        let forceSignedOut = ProcessInfo.processInfo.environment["KRAKI_MAC_FORCE_SIGNED_OUT"] == "1"
-        #else
-        let forceSignedOut = false
-        #endif
 
         let canEnterAuthenticatedRoot: Bool
         if forceSignedOut {
@@ -195,11 +198,19 @@ final class MacLaunchCoordinator {
         await finishAuthenticatedSurface(source: "probe")
     }
 
+    /// The launch gate stays at most about 2 s from when it appeared: the
+    /// credential lookup before preparation counts too. The authenticated
+    /// shell still gets a short floor to lay out before the watchdog fires.
+    nonisolated static func presentationWatchdogDelay(gateVisibleFor elapsed: TimeInterval) -> TimeInterval {
+        max(0.5, 2 - elapsed)
+    }
+
     private func beginPreparingAuthenticatedSurface() {
         phase = .preparingAuthenticated
         presentationWatchdogTask?.cancel()
+        let delay = Self.presentationWatchdogDelay(gateVisibleFor: Date().timeIntervalSince(launchStartedAt ?? Date()))
         presentationWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self,
                   self.phase == .preparingAuthenticated else { return }
             self.presentationWatchdogTask = nil
@@ -262,11 +273,16 @@ final class MacLaunchCoordinator {
     /// activation) never sign back in after Sign Out.
     func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil, userInitiated: Bool = false) async {
         guard !isCheckingCredentials else { return }
-        if userInitiated { appState.signedOutByUser = false }
+        if userInitiated {
+            appState.signedOutByUser = false
+            forceSignedOut = false
+        }
+        // App activation must not undo the forced signed-out launch.
+        if forceSignedOut { return }
         // While setup asks which install should run Kraki, don't slip in with
         // the command-line login (e.g. on app activation): setup finishes the
         // choice and then calls back here.
-        if let tentacleCLI, tentacleCLI.ownerChoicePending { return }
+        if let tentacleCLI, tentacleCLI.ownerChoicePending || tentacleCLI.setupHoldsSignIn { return }
         isCheckingCredentials = true
         loginCheckFailed = false
         defer { isCheckingCredentials = false }

@@ -37,6 +37,7 @@ import {
   DEFAULT_LOG_VERBOSITY,
   type KrakiConfig,
   getConfigPath,
+  getKrakiHome,
   getOrCreateDeviceId,
   getVersion,
   loadConfig,
@@ -45,6 +46,7 @@ import {
   saveGitHubToken,
 } from './config.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
+import { adoptAccountDataOwner, loadAccountDataOwner } from './account-switch.js';
 
 export type SetupJsonEvent =
   | { event: 'start'; version: string }
@@ -81,6 +83,11 @@ class SetupJsonError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
   }
+}
+
+function isPermissionDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'EACCES' || code === 'EPERM';
 }
 
 function getArg(args: string[], flag: string): string | undefined {
@@ -284,6 +291,14 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     deps.emit({ event: 'relay', relay, region, fallback });
 
     const existing = loadConfig();
+    // Installs from before account.json: name the account the data in place
+    // belongs to while its token is still here, so the daemon can move it
+    // aside if this sign-in is another account.
+    if (existing && !loadAccountDataOwner()) {
+      const saved = source === 'saved' ? null : loadGitHubToken();
+      const previous = existing.account?.login ?? (saved ? await githubUser(deps, saved) : null);
+      if (previous) adoptAccountDataOwner(previous);
+    }
     const deviceName = getArg(args, '--device-name')
       ?? existing?.device.name
       ?? hostname().replace(/\.local$/, '');
@@ -291,6 +306,7 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
       ...(existing ?? {}),
       relay,
       authMethod: 'github_token',
+      account: { login: username },
       device: { name: deviceName, id: getOrCreateDeviceId() },
       logging: existing?.logging ?? { verbosity: DEFAULT_LOG_VERBOSITY },
     };
@@ -299,6 +315,16 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     deps.emit({ event: 'done', configPath: getConfigPath(), relay, username, deviceName });
     return 0;
   } catch (err) {
+    if (!(err instanceof SetupJsonError) && isPermissionDenied(err)) {
+      // Typically a Kraki folder created by `sudo kraki`: say how to fix it.
+      const home = getKrakiHome();
+      deps.emit({
+        event: 'error',
+        code: 'home_not_writable',
+        message: `Kraki cannot write to ${home} (${(err as Error).message}). Fix it in Terminal: sudo chown -R "$USER" "${home}"`,
+      });
+      return 1;
+    }
     const code = err instanceof SetupJsonError ? err.code : 'unexpected';
     deps.emit({ event: 'error', code, message: (err as Error).message });
     return 1;

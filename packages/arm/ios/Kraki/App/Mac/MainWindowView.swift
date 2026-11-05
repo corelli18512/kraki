@@ -369,6 +369,19 @@ struct MainWindowView: View {
         .sheet(isPresented: $pairingPresented) {
             PairingSheet()
         }
+        // A computer reinstalled with new keys: messages to it fail closed,
+        // so say so instead of letting the chat look alive.
+        .alert(
+            "Computer Key Changed",
+            isPresented: Binding(
+                get: { appState.keyWarning != nil },
+                set: { if !$0, let ids = appState.keyWarning?.ids { appState.acknowledgedKeyWarnings.formUnion(ids) } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appState.keyWarning?.message ?? "")
+        }
         #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
         .performanceNotice()
         #endif
