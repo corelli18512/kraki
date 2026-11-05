@@ -373,6 +373,11 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
   const pid = await startDaemon(config);
   console.log('');
   console.log(`  ${chalk.green('✔')} ${chalk.bold('Kraki is running')} ${chalk.dim(`in the background (PID ${pid})${process.platform === 'darwin' ? ' and starts again when you log in' : ''}.`)}`);
+  // Linux has no login autostart (K-276); say so instead of leaving users to
+  // find Kraki stopped after a reboot.
+  if (process.platform === 'linux') {
+    console.log(chalk.dim(`  After a restart, run ${chalk.bold('kraki start')} to bring it back.`));
+  }
   console.log('');
   console.log(`  ${chalk.hex('#2384d4').bold('Use it from your phone')}`);
 

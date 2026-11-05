@@ -762,6 +762,38 @@ describe('CLI config reset', () => {
 // ── default (no args) ───────────────────────────────────
 
 describe('CLI default (no args)', () => {
+  const cancelled = () => Object.assign(new Error('User force closed the prompt'), { name: 'ExitPromptError' });
+
+  it('exits 130 when install.sh setup is cancelled, so the installer does not start Kraki (K-276)', async () => {
+    process.env.KRAKI_INSTALL = '1';
+    mockLoadConfig.mockReturnValue(null);
+    mockRunSetup.mockRejectedValue(cancelled());
+    await runCli([]);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(130));
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
+
+  it('tells Linux users Kraki does not come back by itself after a restart (K-276)', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github', device: { name: 'x' } });
+      mockIsDaemonRunning.mockReturnValue(false);
+      mockStartDaemon.mockResolvedValue(99);
+      await runCli(['start']);
+      await vi.waitFor(() => expect(consoleOutput.join('\n')).toContain('After a restart, run'));
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('still exits 0 when an interactive prompt is cancelled outside the installer', async () => {
+    mockLoadConfig.mockReturnValue(null);
+    mockRunSetup.mockRejectedValue(cancelled());
+    await runCli([]);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(0));
+  });
+
   it('starts daemon when config exists and daemon not running', async () => {
     mockLoadConfig.mockReturnValue({
       relay: 'wss://r',

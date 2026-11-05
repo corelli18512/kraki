@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const installerPaths = [
@@ -59,6 +60,84 @@ for (const installerPath of installerPaths) {
       expect(installer).toContain('releases/latest');
       expect(installer).toContain('releases/download/${VERSION}/SHA256SUMS.txt');
       expect(installer.indexOf('verify_checksum "$TMP"')).toBeGreaterThan(installer.indexOf('install() {'));
+    });
+  });
+
+  // K-276 / K-358: installer rough edges, exercised on the real functions
+  // with stubbed commands.
+  describe(`installer behaviour: ${installerPath}`, () => {
+    const functions = installer.replace(/\nmain\n*$/, '\n');
+    const run = (script: string, env: Record<string, string> = {}) => spawnSync('sh', ['-c', `${functions}\n${script}`], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, ...env },
+    });
+    const stubBin = (dir: string, name: string, body: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(dir, name), 0o755);
+    };
+
+    it('points Linux arm64 to npm instead of a raw 404 (K-276)', () => {
+      const bin = mkdtempSync(join(tmpdir(), 'kraki-inst-uname-'));
+      stubBin(bin, 'uname', '[ "$1" = "-s" ] && echo Linux || echo aarch64');
+      const result = run('detect_platform; echo "ASSET=$ASSET"', { PATH: `${bin}:${process.env.PATH}` });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('npm install -g @kraki/tentacle');
+      expect(result.stdout).not.toContain('ASSET=');
+    });
+
+    it('removes the download when the final move fails (K-276)', () => {
+      const root = mkdtempSync(join(tmpdir(), 'kraki-inst-tmp-'));
+      const tmp = join(root, 'tmp');
+      const dest = join(root, 'ro');
+      mkdirSync(tmp);
+      mkdirSync(dest);
+      chmodSync(dest, 0o555);
+      const result = run([
+        'curl() { while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { echo binary > "$2"; }; shift; done; }',
+        'verify_checksum() { :; }',
+        'stop_running_daemon() { :; }',
+        'sudo() { return 1; }',
+        `mktemp() { mkdir ${tmp}/download && echo ${tmp}/download; }`,
+        'PLATFORM=linux; ARCH=x64; ASSET=kraki-cli-linux-x64; VERSION=v0.0.1',
+        `INSTALL_DIR=${dest}`,
+        'install',
+      ].join('\n'), { HOME: root });
+      chmodSync(dest, 0o755);
+      expect(result.status).not.toBe(0);
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    it('does not add the PATH line again when the profile names it as $HOME/… (K-276)', () => {
+      const home = mkdtempSync(join(tmpdir(), 'kraki-inst-home-'));
+      const profile = join(home, '.bashrc');
+      writeFileSync(profile, 'export PATH="$HOME/.local/bin:$PATH"\n');
+      const result = run('INSTALL_DIR="$HOME/.local/bin"; ensure_path_configured', { HOME: home, SHELL: '/bin/bash' });
+      expect(result.status).toBe(0);
+      expect(readFileSync(profile, 'utf8')).toBe('export PATH="$HOME/.local/bin:$PATH"\n');
+    });
+
+    describe('start_daemon (K-358)', () => {
+      const startWith = (status: string) => {
+        const dir = mkdtempSync(join(tmpdir(), 'kraki-inst-start-'));
+        const calls = join(dir, 'calls');
+        stubBin(dir, 'kraki', `echo "$1" >> ${calls}\n[ "$1" = status ] && printf '%s\\n' '${status}'\nexit 0`);
+        const result = run(`INSTALL_DIR=${dir}; BINARY_NAME=kraki; start_daemon`);
+        expect(result.status).toBe(0);
+        return readFileSync(calls, 'utf8').trim().split('\n').filter((c) => c !== 'status');
+      };
+
+      it('restarts a daemon still running the old version', () => {
+        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":"0.30.0"}}')).toEqual(['restart']);
+      });
+
+      it('restarts a running daemon whose version is unknown', () => {
+        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":null}}')).toEqual(['restart']);
+      });
+
+      it('just starts when the daemon is stopped or already on the new version', () => {
+        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":false,"pid":null,"daemonVersion":null}}')).toEqual(['start']);
+        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":"0.39.0"}}')).toEqual(['start']);
+      });
     });
   });
 }

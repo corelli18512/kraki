@@ -27,8 +27,15 @@ detect_platform() {
   case "$ARCH" in
     x86_64|amd64)  ARCH="x64" ;;
     aarch64|arm64) ARCH="arm64" ;;
-    *)             echo "Error: Unsupported architecture: $ARCH"; exit 1 ;;
+    *)             echo "Error: Unsupported architecture: $ARCH"; echo "  Install with npm instead (needs Node.js): npm install -g @kraki/tentacle"; exit 1 ;;
   esac
+
+  # Releases ship no Linux arm64 binary; the download was a bare 404.
+  if [ "$PLATFORM" = "linux" ] && [ "$ARCH" = "arm64" ]; then
+    echo "Error: There is no Kraki binary for Linux arm64 yet."
+    echo "  Install with npm instead (needs Node.js): npm install -g @kraki/tentacle"
+    exit 1
+  fi
 
   if [ "$PLATFORM" = "windows" ]; then
     ASSET="kraki-cli-${PLATFORM}-${ARCH}.exe"
@@ -121,11 +128,36 @@ stop_running_daemon() {
   fi
 }
 
+# ── Start, or restart a daemon still on another version ──
+#
+# An old CLI can report "not running" for a daemon that started moments ago
+# (before it wrote daemon.pid), so stop_running_daemon kept it and `start`
+# then said "already running" with the old version. Ask the new binary,
+# which also sees the launchd job, and restart a daemon that is not on the
+# installed version.
+
+start_daemon() {
+  STATUS=$("${INSTALL_DIR}/${BINARY_NAME}" status --json 2>/dev/null || true)
+  if printf '%s' "$STATUS" | grep -q '"running": *true'; then
+    INSTALLED=$(printf '%s' "$STATUS" | sed -n 's/^{"ok":true,"version":"\([^"]*\)".*/\1/p')
+    RUNNING=$(printf '%s' "$STATUS" | sed -n 's/.*"daemonVersion":"\([^"]*\)".*/\1/p')
+    if [ -z "$RUNNING" ] || [ "$RUNNING" != "$INSTALLED" ]; then
+      echo "  Restarting Kraki on the new version..."
+      "${INSTALL_DIR}/${BINARY_NAME}" restart
+      return
+    fi
+  fi
+  "${INSTALL_DIR}/${BINARY_NAME}" start
+}
+
 # ── Download and install ─────────────────────────────────
 
 install() {
   URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
   TMP=$(mktemp -d)
+  # Never leave the download behind (a failed sudo mv, Ctrl+C).
+  trap 'rm -rf "$TMP"' EXIT
+  trap 'exit 130' INT TERM
 
   echo "  Installing Kraki ${VERSION} (${PLATFORM}/${ARCH})..."
 
@@ -248,7 +280,11 @@ ensure_path_configured() {
           fi ;;
       esac
       if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
-        if ! grep -q "${INSTALL_DIR}" "$PROFILE" 2>/dev/null; then
+        # The profile may already name the directory as $HOME/… or ~/…
+        # (e.g. a line from an earlier install); don't add it twice.
+        HOME_RELATIVE="${INSTALL_DIR#"$HOME"/}"
+        # shellcheck disable=SC2088 # a literal ~/ is what is searched for
+        if ! grep -qF -e "${INSTALL_DIR}" -e "\$HOME/${HOME_RELATIVE}" -e "\${HOME}/${HOME_RELATIVE}" -e "~/${HOME_RELATIVE}" "$PROFILE" 2>/dev/null; then
           printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$PROFILE"
         fi
         echo "  Added ${INSTALL_DIR} to PATH in ${PROFILE}. Open a new Terminal window to use kraki."
@@ -349,10 +385,16 @@ main() {
   # subsequent `kraki start` uses the same background-only daemon manager,
   # manager, readiness handshake, Launch Services validation, and error path as
   # `kraki start` / `kraki restart`.
-  KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
+  # Setup cancelled (Ctrl+C / Esc exits non-zero in install mode): don't start.
+  if ! KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty; then
+    echo ""
+    echo "  Setup did not finish, so Kraki was not started. Run kraki to set it up."
+    echo ""
+    exit 1
+  fi
 
   echo "  Starting Kraki daemon..."
-  "${INSTALL_DIR}/${BINARY_NAME}" start
+  start_daemon
   echo ""
 }
 

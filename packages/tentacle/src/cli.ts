@@ -321,7 +321,9 @@ main().catch((err) => {
   // User pressed Esc or Ctrl+C during a prompt — exit cleanly
   if (err?.name === 'ExitPromptError' || err?.message?.includes('User force closed')) {
     console.log(chalk.dim('\n  Cancelled.'));
-    gracefulExit(0);
+    // install.sh starts the daemon after a successful setup; a cancelled one
+    // must stop it there (K-276).
+    gracefulExit(process.env.KRAKI_INSTALL === '1' ? 130 : 0);
     return;
   }
   // Users see a one-line reason; the stack trace is only for KRAKI_DEBUG.
