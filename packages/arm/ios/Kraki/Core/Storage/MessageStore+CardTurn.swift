@@ -44,13 +44,26 @@ extension MessageStore {
     /// Close the turn now, but keep its last draft until the spine reaches
     /// `seq`: the bubble that lands then replaces the draft in place. Removing
     /// the draft first made the reply vanish and slide in again (K-013).
+    /// Only the words are kept: a pending prompt or a running tool of the
+    /// closed turn is no longer live, so its buttons/spinner go now, and a
+    /// card with no words has nothing to swap in place and ends at once.
     func endCardTurn(_ sessionId: String, afterCatchUpTo seq: Int) {
-        guard cards[sessionId] != nil, persistedHead(sessionId) < seq else {
+        guard let card = cards[sessionId], !card.text.isEmpty, persistedHead(sessionId) < seq else {
             endCardTurn(sessionId)
             return
         }
         closedCardTurns.insert(sessionId)
         cardEndsAtSeq[sessionId] = seq
+        if let action = card.action, Self.isLiveAction(action) { cards[sessionId]?.action = nil }
+    }
+
+    /// An action that still asks for something or is still running.
+    static func isLiveAction(_ action: ChatMessage) -> Bool {
+        switch action.type {
+        case "tool_start", "tool_batch": true
+        case "permission": action.payload["decision"]?.stringValue == nil
+        default: false
+        }
     }
 
     /// The kept draft of a concluded turn is retired in the same main-thread

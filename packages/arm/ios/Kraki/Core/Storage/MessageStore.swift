@@ -1128,6 +1128,7 @@ final class MessageStore {
         cards.removeAll()
         closedCardTurns.removeAll()
         cardEndsAtSeq.removeAll()
+        lastDeltaSeq.removeAll()
         withdrawnQuestions.removeAll()
         traces.removeAll()
         messages.removeAll()

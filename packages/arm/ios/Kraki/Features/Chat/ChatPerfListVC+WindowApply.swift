@@ -642,9 +642,11 @@ extension ChatPerfListVC {
         syncLiveUpdates()
     }
 
-    /// Mirrors Mac `recordEntrances`: only new rows after the last surviving
-    /// old row, at most two per burst of applies (a catch-up burst is not a
-    /// conversation beat, even when it lands one row per apply), and
+    /// Like Mac `recordEntrances` (which caps per apply, not per burst): only
+    /// new rows after the last surviving old row, at most two per burst of
+    /// applies (a catch-up burst is not a conversation beat, even when it
+    /// lands one row per apply; rows of the burst that already started
+    /// entering snap into place), and
     /// a row that only changes identity (pending → echoed message, live card →
     /// landed answer) replaces an old tail row of the same role and does not
     /// enter again. Session entry and older pages never get here.
@@ -690,7 +692,9 @@ extension ChatPerfListVC {
     /// An open question's row becomes its answered/closed row (same seq, the
     /// `#q-open` identity suffix gone): its choices go away.
     static func questionCloses(old: String, new: String) -> Bool {
-        old.hasSuffix("#q-open") && !new.hasSuffix("#q-open") && new.hasPrefix(String(old.dropLast("#q-open".count)))
+        guard old.hasSuffix("#q-open"), !new.hasSuffix("#q-open") else { return false }
+        let base = String(old.dropLast("#q-open".count))
+        return new == base || new.hasPrefix(base + "#")
     }
 
     /// The choices fade out into the answered state instead of vanishing in

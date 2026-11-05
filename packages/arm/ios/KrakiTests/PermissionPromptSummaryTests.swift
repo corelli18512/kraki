@@ -24,4 +24,10 @@ final class PermissionPromptSummaryTests: XCTestCase {
         XCTAssertEqual(PermissionPromptCopy.argsSummary(permission("custom", "custom", ["b": "second", "a": "first"])),
                        "first", "an unknown tool shows its first argument in key order")
     }
+
+    func testShortDetailInsideAWordOfTheTitleStaysVisible() {
+        XCTAssertEqual(PermissionPromptCopy.argsSummary(permission("shell", "Run: format", ["command": "rm"])), "rm",
+                       "the command is not what the title names, so the prompt must still show it")
+        XCTAssertEqual(PermissionPromptCopy.argsSummary(permission("mcp", "MCP tool: x on server", ["arg": "on"])), "on")
+    }
 }

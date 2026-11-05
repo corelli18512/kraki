@@ -70,6 +70,30 @@ final class CardTurnCatchUpTests: XCTestCase {
         XCTAssertNil(app.messageStore.visibleCard(sid))
     }
 
+    private func pendingPermission() -> ChatMessage {
+        ChatMessage(type: "permission", seq: 0, sessionId: sid, deviceId: dev, timestamp: nil, payload: [
+            "id": AnyCodable("p1"), "toolName": AnyCodable("shell"), "description": AnyCodable("Run: ls"),
+        ])
+    }
+
+    func testKeptDraftDropsAPromptThatIsNoLongerPending() throws {
+        let app = try makeApp()
+        app.messageStore.setCardAction(sid, pendingPermission())
+        try sessionList(app, state: "idle", lastSeq: 3)
+        XCTAssertEqual(app.messageStore.visibleCard(sid)?.text, "Here is what I fou")
+        XCTAssertNil(app.messageStore.visibleCard(sid)?.action,
+                     "the closed turn must not offer Approve/Deny for a prompt it no longer waits on")
+    }
+
+    func testActionOnlyCardEndsAtOnceWhenTheTurnCloses() throws {
+        let app = try makeApp()
+        app.messageStore.applyCardMessage(sid, "", reset: true)
+        app.messageStore.setCardAction(sid, pendingPermission())
+        XCTAssertEqual(app.messageStore.visibleCard(sid)?.text, "")
+        try sessionList(app, state: "idle", lastSeq: 3)
+        XCTAssertNil(app.messageStore.visibleCard(sid), "no words to swap in place, so nothing is kept")
+    }
+
     func testIdleSubscriptionSnapshotKeepsTheDraftUntilTheCatchUp() throws {
         let app = try makeApp()
         app.sessionStore.sessions[sid] = SessionInfo(

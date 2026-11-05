@@ -36,4 +36,15 @@ final class ToolResultPreviewTests: XCTestCase {
         XCTAssertEqual(preview.text, "new_string: let a = 3\nold_string: let a = 1\nlet b = 2\npath: a.swift\nreplace_all: false")
         XCTAssertEqual(ToolResultPreview.arguments(Data("plain".utf8))?.text, "plain")
     }
+
+    /// The arguments preview is built in the view body: a multi-MB write is
+    /// not parsed as JSON on every render, its raw head is shown instead.
+    func testArgumentsOverTheParseLimitShowTheirRawHead() throws {
+        let content = String(repeating: "x", count: ToolResultPreview.argumentsParseLimit)
+        let json = #"{"path":"big.txt","content":""# + content + #""}"#
+        let preview = try XCTUnwrap(ToolResultPreview.arguments(Data(json.utf8)))
+        XCTAssertTrue(preview.text.hasPrefix(#"{"path":"big.txt""#), "raw JSON head, not parsed lines")
+        XCTAssertEqual(preview.totalBytes, json.utf8.count)
+        XCTAssertNotNil(preview.truncationNotice)
+    }
 }

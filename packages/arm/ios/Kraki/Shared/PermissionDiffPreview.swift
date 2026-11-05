@@ -103,7 +103,12 @@ enum PermissionPromptCopy {
             summary = args.keys.sorted().compactMap { args[$0]?.stringValue }.first { !$0.isEmpty && $0.count < 200 }
         }
         guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return nil }
-        if let title = message.toolDescription, title.contains(summary) { return nil }
+        // Adapters end the title with the target ("Run: <cmd>", "Edit <path>"),
+        // so only a title that ends with the detail repeats it. A short detail
+        // that merely occurs inside the title ("rm" in "Run: format") must
+        // stay visible on a permission prompt.
+        if let title = message.toolDescription,
+           title == summary || title.hasSuffix(": " + summary) || title.hasSuffix(" " + summary) { return nil }
         return summary
     }
 }

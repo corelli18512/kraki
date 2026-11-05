@@ -5,6 +5,10 @@ import Foundation
 /// drew an empty box (K-050): show its first `limit` bytes and say so.
 struct ToolResultPreview: Equatable {
     static let limit = 32 * 1024
+    /// Largest arguments payload parsed into `key: value` lines. The preview
+    /// is built in the view body, so a bigger one (a multi-MB write) shows
+    /// its raw head instead of parsing megabytes of JSON on every render.
+    static let argumentsParseLimit = 256 * 1024
 
     let text: String
     /// Bytes not shown (0 when the whole result is shown).
@@ -31,9 +35,10 @@ struct ToolResultPreview: Equatable {
 
     /// A tool's arguments (a JSON object) as sorted `key: value` lines, strings
     /// verbatim, like the web Steps. The raw JSON showed an edit's text as one
-    /// escaped blob with literal `\n` (K-051). Not an object: shown as is.
+    /// escaped blob with literal `\n` (K-051). Not an object, or larger than
+    /// `argumentsParseLimit`: shown as is.
     static func arguments(_ data: Data, limit: Int = Self.limit) -> ToolResultPreview? {
-        guard data.count <= 4 * 1024 * 1024,
+        guard data.count <= argumentsParseLimit,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return ToolResultPreview(data, limit: limit)
         }

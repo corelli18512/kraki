@@ -33,6 +33,15 @@ extension ChatUXRegressionTests {
         XCTAssertEqual(fade.type, .fade)
     }
 
+    /// Only the same row closing counts, never a row whose seq merely starts
+    /// with the same digits.
+    func testQuestionClosesMatchesOnlyTheSameRow() {
+        XCTAssertTrue(ChatPerfListVC.questionCloses(old: "s:12#q-open", new: "s:12"))
+        XCTAssertTrue(ChatPerfListVC.questionCloses(old: "s:12#q-open", new: "s:12#a1"))
+        XCTAssertFalse(ChatPerfListVC.questionCloses(old: "s:12#q-open", new: "s:120"))
+        XCTAssertFalse(ChatPerfListVC.questionCloses(old: "s:12", new: "s:12"))
+    }
+
     /// K-022: the agent withdrew its question (timeout, cancel). Its choices
     /// close at once; tapping one sent a plain prompt that began a new turn.
     func testWithdrawnQuestionClosesAtOnce() throws {
