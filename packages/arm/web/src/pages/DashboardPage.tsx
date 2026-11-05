@@ -145,18 +145,17 @@ export function DashboardPage() {
         )}
 
         {pendingPairing && (
-          <div className="fixed inset-0 z-[90]">
-            <SettingsAlert
-              title={t('pairing.confirmTitle')}
-              body={t('pairing.confirmDetail').replace('<b></b>', pendingPairing.host)}
-              confirm={t('pairing.connect')}
-              onCancel={() => setPendingPairing(null)}
-              onConfirm={() => {
-                setPendingPairing(null);
-                wsClient.pairWithToken(pendingPairing.relay, pendingPairing.token);
-              }}
-            />
-          </div>
+          <SettingsAlert
+            viewport
+            title={t('pairing.confirmTitle')}
+            body={t('pairing.confirmDetail').replace('<b></b>', pendingPairing.host)}
+            confirm={t('pairing.connect')}
+            onCancel={() => setPendingPairing(null)}
+            onConfirm={() => {
+              setPendingPairing(null);
+              wsClient.pairWithToken(pendingPairing.relay, pendingPairing.token);
+            }}
+          />
         )}
       </div>
     );
