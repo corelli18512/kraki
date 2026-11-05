@@ -396,11 +396,11 @@ export function SettingsPanel({
           </button>
         </div>
       </SettingsSection>
-      {state.status === 'connected' && (
-        <div className="kp-section kp-section-untitled">
-          <DeleteAccountSection />
-        </div>
-      )}
+      {/* Shown offline too (as on iOS): a drop mid-deletion keeps its progress
+          and answer visible, and asking offline says to connect first. */}
+      <div className="kp-section kp-section-untitled">
+        <DeleteAccountSection />
+      </div>
     </>
   ) : (
     <p className="text-center text-text-secondary">{t('account.notSignedIn')}</p>

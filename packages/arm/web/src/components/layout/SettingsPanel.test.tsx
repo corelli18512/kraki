@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useAccountDeletion } from '../../lib/account-deletion';
 import { SettingsPanel, providerLabel, performanceDataFooter } from './SettingsPanel';
 import { diag } from '../../lib/diag';
 import { useStore } from '../../hooks/useStore';
@@ -127,6 +128,20 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.getByTestId('delete-final').querySelector('.kp-alert-actions')).toHaveClass('is-stacked');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(commands.requestAccountDeletion).not.toHaveBeenCalled();
+  });
+  it('K-203: account deletion stays visible when the connection drops', async () => {
+    open(); tab('Account');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Account…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    act(() => { useStore.setState({ status: 'disconnected' }); });
+    // The open final confirmation does not vanish silently.
+    expect(screen.getByRole('alertdialog', { name: 'Delete account permanently?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    act(() => { useAccountDeletion.getState().set({ kind: 'deleting', attempt: 1 }); });
+    expect(screen.getByRole('button', { name: 'Deleting…' })).toBeDisabled();
+    act(() => { useAccountDeletion.getState().set({ kind: 'failed', message: 'Kraki didn\'t answer. Check the connection and try again.' }); });
+    expect(screen.getByText('Kraki didn\'t answer. Check the connection and try again.')).toBeInTheDocument();
+    act(() => { useAccountDeletion.getState().set({ kind: 'idle' }); });
   });
   it('includes app devices and hides remove for this app and online devices', () => {
     useStore.setState({ devices: new Map([
