@@ -8,12 +8,23 @@ import SwiftUI
 
 struct DeviceDetailView: View {
     @Environment(AppState.self) private var appState
-    private let initial: DeviceSummary
+    @Environment(\.dismiss) private var dismiss
+    private let deviceId: String
+    /// Shown for the moment between the device leaving the account and this
+    /// page closing; set once, when the page opens.
+    @State private var lastKnown: DeviceSummary
 
-    init(device: DeviceSummary) { initial = device }
+    init(device: DeviceSummary) {
+        deviceId = device.id
+        _lastKnown = State(initialValue: device)
+    }
 
     /// Live from the store, so a rename (from here or any other device) shows.
-    private var device: DeviceSummary { appState.deviceStore.devices[initial.id] ?? initial }
+    private var device: DeviceSummary { appState.deviceStore.devices[deviceId] ?? lastKnown }
+
+    /// Removed (here or from another device): the page closes rather than
+    /// staying open on a device that is gone (K-193).
+    private var isRemoved: Bool { appState.deviceStore.devices[deviceId] == nil }
 
     @State private var showRemoveConfirmation = false
     @State private var showRename = false
@@ -206,6 +217,9 @@ struct DeviceDetailView: View {
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.inline)
         .hidesTabBar()
+        .onChange(of: isRemoved, initial: true) { _, removed in
+            if removed { dismiss() }
+        }
         .navigationDestination(for: SessionNavID.self) { nav in
             SessionDetailView(sessionId: nav.id)
                 .id(nav.id)

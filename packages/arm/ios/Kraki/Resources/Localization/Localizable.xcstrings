@@ -9068,6 +9068,16 @@
         }
       }
     },
+    "Some computers have the same name. Open one and tap its name to rename it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有几台电脑同名。打开其中一台，轻点名称即可重命名。"
+          }
+        }
+      }
+    },
     "Something went wrong. Nothing was changed." : {
       "localizations" : {
         "zh-Hans" : {
