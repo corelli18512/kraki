@@ -3,12 +3,12 @@ import Foundation
 
 /// Decisions of the Mac Session Info sheet that do not need the view.
 enum MacSessionInfoRules {
-    /// The title to save when the sheet closes (Done or Esc) while the title
-    /// is still being edited; nil when nothing changed.
-    static func titleToSaveOnClose(editing: Bool, draft: String, original: String) -> String? {
+    /// The title to save when the title edit ends (Return, Done or Esc) while
+    /// the title is still being edited; nil when nothing changed. Same rule as
+    /// iOS (`SessionInfo.titleEdit`): clearing a never-set title is a no-op.
+    static func titleToSaveOnClose(editing: Bool, draft: String, session: SessionInfo) -> String? {
         guard editing else { return nil }
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed == original ? nil : trimmed
+        return session.titleEdit(draft)
     }
 
     /// Picking another model keeps the chosen Thinking level when the new

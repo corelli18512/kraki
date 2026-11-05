@@ -4,18 +4,29 @@ import XCTest
 /// Session Info on the Mac: a typed title survives Done/Esc (K-045), and a
 /// model change keeps the chosen Thinking level when it can (K-264).
 final class MacSessionInfoRulesTests: XCTestCase {
+    private func session(title: String?, autoTitle: String?) -> SessionInfo {
+        SessionInfo(id: "s", deviceId: "d", deviceName: "D", agent: "pi", title: title, autoTitle: autoTitle,
+                    state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0,
+                    createdAt: Date(), pinned: false)
+    }
+
     func testDoneOrEscWhileEditingSavesTheTypedTitle() {
-        XCTAssertEqual(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "  Release notes ", original: "Old"),
+        let manual = session(title: "Old", autoTitle: nil)
+        XCTAssertEqual(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "  Release notes ", session: manual),
                        "Release notes")
-        XCTAssertEqual(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "", original: "Old"), "",
-                       "clearing the title is a change too")
+        XCTAssertEqual(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "", session: manual), "",
+                       "clearing a set title is a change too")
     }
 
     func testClosingWithoutAChangeSavesNothing() {
-        XCTAssertNil(MacSessionInfoRules.titleToSaveOnClose(editing: false, draft: "New", original: "Old"),
+        let manual = session(title: "Old", autoTitle: nil)
+        let auto = session(title: nil, autoTitle: "Auto title")
+        XCTAssertNil(MacSessionInfoRules.titleToSaveOnClose(editing: false, draft: "New", session: manual),
                      "not editing: the title was already saved")
-        XCTAssertNil(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "Auto title ", original: "Auto title"),
+        XCTAssertNil(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "Auto title ", session: auto),
                      "an untouched auto title is not turned into a fixed one")
+        XCTAssertNil(MacSessionInfoRules.titleToSaveOnClose(editing: true, draft: "", session: auto),
+                     "clearing a title that was never set is a no-op (K-043)")
     }
 
     private let details = [
