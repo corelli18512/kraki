@@ -399,11 +399,27 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'send input failed');
             const message = describeFailure('Failed to deliver message', err);
+            const turnId = reservation.turnId;
+            // The prompt never reached the agent (it could not be started or
+            // reopened) but its user_message already opened a turn on the
+            // spine. Nothing else will close that turn: without a failed
+            // outcome and idle the apps showed the prompt hanging forever.
+            const neverReachedAgent = persistedSeq !== undefined
+              && client.activeInputTurnIds.get(sessionId) !== turnId
+              && client.sessionManager.getMeta(sessionId)?.lastSeq === persistedSeq;
             client.send({ type: 'error', sessionId, payload: { message } });
+            if (neverReachedAgent) {
+              finishTurnWithStatus(client, sessionId, {
+                type: 'failed',
+                payload: { message, failedAt: new Date().toISOString() },
+              });
+              sendTurnIdle(client, sessionId, { reason: 'failed' }, { failure: message });
+              client.broadcastSessionList();
+              return;
+            }
             // The adapter refused the prompt after this turn was announced
             // active (e.g. Codex turn/start rejected a retired model). No
             // provider idle will follow: close the turn as failed here.
-            const turnId = reservation.turnId;
             if (client.activeInputTurnIds.get(sessionId) === turnId
               && client.settledAdapterTurnIds.get(sessionId) !== turnId
               && client.sessionManager.getMeta(sessionId)?.state === 'active') {

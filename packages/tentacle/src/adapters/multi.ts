@@ -538,7 +538,12 @@ export class MultiAgentAdapter extends AgentAdapter {
   }
 
   isTurnSettled(sessionId: string): boolean {
-    return this.getSessionAdapter(sessionId).isTurnSettled(sessionId);
+    // No turn can be running in an agent that is not running here. Throwing
+    // aborted send_input before it was recorded: the prompt vanished silently
+    // instead of failing with "<agent> is not available on this computer".
+    let adapter: AgentAdapter;
+    try { adapter = this.getSessionAdapter(sessionId); } catch { return true; }
+    return adapter.isTurnSettled(sessionId);
   }
 }
 
