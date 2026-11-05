@@ -267,11 +267,23 @@ function useUsageData() {
     return session ? accountKeyForSession(usage, session.deviceId, session.agent, session.model) : null;
   }, [sessionId, sessions, usage]);
   const accounts = useMemo(() => orderedAccounts(mergedUsage(usage, devices), current), [usage, devices, current]);
-  const outdated = useMemo(() => [...devices.values()]
-    .filter((d) => d.role === 'tentacle' && d.online && wsClient.deviceHasFeature(d.id, 'account_usage') === false
-      && wsClient.deviceHasFeature(d.id, 'account_usage_off') === false && !usage.has(d.id))
-    .sort((a, b) => a.name.localeCompare(b.name)), [devices, usage]);
+  const outdated = useMemo(() => devicesNeedingUsageUpdate(devices.values(), usage,
+    (id, feature) => wsClient.deviceHasFeature(id, feature)), [devices, usage]);
   return { accounts, current, outdated };
+}
+
+/** Online computers whose kraki is too old to report account usage. One that
+ *  advertises `account_usage_off` has usage turned off, not an old kraki, so
+ *  it is not told to update (K-084; iOS `devicesNeedingUsageUpdate`). */
+export function devicesNeedingUsageUpdate(
+  devices: Iterable<DeviceSummary>,
+  usage: { has: (deviceId: string) => boolean },
+  hasFeature: (deviceId: string, feature: string) => boolean | undefined,
+): DeviceSummary[] {
+  return [...devices]
+    .filter((d) => d.role === 'tentacle' && d.online && hasFeature(d.id, 'account_usage') === false
+      && hasFeature(d.id, 'account_usage_off') === false && !usage.has(d.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 type Mode = 'closed' | 'compact' | 'detail';
