@@ -73,6 +73,9 @@
     "pairingUnavailable": "Pairing is temporarily unavailable. Try again later.",
     "targetUnreachable": "That computer can't be reached right now. Check that it is online.",
     "createSession": "Couldn't create the session: {{detail}}",
-    "createSessionGeneric": "Couldn't create the session."
+    "copySession": "Couldn't copy the session: {{detail}}",
+    "importSession": "Couldn't import the session: {{detail}}",
+    "alreadyImported": "This session has already been imported.",
+    "requestGeneric": "The computer couldn't complete that. Try again."
   }
 }

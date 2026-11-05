@@ -35,6 +35,27 @@ describe('create/fork failures (release review A5)', () => {
     expect(cmdState.pendingCreateRequests.has('req_1')).toBe(false);
   });
 
+  it('K-218: a failed fork reads as a copy failure, not a create failure', () => {
+    const cmdState = new CommandState();
+    cmdState.pendingCreateRequests.add('req_fork');
+    handleDataMessage({
+      type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',
+      payload: { message: "Couldn't copy the session: Source session not found: s1", requestId: 'req_fork' },
+    } as unknown as InnerMessage, { cmdState, messageProvider } as never);
+    expect(useStore.getState().lastError).toBe("Couldn't copy the session: Source session not found: s1");
+    expect(cmdState.pendingCreateRequests.has('req_fork')).toBe(false);
+  });
+
+  it('K-218: importing a session twice says it is already imported', () => {
+    const cmdState = new CommandState();
+    cmdState.pendingCreateRequests.add('req_import');
+    handleDataMessage({
+      type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',
+      payload: { message: 'Session already imported as sess_9', requestId: 'req_import' },
+    } as unknown as InnerMessage, { cmdState, messageProvider } as never);
+    expect(useStore.getState().lastError).toBe('This session has already been imported.');
+  });
+
   it('returns the typed first message to the New Session draft when create fails (iOS/Mac parity)', () => {
     const cmdState = new CommandState();
     cmdState.pendingCreateRequests.add('req_2');

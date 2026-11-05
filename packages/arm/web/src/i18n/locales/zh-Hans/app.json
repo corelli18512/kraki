@@ -73,6 +73,9 @@
     "pairingUnavailable": "配对暂时不可用。请稍后重试。",
     "targetUnreachable": "暂时无法连接到这台电脑。请确认它在线。",
     "createSession": "无法创建会话：{{detail}}",
-    "createSessionGeneric": "无法创建会话。"
+    "copySession": "无法复制会话：{{detail}}",
+    "importSession": "无法导入会话：{{detail}}",
+    "alreadyImported": "此会话已导入。",
+    "requestGeneric": "电脑无法完成此操作。请重试。"
   }
 }

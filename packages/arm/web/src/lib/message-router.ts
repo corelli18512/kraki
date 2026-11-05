@@ -13,7 +13,7 @@ import { traceEvent } from './trace';
 import { allowAutoRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
 import { diag } from './diag';
-import { createSessionErrorText } from './server-errors';
+import { requestErrorText } from './server-errors';
 
 const logger = createLogger('msg-router');
 
@@ -220,7 +220,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     const reqId = (msg.payload as { requestId?: string }).requestId;
     if (reqId && ctx.cmdState.pendingCreateRequests.has(reqId)) {
       ctx.cmdState.clearRequest(reqId);
-      store.setLastError(createSessionErrorText(msg.payload.message));
+      store.setLastError(requestErrorText(msg.payload.message));
     }
     return;
   }

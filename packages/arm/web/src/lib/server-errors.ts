@@ -23,11 +23,22 @@ export function serverErrorText(message: unknown): string {
   return t(key ?? 'app:serverErrors.generic');
 }
 
-/** A Tentacle's create/fork failure, framed in the UI language. Its detail is
- *  the computer's own words and stays as sent. */
-const CREATE_PREFIX = "Couldn't create the session: ";
-export function createSessionErrorText(message: unknown): string {
+/** A Tentacle's create/fork/import failure. These share one path (the
+ *  request id), so each is framed by its own prefix in the UI language; the
+ *  detail is the computer's own words and stays as sent. Any other text is
+ *  shown as sent. */
+const REQUEST_ERROR_PREFIXES = [
+  ["Couldn't create the session: ", 'app:serverErrors.createSession'],
+  ["Couldn't copy the session: ", 'app:serverErrors.copySession'],
+  ["Couldn't import the session: ", 'app:serverErrors.importSession'],
+] as const;
+const ALREADY_IMPORTED_PREFIX = 'Session already imported as ';
+
+export function requestErrorText(message: unknown): string {
   const raw = typeof message === 'string' ? message : '';
-  const detail = raw.startsWith(CREATE_PREFIX) ? raw.slice(CREATE_PREFIX.length) : raw;
-  return detail ? t('app:serverErrors.createSession', { detail }) : t('app:serverErrors.createSessionGeneric');
+  for (const [prefix, key] of REQUEST_ERROR_PREFIXES) {
+    if (raw.startsWith(prefix)) return t(key, { detail: raw.slice(prefix.length) });
+  }
+  if (raw.startsWith(ALREADY_IMPORTED_PREFIX)) return t('app:serverErrors.alreadyImported');
+  return raw || t('app:serverErrors.requestGeneric');
 }
