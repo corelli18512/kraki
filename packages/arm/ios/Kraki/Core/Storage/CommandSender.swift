@@ -457,15 +457,19 @@ final class CommandSender {
     /// Our own paced upload (e.g. a photo on a slow uplink) is still going
     /// out. The echo cannot come back before the input has arrived, so that
     /// time is not a stall: counting it re-sent a second copy of the photo
-    /// halfway through and showed "Awaiting confirmation" mid-upload.
+    /// halfway through and showed "Awaiting confirmation" mid-upload. An
+    /// upload with no progress for `uploadProgressWindowSeconds` is a stall.
     private var isUploading: Bool {
         #if DEBUG
-        if let testUploadInProgress { return testUploadInProgress() }
+        if let testUploadProgress {
+            let upload = testUploadProgress()
+            return PulseManager.isUploadMoving(queued: upload.queued, lastProgressAt: upload.lastProgressAt, now: Date())
+        }
         #endif
-        return appState?.pulseManager?.hasQueuedUpload == true
+        return appState?.pulseManager?.isUploadMoving == true
     }
     #if DEBUG
-    @ObservationIgnored var testUploadInProgress: (() -> Bool)?
+    @ObservationIgnored var testUploadProgress: (() -> (queued: Bool, lastProgressAt: Date?))?
     #endif
 
     private var isLinkBusy: Bool {

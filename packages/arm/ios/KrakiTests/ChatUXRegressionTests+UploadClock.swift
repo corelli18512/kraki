@@ -13,7 +13,7 @@ extension ChatUXRegressionTests {
         let sender = try XCTUnwrap(fx.app.commandSender)
         sender.confirmationTimeout = .milliseconds(200)
         var uploading = true
-        sender.testUploadInProgress = { uploading }
+        sender.testUploadProgress = { (queued: uploading, lastProgressAt: Date()) }
         drain(600)
         XCTAssertTrue(sender.sendInput(sessionId: sid, text: "[image]"))
         drain(800)
@@ -24,6 +24,32 @@ extension ChatUXRegressionTests {
         drain(800)
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed)
         XCTAssertEqual(sends, 2, "one same-clientId resend once the clock runs")
+    }
+
+    /// A queued upload the Relay stopped acknowledging must not freeze the
+    /// confirmation clock: the input still becomes unconfirmed.
+    func testStalledUploadStillLetsTheInputBecomeUnconfirmed() throws {
+        var sends = 0
+        let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
+        fx.app.deviceStore.setDeviceFeatures(dev, features: ["idempotent_input"])
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        sender.confirmationTimeout = .milliseconds(200)
+        let stalledSince = Date().addingTimeInterval(-(PulseManager.uploadProgressWindowSeconds + 1))
+        sender.testUploadProgress = { (queued: true, lastProgressAt: stalledSince) }
+        drain(600)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "[image]"))
+        drain(800)
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed)
+        XCTAssertEqual(sends, 2, "one same-clientId resend once the clock runs")
+    }
+
+    func testUploadCountsAsMovingOnlyWhileItMakesProgress() {
+        let now = Date()
+        let window = PulseManager.uploadProgressWindowSeconds
+        XCTAssertTrue(PulseManager.isUploadMoving(queued: true, lastProgressAt: now.addingTimeInterval(-1), now: now))
+        XCTAssertFalse(PulseManager.isUploadMoving(queued: true, lastProgressAt: now.addingTimeInterval(-window - 1), now: now))
+        XCTAssertFalse(PulseManager.isUploadMoving(queued: true, lastProgressAt: nil, now: now))
+        XCTAssertFalse(PulseManager.isUploadMoving(queued: false, lastProgressAt: now, now: now))
     }
 }
 #endif
