@@ -437,7 +437,11 @@ export async function startWorker(): Promise<WorkerResult> {
     adapter,
     sessionManager,
     {
-      relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
+      // The relay setup saved, always. KRAKI_RELAY_URL is only setup's default
+      // (the user can pick another there); letting it override the saved
+      // relay here connected the daemon to a relay `kraki status` did not
+      // show (K-125).
+      relayUrl: config.relay,
       device: {
         name: config.device.name,
         role: 'tentacle',
@@ -598,7 +602,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
-  initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
+  initStatusFile(config.relay, config.device.name);
   const supervisorPid = Number(process.env.KRAKI_SUPERVISED) || undefined;
   updateDaemonIdentity({ managedBy: appManagedWorkerOwner() ?? 'cli', version: getVersion(), pid: process.pid, supervisorPid });
   if (pendingFda) updateFdaStatus(pendingFda);

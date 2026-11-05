@@ -623,7 +623,6 @@ export async function startDaemonLaunchctl(
     // files while connecting as the same device.
     ['KRAKI_HOME', getKrakiHome()],
   ];
-  if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
   // Forward proxy variables so the daemon reaches the network the same way.
   // Values live only in launchd's EnvironmentVariables dictionary; `open` and
