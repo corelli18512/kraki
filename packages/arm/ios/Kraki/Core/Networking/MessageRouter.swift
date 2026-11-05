@@ -214,7 +214,7 @@ final class MessageRouter {
             let reason = (json["reason"] as? String).flatMap(VoiceLeaseDeniedReason.init(rawValue:))
                 ?? .invalidRequest
             let detail = json["detail"] as? String
-            KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue)")
+            KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue) detail=\(detail ?? "-")")
             Task { @MainActor in
                 appState?.voiceInputController.receiveLeaseDenied(reason: reason, detail: detail)
             }
