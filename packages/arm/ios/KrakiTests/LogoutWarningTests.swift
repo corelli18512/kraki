@@ -88,6 +88,7 @@ final class LogoutWarningTests: XCTestCase {
 
         XCTAssertFalse(app.hasStoredCredentials)
         XCTAssertTrue(app.sessionStore.drafts.isEmpty, "the removed device keeps no drafts")
-        XCTAssertEqual(app.lastError, "Unknown device\n" + String(localized: "\(1) unsent drafts were removed from this device with its sign-in."))
+        // The app's own copy, not the relay's English reason (K-076).
+        XCTAssertEqual(app.lastError, String(localized: "Authentication failed. Please scan a new pairing QR code.") + "\n" + String(localized: "\(1) unsent drafts were removed from this device with its sign-in."))
     }
 }
