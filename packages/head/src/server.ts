@@ -495,6 +495,10 @@ export class HeadServer {
       const requested = [...new Set(msg.to)];
       if (requested.length === 0 || requested.length > MAX_MULTICAST_TARGETS) {
         this.sendError(ws, `multicast target count must be between 1 and ${MAX_MULTICAST_TARGETS}`);
+        // Consume the frame anyway (see the unicast branch): left unacked, the
+        // sender would retransmit it forever and every later seq on that
+        // stream would wait behind it.
+        this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse, to: [] });
         return;
       }
       const allowed = requested.filter((targetId) => {
