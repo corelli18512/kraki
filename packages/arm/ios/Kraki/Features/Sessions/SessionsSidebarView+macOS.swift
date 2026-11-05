@@ -428,7 +428,7 @@ struct SessionsSidebarView: View {
                 ? appState.deviceStore.devices[session.deviceId]?.online : nil,
             hasDraft: hasDraft
         )
-        return [status.accessibilityLabel, preview?.text]
+        return [status.accessibilityLabel(isDraft: hasDraft), preview?.displayText()]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
@@ -625,8 +625,9 @@ struct MacSidebarSessionRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([projection.status.accessibilityLabel, projection.previewText].compactMap { $0 }.joined(separator: ": "))
-        .help(projection.status.accessibilityLabel ?? "")
+        .accessibilityLabel([projection.statusAccessibilityLabel, projection.previewText ?? String(localized: "Session created")]
+            .compactMap { $0 }.joined(separator: ": "))
+        .help(projection.statusAccessibilityLabel ?? "")
     }
 }
 
