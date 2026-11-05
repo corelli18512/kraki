@@ -30,6 +30,8 @@ import { AttachmentPullQueue } from './attachment-pull-queue';
 import { ForegroundActivity } from './foreground-activity';
 
 const logger = createLogger('ws-client');
+/** How long Settings waits for the relay to confirm a push token. */
+export const PUSH_REGISTRATION_TIMEOUT_MS = 30_000;
 
 
 /** No frame for longer than a ping round (10 s + slack) → the link is not
@@ -77,6 +79,8 @@ export class KrakiWSClient {
   private pulse: ArmPulse;
   /** Bumped on every Head socket close; scopes CONNECTION_SCOPED sends. */
   private connectionEpoch = 0;
+  /** A push token sent to the relay, waiting for its answer. */
+  private pushRegistration: { provider: string; resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> } | null = null;
   private subscription: SessionSubscriptionController;
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
@@ -962,8 +966,23 @@ export class KrakiWSClient {
   renameDevice(deviceId: string, name: string): void {
     this.sendToHead({ type: 'rename_device', deviceId, name });
   }
-  registerPushToken(payload: { provider: string; token: string }): void {
-    this.sendToHead({ type: 'register_push_token', payload });
+  /** Resolves true when the relay stored the token (`push_token_registered`),
+   *  false when it refused it (`server_error`) or did not answer in time. */
+  registerPushToken(payload: { provider: string; token: string }): Promise<boolean> {
+    this.settlePushRegistration(false);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settlePushRegistration(false), PUSH_REGISTRATION_TIMEOUT_MS);
+      this.pushRegistration = { provider: payload.provider, resolve, timer };
+      this.sendToHead({ type: 'register_push_token', payload });
+    });
+  }
+  private settlePushRegistration(ok: boolean): boolean {
+    const pending = this.pushRegistration;
+    if (!pending) return false;
+    this.pushRegistration = null;
+    clearTimeout(pending.timer);
+    pending.resolve(ok);
+    return true;
   }
   unregisterPushToken(payload: { provider: string }): void {
     this.sendToHead({ type: 'unregister_push_token', payload });
@@ -1447,7 +1466,15 @@ export class KrakiWSClient {
         if (ref) {
           this.cmdState.clearRequest(ref);
         }
+        // A refused push token is answered in Settings, in the user's language.
+        if (!ref && /^(Invalid push token|Not authenticated)/.test(serverErr.message ?? '') && this.settlePushRegistration(false)) break;
         getStore().setLastError(serverErr.message);
+        break;
+      }
+
+      case 'push_token_registered': {
+        const registered = msg as { payload?: { provider?: string } };
+        if (this.pushRegistration?.provider === registered.payload?.provider) this.settlePushRegistration(true);
         break;
       }
 

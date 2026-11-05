@@ -19,6 +19,7 @@ beforeEach(() => {
   push.isPushSubscribed.mockResolvedValue(false);
   push.subscribeToPush.mockResolvedValue('subscription');
   push.unsubscribeFromPush.mockResolvedValue(true);
+  commands.registerPushToken.mockResolvedValue(true);
   localStorage.removeItem('kraki:notifications.enabled');
   useStore.getState().reset();
   useStore.setState({ status: 'connected', user: { id: 'u1', login: 'tester', provider: 'open' }, deviceId: 'self', archiveInfo: new Map([['computer', { count: 0, days: 14 }]]) });
@@ -96,6 +97,19 @@ describe('SettingsPanel native preferences parity', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
     await waitFor(() => expect(commands.registerPushToken).toHaveBeenCalledWith({ provider: 'web_push', token: 'subscription' }));
     expect(push.subscribeToPush).toHaveBeenCalledWith('public-key');
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
+  });
+  it('K-227: a push token the relay refuses does not read as on and gives a localized error', async () => {
+    push.supported = true;
+    push.isPushSubscribed.mockResolvedValue(false);
+    commands.registerPushToken.mockResolvedValue(false);
+    localStorage.setItem('kraki:notifications.enabled', '0');
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await screen.findByText('The relay didn’t accept push notifications from this browser. Notifications still appear while Kraki is open.');
+    expect(push.unsubscribeFromPush).toHaveBeenCalled();
+    expect(screen.queryByText('Push notifications are on, including when this browser is closed.')).not.toBeInTheDocument();
     expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
   });
   it('shows open-auth identity and retains two-stage account deletion safety', () => {

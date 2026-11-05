@@ -1449,6 +1449,25 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().lastError).toBe('Target device "dev-xyz" is not online');
     });
 
+    it('K-227: a refused push token answers registerPushToken, not the error banner', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      const answer = client.registerPushToken({ provider: 'web_push', token: 'bad' });
+      lastWsInstance._receive({ type: 'server_error', message: 'Invalid push token: unsupported Web Push subscription' });
+      await expect(answer).resolves.toBe(false);
+      expect(useStore.getState().lastError).toBeNull();
+    });
+
+    it('K-227: push_token_registered confirms the token; unrelated errors still show', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      const answer = client.registerPushToken({ provider: 'web_push', token: 'good' });
+      lastWsInstance._receive({ type: 'server_error', message: 'unicast target is not reachable' });
+      expect(useStore.getState().lastError).toBe('unicast target is not reachable');
+      lastWsInstance._receive({ type: 'push_token_registered', payload: { provider: 'web_push' } });
+      await expect(answer).resolves.toBe(true);
+    });
+
     it('clears pending prompt on server_error with matching requestId', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
