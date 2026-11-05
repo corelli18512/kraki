@@ -20,6 +20,7 @@ import type { AgentId } from '@kraki/protocol';
 import { SETUP_AGENTS, checkAgentCli } from './checks.js';
 import { piHasShellOnWindows, GIT_FOR_WINDOWS_URL } from './windows-shell.js';
 import type { AgentAdapter } from './adapters/base.js';
+import { killProcessTree } from './process-tree.js';
 
 export type AgentCheckStatus = 'ready' | 'needs_login' | 'not_installed' | 'error';
 
@@ -166,14 +167,36 @@ export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
 export async function runAgentsCheckChild(
   onEvent: (event: AgentsCheckEvent) => void = () => {},
   timeoutMs = 90_000,
+  options: {
+    /** After the timeout's SIGTERM, how long before SIGKILL and giving up. */
+    killGraceMs?: number;
+    /** For tests: run this instead of `kraki agents --json`. */
+    command?: { file: string; args: string[] };
+  } = {},
 ): Promise<AgentCheckResult[]> {
   const { spawn } = await import('node:child_process');
   const { isSea } = await import('node:sea');
-  const args = isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'];
+  const command = options.command ?? {
+    file: process.execPath,
+    args: isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'],
+  };
   return new Promise((resolve) => {
     const results: AgentCheckResult[] = [];
-    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
+    const child = spawn(command.file, command.args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true });
+    // A child that ignores SIGTERM, or a grandchild (an agent CLI it started)
+    // still holding the stdout pipe, never lets 'close' fire: setup hung
+    // forever (K-346). SIGTERM, then SIGKILL, then stop waiting regardless.
+    let killTimer: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* gone */ }
+      killTimer = setTimeout(() => {
+        try {
+          if (child.pid) killProcessTree(child.pid, 'SIGKILL');
+        } catch { /* gone */ }
+        child.stdout.destroy();
+        finish();
+      }, options.killGraceMs ?? 5_000);
+    }, timeoutMs);
     let buf = '';
     child.stdout.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
@@ -193,8 +216,12 @@ export async function runAgentsCheckChild(
     });
     // Agents the child never reported (timeout, crash) must not silently
     // vanish from the list or read as "not installed".
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       for (const agent of SETUP_AGENTS) {
         if (results.some((r) => r.id === agent.id)) continue;
         results.push({

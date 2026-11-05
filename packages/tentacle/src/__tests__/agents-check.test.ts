@@ -127,3 +127,26 @@ describe('a broken agent install (K-128)', () => {
     expect(createAdapter).not.toHaveBeenCalled();
   });
 });
+
+import { runAgentsCheckChild } from '../agents-check.js';
+
+describe('the agents check child times out for real (K-346)', () => {
+  it('finishes when the child ignores SIGTERM and a grandchild keeps its stdout open', async () => {
+    if (process.platform === 'win32') return;
+    // The child ignores SIGTERM and leaves a grandchild holding the stdout
+    // pipe: 'close' never fires on its own.
+    const script = [
+      "process.on('SIGTERM', () => {});",
+      "require('node:child_process').spawn('sleep', ['5'], { stdio: ['ignore', 'inherit', 'ignore'] }).unref();",
+      'setInterval(() => {}, 1000);',
+    ].join(' ');
+    const started = Date.now();
+    const results = await runAgentsCheckChild(() => {}, 200, {
+      killGraceMs: 200,
+      command: { file: process.execPath, args: ['-e', script] },
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(results).toHaveLength(SETUP_AGENTS.length);
+    expect(results.every((r) => r.status === 'error')).toBe(true);
+  }, 10_000);
+});
