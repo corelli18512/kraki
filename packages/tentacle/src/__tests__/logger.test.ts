@@ -56,6 +56,15 @@ describe('createLogger()', () => {
     expect((logger as unknown as { bindings: () => { name: string } }).bindings().name).toBe('my-component');
   });
 
+  it('writes to stderr, never stdout, outside production so CLI --json output stays parseable (K-129)', async () => {
+    delete process.env.NODE_ENV; // CLI commands run without NODE_ENV
+    const pino = (await import('pino')).default;
+    ({ createLogger } = await import('../logger.js'));
+    const logger = createLogger('cli-cmd');
+    const stream = (logger as unknown as Record<symbol, { fd?: number }>)[pino.symbols.streamSym];
+    expect(stream.fd).toBe(2);
+  });
+
   it('writes <name>.log under the Kraki home in production mode on an npm install too (one naming scheme)', async () => {
     process.env.NODE_ENV = 'production';
     const { existsSync } = await import('node:fs');
