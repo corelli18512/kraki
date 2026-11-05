@@ -3,6 +3,93 @@
 import Foundation
 
 extension MessageStore {
+    /// Another device decided the permission first: Tentacle's resolved card
+    /// carries that decision, not the one this device showed optimistically.
+    /// Say so rather than silently flipping it (K-345).
+    static func notingAnsweredElsewhere(_ incoming: ChatMessage?, replacing current: ChatMessage?) -> ChatMessage? {
+        guard var incoming, let current, current.payload["localPending"]?.boolValue == true,
+              let id = promptID(current), promptID(incoming) == id,
+              let ours = current.payload["decision"]?.stringValue,
+              let theirs = incoming.payload["decision"]?.stringValue, ours != theirs else { return incoming }
+        incoming.payload["localError"] = AnyCodable(String(localized: "Already answered on another device."))
+        return incoming
+    }
+
+    /// An action that only says what happened last (a completed tool, a
+    /// decided permission): narration that resumes supersedes it.
+    static func isSettledTail(_ action: ChatMessage) -> Bool {
+        action.type == "tool_complete" || isResolvedPrompt(action)
+    }
+
+    /// Reopen transient draft/action state for an accepted user input. A normal
+    /// prompt starts a fresh turn and clears stale card state; a steer is a
+    /// visible interjection inside the current lifecycle and must preserve the
+    /// active draft/action while only reopening the late-frame gate.
+    func beginCardTurn(_ sessionId: String, delivery: String? = nil) {
+        closedCardTurns.remove(sessionId)
+        cardEndsAtSeq.removeValue(forKey: sessionId)
+        if delivery != "steer" { cards.removeValue(forKey: sessionId) }
+    }
+
+    /// Permanently retire transient state for the concluded turn. Late WS
+    /// coalescing or request_card snapshots are ignored until beginCardTurn.
+    func endCardTurn(_ sessionId: String) {
+        if !closedCardTurns.contains(sessionId) { closedCardTurns.insert(sessionId) }
+        if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
+        if cardEndsAtSeq[sessionId] != nil { cardEndsAtSeq.removeValue(forKey: sessionId) }
+    }
+
+    /// An idle authority (session_list digest, idle subscription snapshot) for
+    /// a turn whose concluding bubble this device has not caught up to yet.
+    /// Close the turn now, but keep its last draft until the spine reaches
+    /// `seq`: the bubble that lands then replaces the draft in place. Removing
+    /// the draft first made the reply vanish and slide in again (K-013).
+    /// Only the words are kept: a pending prompt or a running tool of the
+    /// closed turn is no longer live, so its buttons/spinner go now, and a
+    /// card with no words has nothing to swap in place and ends at once.
+    func endCardTurn(_ sessionId: String, afterCatchUpTo seq: Int) {
+        guard let card = cards[sessionId], !card.text.isEmpty, persistedHead(sessionId) < seq else {
+            endCardTurn(sessionId)
+            return
+        }
+        closedCardTurns.insert(sessionId)
+        cardEndsAtSeq[sessionId] = seq
+        if let action = card.action, Self.isLiveAction(action) { cards[sessionId]?.action = nil }
+    }
+
+    /// An action that still asks for something or is still running.
+    static func isLiveAction(_ action: ChatMessage) -> Bool {
+        switch action.type {
+        case "tool_start", "tool_batch": true
+        case "permission": action.payload["decision"]?.stringValue == nil
+        default: false
+        }
+    }
+
+    /// The kept draft of a concluded turn is retired in the same main-thread
+    /// step that persists its concluding bubble.
+    func retireCardIfCaughtUp(_ sessionId: String) {
+        guard let end = cardEndsAtSeq[sessionId], persistedHead(sessionId) >= end else { return }
+        endCardTurn(sessionId)
+    }
+
+    /// Restore the gate from persisted conversation truth when opening a DB
+    /// window. `session.state == active` is not sufficient because a reconnect
+    /// snapshot may race after the preceding turn already concluded. A question
+    /// `agent_message` is not a boundary: it does not conclude the turn.
+    func restoreCardTurnGate(_ sessionId: String, from messages: [ChatMessage]) {
+        guard let boundary = messages.last(where: {
+            ["user_message", "agent_message", "turn_status", "interrupted_turn",
+             "system_message", "idle", "session_ended"].contains($0.type) && $0.questionSpec == nil
+        }) else { return }
+        if boundary.type == "user_message" {
+            // A turn kept for its catch-up stays closed until the bubble lands.
+            if cardEndsAtSeq[sessionId] == nil { closedCardTurns.remove(sessionId) }
+        } else {
+            endCardTurn(sessionId)
+        }
+    }
+
     /// A concluding `agent_message` ends the card turn. A question
     /// `agent_message` only lands the lead-in draft on the spine: Tentacle
     /// keeps the turn (and an unresolved permission from a parallel subagent)
@@ -21,5 +108,13 @@ extension MessageStore {
         } else {
             cards[sessionId] = card
         }
+    }
+}
+
+extension MessageStore {
+    /// The agent withdrew an open question: it is no longer answerable.
+    func withdrawQuestion(_ sessionId: String, questionId: String) {
+        guard withdrawnQuestions[sessionId]?.contains(questionId) != true else { return }
+        withdrawnQuestions[sessionId, default: []].insert(questionId)
     }
 }

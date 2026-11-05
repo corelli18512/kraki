@@ -2565,7 +2565,7 @@ describe('KrakiWSClient', () => {
 
       await vi.waitFor(() => {
         const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean) as Array<Record<string, unknown>>;
-        expect(sent.find((m) => m.type === 'client_features')?.payload).toMatchObject({ features: ['fragments'], targetDeviceId: 'dev-t' });
+        expect(sent.find((m) => m.type === 'client_features')?.payload).toMatchObject({ features: ['fragments', 'question_withdrawn'], targetDeviceId: 'dev-t' });
         expect(sent.filter((m) => m.type === 'send_input').map((m) => (m.payload as { clientId: string }).clientId)).toEqual([clientId]);
       });
       outbox.reset();

@@ -477,7 +477,7 @@ final class MessageRouter {
             // Draft bubble (card). Keep-last: replace on `reset`, else append.
             if let content = payload?["content"] as? String {
                 let reset = payload?["reset"] as? Bool ?? false
-                appState.messageStore.applyCardMessage(sessionId, content, reset: reset)
+                appState.messageStore.applyCardMessage(sessionId, content, reset: reset, envelopeSeq: dict["seq"] as? Int)
                 // No per-delta SessionInfo.activity write: nothing displays the
                 // agent-text activity (ActivityRow has no callers), and copying
                 // the growing answer into `sessions` on every delta notified
@@ -619,7 +619,7 @@ final class MessageRouter {
             // transient envelope with a global-counter seq that
             // would silently pollute `getLastSeq`. If a new persistent
             // type is added, give it an explicit case + handler.
-            break
+            handleLiveSessionSignal(type, sessionId: sessionId, payload: payload)
         }
     }
 
@@ -722,7 +722,8 @@ final class MessageRouter {
                 // session_list is reconnect authority. An idle digest proves no
                 // live card exists, including for an inactive Session whose
                 // concluding push may have been missed while disconnected.
-                appState.messageStore.endCardTurn(digest.id)
+                // A draft this device is behind on stays until its bubble lands.
+                appState.messageStore.endCardTurn(digest.id, afterCatchUpTo: digest.lastSeq)
             }
 
             // `reconcileSessionList` already applied Tentacle's authoritative
@@ -978,7 +979,8 @@ final class MessageRouter {
     }
 
     /// Tell a Tentacle (that advertised `fragments`) this app reassembles
-    /// fragments, so it may send large payloads in small parts.
+    /// fragments, so it may send large payloads in small parts, and that it
+    /// understands `question_withdrawn`.
     func declareClientFeatures(to deviceId: String) {
         guard let appState else { return }
         _ = appState.sendEncryptedMessage([
@@ -986,7 +988,7 @@ final class MessageRouter {
             "deviceId": appState.deviceId ?? "",
             "seq": 0,
             "timestamp": ISO8601.now(),
-            "payload": ["features": [PayloadFragments.feature]],
+            "payload": ["features": [PayloadFragments.feature, Self.questionWithdrawnFeature]],
         ], routingTarget: deviceId, connectionScoped: true)
     }
 

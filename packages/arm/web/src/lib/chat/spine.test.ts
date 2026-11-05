@@ -31,6 +31,15 @@ describe('questions on the spine', () => {
     expect(presentQuestions(moved, [], true)[0].question?.state).toBe('unanswered');
   });
 
+  it('a question the agent withdrew closes at once (K-022)', () => {
+    const raw = [m('user_message', 1, { content: 'go' }), ask(2, 'q1')];
+    expect(presentQuestions(raw, [], true, ['q1'])[1].question?.state).toBe('unanswered');
+    expect(openQuestions(raw, [], true, ['q1'])).toEqual([]);
+    expect(rowKey(spineRows(raw, [], true, ['q1'])[1])).toBe('2');
+    // Another question stays open.
+    expect(openQuestions([...raw, ask(3, 'q2')], [], true, ['q1']).map((q) => q.id)).toEqual(['q2']);
+  });
+
   it('an optimistic answer closes the question at once', () => {
     const raw = [ask(1, 'q1')];
     expect(presentQuestions(raw, ['q1'], true)[0].question?.state).toBe('answered');

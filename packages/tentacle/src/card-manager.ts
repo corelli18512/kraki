@@ -155,13 +155,6 @@ export class CardManager {
   onDelta(sessionId: string, content: string): void {
     if (!content) return;
     const c = this.get(sessionId);
-    // Narration resumed → a SETTLED tail is no longer the latest activity.
-    // Running tools and unresolved prompts remain. (Compaction is no longer a
-    // card action - it lives in the separate compacting session-state.)
-    if (this.isSettledTail(c)) {
-      c.action = null;
-      this.syncAction(sessionId, c);
-    }
     const reset = c.resetNext;
     if (reset) {
       c.draftText = content;
@@ -170,6 +163,16 @@ export class CardManager {
       c.draftText += content;
     }
     this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content, reset } });
+    // Narration resumed → a SETTLED tail is no longer the latest activity.
+    // Running tools and unresolved prompts remain. (Compaction is no longer a
+    // card action - it lives in the separate compacting session-state.)
+    // Retired only AFTER the new words are sent: clearing first gave apps a
+    // frame with the old narration and no chip, or (tool-first bubble) no
+    // bubble at all before it slid in again (K-064).
+    if (this.isSettledTail(c)) {
+      c.action = null;
+      this.syncAction(sessionId, c);
+    }
   }
 
   /** A narration segment finalized (message_end). `content` is the AUTHORITATIVE
@@ -186,17 +189,17 @@ export class CardManager {
    *  next delta to start a fresh segment (keep-last). */
   onNarrationFinal(sessionId: string, content: string): void {
     const c = this.get(sessionId);
-    // A narration segment is the latest activity now → retire a settled tail
-    // (mirrors onDelta for no-stream edge cases).
-    if (this.isSettledTail(c)) {
-      c.action = null;
-      this.syncAction(sessionId, c);
-    }
     if (content) {
       if (content !== c.draftText) {
         this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content, reset: true } });
       }
       c.draftText = content;
+    }
+    // A narration segment is the latest activity now → retire a settled tail
+    // (mirrors onDelta for no-stream edge cases), after its words (K-064).
+    if (this.isSettledTail(c)) {
+      c.action = null;
+      this.syncAction(sessionId, c);
     }
     c.resetNext = true;
   }
@@ -247,6 +250,11 @@ export class CardManager {
     const c = this.get(sessionId);
     c.runningTools.delete(toolKey(action));
     if (this.slotBlocksTool(c)) return;
+    // The tool the user just denied reports its failure: "Denied" already says
+    // why, so keep it instead of flashing it for a frame and replacing it with
+    // a red chip (K-171).
+    if (c.runningTools.size === 0 && action.payload.success === false
+      && c.action?.type === 'permission' && c.action.payload.decision === 'deny') return;
     c.action = c.runningTools.size > 0 ? this.toolActionFor(c) : action;
     this.syncAction(sessionId, c);
   }

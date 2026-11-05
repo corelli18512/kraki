@@ -81,6 +81,7 @@ const initialState = {
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
   cardHoldUntil: new Map<string, number>(),
+  withdrawnQuestions: new Map<string, string[]>(),
   historyCaughtUpThrough: new Map<string, number>(),
   runtimeStatuses: new Map<string, import('../types/store').SessionRuntimeStatus>(),
   pinnedSessions: new Set<string>(),
@@ -547,6 +548,14 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
+  withdrawQuestion: (sessionId, questionId) => set((state) => {
+    const current = state.withdrawnQuestions.get(sessionId) ?? [];
+    if (current.includes(questionId)) return state;
+    const withdrawnQuestions = new Map(state.withdrawnQuestions);
+    withdrawnQuestions.set(sessionId, [...current, questionId]);
+    return { withdrawnQuestions };
+  }),
+
   holdCard: (sessionId, untilSeq) => set((state) => {
     const cardHoldUntil = new Map(state.cardHoldUntil);
     if (untilSeq > 0) cardHoldUntil.set(sessionId, untilSeq);
@@ -932,6 +941,7 @@ export const useStore = create<Store>()(persist((set) => ({
     lastError: null,
     cards: new Map(),
     cardHoldUntil: new Map(),
+    withdrawnQuestions: new Map(),
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
@@ -954,6 +964,7 @@ export const useStore = create<Store>()(persist((set) => ({
     messages: new Map(),
     cards: new Map(),
     cardHoldUntil: new Map(),
+    withdrawnQuestions: new Map(),
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     pinnedSessions: new Set(),

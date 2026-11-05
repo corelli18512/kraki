@@ -38,6 +38,7 @@ const NON_SPINE_CACHE_TYPES = new Set([
   'answer',
   'permission_resolved',
   'question_resolved',
+  'question_withdrawn',
 ]);
 
 export function isSpineMessage(message: ChatMessage): boolean { return isSpineCacheMessage(message); }

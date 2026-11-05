@@ -128,24 +128,29 @@ extension AppState: SessionSubscriptionHost {
         let sameTurn = routeSwitched && !shownText.isEmpty && draft.hasPrefix(shownText)
         let actionPayload = cardJSON["action"].map { ["action": $0] }
         let action = MessageRouter.decodeCardAction(actionPayload)
-        messageStore.replaceCardFromSubscription(
-            sessionId,
-            draft: draft,
-            action: action,
-            state: digest.state
-        )
-
         let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
-        // The card belongs to the turn after `spineHeadSeq`: show it only once
-        // this device has the messages up to there (catch-up comes next).
-        // Not when the route switch kept the same reply going: the missing
-        // rows are usually tool events never stored here, and holding made
-        // the whole reply vanish until the catch-up answered.
-        let keepsShowing = sameTurn && (digest.state == .active || digest.state == .compacting)
-        if keepsShowing {
-            messageStore.releaseCardHold(sessionId)
+        if digest.state == .idle {
+            // The turn is over. A draft this device is behind on stays until
+            // its concluding bubble lands by catch-up (K-013).
+            messageStore.endCardTurn(sessionId, afterCatchUpTo: spineHeadSeq)
+            messageStore.holdCard(sessionId, untilSeq: 0)
         } else {
-            messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+            messageStore.replaceCardFromSubscription(
+                sessionId,
+                draft: draft,
+                action: action,
+                state: digest.state
+            )
+            // The card belongs to the turn after `spineHeadSeq`: show it only
+            // once this device has the messages up to there (catch-up next).
+            // Not when the route switch kept the same reply going: the missing
+            // rows are usually tool events never stored here, and holding made
+            // the whole reply vanish until the catch-up answered.
+            if sameTurn {
+                messageStore.releaseCardHold(sessionId)
+            } else {
+                messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+            }
         }
         messageProvider?.setTentacleInfo(
             sessionId: sessionId,

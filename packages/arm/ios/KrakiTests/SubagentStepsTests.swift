@@ -74,6 +74,18 @@ final class SubagentStepsTests: XCTestCase {
         XCTAssertEqual(PermissionStep.outcome(permissions[0]), "Cancelled")
     }
 
+    /// K-053: Tentacle records an error step's text as `payload.message`;
+    /// Steps showed only "Error", so the full error was reachable nowhere.
+    func testErrorStepShowsTheRecordedErrorText() {
+        func error(_ payload: [String: AnyCodable]) -> ChatMessage {
+            ChatMessage(type: "error", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil, payload: payload)
+        }
+        XCTAssertEqual(ErrorStep.text(error(["message": AnyCodable("429 rate limited: retry in 20s")])),
+                       "429 rate limited: retry in 20s")
+        XCTAssertEqual(ErrorStep.text(error(["content": AnyCodable("legacy text")])), "legacy text")
+        XCTAssertEqual(ErrorStep.text(error(["message": AnyCodable("  ")])), "Error")
+    }
+
     func testTopLevelShowsDispatchCardsAndHidesSubagentSteps() {
         let trace = [
             narration("Delegating."),

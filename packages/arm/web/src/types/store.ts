@@ -84,6 +84,8 @@ export interface AppState {
   historyCaughtUpThrough: Map<string, number>;
   /** Ephemeral session runtime state; never persisted to localStorage/IDB. */
   runtimeStatuses: Map<string, SessionRuntimeStatus>;
+  /** Questions no longer answerable here (`question_withdrawn`). In memory only. */
+  withdrawnQuestions: Map<string, string[]>;
 
   // Pinned sessions (stick to top of list)
   pinnedSessions: Set<string>;
@@ -180,6 +182,7 @@ export interface AppActions {
   setRuntimeStatus: (sessionId: string, status: SessionRuntimeStatus | null) => void;
   clearCard: (sessionId: string) => void;
   holdCard: (sessionId: string, untilSeq: number) => void;
+  withdrawQuestion: (sessionId: string, questionId: string) => void;
   markHistoryCaughtUp: (sessionId: string, throughSeq: number) => void;
   togglePin: (sessionId: string) => void;
   setPinnedSessions: (pinned: Set<string>) => void;

@@ -126,10 +126,14 @@ export function wireAdapterEvents(client: RelayClient): void {
     client.send({ type: 'permission_resolved', sessionId, payload: { permissionId, resolution } });
   };
 
-  // Withdrawn by the agent (timeout/cancel): stop routing answers to it. On
-  // the spine the question closes as unanswered once anything else follows.
+  // No longer answerable here (the agent timed it out, cancelled it or
+  // answered it itself, e.g. after a switch to delegate mode): stop routing
+  // answers to it, and tell apps that declared the feature so its choices
+  // close now (K-022). On the spine the question closes as unanswered once
+  // anything else follows.
   client.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
     removeOpenQuestion(client, sessionId, questionId);
+    client.send({ type: 'question_withdrawn', sessionId, payload: { questionId } });
     client.broadcastSessionList();
   };
 

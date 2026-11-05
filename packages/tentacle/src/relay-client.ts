@@ -11,7 +11,7 @@ import { WebSocket } from 'ws';
 import { ACCOUNT_DELETED_CLOSE_CODE, DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import type { AgentCapabilities, ProducerMessage, DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod, BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
-import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, QUESTION_WITHDRAWN_FEATURE, fragmentPayload, isPayloadFragment, reassembledPayloadNamesSender } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
@@ -135,6 +135,9 @@ export class RelayClient {
   private static readonly MAX_FRAGMENTED_PAYLOAD_BYTES = 48 * 1024 * 1024;
   /** High-frequency live card types filtered by current session subscription. */
   private static readonly SUBSCRIBER_ONLY_TYPES = new Set(['agent_message_delta', 'card_action']);
+  /** Types only apps that declared the named `client_features` entry
+   *  understand; an older app would cache them as spine rows (K-022). */
+  private static readonly FEATURE_GATED_TYPES = new Map([['question_withdrawn', QUESTION_WITHDRAWN_FEATURE]]);
 
   /** Messages with explicit reconnect authorities; never replay as generic events. */
   private static readonly NO_OFFLINE_REPLAY_TYPES = new Set([
@@ -1353,9 +1356,11 @@ export class RelayClient {
 
     const type = msg.type;
     const sessionId = msg.sessionId;
-    const targetIds = type && RelayClient.SUBSCRIBER_ONLY_TYPES.has(type)
+    const requiredFeature = type ? RelayClient.FEATURE_GATED_TYPES.get(type) : undefined;
+    const targetIds = (type && RelayClient.SUBSCRIBER_ONLY_TYPES.has(type)
       ? reachable.filter((deviceId) => this.currentSessionByArm.get(deviceId) === sessionId)
-      : reachable;
+      : reachable
+    ).filter((deviceId) => !requiredFeature || this.appFeatures.get(deviceId)?.has(requiredFeature));
 
     if (targetIds.length === 0) {
       traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type, sessionId, droppedReason: 'targets-empty' });
