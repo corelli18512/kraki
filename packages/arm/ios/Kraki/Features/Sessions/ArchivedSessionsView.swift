@@ -77,6 +77,11 @@ struct ArchivedSessionsSection: View {
                 }
             }
             .padding(.top, 6)
+            // Expanded, the group follows new archives (the session list
+            // carries the count) instead of waiting for collapse/expand.
+            .onChange(of: count) { _, _ in
+                if expanded { appState.loadArchivedSessions() }
+            }
         }
     }
 
