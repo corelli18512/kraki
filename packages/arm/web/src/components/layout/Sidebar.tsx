@@ -178,6 +178,10 @@ export function Sidebar() {
     </>
   );
 
+  // Always mounted, so screen readers announce the text when it changes
+  // (a live region inserted together with its text is often not read).
+  const connectingShown = narrow ? reconnecting : reconnecting || (status === 'connecting' && total === 0);
+  const connectingStatus = <span role="status" className="sr-only">{connectingShown ? t(narrow ? 'sidebar.connectingLabel' : 'sidebar.connecting') : ''}</span>;
   if (!narrow) {
     return (
       <div className="ksb is-wide">
@@ -211,8 +215,7 @@ export function Sidebar() {
               type="button"
               className={`ksb-icon ksb-new${sessionId ? '' : ' is-composing'}`}
               aria-label={t('sidebar.newSessionLabel')}
-              aria-haspopup="menu"
-              aria-expanded={plusMenu}
+              aria-keyshortcuts="Shift+F10"
               title={t('sidebar.newSessionShortcut')}
               onClick={startNewSession}
               onContextMenu={(e) => { e.preventDefault(); setPlusMenu((v) => !v); }}
@@ -228,8 +231,8 @@ export function Sidebar() {
             )}
           </div>
         </div>
-        {reconnecting && <div className="ksb-status" role="status"><span className="kspinner ksb-spin" aria-hidden /> {t('sidebar.connecting')}</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status" role="status"><span className="kspinner ksb-spin" aria-hidden /> {t('sidebar.connecting')}</div>}
+        {connectingShown && <div className="ksb-status" aria-hidden><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
+        {connectingStatus}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
@@ -243,7 +246,8 @@ export function Sidebar() {
         <>
           <div className="ksb-hero">
             <Brand />
-            {reconnecting && <span className="kspinner ksb-spin" role="status" aria-label={t('sidebar.connectingLabel')} />}
+            {reconnecting && <span className="kspinner ksb-spin" aria-hidden />}
+            {connectingStatus}
           </div>
           <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
         </>

@@ -123,7 +123,7 @@ export const SessionRow = memo(function SessionRow({
       onContextMenu={onContextMenu}
       onKeyDown={onRowKeyDown}
       aria-label={accessibleName}
-      aria-haspopup={narrow || archived ? undefined : 'menu'}
+      aria-keyshortcuts={narrow || archived ? undefined : 'Shift+F10'}
       aria-current={selected ? 'page' : undefined}
     >
       <span className="ksr-avatar">

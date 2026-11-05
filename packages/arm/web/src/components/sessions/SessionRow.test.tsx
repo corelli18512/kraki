@@ -124,7 +124,9 @@ describe('SessionRow keyboard and screen reader (K-212)', () => {
     useStore.getState().setSessionPreview('s', { text: 'Done, tests pass', type: 'agent', timestamp: session.createdAt! });
     row();
     const button = screen.getByRole('button', { name: /^Sidebar test, Unread, Last message from agent, Local Mac, Done, tests pass/ });
-    expect(button).toHaveAttribute('aria-haspopup', 'menu');
+    // The row opens the session, not a menu; the menu is Shift+F10.
+    expect(button).not.toHaveAttribute('aria-haspopup');
+    expect(button).toHaveAttribute('aria-keyshortcuts', 'Shift+F10');
     expect(screen.getByRole('img', { name: 'Unread' })).toBeInTheDocument();
   });
 });

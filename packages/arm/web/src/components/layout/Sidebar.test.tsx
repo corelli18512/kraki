@@ -1,12 +1,19 @@
-import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { i18next } from '../../i18n';
 import { MemoryRouter } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { Sidebar } from './Sidebar';
 
+const viewport = vi.hoisted(() => ({ narrow: false }));
+vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
+const connection = vi.hoisted(() => ({ reconnecting: false }));
+vi.mock('../../hooks/useShowsReconnecting', () => ({ useShowsReconnecting: () => connection.reconnecting }));
+
 beforeEach(() => {
   useStore.getState().reset();
+  viewport.narrow = false;
+  connection.reconnecting = false;
 });
 
 afterEach(async () => { await act(async () => { await i18next.changeLanguage('en'); }); });
@@ -200,9 +207,30 @@ describe('Sidebar menus from the keyboard (K-212)', () => {
     fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Devices' }), { key: 'ArrowDown' });
     expect(screen.getByRole('menuitem', { name: 'Account Usage' })).toHaveFocus();
   });
-  it('announces the reconnecting status', () => {
-    useStore.getState().setStatus('connecting');
+  it('announces the connecting status in a live region that stays mounted', () => {
+    useStore.getState().setStatus('connected');
     render(<MemoryRouter><Sidebar /></MemoryRouter>);
-    expect(screen.getByRole('status')).toHaveTextContent('Connecting…');
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('');
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status).toHaveTextContent('Connecting…');
+  });
+  it('narrow: the reconnecting spinner is announced through a live region that stays mounted', () => {
+    viewport.narrow = true;
+    const view = render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('');
+    connection.reconnecting = true;
+    view.rerender(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status).toHaveTextContent('Connecting');
+    expect(document.querySelector('.ksb-hero .kspinner')).toHaveAttribute('aria-hidden');
+  });
+  it('the + button starts a session, so it does not claim to open a menu', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const plus = screen.getByTestId('sidebar-new-session');
+    expect(plus).not.toHaveAttribute('aria-haspopup');
+    expect(plus).toHaveAttribute('aria-keyshortcuts', 'Shift+F10');
   });
 });
