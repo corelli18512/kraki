@@ -491,7 +491,10 @@ final class AttachmentStore {
             streamingWhole.remove(id)
             pendingChunks[id] = nil
             pendingTotal[id] = nil
-            states[id] = .error(reason: error)
+            // The Tentacle's error is a wire code (`not_found`, …), not copy:
+            // an empty reason shows the localized "Couldn't load image".
+            KLog.d("⚠️ Attachment \(id.prefix(12)) unavailable: \(error)")
+            states[id] = .error(reason: "")
             pump()
             return
         }

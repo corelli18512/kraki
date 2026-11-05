@@ -419,7 +419,8 @@ final class CommandSender {
                     }
                     continue
                 }
-                guard !self.isLinkBusy, !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
+                guard !self.isLinkBusy, !self.isUploading,
+                      !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
                 stalled += step
                 if !resent, stalled >= timeout / 2, self.canResendAutomatically(sessionId) {
                     resent = true
@@ -452,6 +453,20 @@ final class CommandSender {
         #endif
         return appState.deviceId != nil || appState.hasStoredCredentials
     }
+
+    /// Our own paced upload (e.g. a photo on a slow uplink) is still going
+    /// out. The echo cannot come back before the input has arrived, so that
+    /// time is not a stall: counting it re-sent a second copy of the photo
+    /// halfway through and showed "Awaiting confirmation" mid-upload.
+    private var isUploading: Bool {
+        #if DEBUG
+        if let testUploadInProgress { return testUploadInProgress() }
+        #endif
+        return appState?.pulseManager?.hasQueuedUpload == true
+    }
+    #if DEBUG
+    @ObservationIgnored var testUploadInProgress: (() -> Bool)?
+    #endif
 
     private var isLinkBusy: Bool {
         #if DEBUG
