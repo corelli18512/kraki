@@ -698,6 +698,10 @@ final class AppState {
         }
         client.onRecover = { [weak self] reason, code, quietFor in
             self?.stability.transportLost(reason: reason, code: code, quietFor: quietFor)
+            if reason == "transport_error", let notice = Self.transportFailureNotice(code: code),
+               self?.lastError != notice {
+                self?.lastError = notice
+            }
         }
         client.onReconnectAttempt = { [weak self] attempt in
             self?.updateReconnectAttempt(attempt)
@@ -892,6 +896,15 @@ extension AppState {
         ))
     }
     #endif
+
+    /// A transport failure that retrying cannot fix, in the user's words.
+    /// App Transport Security refuses plain `ws://` to a host name before
+    /// anything is sent (a self-hosted relay); without this the app only
+    /// said "Connecting…" forever.
+    static func transportFailureNotice(code: Int?) -> String? {
+        guard code == NSURLErrorAppTransportSecurityRequiresSecureConnection else { return nil }
+        return String(localized: "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address.")
+    }
 
     /// `auth_ok` capabilities of this relay connection.
     func applyRelayCapabilities(_ authOk: [String: Any]) {

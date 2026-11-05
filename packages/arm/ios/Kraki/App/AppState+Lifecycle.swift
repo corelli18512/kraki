@@ -161,6 +161,9 @@ extension AppState {
         // Back before a deferred teardown ran: nothing was closed.
         if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
         let keptSocket = backgroundSocketGrace.resume()
+        // The kept socket may have gone half-open while suspended: prove it
+        // now instead of waiting for the 22 s liveness ping.
+        if keptSocket { wsClient?.probeAfterResume() }
         #else
         let keptSocket = false
         #endif
