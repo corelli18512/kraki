@@ -72,6 +72,10 @@ struct PairingView: View {
             .onAppear {
                 checkCameraPermission()
             }
+            // The toast leaves after 3 s, away from the VoiceOver cursor: say it (K-074).
+            .onChange(of: errorMessage) { _, message in
+                if let message { AccessibilityAnnouncer.announce(message) }
+            }
         }
     }
 

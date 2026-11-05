@@ -191,11 +191,14 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open Notification Settings")
             } else {
-                Toggle("", isOn: Binding(
+                // The visible "Notifications" text is a sibling, so the
+                // hidden label still names the switch for VoiceOver.
+                Toggle("Notifications", isOn: Binding(
                     get: { pushToggle },
                     set: { newValue in handlePushToggle(newValue) }
                 ))
                 .labelsHidden()
+                .accessibilityIdentifier("settings.notifications.toggle")
                 .disabled(pushBusy)
             }
         }

@@ -1,4 +1,4 @@
-import { formatDateTime, formatRelativeDays, formatRelativeTime } from '../i18n/format';
+import { formatClockTime, formatRelativeDays, formatRelativeTime } from '../i18n/format';
 
 /** Format an ISO timestamp to a human-readable relative time ("5m ago" / "5分钟前"). */
 export function timeAgo(iso: string): string {
@@ -20,9 +20,9 @@ export function sessionTime(iso: string): string {
   return formatRelativeDays(days);
 }
 
-/** Format an ISO timestamp to HH:MM (24-hour) */
+/** Format an ISO timestamp to hours:minutes in the user's 12/24-hour cycle. */
 export function formatTime(iso: string): string {
-  return formatDateTime(iso, { hour: '2-digit', minute: '2-digit', hour12: false });
+  return formatClockTime(iso);
 }
 
 /** Capitalize first letter */

@@ -224,6 +224,16 @@
         }
       }
     },
+    "Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿"
+          }
+        }
+      }
+    },
     "Couldn't load steps" : {
       "localizations" : {
         "zh-Hans" : {

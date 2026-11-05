@@ -57,8 +57,15 @@ final class DeviceTrustModel {
     var info: [String: ComputerTrustInfo] = [:]
     /// Computers (without a pin) that said they only serve paired apps.
     var pairingRequired: Set<String> = []
-    /// Short-lived message after a scan/paste ("Paired with …").
-    var feedback: PairingFeedback?
+    /// Short-lived message after a scan/paste ("Paired with …"). Each new
+    /// result is also announced: the toast appears away from the VoiceOver
+    /// cursor.
+    var feedback: PairingFeedback? {
+        didSet {
+            guard let feedback, feedback != oldValue else { return }
+            AccessibilityAnnouncer.announce(feedback.accessibilityAnnouncement)
+        }
+    }
     /// Computers the user dismissed the "needs pairing" banner for.
     var dismissedBanners: Set<String> = []
     /// Paired computers that sent unsigned messages since their last signed one.
@@ -133,6 +140,18 @@ enum PairingFeedback: Equatable, Identifiable {
     case pairing(name: String)
     case paired(name: String)
     case failed(name: String, reason: String)
+
+    /// What the toast says, as one sentence for VoiceOver.
+    var accessibilityAnnouncement: String {
+        switch self {
+        case .pairing(let name): return String(localized: "Pairing with \(name)…")
+        case .paired(let name): return String(localized: "Paired with \(name)")
+        case .failed(let name, let reason):
+            let detail = (try? AttributedString(markdown: PairingFailureText.describe(reason)))
+                .map { String($0.characters) } ?? PairingFailureText.describe(reason)
+            return String(localized: "Couldn't pair with \(name)") + "\n" + detail
+        }
+    }
 
     var id: String {
         switch self {

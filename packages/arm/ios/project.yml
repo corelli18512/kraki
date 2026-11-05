@@ -330,6 +330,8 @@ targets:
       - path: Kraki/Shared/AppColorScheme.swift
       - path: Kraki/Shared/AgentAvatar.swift
       - path: Kraki/Shared/Helpers.swift
+      - path: Kraki/Shared/UsageNumberFormat.swift
+      - path: Kraki/Shared/AccessibilityAnnouncer.swift
       - path: Kraki/Shared/KrakiLogger.swift
       - path: Kraki/Shared/EventMonitorForwarding.swift
       - path: Kraki/Shared/LucideIcon.swift

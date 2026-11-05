@@ -272,7 +272,7 @@ struct DeviceDetailView: View {
     /// Mirrors SessionCardView's `timestampView`: prefer the preview's
     /// last-activity timestamp; fall back to converting `createdAt`
     /// (which is a `Date`) into ISO so SessionTimeFormatter can read
-    /// it. Same formatter → same output ("HH:mm" / "yesterday" / "Xd
+    /// it. Same formatter → same output (short time / "yesterday" / "Xd
     /// ago") as the session list, keeping the two views in sync.
     private func sessionListTimestamp(for session: SessionInfo) -> String {
         if let preview = appState.sessionStore.sessionPreviews[session.id],

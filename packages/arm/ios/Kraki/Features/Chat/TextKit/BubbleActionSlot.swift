@@ -135,11 +135,13 @@ struct BubbleActionSlot: View {
                     .foregroundStyle(Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 if decision == nil {
-                    HStack(spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Image(systemName: "lock.fill").scaledFont(10, weight: .semibold).foregroundStyle(.orange)
+                        // Wraps at large text sizes instead of "Needs your app…".
                         Text(PermissionPromptCopy.caption)
                             .scaledFont(12)
                             .foregroundStyle(Color.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -197,6 +199,8 @@ struct BubbleActionSlot: View {
                     .font(Font(BubbleActionMetrics.choiceFont))
                     .foregroundStyle(primary ? Color.white : Color.textPrimary)
             }
+            // Stacked at accessibility sizes: each answer spans the bubble.
+            .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil)
             .padding(.horizontal, BubbleActionMetrics.choicePaddingH)
             .padding(.vertical, 7)
             .background(primary ? Color.krakiPrimary : Color.surfacePrimary.opacity(0.75), in: Capsule())
@@ -223,9 +227,9 @@ struct BubbleActionSlot: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, BubbleActionMetrics.choicePaddingH)
                             .padding(.vertical, 7)
-                            .background(Color.surfacePrimary.opacity(0.75), in: Capsule())
-                            .overlay(Capsule().strokeBorder(Color.borderPrimary))
-                            .contentShape(Capsule())
+                            .background(Color.surfacePrimary.opacity(0.75), in: BubbleChoiceShape())
+                            .overlay(BubbleChoiceShape().strokeBorder(Color.borderPrimary))
+                            .contentShape(BubbleChoiceShape())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Answer: \(choice)")
@@ -264,6 +268,26 @@ struct BubbleActionSlot: View {
         onAnswerQuestion(questionId, answer)
     }
 
+}
+
+/// A question choice's outline: a capsule while the choice is one line, but
+/// never rounder than that, so a choice that wraps (large text sizes) keeps
+/// its first and last letters inside the outline.
+struct BubbleChoiceShape: InsettableShape {
+    static let maximumCornerRadius: CGFloat = 18
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let radius = min(rect.height / 2, Self.maximumCornerRadius)
+        return RoundedRectangle(cornerRadius: max(0, radius), style: .circular).path(in: rect)
+    }
+
+    func inset(by amount: CGFloat) -> Self {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
+    }
 }
 
 /// UIKit wrapper that hosts `BubbleActionSlot` as a subview of `TKBubbleCell`.

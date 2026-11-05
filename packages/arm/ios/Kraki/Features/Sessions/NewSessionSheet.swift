@@ -425,31 +425,11 @@ struct NewSessionSheet: View {
 
     /// Horizontal pill list mirroring the web "Agent" buttons.
     private var agentChipStrip: some View {
-        HStack(spacing: 8) {
-            ForEach(agentsList, id: \.id) { agent in
-                Button {
-                    handleSelectAgent(agent.id)
-                } label: {
-                    Text(AgentInfo.from(agent.id).label)
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(
-                            agent.id == selectedAgentId
-                                ? Color.krakiPrimary
-                                : Color.secondary.opacity(0.18),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(
-                            agent.id == selectedAgentId
-                                ? Color.white
-                                : Color.primary
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
-        }
+        NewSessionAgentChipStrip(
+            agentIds: agentsList.map(\.id),
+            selectedAgentId: selectedAgentId,
+            onSelect: handleSelectAgent
+        )
     }
 
     // MARK: - Create / Empty
@@ -803,4 +783,44 @@ private struct ScrollMetrics: Equatable {
     var offset: CGFloat
 }
 
+/// Agent chips of the New Session picker. One line each: at large text sizes
+/// the row scrolls sideways instead of breaking names mid-word into tall chips.
+struct NewSessionAgentChipStrip: View {
+    let agentIds: [String]
+    let selectedAgentId: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(agentIds, id: \.self) { agentId in
+                    Button {
+                        onSelect(agentId)
+                    } label: {
+                        Text(AgentInfo.from(agentId).label)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                agentId == selectedAgentId
+                                    ? Color.krakiPrimary
+                                    : Color.secondary.opacity(0.18),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(
+                                agentId == selectedAgentId
+                                    ? Color.white
+                                    : Color.primary
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
 #endif

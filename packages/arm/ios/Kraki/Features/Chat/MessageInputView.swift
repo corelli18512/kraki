@@ -383,7 +383,10 @@ struct MessageInputView: View {
         // One layout places the same views in one or two rows: the field
         // (focus, IME) is never rebuilt when the draft wraps.
         IOSComposerRestingLayout(stacked: stacksRows, showsClear: showsClear, showsMic: canShowVoiceToggle) {
+            // Above the text field: the remove-image target reaches past the
+            // slot's trailing edge.
             imageSlot
+                .zIndex(1)
             textFieldForMode
                 .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
                 // The TextField only hit-tests its glyph rect: any other tap in
@@ -694,6 +697,9 @@ struct MessageInputView: View {
                             .frame(width: 44, height: Self.inputBoxHeight)
                             .contentShape(Rectangle())
                     }
+                    // Plain: with Button Shapes on, the default style draws
+                    // its own (offset) shape around the picker label.
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Replace image")
                     Button { clearImage() } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -701,10 +707,14 @@ struct MessageInputView: View {
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, Color.black.opacity(0.6))
                             .frame(width: 22, height: 22)
+                            // The glyph stays put; its touch target grows to
+                            // 32 pt into the free space right of the thumbnail
+                            // instead of being only the 22 pt glyph.
+                            .padding(EdgeInsets(top: 3, leading: 0, bottom: 7, trailing: 10))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .offset(x: -1, y: 3)
+                    .offset(x: 9)
                     .accessibilityLabel("Remove image")
                 }
             } else {
@@ -713,6 +723,7 @@ struct MessageInputView: View {
                         .frame(width: 44, height: Self.inputBoxHeight)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Attach image")
             }
         }

@@ -16,6 +16,12 @@ function resolvedColor(element: Element): string {
 }
 
 describe('Markdown — native transcript rendering', () => {
+  it('gives every text block its own direction so Arabic punctuation stays at the end (K-165)', () => {
+    const { container } = render(<Markdown text={'مرحبا بالعالم.\n\n- عنصر أول.\n\n> اقتباس.\n\n## عنوان'} />);
+    for (const selector of ['p', 'li', 'blockquote', 'h2']) {
+      expect(container.querySelector(selector), selector).toHaveAttribute('dir', 'auto');
+    }
+  });
   it.each([Markdown, StreamingMarkdown])('preserves prose and quote soft newlines in final and streamed text', (Component) => {
     const { container } = render(<Component text={'First **bold** line\nSecond `code` line\n\n> Quote one\n> Quote two'} />);
     const paragraphs = container.querySelectorAll('p');

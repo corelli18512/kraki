@@ -48,6 +48,12 @@ describe('SessionRow Mac sidebar', () => {
     expect(screen.getByLabelText('Offline')).toBeInTheDocument();
     expect(container.querySelector('.ksr-devdot')).toBeNull();
   });
+  it('lets the title and preview take their own text direction (K-165)', () => {
+    useStore.getState().setSessionPreview('s', { text: 'مرحبا بالعالم.', type: 'agent', timestamp: session.createdAt! });
+    row();
+    expect(screen.getByText('Sidebar test')).toHaveAttribute('dir', 'auto');
+    expect(screen.getByText('مرحبا بالعالم.')).toHaveAttribute('dir', 'auto');
+  });
   it('uses creation time for an invalid preview just like list ordering', () => {
     useStore.getState().setSessionPreview('s', { text: 'Invalid timestamp', type: 'agent', timestamp: 'invalid' });
     row();

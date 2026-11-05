@@ -64,6 +64,33 @@ enum SessionCardStatus: Equatable {
         case .idle: return nil
         }
     }
+
+    /// A draft resolves to `.humanMessage` (it shares that glyph slot), but it
+    /// is not a sent message: VoiceOver must not read it as one. Any other
+    /// status (running, approval, …) outranks the draft, as on screen.
+    func accessibilityLabel(isDraft: Bool) -> String? {
+        isDraft && self == .humanMessage ? String(localized: "Draft") : accessibilityLabel
+    }
+}
+
+extension SessionPreview {
+    /// Terminal-turn previews the computer renders in English.
+    private static let computerRenderedTexts: [LocalizedStringResource] = [
+        LocalizedStringResource("Turn failed"),
+        LocalizedStringResource("Stopped"),
+        LocalizedStringResource("System notice"),
+    ]
+
+    /// The computer renders terminal-turn previews in English ("Turn failed",
+    /// "Stopped", "System notice"); show them in the app's language like the
+    /// previews this app derives itself (MessageRouter). User text is never
+    /// rewritten.
+    func displayText(locale: Locale = .current) -> String {
+        guard type != "user", type != "user_message",
+              var resource = Self.computerRenderedTexts.first(where: { $0.key == text }) else { return text }
+        resource.locale = locale
+        return String(localized: resource)
+    }
 }
 
 struct SessionCardProjection: Equatable {
@@ -81,6 +108,9 @@ struct SessionCardProjection: Equatable {
     let isPinned: Bool
     let isDraft: Bool
     let deviceOnline: Bool?
+
+    /// Status as read by VoiceOver (a draft is not "Last message from you").
+    var statusAccessibilityLabel: String? { status.accessibilityLabel(isDraft: isDraft) }
 
     static func make(
         session: SessionInfo,
@@ -106,7 +136,7 @@ struct SessionCardProjection: Equatable {
         let normalizedDraft = draft?.collapseWhitespace()
         let previewText = pending?.text ?? (normalizedDraft?.isEmpty == false
             ? normalizedDraft
-            : preview?.text.collapseWhitespace())
+            : preview?.displayText().collapseWhitespace())
         let timestamp = pending?.timestamp ?? (preview?.timestamp.isEmpty == false
             ? preview?.timestamp ?? ""
             : ISO8601.withFractional.string(from: session.createdAt))
@@ -218,18 +248,16 @@ private struct IOSSessionActivityDots: View {
 }
 #endif
 
-/// Mirrors the relay/web session timestamp contract on both Apple clients.
+/// Mirrors the relay/web session timestamp contract on both Apple clients:
+/// today's time (in the user's 12/24-hour setting, like the Info sheet's
+/// dates), "yesterday", then elapsed days.
 enum SessionTimeFormatter {
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
-    static func format(_ iso: String) -> String {
+    static func format(_ iso: String, locale: Locale = .autoupdatingCurrent) -> String {
         guard let date = ISO8601.parse(iso) else { return "" }
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return timeFormatter.string(from: date) }
+        if calendar.isDateInToday(date) {
+            return date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale))
+        }
         if calendar.isDateInYesterday(date) { return String(localized: "yesterday") }
         let days = calendar.dateComponents([.day], from: date, to: Date()).day ?? 0
         return String(localized: "\(max(days, 2))d ago")

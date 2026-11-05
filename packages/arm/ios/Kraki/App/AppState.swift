@@ -573,6 +573,10 @@ final class AppState {
             if showsReconnecting {
                 showsReconnecting = false
                 stability.reconnectingShown(false)
+                // Only a real recovery; backgrounding also clears the notice.
+                if connectionStatus == .connected {
+                    announceForAccessibility(String(localized: "Connected"))
+                }
             }
             return
         }
@@ -583,11 +587,19 @@ final class AppState {
             if self.isReconnecting {
                 self.showsReconnecting = true
                 self.stability.reconnectingShown(true)
+                // The header changes silently otherwise (VoiceOver users
+                // would not learn the app is offline).
+                self.announceForAccessibility(self.hasCompletedInitialConnect
+                    ? String(localized: "Connecting…") : String(localized: "Signing in…"))
             }
         }
         reconnectingIndicatorWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
     }
+
+    /// VoiceOver announcements of this app graph's state changes (tests
+    /// replace it to observe them without other graphs in the process).
+    @ObservationIgnored var announceForAccessibility: (String) -> Void = { AccessibilityAnnouncer.announce($0) }
 
     /// Opening and outage summaries (metadata only; see StabilityTracker).
     @ObservationIgnored let stability = StabilityTracker()
