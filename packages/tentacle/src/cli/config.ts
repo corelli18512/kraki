@@ -352,7 +352,7 @@ export async function cmdAuth(args: string[]): Promise<void> {
       signal: AbortSignal.timeout(15_000),
     });
   } catch (err) {
-    const { githubUnreachableMessage } = await import('../github-reach.js');
+    const { githubUnreachableMessage } = await import('../network-errors.js');
     process.stderr.write(`error: ${githubUnreachableMessage(err)}\n`);
     gracefulExit(1);
     return;

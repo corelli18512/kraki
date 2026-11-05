@@ -303,9 +303,13 @@ export class LocalAuthBackend implements AuthBackend {
     // open computer) only to the open provider, never to GitHub.
     const owner = [...this.authProviders.values()].find((provider) => provider.isOwnSecret?.(token));
     let unavailable: string | undefined;
+    // Each provider's own reason ("Invalid API key", the keyless-remote
+    // refusal, …): the generic line alone said nothing about what to fix.
+    const reasons: string[] = [];
     for (const provider of owner ? [owner] : this.authProviders.values()) {
       const result = await provider.authenticate({ token, ip, remoteClient });
       if (!result.ok && result.retryable) unavailable = result.message;
+      if (!result.ok && !reasons.includes(result.message)) reasons.push(result.message);
       if (result.ok) {
         this.storage.upsertUser(result.user.id, result.user.login, result.user.provider, result.user.email);
         const pairing = this.createPairingToken(result.user.id);
@@ -313,7 +317,10 @@ export class LocalAuthBackend implements AuthBackend {
       }
     }
     if (unavailable) return { ok: false, code: 'service_unavailable', message: unavailable };
-    return { ok: false, code: 'auth_rejected', message: 'No auth provider accepted the token' };
+    const message = reasons.length === 1 ? reasons[0]
+      : reasons.length > 1 ? `No auth provider accepted the token (${reasons.join('; ')})`
+      : 'No auth provider accepted the token';
+    return { ok: false, code: 'auth_rejected', message };
   }
 
   getAuthInfo(): AuthInfoConfig {

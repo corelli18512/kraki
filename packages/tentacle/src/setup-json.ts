@@ -45,7 +45,7 @@ import {
   saveGitHubToken,
 } from './config.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
-import { githubUnreachableMessage } from './github-reach.js';
+import { githubUnreachableMessage } from './network-errors.js';
 
 export type SetupJsonEvent =
   | { event: 'start'; version: string }

@@ -27,7 +27,7 @@ import {
 import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
-import { githubUnreachableMessage } from './github-reach.js';
+import { githubUnreachableMessage, relayConnectErrorMessage } from './network-errors.js';
 import { findMacAppWithBuiltIn } from './managed.js';
 import { runAgentsCheckChild, type AgentCheckResult } from './agents-check.js';
 import { isSea } from 'node:sea';
@@ -212,7 +212,7 @@ export function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo
     });
     ws.on('error', (err) => {
       clearTimeout(timer);
-      reject(new Error(err.message || 'Connection failed'));
+      reject(new Error(relayConnectErrorMessage(err)));
     });
   });
 }
@@ -427,7 +427,10 @@ function openInBrowser(url: string): boolean {
  * scopes (repo, workflow, read:org, gist) and would be handed to the relay.
  * Kraki only needs to prove who the user is.
  */
-async function signInWithGitHub(clientId: () => Promise<string | undefined>): Promise<{ token: string; username: string }> {
+async function signInWithGitHub(
+  clientId: () => Promise<string | undefined>,
+  noClientIdMessage = 'Could not reach Kraki to start GitHub sign-in. Check your network connection.',
+): Promise<{ token: string; username: string }> {
   // Re-setup: Kraki's own saved token is fine to reuse while GitHub accepts it.
   const { loadGitHubToken } = await import('./config.js');
   const saved = loadGitHubToken();
@@ -449,7 +452,7 @@ async function signInWithGitHub(clientId: () => Promise<string | undefined>): Pr
     }
   }
   const id = await clientId();
-  if (!id) throw new Error('Could not reach Kraki to start GitHub sign-in. Check your network connection.');
+  if (!id) throw new Error(noClientIdMessage);
   return githubDeviceFlow(id);
 }
 
@@ -783,7 +786,9 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     // receives the token (scope read:user). Say so before signing in.
     console.log(chalk.yellow('    This relay is not run by Kraki. Signing in with GitHub sends your GitHub sign-in'));
     console.log(chalk.yellow('    (read-only access to your public profile) to whoever runs it.'));
-    user = (await signInWithGitHub(async () => relayInfo.githubClientId)).username;
+    // The relay answered, so a missing id is its configuration, not the network (K-278).
+    user = (await signInWithGitHub(async () => relayInfo.githubClientId,
+      'This relay offers GitHub sign-in but has no GitHub app configured. Ask whoever runs it to set GITHUB_CLIENT_ID.')).username;
   } else if (cliMethods.length === 1) {
     authMethod = cliMethods[0];
     console.log(chalk.dim(`    ${cliAuthLabels[authMethod]?.trim() ?? authMethod}`));

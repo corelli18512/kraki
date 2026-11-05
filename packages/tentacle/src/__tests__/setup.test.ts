@@ -408,6 +408,19 @@ describe("relayAuthToken — open (self-hosted) relay", () => {
   });
 });
 
+describe("runSetup — self-hosted GitHub relay without a client id (K-278)", () => {
+  it("blames the relay's configuration, not the network", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://lab:4600";
+    mockRelayMethods = ['github_token', 'challenge']; // auth_info without githubClientId
+    mockSavedToken.mockReturnValueOnce(null);
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
+    const failure = await runSetup().catch((err: Error) => err);
+    expect((failure as Error).message).toContain('GITHUB_CLIENT_ID');
+    expect((failure as Error).message).not.toContain('Could not reach Kraki');
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+});
+
 describe("runSetup — unsupported proxy (K-328)", () => {
   it("warns before signing in when the network uses a PAC or SOCKS proxy", async () => {
     process.env.KRAKI_RELAY_URL = "ws://lab:4600";

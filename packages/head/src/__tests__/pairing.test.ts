@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import { createTestEnv, connectDevice, type TestEnv } from './integration-helpers.js';
-import { GitHubAuthProvider, OpenAuthProvider, ThrottledAuthProvider, type AuthProvider } from '../auth.js';
+import { ApiKeyAuthProvider, GitHubAuthProvider, OpenAuthProvider, ThrottledAuthProvider, type AuthProvider } from '../auth.js';
 import { LocalAuthBackend } from '../local-auth-backend.js';
 import { Storage } from '../storage.js';
 
@@ -157,6 +157,39 @@ describe('requestPairingToken with mixed auth modes', () => {
     // A GitHub token still reaches GitHub.
     await backend.requestPairingToken('gho_not_the_open_key', '127.0.0.1');
     expect(githubCalls).toEqual(['https://api.github.com/user']);
+    storage.close();
+  });
+});
+
+describe('requestPairingToken rejection reasons (K-278)', () => {
+  it("passes on the provider's own reason instead of a generic line", async () => {
+    const storage = new Storage(':memory:');
+    const backend = new LocalAuthBackend({
+      storage,
+      authProviders: new Map<string, AuthProvider>([['apikey', new ApiKeyAuthProvider('right-key')]]),
+    });
+    const result = await backend.requestPairingToken('wrong-key', '127.0.0.1');
+    expect(result).toMatchObject({ ok: false, code: 'auth_rejected', message: 'Invalid API key' });
+    storage.close();
+  });
+
+  it('lists each provider\'s reason when several refused the token', async () => {
+    const storage = new Storage(':memory:');
+    const github = new GitHubAuthProvider({ fetcher: (async () => new Response('{}', { status: 401 })) as typeof fetch });
+    const backend = new LocalAuthBackend({
+      storage,
+      authProviders: new Map<string, AuthProvider>([
+        ['github', github],
+        ['apikey', new ApiKeyAuthProvider('right-key')],
+      ]),
+    });
+    const result = await backend.requestPairingToken('wrong-key', '127.0.0.1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('No auth provider accepted the token (');
+      expect(result.message).toContain('Invalid API key');
+      expect(result.message).toContain('GitHub API returned 401');
+    }
     storage.close();
   });
 });
