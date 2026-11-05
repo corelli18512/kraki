@@ -57,3 +57,16 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   }
   return `${out.trimEnd()}…`;
 }
+
+/** The first `maxGraphemes` user-perceived characters of `text`: never half a
+ *  surrogate pair or ZWJ/flag emoji. */
+export function sliceGraphemes(text: string, maxGraphemes: number): string {
+  let out = '';
+  let count = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (count === maxGraphemes) break;
+    out += segment;
+    count += 1;
+  }
+  return out;
+}

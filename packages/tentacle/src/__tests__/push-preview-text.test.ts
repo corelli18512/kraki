@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../push-preview-text.js';
+import { markdownToPlainText, sliceGraphemes, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../push-preview-text.js';
 
 describe('markdownToPlainText', () => {
   it('reduces common Markdown to its words on one line', () => {
@@ -57,5 +57,18 @@ describe('truncateUtf8', () => {
   it('never splits an emoji surrogate pair', () => {
     const out = truncateUtf8('😀'.repeat(10), 9);
     expect(out).toBe('😀…');
+  });
+});
+
+describe('sliceGraphemes (push title)', () => {
+  it('K-216: cuts the title by grapheme, never inside a ZWJ or flag sequence', () => {
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+    const title = `${'a'.repeat(79)}${family}${family}`;
+    // Code-point slicing (the old cut) leaves a dangling ZWJ fragment.
+    expect(Array.from(title).slice(0, 80).join('')).not.toBe(`${'a'.repeat(79)}${family}`);
+    expect(sliceGraphemes(title, 80)).toBe(`${'a'.repeat(79)}${family}`);
+    const flag = '\u{1F1EF}\u{1F1F5}';
+    expect(sliceGraphemes(`${'b'.repeat(79)}${flag}${flag}`, 80)).toBe(`${'b'.repeat(79)}${flag}`);
+    expect(sliceGraphemes('short', 80)).toBe('short');
   });
 });
