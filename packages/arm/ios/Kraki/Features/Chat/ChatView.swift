@@ -135,15 +135,31 @@ struct ChatView: View {
             }
         }
         // A brand-new session: say where it runs, so the empty screen is
-        // not ambiguous ("which computer / agent / model is this?").
+        // not ambiguous ("which computer / agent / model is this?"). A
+        // session whose history is on an offline computer says so instead.
         .overlay {
             if !waitingForLatest, isNewEmptySession, let session {
-                NewSessionIntro(
-                    deviceName: appState.deviceStore.device(for: session.deviceId)?.name,
-                    agent: AgentInfo.from(session.agent).label,
-                    model: session.model
-                )
-                .allowsHitTesting(false)
+                switch ChatEntryLoading.emptyChatNote(
+                    knownLastSeq: max(session.lastSeq, viewModel?.sessionLastSeq ?? 0),
+                    deviceOnline: isDeviceOnline
+                ) {
+                case .newSession:
+                    NewSessionIntro(
+                        deviceName: appState.deviceStore.device(for: session.deviceId)?.name,
+                        agent: AgentInfo.from(session.agent).label,
+                        model: session.model
+                    )
+                    .allowsHitTesting(false)
+                case .historyOnOfflineComputer:
+                    Text("The session device is offline and no cached conversation is available.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .allowsHitTesting(false)
+                case nil:
+                    EmptyView()
+                }
             }
         }
         // Let the chat collection view extend behind BOTH the top navbar

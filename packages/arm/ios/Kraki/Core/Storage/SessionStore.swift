@@ -275,7 +275,9 @@ final class SessionStore {
     /// Newest session_list timestamp per computer. Device trust resets it
     /// on a computer's first signed list (an unsigned one may be forged).
     var lastSessionListSnapshotAt: [String: Date] = [:]
-    /// Bumped when a session is deleted while it's being viewed.
+    /// Bumped when a session is deleted while it's being viewed — from
+    /// this device, another device (`session_deleted`) or a computer's
+    /// session list that no longer contains it.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the
     /// "Session not found" placeholder. Counter (not boolean) so two
@@ -839,6 +841,9 @@ final class SessionStore {
             return false
         }
 
+        if let active = activeSessionId, removedIDs.contains(active) {
+            popToSessionListSignal &+= 1
+        }
         for id in removedIDs {
             nextSessions.removeValue(forKey: id)
             nextPinned.remove(id)
@@ -943,6 +948,10 @@ final class SessionStore {
     func removeSession(_ id: String) {
         if sessionListRevealId == id {
             sessionListRevealId = nil
+        }
+        // Deleted while open (here or on another device): leave the chat.
+        if activeSessionId == id, sessions[id] != nil {
+            popToSessionListSignal &+= 1
         }
         sessions.removeValue(forKey: id)
         pinnedSessions.remove(id)

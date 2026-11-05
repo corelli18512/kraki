@@ -102,7 +102,9 @@ extension ChatPerfListVC {
             refreshJumpButtonTitle()
         }
         guard !jumpControlsFrozen else { return }
-        let showTail = !isAtConversationBottom
+        // An empty chat has no newer edge to jump to, even when the history
+        // it would load is not reachable yet (computer offline).
+        let showTail = !isAtConversationBottom && !items.isEmpty
         // ↑ stays available at the bottom (resting in ↓'s slot) unless the
         // newest item is the user's own message: there is nothing new to read
         // back to yet, and a right-aligned user bubble sits under the slot.

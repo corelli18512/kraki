@@ -439,13 +439,13 @@ final class TKBubbleContent {
         switch kind {
         case .user:
             body = rawBody.map { rendered in
-                let solid = TKMarkdown.recolored(rendered, color: .white)
+                let solid = TKMarkdown.underliningLinks(TKMarkdown.recolored(rendered, color: .white))
                 return Self.lighteningUncorrected(solid, message: message) ?? solid
             }
         case .error:
-            body = TKMarkdown.recolored(
+            body = TKMarkdown.underliningLinks(TKMarkdown.recolored(
                 rawBody ?? NSAttributedString(string: message.result ?? String(localized: "Error")),
-                color: .systemRed)
+                color: .systemRed))
         case .system, .agent:
             body = rawBody
         }
