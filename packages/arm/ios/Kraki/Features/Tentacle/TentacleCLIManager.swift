@@ -95,6 +95,9 @@ final class TentacleCLIManager {
     @ObservationIgnored private var onDemandCheckedAt: Date?
     @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
+    /// When the built-in job was last re-registered: the job gets time to
+    /// come up after that before it counts as failed.
+    @ObservationIgnored private var reRegisteredAt: Date?
     /// The built-in job is registered but did not come up in time (see
     /// registeredButNotRunningState): Try Again repairs the registration.
     @ObservationIgnored private var helperFailedToStart = false
@@ -310,7 +313,7 @@ final class TentacleCLIManager {
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            daemonState = .error(String(localized: "status query failed"))
+            daemonState = .error(Self.statusQueryFailedMessage)
             return
         }
 
@@ -383,7 +386,7 @@ final class TentacleCLIManager {
             }
             // Still down: tell the user why instead of spinning forever.
             var stuck = false
-            if down > Self.builtInStartGrace {
+            if down > Self.launchdStuckGrace {
                 if let checked = onDemandCheckedAt, now.timeIntervalSince(checked) < 30 {
                     stuck = launchdDomainStuck
                 } else {
@@ -393,8 +396,15 @@ final class TentacleCLIManager {
                     if stuck { KLog.diag("[Tentacle] launchd domain is in on-demand-only mode; daemon cannot start") }
                 }
             }
-            notRunningVerdict = Self.registeredButNotRunningState(down: down, launchdDomainStuck: stuck)
-        } else if running {
+            notRunningVerdict = Self.registeredButNotRunningState(
+                down: down,
+                launchdDomainStuck: stuck,
+                sinceReRegister: reRegisteredAt.map { now.timeIntervalSince($0) }
+            )
+        } else {
+            // Running, or not registered to run: the next stretch down starts
+            // a fresh grace period (a job turned off and on again later must
+            // not count the time it was off).
             notRunningSince = nil
             lastKickstartAt = nil
             launchdDomainStuck = false
@@ -524,6 +534,7 @@ final class TentacleCLIManager {
     /// exit 78); `launchctl bootout` drops it, and the next register records
     /// the binary now in the app.
     private func reRegisterBuiltIn() async {
+        reRegisteredAt = Date()
         _ = await runCapturing(binary: "/bin/launchctl", args: ["bootout", "gui/\(getuid())/\(builtIn.label)"])
         do {
             try await builtIn.service.unregister()
@@ -604,6 +615,9 @@ final class TentacleCLIManager {
 
         guard !quittingOffline else { return }
         daemonState = .starting
+        // Every explicit start gets the full grace period.
+        notRunningSince = nil
+        lastKickstartAt = nil
         do {
             let status = try builtIn.enable()
             if status == .requiresApproval {
@@ -753,17 +767,40 @@ extension TentacleCLIManager {
     nonisolated static let helperDidNotStartMessage =
         String(localized: "Kraki didn't start on this Mac. Try again, or open the logs to see why.")
 
+    /// One `kraki status --json` poll failed or timed out; the next poll
+    /// usually succeeds.
+    nonisolated static let statusQueryFailedMessage = String(localized: "status query failed")
+
+    /// The built-in daemon could not be started (the message to show), or nil.
+    /// A single failed status poll is not a start failure.
+    nonisolated static func startFailure(in state: DaemonState) -> String? {
+        guard case .error(let message) = state, message != statusQueryFailedMessage else { return nil }
+        return message
+    }
+
+    /// How long a registered built-in job may stay down before a launchd
+    /// domain stuck in on-demand-only mode is reported.
+    nonisolated static let launchdStuckGrace: TimeInterval = 45
+
     /// How long a registered built-in job may stay down (while it is
-    /// kickstarted and re-registered) before the user is told it failed.
-    nonisolated static let builtInStartGrace: TimeInterval = 45
+    /// kickstarted and re-registered) before the user is told it failed. A
+    /// healthy start after a mode switch was measured at 74 s.
+    nonisolated static let builtInStartGrace: TimeInterval = 90
+
+    /// How long the job gets to come up after a re-register before it counts
+    /// as failed.
+    nonisolated static let reRegisterGrace: TimeInterval = 30
 
     /// State for a built-in job that is registered and should run but does
     /// not: offline while it may still come up, then a problem with a reason
     /// (it was shown as a plain "offline" forever, e.g. launchd "spawn
     /// failed" exit 78 after the app was renamed or moved).
-    nonisolated static func registeredButNotRunningState(down: TimeInterval, launchdDomainStuck: Bool) -> DaemonState {
-        guard down > builtInStartGrace else { return .stopped }
-        return .error(launchdDomainStuck ? launchdStuckMessage : helperDidNotStartMessage)
+    nonisolated static func registeredButNotRunningState(
+        down: TimeInterval, launchdDomainStuck: Bool, sinceReRegister: TimeInterval?
+    ) -> DaemonState {
+        if launchdDomainStuck, down > launchdStuckGrace { return .error(launchdStuckMessage) }
+        guard down > builtInStartGrace, (sinceReRegister ?? .infinity) > reRegisterGrace else { return .stopped }
+        return .error(helperDidNotStartMessage)
     }
 
     /// Quit Kraki and go offline: stop the daemon and never start it again

@@ -16,6 +16,9 @@ struct TentaclePane: View {
 
     @AppStorage("tentacle.autostart") private var autostart: Bool = false
     @State private var switching = false
+    /// Bumped when a mode switch is cancelled, so the radio group redraws
+    /// with the mode still in use instead of the one the user clicked.
+    @State private var modePickerEpoch = 0
 
     var body: some View {
         Form {
@@ -90,6 +93,7 @@ struct TentaclePane: View {
                 // Switching restarts Kraki here: ask first while turns run.
                 if target != tentacleCLI.mode,
                    !MacReconnectConfirmation.confirm(appState: appState, tentacleCLI: tentacleCLI, action: .switchMode) {
+                    modePickerEpoch += 1
                     return
                 }
                 switching = true
@@ -103,6 +107,7 @@ struct TentaclePane: View {
             Text("External kraki CLI").tag(TentacleMode.external)
         }
         .pickerStyle(.radioGroup)
+        .id(modePickerEpoch)
         .disabled(switching || (tentacleCLI.externalCLI == nil && tentacleCLI.mode == .builtIn))
 
         if tentacleCLI.mode == .builtIn {

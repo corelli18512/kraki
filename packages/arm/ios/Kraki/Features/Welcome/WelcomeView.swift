@@ -357,7 +357,9 @@ struct WelcomeView: View {
     private var builtInAttentionCard: AnyView? {
         guard tentacleCLI.mode == .builtIn, BuiltInTentacle.thisMacRole != .remoteOnly else { return nil }
         if case .needsApproval = tentacleCLI.daemonState { return AnyView(loginItemsCard) }
-        if case .error(let message) = tentacleCLI.daemonState { return AnyView(daemonErrorCard(message)) }
+        if let message = TentacleCLIManager.startFailure(in: tentacleCLI.daemonState) {
+            return AnyView(daemonErrorCard(message))
+        }
         if case .running = tentacleCLI.daemonState, tentacleCLI.fdaStatus == "denied", !fdaReminderDismissed {
             return AnyView(fullDiskAccessCard)
         }

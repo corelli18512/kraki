@@ -14,7 +14,28 @@ final class RelayOutageReconnectTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(Int(seconds * 1_000)))
     }
 
+    /// True when something accepts TCP connections on 127.0.0.1:`port`.
+    private static func somethingListens(on port: UInt16) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+    }
+
     func testRelayBackAfterAnOutageIsPickedUpWithinSeconds() async throws {
+        // The outage is simulated by nothing listening on the port.
+        guard !Self.somethingListens(on: port) else {
+            XCTFail("port \(port) is in use; the relay outage cannot be simulated")
+            return
+        }
         let client = WebSocketClient(relayURL: "ws://127.0.0.1:\(port)")
         defer { client.disconnect() }
         client.connect()

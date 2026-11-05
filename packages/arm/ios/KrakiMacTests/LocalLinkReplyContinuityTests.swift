@@ -41,18 +41,45 @@ final class LocalLinkReplyContinuityTests: XCTestCase {
             errorMessage: nil)
     }
 
-    func testRouteSwitchDuringAReplyKeepsTheReplyOnScreen() throws {
+    /// A reply on screen for the turn that began at seq 1.
+    private func makeAppShowingAReply() throws -> AppState {
         let app = try makeApp()
         app.messageStore.persist("S", [ChatMessage(type: "user_message", seq: 1, sessionId: "S", deviceId: nil,
                                                    timestamp: nil, payload: ["content": AnyCodable("go")])])
         app.messageStore.beginCardTurn("S")
         app.messageStore.applyCardMessage("S", "Half a reply", reset: true)
         XCTAssertEqual(app.messageStore.visibleCard("S")?.text, "Half a reply")
+        return app
+    }
 
+    func testRouteSwitchDuringAReplyKeepsTheReplyOnScreen() throws {
+        let app = try makeAppShowingAReply()
+
+        app.localLinkDidChange(tentacleId: "T1", linked: false)
         app.applySessionSubscriptionSnapshot(snapshotAck(draft: "Half a reply, and more"))
 
         XCTAssertEqual(app.messageStore.visibleCard("S")?.text, "Half a reply, and more",
                        "the reply must not vanish until the catch-up answers")
+    }
+
+    func testRouteSwitchIntoALaterTurnStillWaitsForItsMessages() throws {
+        let app = try makeAppShowingAReply()
+
+        // The card on screen is from an earlier turn; the snapshot's draft is not its continuation.
+        app.localLinkDidChange(tentacleId: "T1", linked: false)
+        app.applySessionSubscriptionSnapshot(snapshotAck(draft: "A later turn's reply"))
+
+        XCTAssertNil(app.messageStore.visibleCard("S"),
+                     "a later turn's draft must wait until the turns before it are here")
+    }
+
+    func testReconnectWithoutARouteSwitchStillWaitsForTheCatchUp() throws {
+        let app = try makeAppShowingAReply()
+
+        // A plain reconnect (iOS foreground, Head reconnect) cannot tell it is the same turn.
+        app.applySessionSubscriptionSnapshot(snapshotAck(draft: "Half a reply, and more"))
+
+        XCTAssertNil(app.messageStore.visibleCard("S"))
     }
 
     func testOpeningASessionMidTurnStillWaitsForItsUserMessage() throws {

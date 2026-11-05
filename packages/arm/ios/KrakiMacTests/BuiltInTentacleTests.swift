@@ -316,17 +316,33 @@ final class BuiltInTentacleTests: XCTestCase {
     /// may still come up, then a problem the user can act on, not a plain
     /// "offline" forever.
     func testARegisteredJobThatNeverRunsBecomesAProblem() {
-        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 0, launchdDomainStuck: false), .stopped)
-        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 30, launchdDomainStuck: false), .stopped)
-        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 46, launchdDomainStuck: false),
-                       .error(TentacleCLIManager.helperDidNotStartMessage))
-        XCTAssertEqual(TentacleCLIManager.registeredButNotRunningState(down: 46, launchdDomainStuck: true),
-                       .error(TentacleCLIManager.launchdStuckMessage))
+        func state(down: TimeInterval, stuck: Bool = false, sinceReRegister: TimeInterval? = 60) -> TentacleCLIManager.DaemonState {
+            TentacleCLIManager.registeredButNotRunningState(
+                down: down, launchdDomainStuck: stuck, sinceReRegister: sinceReRegister)
+        }
+        XCTAssertEqual(state(down: 0), .stopped)
+        XCTAssertEqual(state(down: 30), .stopped)
+        // A healthy start was measured at 74 s: still coming up, not a problem.
+        XCTAssertEqual(state(down: 75), .stopped)
+        XCTAssertEqual(state(down: 91), .error(TentacleCLIManager.helperDidNotStartMessage))
+        // The self-heal re-register just ran: give it time first.
+        XCTAssertEqual(state(down: 91, sinceReRegister: 10), .stopped)
+        XCTAssertEqual(state(down: 91, sinceReRegister: nil), .error(TentacleCLIManager.helperDidNotStartMessage))
+        XCTAssertEqual(state(down: 46, stuck: true), .error(TentacleCLIManager.launchdStuckMessage))
         let status = MacOnlineStatus.resolve(
             installState: .available(path: "/x/kraki", version: "1"),
-            daemonState: TentacleCLIManager.registeredButNotRunningState(down: 60, launchdDomainStuck: false),
+            daemonState: state(down: 120),
             mode: .builtIn, role: .runsAgents)
         XCTAssertTrue(status.needsFixing, "the menu bar badges it and Bring This Mac Online retries")
         XCTAssertEqual(status.detail, TentacleCLIManager.helperDidNotStartMessage)
+    }
+
+    /// The idle pane swaps the composer for the couldn't-run card only for a
+    /// real start failure, not for one failed status poll (K-351).
+    func testOnlyAStartFailureReplacesTheComposer() {
+        XCTAssertNil(TentacleCLIManager.startFailure(in: .error(TentacleCLIManager.statusQueryFailedMessage)))
+        XCTAssertNil(TentacleCLIManager.startFailure(in: .stopped))
+        XCTAssertEqual(TentacleCLIManager.startFailure(in: .error(TentacleCLIManager.helperDidNotStartMessage)),
+                       TentacleCLIManager.helperDidNotStartMessage)
     }
 }

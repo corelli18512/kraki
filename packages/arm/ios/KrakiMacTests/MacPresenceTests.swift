@@ -226,14 +226,14 @@ final class MacPresenceTests: XCTestCase {
 
     /// Quitting right after launch, while launch was still bringing this Mac
     /// online, left the service registered and the Mac online with no app
-    /// (K-118). Once the quit takes the Mac offline nothing starts it again.
-    func testQuittingOfflineBlocksALaunchStillGoingOnline() async {
+    /// (K-118). The quit marks the manager so that startBuiltIn and
+    /// reRegisterBuiltIn refuse to register the job again. Seam test only:
+    /// registering the real job is not possible in tests.
+    func testGoingOfflineForQuitIsRemembered() async {
         let tentacle = TentacleCLIManager()
         XCTAssertFalse(tentacle.quittingOffline)
         await tentacle.goOfflineForQuit()
         XCTAssertTrue(tentacle.quittingOffline)
-        await tentacle.startDaemon()
-        XCTAssertNotEqual(tentacle.daemonState, .starting)
     }
 
     func testQuitEventDescriptorsAreClassified() {

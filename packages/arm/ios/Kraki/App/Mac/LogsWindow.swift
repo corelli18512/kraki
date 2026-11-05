@@ -167,8 +167,7 @@ struct LogTextView: NSViewRepresentable {
         let changed = textView.string != text
         if changed { textView.string = text }
         guard follow, changed || !wasFollowing else { return }
-        if let container = textView.textContainer { textView.layoutManager?.ensureLayout(for: container) }
-        textView.scrollToEndOfDocument(nil)
+        textView.scrollRangeToVisible(NSRange(location: (textView.string as NSString).length, length: 0))
     }
 }
 
