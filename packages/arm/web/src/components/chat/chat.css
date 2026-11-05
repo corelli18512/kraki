@@ -466,6 +466,11 @@
   color: var(--k-text);
   font: 13px/18px var(--k-font);
 }
+/* Touch: a long press opens the message menu (MessageBubble), like the iOS
+ * bubble menu, instead of the browser's one-word selection (K-107, K-237). */
+@media (hover: none) and (pointer: coarse) {
+  .kbubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
 .dark .kmessage-menu {
   --k-bg: #262626;
   --k-text: #f2f2f2;

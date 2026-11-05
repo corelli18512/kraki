@@ -182,6 +182,7 @@
     "actions": "Message actions",
     "copySelection": "Copy Selection",
     "copy": "Copy",
+    "copyCode": "Copy Code",
     "showSteps": "Show Steps"
   },
   "steps": {
