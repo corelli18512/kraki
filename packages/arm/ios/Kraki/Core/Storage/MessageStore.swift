@@ -1091,8 +1091,9 @@ final class MessageStore {
         var sessionTraces = traces[sessionId] ?? [:]
         sessionTraces[bubbleSeq] = entries
         if sessionTraces.count > Self.maxTracesPerSession {
-            // Drop the oldest turns (lowest bubble seq) first.
-            for seq in sessionTraces.keys.sorted().prefix(sessionTraces.count - Self.maxTracesPerSession) {
+            // Drop the oldest turns (lowest bubble seq) first, never the one
+            // just pulled: an old turn's Steps were re-pulled to be shown.
+            for seq in sessionTraces.keys.filter({ $0 != bubbleSeq }).sorted().prefix(sessionTraces.count - Self.maxTracesPerSession) {
                 sessionTraces.removeValue(forKey: seq)
             }
         }
