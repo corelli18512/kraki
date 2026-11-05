@@ -58,6 +58,16 @@
         }
       }
     },
+    "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥加密。如果你在该电脑上重新安装了 Kraki，在你于该电脑上运行 `kraki connect` 并扫描新二维码之前，它无法读取新消息。如果没有，照常使用即可。"
+          }
+        }
+      }
+    },
     "This Mac is reconnecting…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9786,16 +9796,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "中继服务器未报告与你扫码的电脑匹配的密钥。消息只会使用 Kraki 信任的密钥加密。如果问题持续出现，请联系支持。"
-          }
-        }
-      }
-    },
-    "The relay reported a new encryption key for %@. Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥，因此无法向该电脑发送消息。如果你在该电脑上重新安装了 Kraki，请运行 `kraki connect` 并扫描新二维码。"
           }
         }
       }

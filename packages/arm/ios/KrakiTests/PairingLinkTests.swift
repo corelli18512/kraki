@@ -53,6 +53,18 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertEqual(app.connectionStatus, .authenticating)
     }
 
+    /// K-303: only the relay reports the new key, so messages may still reach
+    /// the computer; the warning must not say they won't.
+    @MainActor
+    func testKeyChangeWarningDoesNotClaimMessagesFail() throws {
+        let app = AppState.makeUnitTestHost()
+        app.deviceStore.setDevices([tentacle("pc", key: "K1")])
+        app.deviceStore.keyMismatchDeviceIds = ["pc"]
+        let message = try XCTUnwrap(app.keyWarning?.message)
+        XCTAssertFalse(message.contains("won't go through"), message)
+        XCTAssertTrue(message.contains("Kraki keeps encrypting to the key it trusted."), message)
+    }
+
     func testFingerprintMatchesTentacle() {
         XCTAssertEqual(DeviceKeyPins.fingerprint("abc"), "ungWv48Bz-pBQUDeXa4iIw")
     }
