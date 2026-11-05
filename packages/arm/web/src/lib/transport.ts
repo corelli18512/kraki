@@ -491,6 +491,21 @@ export class KrakiTransport {
     getStore().setStatus('disconnected');
   }
 
+  /** The relay refused this sign-in for a reason that may pass (auth backend
+   *  down, signing-key refresh): close the socket and retry on the reconnect
+   *  backoff instead of at once (K-198). The outage clock keeps running, so
+   *  repeated refusals slow down like any other outage. */
+  retryLater() {
+    this.replacedElsewhere = false;
+    this.intentionalClose = true;
+    this.cleanup();
+    this.ws?.close();
+    this.ws = null;
+    this.intentionalClose = false;
+    getStore().setStatus('disconnected');
+    this.scheduleReconnect();
+  }
+
   /** Pair with a scanned QR code — set relay + token and reconnect. */
   pairWithToken(relay: string, token: string) {
     this.disconnect();

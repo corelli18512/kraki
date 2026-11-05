@@ -178,6 +178,8 @@ export function processAuthError(
     setStoredDeviceId: (id: string) => void;
     disconnect: () => void;
     connect: () => void;
+    /** Drop this connection and retry on the reconnect backoff (K-198). */
+    reconnectLater: () => void;
     redirectToRelay: (url: string) => void;
     /** The relay that sent this error. */
     currentRelay: string;
@@ -188,8 +190,9 @@ export function processAuthError(
   // The redirect is saved and then signed into with this device's key, so it
   // is followed only to a trusted relay (same rule as the Tentacle). An
   // untrusted one is handled like any other non-fatal auth error.
-  if (authError.code === 'wrong_region' && authError.redirect
-    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect)) {
+  const refusedRedirect = authError.code === 'wrong_region' && !!authError.redirect
+    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect);
+  if (refusedRedirect) {
     logger.warn('Ignoring region redirect to an untrusted relay', authError.redirect);
   } else if (authError.code === 'wrong_region' && authError.redirect) {
     // Save new relay URL so the page reload connects to the correct region
@@ -227,14 +230,16 @@ export function processAuthError(
           ? t('settings:auth.signInAgain')
           : t('settings:auth.scanAgain'),
       );
+      deps.disconnect();
+      deps.connect();
     } else {
-      // Transient: keep the paired identity and just reconnect — the next
-      // challenge attempt succeeds once the backend recovers.
+      // Transient: keep the paired identity and reconnect on the backoff
+      // schedule — the next challenge attempt succeeds once the backend
+      // recovers. Retrying at once hammered the relay many times a second.
       logger.warn('Auth failed for stored device (transient), keeping credentials', { code: authError.code });
-      store.setLastError(t('settings:auth.reconnecting'));
+      store.setLastError(t(refusedRedirect ? 'settings:auth.untrustedRedirect' : 'settings:auth.reconnecting'));
+      deps.reconnectLater();
     }
-    deps.disconnect();
-    deps.connect();
   } else {
     store.setReconnectState(0, null);
     store.setLastError(

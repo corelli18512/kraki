@@ -8,14 +8,14 @@ vi.mock('../hooks/useTheme', () => ({ setTheme: vi.fn() }));
 import { processAuthError } from './auth';
 
 beforeEach(() => { localStorage.clear(); localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.kraki.chat', deviceId: 'r2-web' })); });
-function deps() { return { clearStoredDeviceId: vi.fn(), setStoredDeviceId: vi.fn(), disconnect: vi.fn(), connect: vi.fn(), redirectToRelay: vi.fn() }; }
+function deps() { return { clearStoredDeviceId: vi.fn(), setStoredDeviceId: vi.fn(), disconnect: vi.fn(), connect: vi.fn(), reconnectLater: vi.fn(), redirectToRelay: vi.fn() }; }
 
 describe('PR577 round2 Web revocation policy', () => {
   it('key_changed is a retry, never a pairing wipe', () => {
     const d = deps(); processAuthError({ code: 'key_changed', message: 'refresh signing key' }, 'r2-web', d);
     expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
     expect(localStorage.getItem('kraki_device')).not.toBeNull();
-    expect(d.disconnect).toHaveBeenCalledOnce(); expect(d.connect).toHaveBeenCalledOnce();
+    expect(d.reconnectLater).toHaveBeenCalledOnce(); expect(d.connect).not.toHaveBeenCalled();
   });
   it('unknown_device clears a removed identity and does not silently recreate it', () => {
     const d = deps(); processAuthError({ code: 'unknown_device', message: 'removed' }, 'r2-web', d);

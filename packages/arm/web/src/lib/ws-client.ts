@@ -269,6 +269,12 @@ export class KrakiWSClient {
   }
 
   disconnect() {
+    this.endConnection();
+    this.transport.disconnect();
+  }
+
+  /** Everything `disconnect` ends on this side, leaving the transport alone. */
+  private endConnection(): void {
     this.identityEpoch++;
     this.encryptedQueue = [];
     this.inboundCrypto.clear();
@@ -283,7 +289,6 @@ export class KrakiWSClient {
     this.routeChanges = 0;
     this.clearReplayTracking();
     this.endConnectionScope();
-    this.transport.disconnect();
   }
 
   onMessage(handler: MessageHandler) {
@@ -1388,6 +1393,7 @@ export class KrakiWSClient {
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
+          reconnectLater: () => { this.endConnection(); this.transport.retryLater(); },
           redirectToRelay: (url: string) => { this.endConnectionScope(); this.transport.redirectToRelay(url); },
           currentRelay: this.transport.url,
         });
