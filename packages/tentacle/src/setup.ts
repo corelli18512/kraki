@@ -701,6 +701,7 @@ export async function runSetup(): Promise<KrakiConfig> {
   const config: KrakiConfig = {
     relay,
     authMethod: 'github_token',
+    ...(username !== 'unknown' && { account: { login: username } }),
     device: { name, id: getOrCreateDeviceId() },
     logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };
@@ -788,6 +789,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
   const config: KrakiConfig = {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
+    ...(user && user !== 'unknown' && { account: { login: user } }),
     device: { name, id: getOrCreateDeviceId() },
     logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };

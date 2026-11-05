@@ -45,6 +45,7 @@ import {
   saveGitHubToken,
 } from './config.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
+import { adoptAccountDataOwner, loadAccountDataOwner } from './account-switch.js';
 
 export type SetupJsonEvent =
   | { event: 'start'; version: string }
@@ -284,6 +285,14 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     deps.emit({ event: 'relay', relay, region, fallback });
 
     const existing = loadConfig();
+    // Installs from before account.json: name the account the data in place
+    // belongs to while its token is still here, so the daemon can move it
+    // aside if this sign-in is another account.
+    if (existing && !loadAccountDataOwner()) {
+      const saved = source === 'saved' ? null : loadGitHubToken();
+      const previous = existing.account?.login ?? (saved ? await githubUser(deps, saved) : null);
+      if (previous) adoptAccountDataOwner(previous);
+    }
     const deviceName = getArg(args, '--device-name')
       ?? existing?.device.name
       ?? hostname().replace(/\.local$/, '');
@@ -291,6 +300,7 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
       ...(existing ?? {}),
       relay,
       authMethod: 'github_token',
+      account: { login: username },
       device: { name: deviceName, id: getOrCreateDeviceId() },
       logging: existing?.logging ?? { verbosity: DEFAULT_LOG_VERBOSITY },
     };

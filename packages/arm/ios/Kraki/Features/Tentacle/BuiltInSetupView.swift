@@ -150,7 +150,8 @@ struct BuiltInSetupView: View {
             Task {
                 await tentacleCLI.refreshDaemonState()
                 if signingInAgain {
-                    // Possibly another account: the running Kraki picks it up.
+                    // Possibly another account: on restart Kraki sets the previous
+                    // account's device and sessions aside (account-switch.ts).
                     if role != .remoteOnly { await tentacleCLI.restartDaemon() }
                     finished = true
                     onFinished()
