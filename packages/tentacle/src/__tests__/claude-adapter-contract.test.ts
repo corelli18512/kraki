@@ -101,6 +101,17 @@ describe('ClaudeAdapter — audit findings C1–C7', () => {
     expect(content).toMatch(/^look\n\n\[An attached image was too large to send/);
   });
 
+  it('prepares images before the turn begins, so a steer meanwhile cannot land in the wrong turn (K-285)', async () => {
+    await createClaude(); cc().sessions.get('s')!.query = {};
+    const iterator = cc().sessions.get('s')!.inputIterable[Symbol.asyncIterator]();
+    const beginTurn = vi.spyOn(cc().sessions.get('s')!.turn, 'beginTurn');
+    const sending = claude.sendMessage('s', 'look', [{ type: 'image', data: 'A'.repeat(6 * 1024 * 1024), mimeType: 'image/png' }]);
+    expect(beginTurn).not.toHaveBeenCalled();
+    await sending;
+    expect(beginTurn).toHaveBeenCalledTimes(1);
+    expect(((await iterator.next()).value as { message: { content: unknown } }).message.content).toMatch(/^look/);
+  });
+
   it('C1 also passes images on the very first (lazy) prompt', async () => {
     await createClaude();
     await claude.sendMessage('s', 'first', [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }]);
