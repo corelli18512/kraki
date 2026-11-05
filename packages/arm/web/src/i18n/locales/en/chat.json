@@ -69,7 +69,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "working": "Agent is working",
-    "processLost": "Agent process was lost"
+    "processLost": "Agent process was lost",
+    "attachmentsNotKept": "Attachments were too large to keep when the page reloaded. Attach them again, or retry to send the text only."
   },
   "header": {
     "modePicker": "Session mode picker",
