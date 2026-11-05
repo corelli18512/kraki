@@ -213,6 +213,52 @@ describe('KrakiWSClient', () => {
       expect(state.devices.size).toBe(1);
     });
 
+    it('K-032: a browser tab tells the Head whether the user is looking at it', async () => {
+      const visibility = () => lastWsInstance.sentMessages.map((m) => JSON.parse(m)).filter((m) => m.type === 'app_visibility');
+      let hidden = false;
+      let focused = true;
+      const stateSpy = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible');
+      const focusSpy = vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+      try {
+        for (const [features, expected] of [[['app_visibility'], 1], [[], 0], [undefined, 0]] as const) {
+          const client = new KrakiWSClient('ws://localhost:9999');
+          client.connect();
+          await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+          lastWsInstance.sentMessages = [];
+          lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [], ...(features ? { features } : {}) });
+          expect(visibility(), String(features)).toEqual(expected ? [{ type: 'app_visibility', visible: true }] : []);
+          client.disconnect();
+        }
+
+        // A tab that signs in while hidden is pushed to at once.
+        hidden = true;
+        const client = new KrakiWSClient('ws://localhost:9999');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance.sentMessages = [];
+        lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [], features: ['app_visibility'] });
+        expect(visibility()).toEqual([{ type: 'app_visibility', visible: false }]);
+
+        // Coming on screen, losing focus, and hiding again are reported once each.
+        lastWsInstance.sentMessages = [];
+        hidden = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('focus'));
+        focused = false;
+        window.dispatchEvent(new Event('blur'));
+        hidden = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(visibility()).toEqual([
+          { type: 'app_visibility', visible: true },
+          { type: 'app_visibility', visible: false },
+        ]);
+        client.disconnect();
+      } finally {
+        stateSpy.mockRestore();
+        focusSpy.mockRestore();
+      }
+    });
+
     it('does not send replay requests on auth_ok (session sync is triggered by session_list)', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();

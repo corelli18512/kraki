@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
 import { isImeComposing } from '../../lib/ime';
+import { copyText } from '../../lib/clipboard';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
 import { Check, Copy, GitFork, Pencil, Trash2 } from 'lucide-react';
@@ -140,8 +141,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 type="button"
                 aria-label={copied ? t('sessionInfo.idCopied') : t('sessionInfo.copyId')}
                 onClick={() => {
-                  void navigator.clipboard
-                    .writeText(session.id)
+                  void copyText(session.id)
                     .then(() => {
                       clearTimeout(copyTimer.current);
                       setCopied(true);

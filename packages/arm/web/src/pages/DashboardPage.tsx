@@ -13,6 +13,8 @@ import { DesktopSetup } from '../components/desktop/DesktopSetup';
 import { StartSessionView } from '../components/sessions/NewSessionComposer';
 import { useNarrow } from '../hooks/useNarrow';
 import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
+import { isOfficialRelay } from '../lib/pairing-link';
+import { SettingsAlert } from '../components/layout/SettingsControls';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -35,6 +37,8 @@ export function DashboardPage() {
   const oauthAvailable = supportsOAuthLogin(githubClientId);
   const hasCredentials = !!loadStoredDevice()?.deviceId;
   const [scannerOpen, setScannerOpen] = useState(false);
+  /** A scanned code for a relay that is not Kraki's, waiting for the user. */
+  const [pendingPairing, setPendingPairing] = useState<{ relay: string; token: string; host: string } | null>(null);
   const sessionCount = useStore((s) => s.sessions.size);
   const wide = !useNarrow();
 
@@ -45,7 +49,10 @@ export function DashboardPage() {
       const relay = parsed.searchParams.get('relay');
       const token = parsed.searchParams.get('token');
       if (relay && token) {
-        wsClient.pairWithToken(relay, token);
+        // Same rule as a pairing link opened in the browser (main.tsx): a
+        // crafted code must not sign this browser into a stranger's server.
+        if (isOfficialRelay(relay)) wsClient.pairWithToken(relay, token);
+        else setPendingPairing({ relay, token, host: new URL(relay).host });
       }
     } catch { /* invalid URL — ignored */ }
   }, []);
@@ -135,6 +142,20 @@ export function DashboardPage() {
 
         {scannerOpen && (
           <QrScanner onScan={handleQrScan} onClose={() => setScannerOpen(false)} />
+        )}
+
+        {pendingPairing && (
+          <SettingsAlert
+            viewport
+            title={t('pairing.confirmTitle')}
+            body={t('pairing.confirmDetail').replace('<b></b>', pendingPairing.host)}
+            confirm={t('pairing.connect')}
+            onCancel={() => setPendingPairing(null)}
+            onConfirm={() => {
+              setPendingPairing(null);
+              wsClient.pairWithToken(pendingPairing.relay, pendingPairing.token);
+            }}
+          />
         )}
       </div>
     );

@@ -79,13 +79,33 @@ function formatBody(preview) {
   return preview.summary;
 }
 
+// ── Which Session is on screen ──────────────────────────
+
+/** The Session open in a window the user is looking at (visible and
+ *  focused), or null. */
+async function sessionOnScreen() {
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const client of windows) {
+    if (!client.focused || client.visibilityState !== 'visible') continue;
+    const prefix = new URL('session/', self.registration.scope).pathname;
+    const path = new URL(client.url).pathname;
+    if (path.startsWith(prefix)) return decodeURIComponent(path.slice(prefix.length).split('/')[0]);
+  }
+  return null;
+}
+
 // ── Push event handler ──────────────────────────────────
 
+// A connected tab tells the Head whether the user is looking at it
+// (ws-client.ts reportAppVisibility), so pushes arrive while it is hidden or
+// unfocused. A push that races the tab coming back to the Session it is
+// about is left out.
 self.addEventListener('push', (event) => {
   const handlePush = async () => {
     let title = 'Kraki';
     let body = 'Needs your attention';
     let data = {};
+    let nid;
 
     if (event.data) {
       try {
@@ -96,6 +116,7 @@ self.addEventListener('push', (event) => {
             if (preview) {
               body = formatBody(preview);
               if (preview.sessionId) data.sessionId = preview.sessionId;
+              if (typeof preview.nid === 'string') nid = preview.nid;
             }
           } catch {
             // Decryption failed — use generic message
@@ -106,13 +127,17 @@ self.addEventListener('push', (event) => {
       }
     }
 
+    if (data.sessionId && await sessionOnScreen() === data.sessionId) return;
+
+    // One notification per preview: a shared tag made a reply replace a
+    // pending question. The preview id still collapses the same preview
+    // delivered twice.
     return self.registration.showNotification(title, {
       body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       data,
-      tag: 'kraki-notification',
-      renotify: true,
+      ...(nid ? { tag: 'kraki-' + nid } : {}),
     });
   };
 
@@ -134,6 +159,8 @@ self.addEventListener('notificationclick', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if ('focus' in client) {
+          // An open tab opens the Session itself (App.tsx), without a reload.
+          if (sessionId) client.postMessage({ type: 'kraki:open-session', sessionId });
           return client.focus();
         }
       }
