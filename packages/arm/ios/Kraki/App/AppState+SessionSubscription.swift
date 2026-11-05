@@ -111,6 +111,10 @@ extension AppState: SessionSubscriptionHost {
             }
         }
 
+        // A re-subscribe during a turn this device already shows (the route
+        // switched between the local link and the Head) must not take the
+        // reply off screen while the catch-up runs: it is the same turn.
+        let showedLiveTurn = messageStore.visibleCard(sessionId) != nil
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]
         let draft = cardJSON["draft"] as? String ?? ""
         let actionPayload = cardJSON["action"].map { ["action": $0] }
@@ -125,7 +129,15 @@ extension AppState: SessionSubscriptionHost {
         let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
         // The card belongs to the turn after `spineHeadSeq`: show it only once
         // this device has the messages up to there (catch-up comes next).
-        messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+        // Not when the card was already on screen for this live turn: the
+        // missing rows are usually tool events never stored here, and holding
+        // made the whole reply vanish until the catch-up answered.
+        let keepsShowing = showedLiveTurn && (digest.state == .active || digest.state == .compacting)
+        if keepsShowing {
+            messageStore.releaseCardHold(sessionId)
+        } else {
+            messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+        }
         messageProvider?.setTentacleInfo(
             sessionId: sessionId,
             lastSeq: spineHeadSeq,
