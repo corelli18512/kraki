@@ -32,6 +32,7 @@ import './settings.css';
 import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
 import { deviceLastOnline } from '../../lib/device-last-online';
+import { copyText } from '../../lib/clipboard';
 import {
   notificationsEnabled as readNotificationsEnabled,
   setNotificationsEnabled as saveNotificationsEnabled,
@@ -540,8 +541,7 @@ export function SettingsPanel({
         type="button"
         className="kp-button"
         onClick={() => {
-          void navigator.clipboard
-            .writeText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
+          void copyText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
             .then(() => setDiagCopied(true))
             .catch(() => setError({ key: 'copyDiagnostics' }));
         }}
