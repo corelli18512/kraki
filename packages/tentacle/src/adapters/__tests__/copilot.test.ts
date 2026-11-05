@@ -142,6 +142,10 @@ vi.mock('node:module', () => ({
   },
 }));
 
+// The packaged (SEA) build waits differently for a late Copilot CLI.
+const sea = vi.hoisted(() => ({ value: false }));
+vi.mock('node:sea', () => ({ isSea: () => sea.value }));
+
 // Mock execSync so we don't actually call `gh auth token`
 import { execSync as realExecSync } from 'node:child_process';
 vi.mock('node:child_process', () => ({
@@ -315,6 +319,27 @@ describe('CopilotAdapter', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('K-281: Copilot CLI missing at start in the packaged build', () => {
+    afterEach(() => { sea.value = false; });
+    it('fails at once instead of holding daemon readiness for 30 s (the agent retry brings it up later)', async () => {
+      sea.value = true;
+      mockedExecSync.mockImplementation((command: string) => {
+        if (command.includes('command -v copilot') || command.includes('where.exe copilot')) throw new Error('not found');
+        return 'fake-gh-token\n';
+      });
+      vi.useFakeTimers();
+      try {
+        const started = adapter.start().then(() => 'started', (err: Error) => err.message);
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        const outcome = await Promise.race([started, Promise.resolve('pending')]);
+        expect(outcome).toMatch(/Copilot CLI not found/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('resolveCopilotCliPath', () => {
