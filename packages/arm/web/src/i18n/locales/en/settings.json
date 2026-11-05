@@ -166,6 +166,7 @@
     "disablePush": "Couldn’t turn off push notifications.",
     "blockedNotifications": "Notifications are blocked. Turn them on in site Settings.",
     "updatePush": "Couldn’t update push notifications.",
+    "pushRefused": "The relay didn’t accept push notifications from this browser. Notifications still appear while Kraki is open.",
     "copyDiagnostics": "Couldn’t copy diagnostics."
   },
   "account": {

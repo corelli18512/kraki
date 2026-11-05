@@ -26,7 +26,30 @@ export function browserDeviceName(ua: string): string {
   return os ? `${browser} on ${os}` : `Web ${browser}`;
 }
 
-/** Send the initial auth message. Returns true if a pairing token was consumed. */
+/** Load or create this browser's keys. False when the browser cannot keep
+ *  them (no WebCrypto outside a secure context, IndexedDB blocked): signing
+ *  in without them registers a device that can neither decrypt nor answer the
+ *  next visit's challenge, so the caller must not send auth. */
+export async function ensureDeviceKeys(keyStore: AppKeyStore): Promise<boolean> {
+  if (keyStore.isReady()) return true;
+  try {
+    await keyStore.init();
+    return true;
+  } catch (err) {
+    logger.error('Encryption keys unavailable in this browser:', err);
+    return false;
+  }
+}
+
+/** False when this browser can never keep keys: a plain-http page (no
+ *  WebCrypto), or no IndexedDB. Any other init() failure may be temporary
+ *  (WebKit drops its IndexedDB connection after backgrounding). */
+export function browserCanKeepKeys(): boolean {
+  return window.isSecureContext !== false && !!globalThis.crypto?.subtle && typeof indexedDB !== 'undefined';
+}
+
+/** Send the initial auth message; the keys must be ready (`ensureDeviceKeys`).
+ *  Returns true if a pairing token was consumed. */
 export async function sendAuth(
   send: (msg: Record<string, unknown>) => void,
   keyStore: AppKeyStore,
@@ -41,13 +64,8 @@ export async function sendAuth(
   // Kraki for Mac does with its tentacle's), keeping its device id.
   const desktopToken = desktopCredentials()?.token;
 
-  // Wait for key store if not ready
-  if (!keyStore.isReady()) {
-    try { await keyStore.init(); } catch { /* continue without E2E */ }
-  }
-
-  const publicKey = keyStore.isReady() ? await keyStore.getSigningPublicKey() : undefined;
-  const encryptionKey = keyStore.isReady() ? await keyStore.getPublicKey() : undefined;
+  const publicKey = await keyStore.getSigningPublicKey();
+  const encryptionKey = await keyStore.getPublicKey();
 
   const usedToken = !!pairingToken;
   const device = { name: deviceName, role: 'app', kind: desktopBridge ? 'desktop' : 'web', deviceId: storedDeviceId, publicKey, encryptionKey };

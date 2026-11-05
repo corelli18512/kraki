@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useAccountDeletion } from '../../lib/account-deletion';
 import { SettingsPanel, providerLabel, performanceDataFooter } from './SettingsPanel';
 import { diag } from '../../lib/diag';
 import { useStore } from '../../hooks/useStore';
@@ -19,6 +20,7 @@ beforeEach(() => {
   push.isPushSubscribed.mockResolvedValue(false);
   push.subscribeToPush.mockResolvedValue('subscription');
   push.unsubscribeFromPush.mockResolvedValue(true);
+  commands.registerPushToken.mockResolvedValue('registered');
   localStorage.removeItem('kraki:notifications.enabled');
   useStore.getState().reset();
   useStore.setState({ status: 'connected', user: { id: 'u1', login: 'tester', provider: 'open' }, deviceId: 'self', archiveInfo: new Map([['computer', { count: 0, days: 14 }]]) });
@@ -98,6 +100,32 @@ describe('SettingsPanel native preferences parity', () => {
     expect(push.subscribeToPush).toHaveBeenCalledWith('public-key');
     expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
   });
+  it('K-227: a push token the relay refuses does not read as on and gives a localized error', async () => {
+    push.supported = true;
+    push.isPushSubscribed.mockResolvedValue(false);
+    commands.registerPushToken.mockResolvedValue('refused');
+    localStorage.setItem('kraki:notifications.enabled', '0');
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await screen.findByText('The relay didn’t accept push notifications from this browser. Notifications still appear while Kraki is open.');
+    expect(push.unsubscribeFromPush).toHaveBeenCalled();
+    expect(screen.queryByText('Push notifications are on, including when this browser is closed.')).not.toBeInTheDocument();
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
+  });
+  it('K-227: offline or unanswered, push is not reported as refused and the subscription stays', async () => {
+    push.supported = true;
+    push.isPushSubscribed.mockResolvedValue(false);
+    commands.registerPushToken.mockResolvedValue('unconfirmed');
+    localStorage.setItem('kraki:notifications.enabled', '0');
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await screen.findByText('Couldn’t update push notifications.');
+    expect(push.unsubscribeFromPush).not.toHaveBeenCalled();
+    expect(screen.queryByText(/didn’t accept push/)).not.toBeInTheDocument();
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
+  });
   it('shows open-auth identity and retains two-stage account deletion safety', () => {
     open(); tab('Account');
     expect(screen.getByText('Signed in via Open')).toBeInTheDocument();
@@ -113,6 +141,20 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.getByTestId('delete-final').querySelector('.kp-alert-actions')).toHaveClass('is-stacked');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(commands.requestAccountDeletion).not.toHaveBeenCalled();
+  });
+  it('K-203: account deletion stays visible when the connection drops', async () => {
+    open(); tab('Account');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Account…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    act(() => { useStore.setState({ status: 'disconnected' }); });
+    // The open final confirmation does not vanish silently.
+    expect(screen.getByRole('alertdialog', { name: 'Delete account permanently?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    act(() => { useAccountDeletion.getState().set({ kind: 'deleting', attempt: 1 }); });
+    expect(screen.getByRole('button', { name: 'Deleting…' })).toBeDisabled();
+    act(() => { useAccountDeletion.getState().set({ kind: 'failed', message: 'Kraki didn\'t answer. Check the connection and try again.' }); });
+    expect(screen.getByText('Kraki didn\'t answer. Check the connection and try again.')).toBeInTheDocument();
+    act(() => { useAccountDeletion.getState().set({ kind: 'idle' }); });
   });
   it('includes app devices and hides remove for this app and online devices', () => {
     useStore.setState({ devices: new Map([

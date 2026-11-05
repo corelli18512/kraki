@@ -181,9 +181,66 @@ describe('SessionPage', () => {
     useStore.getState().setStatus('connected');
   }
 
-  it('shows not found for an unknown session', () => {
-    renderWithRoute('/session/unknown-id', <SessionPage />);
-    expect(screen.getByText('Session not found')).toBeInTheDocument();
+  it('shows not found for an unknown session once the lists had time to arrive', () => {
+    vi.useFakeTimers();
+    try {
+      useStore.getState().setStatus('connected');
+      renderWithRoute('/session/unknown-id', <SessionPage />);
+      expect(screen.getByText('Loading session…')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(10_000); });
+      expect(screen.getByText('Session not found')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('K-089: a link to a session not loaded yet waits for it instead of bouncing to the list', () => {
+    useStore.getState().setStatus('connecting');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText('session list')).not.toBeInTheDocument();
+    expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connected'); });
+    expect(screen.getByText('Loading session…')).toBeInTheDocument();
+    act(() => { withSession(); });
+    expect(screen.getByText('Fix the cache')).toBeInTheDocument();
+    // Deleted while open: back to the list.
+    act(() => { useStore.getState().setSessions([]); });
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
+  it('K-089: offline, the wait for a session link has a way back to the list', async () => {
+    useStore.getState().setStatus('disconnected');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '← Back to sessions' }));
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
+  it('K-089: signed out, a session link goes to the sign-in on the home page', () => {
+    useStore.getState().setStatus('awaiting_login');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>sign in</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('sign in')).toBeInTheDocument();
   });
 
   it('header: title and the session mode capsule', () => {

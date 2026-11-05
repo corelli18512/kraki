@@ -227,6 +227,7 @@
   },
   "session": {
     "starting": "正在启动会话…",
+    "loading": "正在加载会话…",
     "notFound": "未找到会话",
     "back": "← 返回会话列表",
     "connecting": "正在连接…",

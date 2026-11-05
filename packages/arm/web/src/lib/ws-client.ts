@@ -11,7 +11,7 @@ import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
-import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
+import { browserCanKeepKeys, ensureDeviceKeys, sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
@@ -30,6 +30,12 @@ import { AttachmentPullQueue } from './attachment-pull-queue';
 import { ForegroundActivity } from './foreground-activity';
 
 const logger = createLogger('ws-client');
+/** How long Settings waits for the relay to confirm a push token. */
+export const PUSH_REGISTRATION_TIMEOUT_MS = 30_000;
+/** `registered`: the relay stored the token. `refused`: it rejected it.
+ *  `unconfirmed`: not connected, no answer in time, or a newer registration
+ *  took over; a queued registration may still land later. */
+export type PushRegistrationResult = 'registered' | 'refused' | 'unconfirmed';
 
 
 /** No frame for longer than a ping round (10 s + slack) → the link is not
@@ -80,6 +86,8 @@ export class KrakiWSClient {
   private pulse: ArmPulse;
   /** Bumped on every Head socket close; scopes CONNECTION_SCOPED sends. */
   private connectionEpoch = 0;
+  /** A push token sent to the relay, waiting for its answer. */
+  private pushRegistration: { provider: string; resolve: (result: PushRegistrationResult) => void; timer: ReturnType<typeof setTimeout> } | null = null;
   private subscription: SessionSubscriptionController;
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
@@ -283,7 +291,7 @@ export class KrakiWSClient {
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
-        // Key init failed — E2E will not work
+        // authenticate() retries and tells the user if keys are unavailable.
       });
     }
     this.transport.connect();
@@ -983,8 +991,25 @@ export class KrakiWSClient {
   renameDevice(deviceId: string, name: string): void {
     this.sendToHead({ type: 'rename_device', deviceId, name });
   }
-  registerPushToken(payload: { provider: string; token: string }): void {
-    this.sendToHead({ type: 'register_push_token', payload });
+  /** Answered by `push_token_registered`, by the relay's refusal
+   *  (`server_error`), or `unconfirmed` (see `PushRegistrationResult`). */
+  registerPushToken(payload: { provider: string; token: string }): Promise<PushRegistrationResult> {
+    this.settlePushRegistration('unconfirmed');
+    // Offline, the send would queue and land after Settings gave up on it.
+    if (getStore().status !== 'connected') return Promise.resolve('unconfirmed');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settlePushRegistration('unconfirmed'), PUSH_REGISTRATION_TIMEOUT_MS);
+      this.pushRegistration = { provider: payload.provider, resolve, timer };
+      this.sendToHead({ type: 'register_push_token', payload });
+    });
+  }
+  private settlePushRegistration(result: PushRegistrationResult): boolean {
+    const pending = this.pushRegistration;
+    if (!pending) return false;
+    this.pushRegistration = null;
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+    return true;
   }
   unregisterPushToken(payload: { provider: string }): void {
     this.sendToHead({ type: 'unregister_push_token', payload });
@@ -1268,8 +1293,26 @@ export class KrakiWSClient {
       return;
     }
 
+    const epoch = this.connectionEpoch;
+    const keysReady = await ensureDeviceKeys(this.encryption.keyStore);
+    // The socket this was for closed while the keys were being created. The
+    // next socket authenticates on its own open; sending here as well put a
+    // second auth on it ("Unknown message type: auth") and spent the token twice.
+    if (epoch !== this.connectionEpoch) return;
+    if (!keysReady) {
+      // A signed-in device keeps its identity through a passing key-store
+      // failure: drop this socket and let the transport back off and retry.
+      if (this.transport.storedDeviceId && browserCanKeepKeys()) {
+        getStore().setLastError(t('settings:auth.reconnecting'));
+        this.transport.retryLater('keys_unavailable');
+        return;
+      }
+      this.refuseWithoutDeviceKeys();
+      return;
+    }
+
     const usedToken = await sendAuth(
-      (msg) => this.transport.sendRaw(msg),
+      (msg) => { if (epoch === this.connectionEpoch) this.transport.sendRaw(msg); },
       this.encryption.keyStore,
       this.transport.pairingToken,
       this.transport.storedDeviceId,
@@ -1279,6 +1322,9 @@ export class KrakiWSClient {
         redirectUri: this.transport.redirectUri,
       },
     );
+    // A socket that closed while sendAuth awaited the keys dropped the frame:
+    // keep the token and code for the next socket's auth.
+    if (epoch !== this.connectionEpoch) return;
     if (usedToken) {
       this.transport.pairingToken = undefined;
     }
@@ -1287,6 +1333,19 @@ export class KrakiWSClient {
       this.transport.codeVerifier = undefined;
       this.transport.redirectUri = undefined;
     }
+  }
+
+  /** The browser cannot keep encryption keys (plain-http self-host, blocked
+   *  IndexedDB). Pairing anyway half-paired silently and signed out on every
+   *  reload: stop, keep the pairing code unspent, and say why. */
+  private refuseWithoutDeviceKeys(): void {
+    this.transport.githubCode = undefined;
+    this.transport.codeVerifier = undefined;
+    this.transport.redirectUri = undefined;
+    this.disconnect();
+    const store = getStore();
+    store.setLastError(t('app:errors.keysUnavailable'));
+    store.setStatus('awaiting_login');
   }
 
   /** Legacy non-Pulse envelopes have only the live domain. Keep their pre-auth
@@ -1451,7 +1510,15 @@ export class KrakiWSClient {
         if (ref) {
           this.cmdState.clearRequest(ref);
         }
+        // A refused push token is answered in Settings, in the user's language.
+        if (!ref && /^Invalid push token/.test(serverErr.message ?? '') && this.settlePushRegistration('refused')) break;
         getStore().setLastError(serverErr.message);
+        break;
+      }
+
+      case 'push_token_registered': {
+        const registered = msg as { payload?: { provider?: string } };
+        if (this.pushRegistration?.provider === registered.payload?.provider) this.settlePushRegistration('registered');
         break;
       }
 

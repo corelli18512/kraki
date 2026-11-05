@@ -461,6 +461,12 @@ export class KrakiTransport {
     this.connect();
   }
 
+  /** Close the current socket as a non-intentional drop, so the usual
+   *  backoff reconnects (a passing failure while authenticating). */
+  retryLater(reason: string) {
+    if (this.ws) this.abandon(this.ws, reason);
+  }
+
   /** Stop using a socket that is dead but has not closed (half-open, stuck
    *  handshake). The browser may take minutes to fire onclose on its own. */
   private abandon(ws: WebSocket, reason = 'transport_silent') {
