@@ -236,5 +236,11 @@
     "settingsHint": "你可以随时在设置 › 隐私中更改此选项。",
     "decline": "不共享",
     "ok": "好"
+  },
+  "dogfood": {
+    "title": "内测",
+    "builds": "版本",
+    "detail": "内部账户：你会最先收到每个新版本。",
+    "switching": "正在切换…"
   }
 }

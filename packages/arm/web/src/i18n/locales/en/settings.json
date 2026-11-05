@@ -236,5 +236,11 @@
     "settingsHint": "You can change this anytime in Settings › Privacy.",
     "decline": "Don't Share",
     "ok": "OK"
+  },
+  "dogfood": {
+    "title": "Dogfood",
+    "builds": "Builds",
+    "detail": "Internal account: you get every new build first.",
+    "switching": "Switching…"
   }
 }

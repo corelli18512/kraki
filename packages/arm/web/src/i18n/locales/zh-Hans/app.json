@@ -39,7 +39,9 @@
     "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
     "deleteAccount": "无法删除账户。请重试。",
     "permissionSend": "无法发送。请重试。",
-    "permissionUnconfirmed": "Agent 尚未确认。请重试。"
+    "permissionUnconfirmed": "Agent 尚未确认。请重试。",
+    "replacedElsewhere": "Kraki 已在另一个标签页或窗口中打开。回到此标签页即可在这里使用。",
+    "oauthUnverified": "无法验证 GitHub 登录。请重试。"
   },
   "scanner": {
     "denied": "无法访问相机。请检查浏览器或设备设置。",

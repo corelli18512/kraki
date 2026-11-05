@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
 import { diag } from './diag';
 import type { Message } from '@kraki/protocol';
@@ -29,7 +30,9 @@ const LIVENESS_CHECK = 2_000;
 const CONNECT_TIMEOUT = 10_000;
 /** Shown while another tab/window with the same stored identity holds the
  *  relay connection. Coming back to this tab takes the connection over. */
-export const REPLACED_ELSEWHERE_MESSAGE = 'Kraki is open in another tab or window. Come back to this tab to use it here.';
+export function replacedElsewhereMessage(): string {
+  return t('app:errors.replacedElsewhere');
+}
 /** Application-level ping interval. 10s keeps the connection warm through
  *  proxies and bounds liveness-detection latency during read-only viewing. */
 const PING_INTERVAL = 10_000;
@@ -279,7 +282,7 @@ export class KrakiTransport {
         this.codeVerifier = pkce.codeVerifier;
         this.redirectUri = pkce.redirectUri;
       } else {
-        getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
+        getStore().setLastError(t('app:errors.oauthUnverified'));
         logger.warn('OAuth state mismatch — ignoring code');
       }
     }
@@ -428,7 +431,7 @@ export class KrakiTransport {
     this.outageStartedAt = null;
     getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
-    getStore().setLastError(REPLACED_ELSEWHERE_MESSAGE);
+    getStore().setLastError(replacedElsewhereMessage());
   }
 
   /** True while another tab holds this device's connection. */
@@ -439,7 +442,7 @@ export class KrakiTransport {
     if (!this.replacedElsewhere) return;
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
-    if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+    if (getStore().lastError === replacedElsewhereMessage()) getStore().setLastError(null);
     this.reconnectDelay = RECONNECT_BASE;
     this.connect();
   }

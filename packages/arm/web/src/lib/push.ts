@@ -5,9 +5,16 @@
  * subscription to the relay via register_push_token.
  */
 
+import { resolveLanguage } from '../i18n';
 import { createLogger } from './logger';
 
 const logger = createLogger('push');
+
+/** The service worker script, told the app's language so its notification
+ *  texts match the UI (it cannot read the app's settings). */
+export function serviceWorkerUrl(): string {
+  return `/sw.js?lang=${encodeURIComponent(resolveLanguage())}`;
+}
 
 /** Check if push notifications are supported in this browser. */
 export function isPushSupported(): boolean {
@@ -56,7 +63,7 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<string | 
 
   try {
     // Register service worker
-    const registration = await navigator.serviceWorker.register('/sw.js');
+    const registration = await navigator.serviceWorker.register(serviceWorkerUrl());
     await navigator.serviceWorker.ready;
 
     // Convert VAPID key from base64url to Uint8Array

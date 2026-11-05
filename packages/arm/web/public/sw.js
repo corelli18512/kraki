@@ -71,11 +71,41 @@ async function decryptPreview(blob, wrappedKeyB64) {
   return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
+// ── Localized notification text ─────────────────────────
+// The worker cannot load the app's locales. These mirror
+// desktop.agents.attention / desktop.notifications.permission in
+// src/i18n/locales (a test keeps them equal). The page registers the worker
+// as /sw.js?lang=<app language>; without it the browser languages decide.
+
+const STRINGS = {
+  en: { attention: 'Needs attention', permission: 'Needs approval: {{summary}}' },
+  'zh-Hans': { attention: '需要处理', permission: '需要批准：{{summary}}' },
+};
+
+function workerLanguage() {
+  const lang = new URL(self.location.href).searchParams.get('lang');
+  if (lang && STRINGS[lang]) return lang;
+  const tags = (self.navigator && self.navigator.languages) || [];
+  for (const tag of tags) {
+    const parts = String(tag).toLowerCase().split(/[-_]/);
+    if (parts[0] === 'zh') {
+      if (parts.some((p) => p === 'hant' || p === 'tw' || p === 'hk' || p === 'mo')) continue;
+      return 'zh-Hans';
+    }
+    if (parts[0] === 'en') return 'en';
+  }
+  return 'en';
+}
+
+function text(key, summary) {
+  return STRINGS[workerLanguage()][key].replace('{{summary}}', summary || '');
+}
+
 // ── Format notification body from preview ───────────────
 
 function formatBody(preview) {
-  if (!preview || !preview.summary) return 'Needs your attention';
-  if (preview.type === 'permission') return 'Permission needed: ' + preview.summary;
+  if (!preview || !preview.summary) return text('attention');
+  if (preview.type === 'permission') return text('permission', preview.summary);
   return preview.summary;
 }
 
@@ -84,7 +114,7 @@ function formatBody(preview) {
 self.addEventListener('push', (event) => {
   const handlePush = async () => {
     let title = 'Kraki';
-    let body = 'Needs your attention';
+    let body = text('attention');
     let data = {};
 
     if (event.data) {
