@@ -288,17 +288,6 @@ final class ChatScrollPolicyTests: XCTestCase {
             hasOlder: true,
             isLoading: false
         ))
-        XCTAssertEqual(
-            policy.navigationControlVisibility(
-                distanceToBottom: 2_000,
-                viewportLength: 700,
-                hasUnloadedNewer: true,
-                currentOffset: 0,
-                latestMessageStartOffset: 500
-            ),
-            .init(showTail: false, showLatestMessageStart: false)
-        )
-
         policy.endNavigation()
         XCTAssertFalse(policy.navigationActive)
     }
@@ -316,31 +305,6 @@ final class ChatScrollPolicyTests: XCTestCase {
         XCTAssertTrue(policy.navigationActive)
         policy.endNavigation()
         XCTAssertFalse(policy.navigationActive)
-    }
-
-    func testNavigationControlVisibilityUsesSharedThresholds() {
-        let policy = ChatScrollPolicy()
-
-        XCTAssertEqual(
-            policy.navigationControlVisibility(
-                distanceToBottom: 1_051,
-                viewportLength: 700,
-                hasUnloadedNewer: false,
-                currentOffset: 100,
-                latestMessageStartOffset: 125
-            ),
-            .init(showTail: true, showLatestMessageStart: true)
-        )
-        XCTAssertEqual(
-            policy.navigationControlVisibility(
-                distanceToBottom: 1_050,
-                viewportLength: 700,
-                hasUnloadedNewer: false,
-                currentOffset: 100,
-                latestMessageStartOffset: 124
-            ),
-            .init(showTail: false, showLatestMessageStart: false)
-        )
     }
 
     func testPinToTailClearsOlderIntentWithoutReleasingEntryLock() {

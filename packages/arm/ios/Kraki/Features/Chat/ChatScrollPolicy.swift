@@ -29,16 +29,10 @@ struct ChatScrollPolicy: Equatable {
         case anchored
     }
 
-    struct NavigationControlVisibility: Equatable {
-        let showTail: Bool
-        let showLatestMessageStart: Bool
-    }
-
     static let defaultBottomTolerance: CGFloat = 24
     static let defaultMovementEpsilon: CGFloat = 0.5
     static let edgeTriggerDistance: CGFloat = 320
     static let olderPrefetchViewportMultiplier: CGFloat = 2
-    static let tailControlViewportMultiplier: CGFloat = 1.5
     static let navigationControlAnimationDurationSeconds: Double = 0.2
     static let navigationSafetyTimeoutSeconds: Double = 0.6
 
@@ -102,30 +96,6 @@ struct ChatScrollPolicy: Equatable {
         max(
             Self.edgeTriggerDistance,
             Self.olderPrefetchViewportMultiplier * max(viewportLength, 0)
-        )
-    }
-
-    func navigationControlVisibility(
-        distanceToBottom: CGFloat,
-        viewportLength: CGFloat,
-        hasUnloadedNewer: Bool,
-        currentOffset: CGFloat,
-        latestMessageStartOffset: CGFloat?
-    ) -> NavigationControlVisibility {
-        guard !navigationActive else {
-            return NavigationControlVisibility(
-                showTail: false,
-                showLatestMessageStart: false
-            )
-        }
-        let farFromBottom = distanceToBottom
-            > Self.tailControlViewportMultiplier * max(viewportLength, 1)
-        let showStart = latestMessageStartOffset.map {
-            abs(currentOffset - $0) > bottomTolerance
-        } == true
-        return NavigationControlVisibility(
-            showTail: farFromBottom || hasUnloadedNewer,
-            showLatestMessageStart: showStart
         )
     }
 
