@@ -227,6 +227,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     // Start agents in parallel: each one spawns its CLI and lists models, and
     // the sum easily exceeded the daemon's readiness window on a cold machine.
     // Insert in detection order so the default agent stays deterministic.
+    this.detectionOrder = ids;
     const started = await Promise.all(ids.map((id) => this.startAgent(id, adapterOpts)));
     started.forEach((ok, i) => { if (!ok) this.failedAgentIds.add(ids[i]); });
 
@@ -238,6 +239,8 @@ export class MultiAgentAdapter extends AgentAdapter {
     if (this.failedAgentIds.size > 0) this.scheduleAgentRetry(adapterOpts, 60_000);
   }
 
+  /** Agent ids in detection order. */
+  private detectionOrder: AgentId[] = [];
   /** Agents that were detected but failed to start (e.g. signed out). */
   private failedAgentIds = new Set<AgentId>();
   /** Startup detection found no agent: each retry detects again. */
@@ -261,6 +264,13 @@ export class MultiAgentAdapter extends AgentAdapter {
       await adapter.start();
       if (this.stopped) { await adapter.stop().catch(() => {}); return false; }
       this.adapters.set(id, adapter);
+      // Agents finish starting in any order; the map order is the default
+      // agent and the picker order, so keep it in detection order.
+      const rank = (agent: AgentId) => {
+        const i = this.detectionOrder.indexOf(agent);
+        return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+      };
+      this.adapters = new Map([...this.adapters].sort(([a], [b]) => rank(a) - rank(b)));
       logger.info({ id }, 'Agent adapter started');
       return true;
     } catch (err) {
@@ -283,6 +293,7 @@ export class MultiAgentAdapter extends AgentAdapter {
         if (this.stopped) return;
         if (found.length > 0) {
           this.redetecting = false;
+          this.detectionOrder = found;
           logger.info({ agents: found }, 'Coding agents detected after startup');
           for (const id of found) if (!this.adapters.has(id)) this.failedAgentIds.add(id);
         }
