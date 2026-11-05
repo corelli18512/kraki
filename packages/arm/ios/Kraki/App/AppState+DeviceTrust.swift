@@ -95,6 +95,24 @@ final class DeviceTrustModel {
     func clearPairRequest(_ tentacleId: String) { lastPairRequest[tentacleId] = nil }
 }
 
+/// User-facing copy for a relay `auth_error`. The relay's `message` is English
+/// developer text (logged by `AuthManager.handleAuthError`); the user always
+/// sees the app's localized copy for the situation.
+enum RelayAuthErrorText {
+    static func describe(code: String?, fallback: String) -> String {
+        switch code {
+        case "invalid_pairing_token":
+            // Same situation as a refused device-trust proof: the scanned code
+            // was already used or has expired.
+            return PairingFailureText.describe("bad_proof")
+        case "pairing_disabled":
+            return String(localized: "This server doesn't accept new pairings.")
+        default:
+            return fallback
+        }
+    }
+}
+
 enum PairingFeedback: Equatable, Identifiable {
     case pairing(name: String)
     case paired(name: String)

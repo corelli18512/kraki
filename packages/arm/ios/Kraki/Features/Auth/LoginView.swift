@@ -120,6 +120,10 @@ struct LoginView: View {
             }
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // GitHub sign-in arrives with the relay's `auth_info`, possibly
+            // after the actions are already shown: ease the subtitle and
+            // button in instead of snapping the layout.
+            .animation(.easeInOut(duration: 0.25), value: oauthAvailable)
         }
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
@@ -139,9 +143,20 @@ struct LoginView: View {
     /// True while the auth/connect handshake is in flight. Drives the
     /// in-place swap of the action area for a status panel.
     private var isConnecting: Bool {
-        if appState.isOAuthInFlight { return true }
-        switch appState.connectionStatus {
-        case .connecting, .authenticating: return true
+        Self.showsStatusPanel(isOAuthInFlight: appState.isOAuthInFlight,
+                              connectionStatus: appState.connectionStatus,
+                              isAwaitingAuthInfo: appState.isAwaitingAuthInfo)
+    }
+
+    /// Only an actual sign-in replaces the actions with "Signing you in…".
+    /// Asking the relay which methods it offers (`auth_info`) is not one: on
+    /// a slow relay the user could not reach Scan QR Code until it answered.
+    static func showsStatusPanel(isOAuthInFlight: Bool, connectionStatus: ConnectionStatus,
+                                 isAwaitingAuthInfo: Bool) -> Bool {
+        if isOAuthInFlight { return true }
+        switch connectionStatus {
+        case .connecting: return true
+        case .authenticating: return !isAwaitingAuthInfo
         default: return false
         }
     }

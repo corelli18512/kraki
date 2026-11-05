@@ -346,6 +346,7 @@ extension AppState {
     /// hasn't been initiated yet).
     func onAuthInfoReceived(githubClientId: String?) {
         self.githubClientId = githubClientId
+        isAwaitingAuthInfo = false
         // If a user-initiated auth (OAuth code, pairing token) raced
         // ahead of this response, leave its `.authenticating` in place.
         if connectionStatus == .authenticating {

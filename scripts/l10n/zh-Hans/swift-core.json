@@ -154,7 +154,9 @@
     "_Image unavailable_": "_图片不可用_",
     "e.g. PostgreSQL": "例如 PostgreSQL",
     "e.g. post gress, postgres Q L": "例如 post gress, postgres Q L",
-    "“%@” is already in the list; only the first is used.": "“%@”已在列表中；仅使用第一项。"
+    "“%@” is already in the list; only the first is used.": "“%@”已在列表中；仅使用第一项。",
+    "This server doesn't accept new pairings.": "此服务器不接受新的配对。",
+    "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address.": "Kraki 无法连接使用主机名的未加密 ws:// 地址。请使用中继服务器的 wss:// 地址或其 IP 地址。"
   },
   "englishPlurals": {
     "Finished with %lld steps and no reply.": {

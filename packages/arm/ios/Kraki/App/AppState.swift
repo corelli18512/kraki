@@ -243,6 +243,7 @@ final class AppState {
     var connectionStatus: ConnectionStatus = .awaitingLogin {
         didSet {
             guard connectionStatus != oldValue else { return }
+            if connectionStatus != .authenticating { isAwaitingAuthInfo = false }
             #if os(macOS)
             if connectionStatus == .connected {
                 authRecoveryAttempts = 0
@@ -464,6 +465,11 @@ final class AppState {
     /// tap doesn't appear unresponsive while the system browser sheet
     /// is materialising.
     var isOAuthInFlight: Bool = false
+
+    /// The open socket only asked the relay which sign-in methods it offers
+    /// (`auth_info`); nobody is being signed in yet. The sign-in screen keeps
+    /// its actions (Scan QR Code) instead of saying "Signing you in…".
+    var isAwaitingAuthInfo: Bool = false
 
     /// True while the WS layer is actively trying to (re)connect after
     /// a drop, or sitting authenticated-pending-handshake. Used by the

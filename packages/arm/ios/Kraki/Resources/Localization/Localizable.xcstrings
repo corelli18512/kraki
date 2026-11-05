@@ -58,6 +58,16 @@
         }
       }
     },
+    "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 无法连接使用主机名的未加密 ws:// 地址。请使用中继服务器的 wss:// 地址或其 IP 地址。"
+          }
+        }
+      }
+    },
     "This Mac is reconnecting…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -10256,6 +10266,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此服务器要求 Kraki 连接到不受信任的地址。"
+          }
+        }
+      }
+    },
+    "This server doesn't accept new pairings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务器不接受新的配对。"
           }
         }
       }
