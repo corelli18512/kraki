@@ -60,7 +60,11 @@ function localHighestSeq(sessionId: string): number {
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
-  private signOutListenerInstalled = false;
+  private windowListenersInstalled = false;
+  /** The Head of this connection takes `app_visibility` (K-032). */
+  private headTakesAppVisibility = false;
+  /** What this connection last told the Head; the Head starts at visible. */
+  private reportedVisible = true;
   private inboundCrypto = new OrderedCrypto();
   private outboundCrypto = new OrderedCrypto();
   private identityEpoch = 0;
@@ -191,6 +195,18 @@ export class KrakiWSClient {
     setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
   }
 
+  /** Tell the Head whether the user is looking at this tab (visible and
+   *  focused), like iOS `sendAppVisibility`. A hidden or unfocused tab gets
+   *  Web Push; the one on screen does not, so every push it gets is shown
+   *  (Safari revokes a subscription that receives silent pushes). */
+  private reportAppVisibility(force = false): void {
+    if (!this.headTakesAppVisibility) return;
+    const visible = document.visibilityState === 'visible' && document.hasFocus();
+    if (!force && visible === this.reportedVisible) return;
+    this.reportedVisible = visible;
+    this.transport.sendRaw({ type: 'app_visibility', visible });
+  }
+
   /** Connect with the account of the Kraki built into the desktop app. */
   connectWithDesktopCredentials(): boolean {
     setDesktopSignedOut(false);
@@ -270,6 +286,7 @@ export class KrakiWSClient {
         },
         onSignedOutElsewhere: () => this.signedOutElsewhere(),
         onClose: () => {
+          this.headTakesAppVisibility = false;
           this.connectionEpoch++;
           this.headEpoch++;
           this.encryptedQueue = [];
@@ -286,13 +303,17 @@ export class KrakiWSClient {
   }
 
   connect() {
-    if (!this.signOutListenerInstalled && typeof window !== 'undefined') {
-      this.signOutListenerInstalled = true;
+    if (!this.windowListenersInstalled && typeof window !== 'undefined') {
+      this.windowListenersInstalled = true;
       // `storage` fires in the other tabs of this browser: removing the
       // stored device (or clearing storage) is a sign-out there.
       window.addEventListener('storage', (event) => {
         if ((event.key === STORAGE_KEY || event.key === null) && !localStorage.getItem(STORAGE_KEY)) this.signedOutElsewhere();
       });
+      const report = () => this.reportAppVisibility();
+      document.addEventListener('visibilitychange', report);
+      window.addEventListener('focus', report);
+      window.addEventListener('blur', report);
     }
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
@@ -1390,12 +1411,12 @@ export class KrakiWSClient {
         this.startPulseTick();
         this.foregroundActivity.start();
         if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
-        // A browser tab notifies only through Web Push, and its service worker
-        // leaves out the Session on screen (public/sw.js). So the Head must
-        // push to this device even while the tab is connected (K-032).
-        if (!desktop && msg.features?.includes('app_visibility')) {
-          this.transport.sendRaw({ type: 'app_visibility', visible: false });
-        }
+        // A browser tab notifies only through Web Push. While the user is not
+        // looking at the tab, the Head must push to it although it is
+        // connected (K-032).
+        this.headTakesAppVisibility = !desktop && msg.features?.includes('app_visibility') === true;
+        this.reportedVisible = true;
+        this.reportAppVisibility(true);
         this.attachmentPulls.resume();
         this.localLink?.start();
         this.localLink?.poke();

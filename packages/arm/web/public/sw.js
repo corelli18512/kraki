@@ -96,9 +96,10 @@ async function sessionOnScreen() {
 
 // ── Push event handler ──────────────────────────────────
 
-// The web app stays push-reachable while a tab is connected (it reports
-// itself hidden to the Head, see ws-client.ts), so a reply or question in any
-// other Session notifies; only the Session on screen is left out.
+// A connected tab tells the Head whether the user is looking at it
+// (ws-client.ts reportAppVisibility), so pushes arrive while it is hidden or
+// unfocused. A push that races the tab coming back to the Session it is
+// about is left out.
 self.addEventListener('push', (event) => {
   const handlePush = async () => {
     let title = 'Kraki';
