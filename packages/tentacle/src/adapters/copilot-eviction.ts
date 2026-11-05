@@ -82,8 +82,10 @@ export async function evictIdleSessions(adapter: CopilotAdapter): Promise<void> 
   const candidates: string[] = [];
   for (const [sessionId, entry] of adapter.sessions) {
     if (entry.pendingPermissions.size > 0 || entry.pendingQuestions.size > 0) continue;
-    // turnHasOutput.get(sessionId) === true => a turn is currently in flight
-    if (adapter.turnHasOutput.get(sessionId)) continue;
+    // A turn in flight. (turnHasOutput is not that signal: it stays true
+    // after a turn that produced output settled, so such sessions were
+    // never evicted.)
+    if (!entry.turn.isSettled) continue;
     const lastAt = adapter.lastActivityAt.get(sessionId) ?? 0;
     if (now - lastAt < ttl) continue;
     candidates.push(sessionId);

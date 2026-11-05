@@ -1868,6 +1868,22 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('K-315: an attachment request with an unsafe id is answered not_found, not dropped silently', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: '../../config', sessionId: 'sess_1' },
+      })));
+      const replies = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(replies).toHaveLength(1);
+      expect(replies[0].payload).toMatchObject({ id: '../../config', error: 'not_found', data: '' });
+    } finally { cleanup(); }
+  });
+
   it('sends account usage to apps: broadcast on update, unicast to a joining app, never before any reading', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {

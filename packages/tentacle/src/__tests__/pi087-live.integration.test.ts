@@ -199,6 +199,17 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(toolResult('write').isError).toBe(decision === 'deny');
   });
 
+  it('K-135: enables the read-only grep/find/ls tools; a safe-mode search runs without a card', async () => {
+    await create(); adapter.setSessionMode(sid, 'safe');
+    writeFileSync(join(root, 'needle.txt'), 'NEEDLE_LINE\n');
+    steps.push({ tool: 'grep', args: { pattern: 'NEEDLE', path: '.' } }, { tool: 'ls', args: { path: '.' } }, { tool: 'find', args: { pattern: '*.txt' } }, { text: 'SEARCH_OK' });
+    await turn();
+    const tools = (requests[0].tools as Array<{ function?: { name?: string }; name?: string }>).map(t => t.function?.name ?? t.name);
+    expect(tools).toEqual(expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'ask_user', 'kraki_get_mode']));
+    expect(callbacks.onPermissionRequest).not.toHaveBeenCalled();
+    expect(callbacks.onToolComplete.mock.calls.map(c => [c[1].toolName, c[1].success])).toEqual([['grep', true], ['ls', true], ['find', true]]);
+  });
+
   it('changes permission mode without respawning and exposes kraki_get_mode', async () => {
     await create(); const original = proc(); adapter.setSessionMode(sid, 'safe');
     steps.push({ tool: 'bash', args: { command: 'cat mode.txt' } }, { tool: 'kraki_get_mode', args: { query: 'current' } }, { text: 'MODE_OK' });

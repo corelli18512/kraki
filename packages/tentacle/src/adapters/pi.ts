@@ -253,7 +253,7 @@ export class PiAdapter extends AgentAdapter {
     // Queued events of a process that has since been replaced (lazy resume
     // while its queue was still draining) must not touch the replacement.
     proc.onEvent = (e) => enqueue(() => (this.sessions.get(sessionId) === sess ? handleEvent(this, sessionId, e) : undefined));
-    proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
+    proc.onExit = (code, signal) => enqueue(() => this.handleProcessExit(sessionId, sess, code, signal));
     proc.start();
     this.sessions.set(sessionId, sess);
     logger.info({
@@ -269,13 +269,13 @@ export class PiAdapter extends AgentAdapter {
     return sess;
   }
 
-  private handleProcessExit(sessionId: string, sess: PiSession, code: number | null = null): void {
+  private handleProcessExit(sessionId: string, sess: PiSession, code: number | null = null, signal: NodeJS.Signals | null = null): void {
     // Process gone (crash/kill) means agent_settled may never arrive.
     // Permissions cannot be reconstructed, but ask_user is durable at
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
-    logger.info({ sessionId, ...sess.turn.event(), code, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
+    logger.info({ sessionId, ...sess.turn.event(), code, signal, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
     this.stopAwaitingSubagents(sess, 'process_exit');
     if (this.sessions.get(sessionId) !== sess) {
       // A replacement process already owns the session: this late exit must
@@ -305,8 +305,8 @@ export class PiAdapter extends AgentAdapter {
       // Pi died mid-turn (crash, killed, broken runtime). Without this the
       // turn ends silently and clients show an empty "no reply" turn.
       const reason = sess.proc.crashReason();
-      const exit = code === null ? '' : ` (exit code ${code})`;
-      logger.warn({ sessionId, code, reason }, 'pi exited during a turn');
+      const exit = code !== null ? ` (exit code ${code})` : signal ? ` (killed by ${signal})` : '';
+      logger.warn({ sessionId, code, signal, reason }, 'pi exited during a turn');
       error = `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`;
     }
     sess.turn.clearError();

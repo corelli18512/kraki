@@ -393,6 +393,10 @@ export function wireAdapterEvents(client: RelayClient): void {
     const hasUnsettledAcceptedTurn = !!turnId
       && client.settledAdapterTurnIds.get(sessionId) !== turnId;
     const hasRecoverableQuestion = !!soleOpenQuestion(client, sessionId);
+    // The process that was compacting is gone: its end event never comes.
+    // Clear first, so a follow-up queued behind that compaction is announced
+    // before (not after) the idle that closes it below.
+    clearCompacting(client, sessionId);
     if (hasUnsettledAcceptedTurn && !hasRecoverableQuestion) {
       client.pendingTerminalErrors.set(sessionId, {
         message: 'Agent process was evicted before the active turn settled.',

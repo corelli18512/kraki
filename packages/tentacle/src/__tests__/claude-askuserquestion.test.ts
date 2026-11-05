@@ -106,7 +106,7 @@ describe('Claude AskUserQuestion answers key', () => {
     });
   });
 
-  it('broadcastPendingResolutions echoes questions with an empty answers map', () => {
+  it('K-283: broadcastPendingResolutions (Stop) denies an open question instead of answering it empty', () => {
     const adapter = new ClaudeAdapter();
     let captured: CapturedResult | undefined;
     const questions = [{ question: 'still open?' }];
@@ -117,9 +117,9 @@ describe('Claude AskUserQuestion answers key', () => {
 
     broadcastPendingResolutions(adapter, 's1');
 
-    expect(captured?.behavior).toBe('allow');
-    expect(captured?.updatedInput?.questions).toEqual(questions);
-    expect(captured?.updatedInput?.answers).toEqual({});
+    expect(captured?.behavior).toBe('deny');
+    expect(captured?.updatedInput).toBeUndefined();
+    expect((captured as { message?: string } | undefined)?.message).toMatch(/Not answered/);
   });
 
   it('asks multiple questions one at a time and resolves with every answer keyed by text', async () => {
