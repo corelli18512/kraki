@@ -24,6 +24,8 @@ async function open(page: Page, server: MockRelayServer, width: number) {
 
 for (const width of [1200, 1240, 900, 390]) {
   test(`composer settles for every draft length around the wrap width (${width}px)`, async ({ page }) => {
+    // About 300 fills per width: more than the default budget on a slow runner.
+    test.setTimeout(60_000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     const server = await MockRelayServer.create();
