@@ -358,6 +358,10 @@ export class KrakiTransport {
         logger.warn('Malformed WS message:', raw.slice(0, 200), err);
         return;
       }
+      if (!msg || typeof msg !== 'object') {
+        logger.warn('Ignoring WS frame that is not an object');
+        return;
+      }
       const rawLen = typeof event.data === 'string' ? event.data.length : 0;
       traceEvent({ comp: 'arm', evt: 'WS-RX', type: (msg as { type?: string }).type, hasPulse: typeof (msg as { pulse?: unknown }).pulse === 'string', rawLen });
       try {

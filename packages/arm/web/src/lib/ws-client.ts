@@ -980,7 +980,18 @@ export class KrakiWSClient {
 
   private applySessionList(msg: SessionListMessage): void {
     const store = getStore();
-    const tentacleSessions = msg.payload?.sessions ?? [];
+    const listed: unknown = msg.payload?.sessions;
+    // A malformed list must not empty the sidebar (K-093): without an array
+    // there is nothing authoritative to apply, and an entry without an id
+    // cannot prove that a session is gone.
+    if (!Array.isArray(listed) || typeof msg.deviceId !== 'string') {
+      logger.warn('Ignoring malformed session_list', { deviceId: msg.deviceId });
+      return;
+    }
+    const tentacleSessions = listed.filter((s): s is SessionListMessage['payload']['sessions'][number] =>
+      !!s && typeof s === 'object' && typeof (s as { id?: unknown }).id === 'string' && (s as { id: string }).id !== '');
+    const complete = tentacleSessions.length === listed.length;
+    if (!complete) logger.warn('session_list has malformed entries', { dropped: listed.length - tentacleSessions.length });
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
@@ -994,7 +1005,7 @@ export class KrakiWSClient {
     }
 
     // Remove local sessions from this tentacle that are no longer in the list
-    for (const [sid, session] of store.sessions) {
+    for (const [sid, session] of complete ? store.sessions : []) {
       if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
         diag.replies.missedEnd(sid);
         store.removeSession(sid);
