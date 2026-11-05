@@ -347,6 +347,7 @@
 		723720AD64D93AE66CBA13D2 /* MacAppDelegate+QuestionRegressions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47092AF4992EEA667A431A44 /* MacAppDelegate+QuestionRegressions.swift */; };
 		740A60CC9415FB46D2D73787 /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
 		740E73B05B08B70AF980FD93 /* ComposerOverlayReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC67C6FD40A88E169633BB2A /* ComposerOverlayReporting.swift */; };
+		746992568E65E01D66F4A49D /* StepsTraceLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C46C8CD39A81F839FF91D0 /* StepsTraceLoadTests.swift */; };
 		7470C4449140388181A10F09 /* SessionCardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EABA3BCA49EC90EEEEA2C7C0 /* SessionCardPresentation.swift */; };
 		7484EC863D2C400D5C9DCD69 /* MacChatListRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D0E22E50EB544A5CA870E67 /* MacChatListRegressionTests.swift */; };
 		74A7A978FAE22D87A99DD551 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = C618D417E4A259543AE388DD /* PairingLink.swift */; };
@@ -938,6 +939,7 @@
 		4FEEACAB97F1A6281EA52F5C /* DeviceTrustBoundaryTests+Round2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DeviceTrustBoundaryTests+Round2.swift"; sourceTree = "<group>"; };
 		50A8B53F3551A54A856D00DF /* SessionStore+UnreadEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionStore+UnreadEntry.swift"; sourceTree = "<group>"; };
 		50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsCheck.swift; sourceTree = "<group>"; };
+		50C46C8CD39A81F839FF91D0 /* StepsTraceLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepsTraceLoadTests.swift; sourceTree = "<group>"; };
 		50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilityTrackerTests.swift; sourceTree = "<group>"; };
 		5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		522C9C637955C4ACB888C9C5 /* ChatHeightEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHeightEstimator.swift; sourceTree = "<group>"; };
@@ -2086,6 +2088,7 @@
 				46FAD598FE27CA110A28CF20 /* SteerPlacementListShots.swift */,
 				37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */,
 				823FAA98B92DAC38750F1B5B /* SteerPlacementTests.swift */,
+				50C46C8CD39A81F839FF91D0 /* StepsTraceLoadTests.swift */,
 				6AF5C73500B408088F5F6C78 /* SubagentStepsTests.swift */,
 				F19F9B78235755F4432E4C6A /* TableRenderShotsIOS.swift */,
 				09D438FF41D78B8547E66208 /* TextKitPureSpineTests.swift */,
@@ -2602,6 +2605,7 @@
 				135E3AA61778C42CFAF4ADAC /* SteerPlacementListShots.swift in Sources */,
 				2BF44615643296C73D4E3211 /* SteerPlacementTallCardTests.swift in Sources */,
 				3E1C2BFD2B076097D46A177E /* SteerPlacementTests.swift in Sources */,
+				746992568E65E01D66F4A49D /* StepsTraceLoadTests.swift in Sources */,
 				5955DE981CE3DC14839835D3 /* SubagentStepsTests.swift in Sources */,
 				BF03C77E144C6ACBF90D6620 /* TableRenderShotsIOS.swift in Sources */,
 				D27A7F9B6B70581836E99C91 /* TextKitPureSpineTests.swift in Sources */,
