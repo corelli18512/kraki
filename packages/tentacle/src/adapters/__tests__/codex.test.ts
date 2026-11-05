@@ -153,6 +153,25 @@ describe('CodexAdapter (fake app-server child process)', () => {
     }]);
   });
 
+  it('K-132: a failed model/list at start is retried and the recovery re-greets the apps', async () => {
+    const saved = CodexAdapter.MODEL_RETRY_FIRST_MS;
+    CodexAdapter.MODEL_RETRY_FIRST_MS = 30;
+    try {
+      h = new Harness(dir, { FAKE_CODEX_MODEL_LIST_FAILURES: '1' });
+      let changed = 0;
+      h.adapter.onCapabilitiesChanged = () => { changed++; };
+      await h.adapter.start();
+      expect(await h.adapter.listModelDetails()).toEqual([]);
+      const end = Date.now() + 3000;
+      while (changed === 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+      expect(changed).toBe(1);
+      expect((await h.adapter.listModels())).toEqual(['gpt-6-astra']);
+      expect(h.sent('model/list')).toHaveLength(2);
+    } finally {
+      CodexAdapter.MODEL_RETRY_FIRST_MS = saved;
+    }
+  });
+
   it('refuses to start when Codex is not logged in', async () => {
     h = new Harness(dir, { FAKE_CODEX_LOGGED_OUT: '1' });
     await expect(h.adapter.start()).rejects.toThrow(/codex login/);

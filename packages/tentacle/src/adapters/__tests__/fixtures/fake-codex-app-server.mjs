@@ -10,6 +10,8 @@ const LOG = process.env.FAKE_CODEX_LOG;
 const LOGGED_OUT = process.env.FAKE_CODEX_LOGGED_OUT === '1';
 // Slow handshake; like the real server, requests before it finish are refused.
 const INIT_DELAY_MS = Number(process.env.FAKE_CODEX_INIT_DELAY_MS ?? 0);
+// Fail this many model/list calls first (transient backend failure).
+let MODEL_LIST_FAILURES = Number(process.env.FAKE_CODEX_MODEL_LIST_FAILURES ?? 0);
 let initialized = false;
 let seq = 0;
 const uid = (p) => `${p}-${process.pid}-${++seq}`;
@@ -52,6 +54,10 @@ async function handle({ id, method, params }) {
     case 'account/read':
       return send({ id, result: LOGGED_OUT ? { account: null, requiresOpenaiAuth: true } : { account: { type: 'chatgpt', email: 't@example.com' }, requiresOpenaiAuth: true } });
     case 'model/list':
+      if (MODEL_LIST_FAILURES > 0) {
+        MODEL_LIST_FAILURES--;
+        return send({ id, error: { code: -32000, message: 'model/list: upstream unavailable' } });
+      }
       return send({ id, result: { nextCursor: null, data: [
         { id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6-Astra', hidden: false, isDefault: true,
           supportedReasoningEfforts: [{ reasoningEffort: 'minimal' }, { reasoningEffort: 'low' }, { reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }],

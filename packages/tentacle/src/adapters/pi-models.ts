@@ -32,6 +32,9 @@ export function ensureRawModels(adapter: PiAdapter): Promise<PiModelRow[] | null
     try {
       const rows = parsePiListModels(await runPiListModels(adapter.cliPath, adapter.modelListTimeoutMs));
       if (adapter.stopped) return null;
+      // A signed-out Pi lists no models. Caching that as the catalog kept the
+      // picker empty after the user signed in, until a daemon restart.
+      if (rows.length === 0) throw new Error('pi listed no models (not signed in to any provider?)');
       adapter.cachedModels = rows;
       const recovered = adapter.modelListFailed;
       adapter.modelListFailed = false;
@@ -96,7 +99,9 @@ export function ensureRawModelsSync(adapter: PiAdapter): void {
       timeout: adapter.modelListTimeoutMs,
       env: process.env,
     });
-    adapter.cachedModels = parsePiListModels(stdout);
+    const rows = parsePiListModels(stdout);
+    if (rows.length === 0) throw new Error('pi listed no models (not signed in to any provider?)');
+    adapter.cachedModels = rows;
     logger.info({ count: adapter.cachedModels.length }, 'Fetched pi model list (sync)');
     if (adapter.modelListFailed) {
       adapter.modelListFailed = false;
@@ -140,7 +145,8 @@ export async function fetchEfforts(adapter: PiAdapter): Promise<Map<string, Reas
       efforts.set(`${m.provider}/${m.id}`, piThinkingLevelsFor(m));
     }
     logger.info({ count: efforts.size, elapsedMs: Date.now() - started }, 'Fetched pi thinking levels');
-    adapter.cachedEfforts = efforts;
+    // An empty catalog (signed out) is not cached either: see ensureRawModels.
+    if (efforts.size > 0) adapter.cachedEfforts = efforts;
     return efforts;
   } catch (err) {
     logger.warn({ err: (err as Error).message, elapsedMs: Date.now() - started }, 'Could not fetch pi thinking levels, using default ladder');

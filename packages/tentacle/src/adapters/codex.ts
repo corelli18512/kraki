@@ -133,13 +133,44 @@ export class CodexAdapter extends AgentAdapter {
       throw new Error('Codex is not logged in. Run `codex login` (or set OPENAI_API_KEY) and restart Kraki.');
     }
 
+    await this.loadModels(this.rpc!);
+    logger.info({ models: this.models.map((m) => m.id) }, 'Codex adapter started');
+  }
+
+  /** First delay before re-listing models after a failed or empty model/list. */
+  static MODEL_RETRY_FIRST_MS = 60_000;
+  private modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private modelRetryDelayMs = CodexAdapter.MODEL_RETRY_FIRST_MS;
+
+  /** model/list; a failed or empty list is retried with backoff (up to 15 min)
+   *  and a recovery re-greets the apps. Without this the picker stayed empty
+   *  until the daemon restarted. */
+  private async loadModels(rpc: CodexRpcProcess): Promise<void> {
     try {
-      const res = await this.rpc!.request<{ data?: unknown }>('model/list', {});
+      const res = await rpc.request<{ data?: unknown }>('model/list', {});
       this.models = mapCodexModels(res?.data);
     } catch (err) {
       logger.warn({ err: errMessage(err) }, 'codex model/list failed');
     }
-    logger.info({ models: this.models.map((m) => m.id) }, 'Codex adapter started');
+    if (this.models.length === 0) this.scheduleModelRetry();
+  }
+
+  private scheduleModelRetry(): void {
+    if (this.stopping || this.modelRetryTimer) return;
+    const delay = this.modelRetryDelayMs;
+    this.modelRetryDelayMs = Math.min(delay * 2, 15 * 60_000);
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = undefined;
+      if (this.stopping) return;
+      if (!this.rpc?.alive) { this.scheduleModelRetry(); return; }
+      void this.loadModels(this.rpc).then(() => {
+        if (this.models.length === 0) return;
+        logger.info({ models: this.models.map((m) => m.id) }, 'codex model list recovered');
+        this.modelRetryDelayMs = CodexAdapter.MODEL_RETRY_FIRST_MS;
+        this.onCapabilitiesChanged?.();
+      });
+    }, delay);
+    this.modelRetryTimer.unref?.();
   }
 
   private async spawnServer(): Promise<void> {
@@ -214,6 +245,8 @@ export class CodexAdapter extends AgentAdapter {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
+    this.modelRetryTimer = undefined;
     for (const s of this.sessions.values()) this.dropPendingCards(s, true);
     const rpc = this.rpc;
     this.rpc = null;
