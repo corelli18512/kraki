@@ -233,4 +233,49 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertTrue(MacPresenceController.wasLaunchedAsLoginItem(open))
         XCTAssertFalse(MacPresenceController.wasLaunchedAsLoginItem(nil))
     }
+
+    // MARK: QA fixes (mac-lifecycle-a)
+
+    /// K-331 / K-333: the login item is added only after the user chose to run
+    /// agents here, and never from a copy that won't stay.
+    func testLoginItemOnlyForAnInstalledMacThatRunsAgents() {
+        typealias P = MacPresenceController
+        let installed = "/Applications/Kraki.app"
+        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: false, role: .remoteOnly, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: "/Volumes/Kraki/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents,
+                                                 bundlePath: "/private/var/folders/x/AppTranslocation/A/d/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, bundlePath: "/Users/me/.Trash/Kraki.app"))
+    }
+
+    /// K-256: Debug KRAKI_MAC_FORCE_SIGNED_OUT survives app activation.
+    func testForcedSignedOutLaunchIsNotUndoneByActivation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("forced-signed-out-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        // Never the real ~/.kraki: a regression must not sign the test host in.
+        var lookedForLogin = false
+        AuthManager.debugCLICredentialLoader = { _ in lookedForLogin = true; return nil }
+        defer { AuthManager.debugCLICredentialLoader = nil }
+        let coordinator = MacLaunchCoordinator()
+        coordinator.forceSignedOut = true
+        await coordinator.retryLogin(appState: app)
+        XCTAssertFalse(lookedForLogin, "activation must not even look for a login")
+        XCTAssertEqual(coordinator.phase, .launching)
+        XCTAssertFalse(coordinator.loginCheckFailed)
+        XCTAssertTrue(coordinator.forceSignedOut)
+    }
+
+    /// K-350: the 2 s launch-gate limit counts from when the gate appeared.
+    func testLaunchGateWatchdogCountsFromTheGate() {
+        typealias C = MacLaunchCoordinator
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 0), 2, accuracy: 0.001)
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 0.9), 1.1, accuracy: 0.001)
+        // The shell still gets a moment to lay out.
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 1.9), 0.5, accuracy: 0.001)
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 5), 0.5, accuracy: 0.001)
+    }
 }

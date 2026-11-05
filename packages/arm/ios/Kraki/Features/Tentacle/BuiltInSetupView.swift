@@ -31,6 +31,8 @@ struct BuiltInSetupView: View {
     /// Signed out of the app on this Mac: ask to sign in again (the built-in
     /// Kraki keeps its own sign-in and keeps this Mac online meanwhile).
     @AppStorage(AppState.signedOutByUserKey) private var signedOutByUser = false
+    /// Signed in; starting (or restarting) this Mac's Kraki.
+    @State private var bringingOnline = false
 
     /// Called once the tentacle is configured and running; the caller retries
     /// the credential discovery that moves the app into the signed-in UI.
@@ -142,40 +144,94 @@ struct BuiltInSetupView: View {
         .onChange(of: runner.phase) { _, phase in
             guard case .done = phase else { return }
             let signingInAgain = signedOutByUser
-            // First sign-in on this Mac: offer the phone once the main window
-            // is up (MacConnectPhoneStep; skipped if the account has a phone).
-            if !signingInAgain {
+            // First sign-in on a Mac that runs agents: offer the phone once
+            // the main window is up (MacConnectPhoneStep; skipped if the
+            // account has a phone). A remote-only Mac has no code to show.
+            if !signingInAgain, role != .remoteOnly {
                 UserDefaults.standard.set(true, forKey: MacConnectPhoneStep.pendingKey)
             }
+            bringingOnline = true
             Task {
                 await tentacleCLI.refreshDaemonState()
-                if signingInAgain {
-                    // Possibly another account: on restart Kraki sets the previous
-                    // account's device and sessions aside (account-switch.ts).
-                    if role != .remoteOnly { await tentacleCLI.restartDaemon() }
-                    finished = true
-                    onFinished()
-                } else if role != .remoteOnly {
-                    await tentacleCLI.startDaemon()
+                if role != .remoteOnly {
+                    if signingInAgain {
+                        // Possibly another account: on restart Kraki sets the previous
+                        // account's device and sessions aside (account-switch.ts).
+                        await tentacleCLI.restartDaemon()
+                    } else {
+                        await tentacleCLI.startDaemon()
+                    }
+                    MacPresenceController.shared.syncLoginItem()
                 }
+                // Signed in again: the steps below sign-in apply now.
+                if signingInAgain { signedOutByUser = false }
+                bringingOnline = false
+                // Stay for the Login Items / couldn't-start card; otherwise
+                // continue (the Welcome pane reports a Mac still offline).
+                if !Self.needsAction(step: currentStep, daemonState: tentacleCLI.daemonState) { finish() }
             }
+        }
+        .onChange(of: holdsSignIn, initial: true) { _, holds in
+            tentacleCLI.setupHoldsSignIn = holds
         }
         .task {
             // Returning users land here only when the daemon is not running.
             if currentStep == .background { await tentacleCLI.startDaemon() }
             if currentStep == .done, !finished { finished = true; onFinished() }
         }
-        .onDisappear { runner.cancel() }
+        .onDisappear {
+            runner.cancel()
+            tentacleCLI.setupHoldsSignIn = false
+        }
+    }
+
+    private func finish() {
+        guard !finished else { return }
+        finished = true
+        onFinished()
+    }
+
+    /// The background step shows a card the user has to act on.
+    static func needsAction(step: Step, daemonState: TentacleCLIManager.DaemonState) -> Bool {
+        guard step == .background else { return false }
+        switch daemonState {
+        case .needsApproval, .error: return true
+        default: return false
+        }
+    }
+
+    /// Setup still owns the window after sign-in: while this Mac is being
+    /// brought online, and while its Login Items / couldn't-start card shows.
+    static func holdsSignIn(
+        finished: Bool, runnerPhase: TentacleSetupRunner.Phase, bringingOnline: Bool,
+        step: Step, daemonState: TentacleCLIManager.DaemonState
+    ) -> Bool {
+        guard !finished else { return false }
+        if bringingOnline { return true }
+        switch runnerPhase {
+        case .configuring: return true
+        default: return needsAction(step: step, daemonState: daemonState)
+        }
+    }
+
+    private var holdsSignIn: Bool {
+        Self.holdsSignIn(finished: finished, runnerPhase: runner.phase, bringingOnline: bringingOnline,
+                         step: currentStep, daemonState: tentacleCLI.daemonState)
     }
 
     // MARK: Steps
 
+    static func moveToApplicationsDetail(_ location: AppInstallLocation) -> String {
+        location == .diskImage
+            ? String(localized: "Kraki is running from the disk image. Drag Kraki onto the Applications folder, then open it from there.")
+            // A translocated copy may already be in Applications (moved with `mv`).
+            : String(localized: "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. Quit Kraki and use Finder to move it into Applications (if it's already there, move it out and back in), then open it again.")
+    }
+
     private func moveToApplications(_ location: AppInstallLocation) -> some View {
         StepCard(
             title: String(localized: "Move Kraki to Applications"),
-            detail: location == .diskImage
-                ? String(localized: "Kraki is running from the disk image. Drag Kraki onto the Applications folder, then open it from there.")
-                : String(localized: "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. In Finder, drag Kraki from Downloads into Applications, then open it again.")
+            detail: Self.moveToApplicationsDetail(location)
         ) {
             HStack(spacing: 10) {
                 Button("Open Applications Folder") {
@@ -291,6 +347,7 @@ struct BuiltInSetupView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.krakiPrimary)
                     Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+                    Button("Not Now") { finish() }
                 }
             }
         case .error(let message):
@@ -314,6 +371,7 @@ struct BuiltInSetupView: View {
                     Button("Show Logs") {
                         NSWorkspace.shared.open(URL(fileURLWithPath: tentacleCLI.logsDirectory, isDirectory: true))
                     }
+                    Button("Not Now") { finish() }
                 }
             }
         default:

@@ -75,6 +75,14 @@ final class TentacleCLIManager {
     /// A command-line install already runs Kraki and the user hasn't chosen
     /// which one should (see TentacleMode.needsOwnerChoice).
     private(set) var ownerChoicePending = false
+    /// Setup has signed in and is still bringing this Mac online, or shows
+    /// the Login Items / couldn't-start card: app activation must not swap
+    /// the setup page for the main window (BuiltInSetupView sets this).
+    var setupHoldsSignIn = false
+
+    #if DEBUG
+    func setDaemonStateForTesting(_ state: DaemonState) { daemonState = state }
+    #endif
     /// Daemon-reported Full Disk Access ("granted" | "denied" | "missing").
     private(set) var fdaStatus: String?
     /// Relay connection state reported by the daemon.
@@ -270,11 +278,14 @@ final class TentacleCLIManager {
         )
         if on {
             await startDaemon()
+            MacPresenceController.shared.syncLoginItem()
         } else {
             daemonState = .stopping
             do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
             try? await Task.sleep(nanoseconds: 300_000_000)
             await refreshDaemonState()
+            // Nothing to keep online: Kraki no longer needs to open at login.
+            await MacPresenceController.shared.dropAddedLoginItem()
         }
     }
 
@@ -745,6 +756,9 @@ extension TentacleCLIManager {
     /// executable ("Failed to create attribution chain").
     func restartDaemonIfOutdated(_ daemon: [String: Any]?, pid: Int?) {
         guard builtIn.ownershipMarkerExists else { return }
+        // A copy on a disk image, translocated or in the Trash must not
+        // restart the daemon the installed app registered.
+        guard AppInstallLocation.isPermanent(bundlePath: Bundle.main.bundlePath) else { return }
         if let shipped = builtIn.version, let live = runningDaemonVersion,
            shipped != live, restartedForVersion != shipped {
             restartedForVersion = shipped

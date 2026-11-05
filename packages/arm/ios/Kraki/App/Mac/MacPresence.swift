@@ -325,10 +325,7 @@ final class MacPresenceController {
         isQuittingOffline = true
         KLog.diag("[Presence] quitting; taking this Mac offline")
         await tentacle?.goOffline()
-        if UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) {
-            try? await SMAppService.mainApp.unregister()
-            UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
-        }
+        await dropAddedLoginItem()
     }
 
     /// Set when Sparkle is about to replace the app (MacUpdateController).
@@ -469,7 +466,11 @@ final class MacPresenceController {
     /// While this Mac is online, Kraki opens at login so the menu bar shows
     /// it. Only a login item we added is removed again (on quit).
     func syncLoginItem() {
-        guard managesPresence else { return }
+        guard Self.shouldRegisterLoginItem(
+            managesPresence: managesPresence,
+            role: BuiltInTentacle.thisMacRole,
+            bundlePath: Bundle.main.bundlePath
+        ) else { return }
         let service = SMAppService.mainApp
         guard service.status != .enabled, service.status != .requiresApproval else { return }
         do {
@@ -479,6 +480,25 @@ final class MacPresenceController {
         } catch {
             KLog.diag("[Presence] login item registration failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Only once the user chose to run agents here, and only from a copy that
+    /// stays: a login item added from the disk image, a translocated copy or
+    /// the Trash outlives that copy and points macOS at the wrong app.
+    nonisolated static func shouldRegisterLoginItem(
+        managesPresence: Bool,
+        role: BuiltInTentacle.ThisMacRole,
+        bundlePath: String
+    ) -> Bool {
+        managesPresence && role == .runsAgents && AppInstallLocation.isPermanent(bundlePath: bundlePath)
+    }
+
+    /// This Mac stopped running agents (remote-only): drop the login item we added.
+    func dropAddedLoginItem() async {
+        guard UserDefaults.standard.bool(forKey: Self.autoLoginItemKey) else { return }
+        try? await SMAppService.mainApp.unregister()
+        UserDefaults.standard.set(false, forKey: Self.autoLoginItemKey)
+        KLog.diag("[Presence] removed login item")
     }
 }
 
