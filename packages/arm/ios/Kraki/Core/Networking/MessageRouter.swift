@@ -654,6 +654,7 @@ final class MessageRouter {
             if appState.sessionStore.archiveInfo[tentacleDeviceId] != info {
                 appState.sessionStore.archiveInfo[tentacleDeviceId] = info
             }
+            appState.commandSender?.reconcileAutoArchiveDays(deviceId: tentacleDeviceId, reported: days)
         }
         guard appState.sessionStore.acceptsSessionListSnapshot(
             deviceId: tentacleDeviceId,

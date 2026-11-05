@@ -175,6 +175,19 @@ final class SessionStore {
 
     var archivedCount: Int { archiveInfo.values.reduce(0) { $0 + $1.count } }
 
+    /// Archive After chosen here but not yet confirmed by that computer's
+    /// `session_list` (it was offline): sent when it next reports (K-082).
+    var pendingAutoArchiveDays: [String: Int] = [:]
+
+    /// The Archive After value to show: the one every computer has (or will
+    /// get), `nil` when they differ.
+    var autoArchiveDays: Int? {
+        let computers = Set(archiveInfo.keys).union(pendingAutoArchiveDays.keys)
+        let values = Set(computers.compactMap { pendingAutoArchiveDays[$0] ?? archiveInfo[$0]?.days })
+        if values.isEmpty { return 14 }
+        return values.count == 1 ? values.first : nil
+    }
+
     func archivedCount(deviceId: String?) -> Int {
         guard let deviceId else { return archivedCount }
         return archiveInfo[deviceId]?.count ?? 0

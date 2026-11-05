@@ -10881,6 +10881,16 @@
         }
       }
     },
+    "Varies" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不一致"
+          }
+        }
+      }
+    },
     "Verifying your account and pairing this device." : {
       "localizations" : {
         "zh-Hans" : {
