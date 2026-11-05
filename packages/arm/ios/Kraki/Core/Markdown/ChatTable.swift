@@ -114,6 +114,9 @@ struct ChatTablePaint {
 
 final class ChatTable {
     let source: [[String]]
+    /// The rows as the message wrote them (header first). Sorting "off"
+    /// returns to this order.
+    let originalSource: [[String]]
     let alignments: [TableAlignment]
     let columnCount: Int
     let numeric: [Bool]
@@ -161,13 +164,14 @@ final class ChatTable {
             // Numbers read best right-aligned unless the author centered them.
             return numeric[column] && explicit == .leading ? .trailing : explicit
         }
-        self.init(source: normalized, header: headerRow, body: bodyRows, alignments: aligned,
-                  numeric: numeric, sortColumn: nil, sortAscending: true)
+        self.init(source: normalized, originalSource: normalized, header: headerRow, body: bodyRows,
+                  alignments: aligned, numeric: numeric, sortColumn: nil, sortAscending: true)
     }
 
-    private init(source: [[String]], header: [String], body bodyRows: [[String]],
+    private init(source: [[String]], originalSource: [[String]], header: [String], body bodyRows: [[String]],
                  alignments: [TableAlignment], numeric: [Bool], sortColumn: Int?, sortAscending: Bool) {
         self.source = source
+        self.originalSource = originalSource
         self.alignments = alignments
         self.columnCount = header.count
         self.numeric = numeric
@@ -209,12 +213,23 @@ final class ChatTable {
         self.headerWidths = headerWidths
     }
 
-    /// The same table with its body rows reordered by one column (nil = source order).
+    /// A header tap: first in the column's natural direction (numbers
+    /// largest first, text A→Z), then the other direction, then off.
+    func nextSort(tappingColumn column: Int) -> ChatTable {
+        let first = column < numeric.count ? !numeric[column] : true
+        guard sortColumn == column else { return sorted(by: column, ascending: first) }
+        return sortAscending == first ? sorted(by: column, ascending: !first) : sorted(by: nil, ascending: true)
+    }
+
+    /// The same table with its body rows reordered by one column (nil = the
+    /// message's own order).
     func sorted(by column: Int?, ascending: Bool) -> ChatTable {
-        let header = source.first ?? []
-        var rows = Array(source.dropFirst())
+        let header = originalSource.first ?? []
+        var rows = Array(originalSource.dropFirst())
         if let column, column < columnCount {
-            let keyed = rows.enumerated().map { index, row in (index, row, ChatTable.sortKey(plainBody[index][column])) }
+            let keyed = rows.enumerated().map { index, row in
+                (index, row, ChatTable.sortKey(ChatTable.plainText(row[column])))
+            }
             rows = keyed.sorted { a, b in
                 // Empty cells sink to the bottom in both directions.
                 if case .empty = a.2 { if case .empty = b.2 { return a.0 < b.0 }; return false }
@@ -224,8 +239,8 @@ final class ChatTable {
                 return ascending ? order == .orderedAscending : order == .orderedDescending
             }.map(\.1)
         }
-        return ChatTable(source: [header] + rows, header: header, body: rows, alignments: alignments,
-                         numeric: numeric, sortColumn: column, sortAscending: ascending)
+        return ChatTable(source: [header] + rows, originalSource: originalSource, header: header, body: rows,
+                         alignments: alignments, numeric: numeric, sortColumn: column, sortAscending: ascending)
     }
 
     /// Height the table occupies inside a bubble of this width.
@@ -268,7 +283,10 @@ final class ChatTable {
     /// GFM Markdown (cell Markdown preserved).
     func markdown() -> String {
         func line(_ cells: [String]) -> String {
-            "| " + cells.map { $0.replacingOccurrences(of: "|", with: "\\|") }.joined(separator: " | ") + " |"
+            // Cells keep their source Markdown, where a literal pipe is
+            // already written `\|`; escape only the bare ones.
+            "| " + cells.map { $0.replacingOccurrences(of: #"(?<!\\)\|"#, with: #"\\|"#, options: .regularExpression) }
+                .joined(separator: " | ") + " |"
         }
         let separator = "|" + alignments.map { alignment -> String in
             switch alignment {
@@ -342,6 +360,11 @@ final class ChatTable {
     }
 
     private enum SortKey { case number(Double), text(String), empty }
+
+    /// A cell's rendered text (what `plainBody` holds).
+    private static func plainText(_ cell: String) -> String {
+        parseMarkdownInline(cell).map(\.text).joined()
+    }
 
     private static func sortKey(_ text: String) -> SortKey {
         let trimmed = text.trimmingCharacters(in: .whitespaces)

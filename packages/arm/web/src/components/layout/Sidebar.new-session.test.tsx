@@ -45,6 +45,17 @@ describe('Sidebar New Session sheet (K-240)', () => {
     create.mockRestore();
   });
 
+  it('closes at once when creating the session fails, so the error is not hidden under the sheet', () => {
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Session' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    act(() => { useStore.getState().setLastError('Agent failed to start'); });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    create.mockRestore();
+  });
+
   it('closes anyway when the session never arrives', () => {
     vi.useFakeTimers();
     const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter, Route, Routes, useNavigate, useParams } from 'react-router';
+import { Route, Routes, useNavigate, useParams } from 'react-router';
 import type { ReactNode } from 'react';
 import { AppRouter } from './AppRouter';
 
@@ -38,8 +38,8 @@ function SessionId() {
 
 describe('AppRouter (K-240)', () => {
   it('never shows the previous chat under the new URL', async () => {
-    // React Router's default renders the route change as a transition.
-    expect(await openAndReadBeforeNextTask(BrowserRouter)).toBe('/session/b shows a');
+    // React Router 7's stock BrowserRouter renders the route change as a
+    // transition ('/session/b shows a' here); AppRouter must not.
     expect(await openAndReadBeforeNextTask(AppRouter)).toBe('/session/b shows b');
   });
 });

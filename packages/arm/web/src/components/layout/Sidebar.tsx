@@ -79,14 +79,18 @@ export function Sidebar() {
   const [newOpen, setNewOpen] = useState(false);
   // After Start the sheet stays up until the new session's route renders
   // (closing first showed the list for a frame, K-240); a session that never
-  // arrives (error, offline) still releases it.
+  // arrives (offline) still releases it, and a create error releases it at
+  // once so the error banner under the sheet is visible.
   const [awaitingCreated, setAwaitingCreated] = useState<string | undefined | null>(null);
   useEffect(() => {
     if (awaitingCreated === null) return;
     const done = () => { setAwaitingCreated(null); setNewOpen(false); };
     if (sessionId && sessionId !== awaitingCreated) { done(); return; }
     const timer = setTimeout(done, NEW_SESSION_WAIT_MS);
-    return () => clearTimeout(timer);
+    const unsubscribe = useStore.subscribe((state, prev) => {
+      if (state.lastError && state.lastError !== prev.lastError) done();
+    });
+    return () => { clearTimeout(timer); unsubscribe(); };
   }, [awaitingCreated, sessionId]);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
