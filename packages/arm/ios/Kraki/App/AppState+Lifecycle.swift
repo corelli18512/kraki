@@ -111,6 +111,44 @@ extension AppState {
         resetIdentity(clearRelayURL: true)
     }
 
+    /// The "Log out?" alert's message: logging out discards what this device
+    /// has not delivered yet, so say so (K-037).
+    var logoutConfirmationMessage: String {
+        (logoutLossNotice + [String(localized: "You'll need to scan a pairing QR or sign in again to reconnect.")])
+            .joined(separator: "\n\n")
+    }
+
+    /// What logging out would discard or leave running, one paragraph each;
+    /// empty when nothing is pending. Also shown by "Log Out and Connect".
+    var logoutLossNotice: [String] {
+        let working = sessionStore.sessions.values.filter { $0.state == .active || $0.state == .compacting }.count
+        return Self.logoutLossNotice(
+            unsent: commandSender?.unsentMessageCount ?? 0,
+            drafts: unsentDraftCount,
+            working: working
+        )
+    }
+
+    /// Composer drafts with text in them. Signing out (or a device
+    /// revocation) discards them with the rest of the account's state.
+    var unsentDraftCount: Int {
+        sessionStore.drafts.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+    }
+
+    static func logoutLossNotice(unsent: Int, drafts: Int, working: Int) -> [String] {
+        var parts: [String] = []
+        if unsent > 0 {
+            parts.append(String(localized: "\(unsent) messages haven't been delivered yet. Logging out discards them."))
+        }
+        if drafts > 0 {
+            parts.append(String(localized: "\(drafts) drafts haven't been sent. Logging out discards them."))
+        }
+        if working > 0 {
+            parts.append(String(localized: "\(working) sessions are still working. They keep running on your computer."))
+        }
+        return parts
+    }
+
     /// Drop everything tied to the current device identity: credentials, the
     /// decrypt pipeline (its router caches the old private key), Pulse
     /// streams, and the per-account stores and outbox. Used by sign-out and
@@ -130,6 +168,7 @@ extension AppState {
         // A new sign-in is a new device: computers pair it again.
         resetDeviceTrust()
         preferencesManager?.resetVocabulary()
+        preferencesManager?.resetTheme()
         if clearRelayURL { clearStoredRelayURL() }
         deviceId = nil
         user = nil
@@ -144,6 +183,7 @@ extension AppState {
         lastError = nil
         reconnectAttempt = 0
         hasCompletedInitialConnect = false
+        pairingInFlightSince = nil
         connectionStatus = .awaitingLogin
         sessionStore.reset()
         deviceStore.reset()
@@ -362,6 +402,7 @@ extension AppState {
         self.connectionStatus = .connected
         self.reconnectAttempt = 0
         self.lastError = nil
+        self.pairingInFlightSince = nil
         // First-time login crosses the line into MainTabView. Mid-
         // session reconnects re-enter this method too, which is fine
         // — setting it to true again is a no-op.
@@ -402,6 +443,7 @@ extension AppState {
     }
 
     func onAuthFailed(error: String) {
+        self.pairingInFlightSince = nil
         self.lastError = error
         self.connectionStatus = .awaitingLogin
     }

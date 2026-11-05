@@ -101,6 +101,13 @@ extension MessageRouter {
                 }
             }
         }
+        // A computer that serves this device its sessions no longer requires
+        // pairing (Kraki was updated there): drop the "Update Kraki" hint
+        // instead of keeping it until relaunch (K-183).
+        if type == "session_list", let from = dict["deviceId"] as? String,
+           appState.deviceTrust.pairingRequired.contains(from) {
+            appState.deviceTrust.pairingRequired.remove(from)
+        }
         if type == "session_list", let signedBy {
             Self.dropUnauthenticatedHistory(listedBy: signedBy, dict: dict, appState: appState)
             // The ordering watermark may come from unsigned (possibly forged,

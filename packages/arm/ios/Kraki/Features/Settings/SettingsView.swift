@@ -42,11 +42,19 @@ struct SettingsView: View {
         .environment(\.defaultMinListHeaderHeight, 0)
         .task {
             await appState.pushManager?.refreshPermissionStatus()
-            pushToggle = (appState.pushManager?.userEnabled ?? false)
-                && (appState.pushManager?.permissionStatus == .authorized
-                    || appState.pushManager?.permissionStatus == .provisional
-                    || appState.pushManager?.permissionStatus == .ephemeral)
+            syncPushToggle()
         }
+        // Back from iOS Settings: the permission may have changed (K-036).
+        .onChange(of: appState.pushManager?.permissionStatus) { _, _ in
+            if !pushBusy { syncPushToggle() }
+        }
+    }
+
+    private func syncPushToggle() {
+        pushToggle = (appState.pushManager?.userEnabled ?? false)
+            && (appState.pushManager?.permissionStatus == .authorized
+                || appState.pushManager?.permissionStatus == .provisional
+                || appState.pushManager?.permissionStatus == .ephemeral)
     }
 
     // MARK: - Account
@@ -103,7 +111,7 @@ struct SettingsView: View {
                     }
                     Button("Cancel", role: .cancel) { }
                 } message: {
-                    Text("You'll need to scan a pairing QR or sign in again to reconnect.")
+                    Text(appState.logoutConfirmationMessage)
                 }
             } else {
                 Text("Not signed in")

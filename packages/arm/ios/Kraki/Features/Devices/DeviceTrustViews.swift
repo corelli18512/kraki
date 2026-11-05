@@ -9,12 +9,41 @@ import SwiftUI
 enum AccountAccessNotice: Equatable {
     case updateComputer
     case checkSavedConnection
+    /// The computer revoked this device's pairing and now answers without
+    /// signing, which a pinned connection refuses (K-026).
+    case pairingRevoked
+    /// Pairing failed because this device's clock is off (K-327).
+    case clockOff
 
     init?(state: ComputerTrustState) {
         switch state {
         case .needsPairing: self = .updateComputer
+        case .failed("revoked"): self = .pairingRevoked
+        case .failed("stale"), .failed("from_future"): self = .clockOff
         case .failed, .stoppedSigning: self = .checkSavedConnection
         default: return nil
+        }
+    }
+
+    func title(computer: String) -> String {
+        switch self {
+        case .updateComputer: return String(localized: "Update Kraki on \(computer)")
+        case .checkSavedConnection: return String(localized: "Check saved connection to \(computer)")
+        case .pairingRevoked: return String(localized: "\(computer) revoked this device's pairing")
+        case .clockOff: return String(localized: "Couldn't pair with \(computer)")
+        }
+    }
+
+    func message(computer: String) -> String {
+        switch self {
+        case .updateComputer:
+            return String(localized: "This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
+        case .checkSavedConnection:
+            return String(localized: "Kraki could not verify the saved connection. Update Kraki on this computer first. Only reset if you changed or reinstalled it; otherwise keep the saved keys and investigate.")
+        case .pairingRevoked:
+            return String(localized: "Its replies are no longer signed for this device, so Kraki holds them back. Reset the saved connection to keep using \(computer) with your account, or scan its code to pair again.")
+        case .clockOff:
+            return String(localized: "This device's clock is off. Check the date and time, then scan the code again, or reset the saved connection to use \(computer) without pairing.")
         }
     }
 }
@@ -27,14 +56,10 @@ struct AccountAccessUpgradeBanner: View {
         if let device = appState.computersNeedingPairing.first,
            let notice = AccountAccessNotice(state: appState.trustState(for: device.id)) {
             VStack(alignment: .leading, spacing: 4) {
-                if notice == .updateComputer {
-                    Text("Update Kraki on \(device.name)").font(.headline)
-                    Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Check saved connection to \(device.name)").font(.headline)
-                    Text("Kraki could not verify the saved connection. Update Kraki on this computer first. Only reset if you changed or reinstalled it; otherwise keep the saved keys and investigate.")
-                        .font(.caption).foregroundStyle(.secondary)
+                Text(notice.title(computer: device.name)).font(.headline)
+                Text(notice.message(computer: device.name))
+                    .font(.caption).foregroundStyle(.secondary)
+                if notice != .updateComputer {
                     Button("Reset Saved Connection…") { resetting = device }
                         .accessibilityIdentifier("accountAccess.resetConnection")
                 }
@@ -472,13 +497,14 @@ struct PairingFeedbackToast: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Couldn't pair with \(name)")
                     Text(trustCopy: PairingFailureText.describe(reason))
-                        .font(.system(size: 11))
+                        .scaledFont(11)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .font(.system(size: 13, weight: .medium))
+        // Follows Dynamic Type like the banner it precedes (NET-241).
+        .scaledFont(13, weight: .medium)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

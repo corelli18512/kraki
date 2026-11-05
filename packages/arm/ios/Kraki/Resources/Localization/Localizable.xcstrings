@@ -48,12 +48,204 @@
         }
       }
     },
+    "%@ revoked this device's pairing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已撤销此设备的配对"
+          }
+        }
+      }
+    },
+    "%lld drafts haven't been sent. Logging out discards them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld draft hasn't been sent. Logging out discards it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld drafts haven't been sent. Logging out discards them."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 份草稿尚未发送，退出登录会将其丢弃。"
+          }
+        }
+      }
+    },
+    "%lld messages haven't been delivered yet. Logging out discards them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld message hasn't been delivered yet. Logging out discards it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld messages haven't been delivered yet. Logging out discards them."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 条消息尚未送达，退出登录会将其丢弃。"
+          }
+        }
+      }
+    },
+    "%lld sessions are still working. They keep running on your computer." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld session is still working. It keeps running on your computer."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld sessions are still working. They keep running on your computer."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个会话仍在工作，它们会在你的电脑上继续运行。"
+          }
+        }
+      }
+    },
+    "%lld undelivered messages were removed from this device with its sign-in." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld undelivered message was removed from this device with its sign-in."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld undelivered messages were removed from this device with its sign-in."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条未送达的消息已随此设备的登录信息一并移除。"
+          }
+        }
+      }
+    },
+    "Camera Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相机不可用"
+          }
+        }
+      }
+    },
     "Can't reach the Kraki server. Check this Mac's internet connection." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "连不上 Kraki 服务器。请检查这台 Mac 的网络连接。"
+          }
+        }
+      }
+    },
+    "Couldn't reach the relay to pair. Check your connection, then scan the code again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接中继服务器完成配对。请检查网络连接，然后重新扫码。"
+          }
+        }
+      }
+    },
+    "Its replies are no longer signed for this device, so Kraki holds them back. Reset the saved connection to keep using %@ with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的回复不再为此设备签名，因此 Kraki 暂不显示。重置已保存的连接即可继续通过你的账户使用 %@，或扫描它的二维码重新配对。"
+          }
+        }
+      }
+    },
+    "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥加密。如果你在该电脑上重新安装了 Kraki，在你于该电脑上运行 `kraki connect` 并扫描新二维码之前，它无法读取新消息。如果没有，照常使用即可。"
+          }
+        }
+      }
+    },
+    "This device's camera can't be used to scan. Enter the pairing URL from your terminal instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的相机无法用于扫码。请改为输入终端中显示的配对 URL。"
+          }
+        }
+      }
+    },
+    "This device's clock is off. Check the date and time, then scan the code again, or reset the saved connection to use %@ without pairing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的时钟不准确。请检查日期和时间后重新扫码，或重置已保存的连接，在不配对的情况下使用 %@。"
+          }
+        }
+      }
+    },
+    "This device's pairing was revoked. Reset the saved connection to keep using the computer with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的配对已被撤销。重置已保存的连接即可继续通过你的账户使用这台电脑，或扫描它的二维码重新配对。"
           }
         }
       }
@@ -929,6 +1121,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 个工具正在并行运行…"
+          }
+        }
+      }
+    },
+    "%lld unsent drafts were removed from this device with its sign-in." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent draft was removed from this device with its sign-in."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent drafts were removed from this device with its sign-in."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 份未发送的草稿已随此设备的登录信息一并移除。"
           }
         }
       }
@@ -9790,16 +10010,6 @@
         }
       }
     },
-    "The relay reported a new encryption key for %@. Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥，因此无法向该电脑发送消息。如果你在该电脑上重新安装了 Kraki，请运行 `kraki connect` 并扫描新二维码。"
-          }
-        }
-      }
-    },
     "The session device is offline and no cached conversation is available." : {
       "localizations" : {
         "zh-Hans" : {
@@ -10066,16 +10276,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此设备的时钟不准确。请检查日期和时间后重新扫码。"
-          }
-        }
-      }
-    },
-    "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此设备的配对已被撤销。请扫描电脑的二维码重新配对，或选择“忘记配对”，以在不使用设备信任的情况下连接。"
           }
         }
       }

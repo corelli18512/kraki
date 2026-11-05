@@ -193,6 +193,13 @@ final class AppState {
         return state
     }
 
+    /// Tests: preferences sync on an isolated `UserDefaults`.
+    func usePreferencesManagerForTesting(defaults: UserDefaults) -> PreferencesManager {
+        let manager = PreferencesManager(appState: self, defaults: defaults)
+        preferencesManager = manager
+        return manager
+    }
+
     static func makeUnitTestHost() -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-unit-host-\(UUID().uuidString)", isDirectory: true)
@@ -444,6 +451,12 @@ final class AppState {
     /// A scanned/opened pairing link waiting for the user's decision
     /// (untrusted relay, or this phone is already connected).
     var pendingPairingPrompt: PairingLinkPrompt?
+    /// A pairing code is being signed in with (scanned, pasted or opened as a
+    /// link) and has not been answered yet. Drives the login screen's
+    /// "Connecting…" panel, its Cancel and the pairing timeout (K-035).
+    var pairingInFlightSince: Date?
+    /// Without an answer from the relay for this long, pairing gives up.
+    @ObservationIgnored static var pairingTimeout: TimeInterval = 30
     /// Key-mismatch warnings the user has already dismissed.
     var acknowledgedKeyWarnings: Set<String> = []
 
@@ -455,7 +468,9 @@ final class AppState {
             return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
         }
         let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
-        return (open, String(localized: "The relay reported a new encryption key for \(names.isEmpty ? String(localized: "a computer") : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code."))
+        // Only the relay says the key changed (K-303): messages still reach
+        // the computer if it kept its key, so don't claim they can't.
+        return (open, String(localized: "The relay reported a new encryption key for \(names.isEmpty ? String(localized: "a computer") : names). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
     }
 
     /// True from the moment the user taps "Sign in with GitHub" until
