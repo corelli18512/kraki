@@ -202,8 +202,10 @@ export class ApnsProvider implements PushProvider {
             if (parsed.reason) errorReason = parsed.reason;
           } catch { /* ignore parse errors */ }
           if (errorReason === 'ExpiredProviderToken' || errorReason === 'InvalidProviderToken') {
-            // Our signing token, not the device token: mint a fresh JWT next time.
-            this.jwt = null;
+            // Our signing token, not the device token: mint a fresh JWT next
+            // time. Only if it is still the one this request used: concurrent
+            // failures must not each mint one (TooManyProviderTokenUpdates).
+            if (this.jwt?.token === jwt) this.jwt = null;
           }
           if (isPermanentTokenFailure(errorReason)) {
             logger.info('APNs token rejected, marking for removal', { status: statusCode, reason: errorReason, tokenSuffix: token.slice(-8) });

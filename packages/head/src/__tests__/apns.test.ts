@@ -137,6 +137,22 @@ describe('ApnsProvider retries a push lost on our side (K-301)', () => {
     expect(seen[1]!.authorization).not.toBe(seen[0]!.authorization);
   });
 
+  it('concurrent ExpiredProviderToken failures mint one new token, not one each', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let calls = 0;
+    // The first two requests (sent together with the same token) are refused.
+    const session = recordingSession(seen, (stream) => (calls++ < 2 ? reject('ExpiredProviderToken', 403)(stream) : ok(stream)));
+    const { p } = provider([session]);
+    const results = await Promise.all([
+      p.send('token-0123456789abcdef', { blob: 'b', key: 'k' }),
+      p.send('token-fedcba9876543210', { blob: 'b', key: 'k' }),
+    ]);
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(seen).toHaveLength(4);
+    expect(seen[1]!.authorization).toBe(seen[0]!.authorization);
+    expect(new Set(seen.map((h) => h.authorization)).size).toBe(2);
+  });
+
   it('does not retry a refusal of the device token or payload', async () => {
     const seen: Array<Record<string, unknown>> = [];
     const { p } = provider([recordingSession(seen, reject('BadDeviceToken'))]);
