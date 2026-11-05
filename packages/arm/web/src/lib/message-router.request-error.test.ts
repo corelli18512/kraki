@@ -84,7 +84,7 @@ describe('create/import with no answer (K-204, K-206)', () => {
       expect(cmdState.pendingCreateRequests.size).toBe(0);
       expect(cmdState.pendingPrompts.size).toBe(0);
       expect(useStore.getState().drafts.get('kraki.new-session-draft')).toBe('Fix the flaky test');
-      expect(useStore.getState().lastError).toBe('The computer didn’t answer, so nothing was started. Try again.');
+      expect(useStore.getState().lastError).toBe('The computer didn’t answer in time. If the session doesn’t appear, try again.');
     } finally { vi.useRealTimers(); }
   });
 
@@ -115,7 +115,7 @@ describe('create/import with no answer (K-204, K-206)', () => {
       expect(useStore.getState().pendingSessions.has('local-1')).toBe(true);
       vi.advanceTimersByTime(CREATE_REQUEST_TIMEOUT_MS);
       expect(useStore.getState().pendingSessions.has('local-1')).toBe(false);
-      expect(useStore.getState().lastError).toBe('The computer didn’t answer, so nothing was started. Try again.');
+      expect(useStore.getState().lastError).toBe('The computer didn’t answer in time. If the session doesn’t appear, try again.');
     } finally { vi.useRealTimers(); }
   });
 
