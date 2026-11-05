@@ -16,7 +16,7 @@ import { ArrowDownCircle, Gauge, Laptop, RotateCw } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import {
-  accountKeyForSession, isStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
+  accountKeyForSession, isDataStale, isStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
   readStatus, ringState, ringWindows, shortLabel, shortReset, usageUpdateHint, windowName, type MergedAccountUsage,
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
@@ -145,7 +145,7 @@ function AccountTile({ account, ringSize, lineWidth, showsPlan, shortName, delay
         </div>
         <div className="ua-tile-badges">
           <ProviderChip provider={account.provider} />
-          {isStale(account, now) && account.windows.length > 0 && <span className="ua-stale">{t('status.stale')}</span>}
+          {isDataStale(account, now) && account.windows.length > 0 && <span className="ua-stale">{t('status.stale')}</span>}
         </div>
       </div>
       <AccountRings account={account} size={ringSize} lineWidth={lineWidth} spacing={big ? 18 : 14} now={now} delay={delay} animateIn={animateIn} />
