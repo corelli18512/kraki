@@ -82,14 +82,20 @@ describe('SettingsPanel native preferences parity', () => {
     open(); tab('Notifications');
     expect(screen.getByText('System permission')).toBeInTheDocument();
     expect(screen.getByText('Push notifications aren’t available with this relay.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
-    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
+    // Without Web Push a browser has no way to notify: the switch reads off
+    // and cannot be turned on (K-111).
+    const notify = screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' });
+    expect(notify).toHaveAttribute('aria-checked', 'false');
+    expect(notify).toBeDisabled();
   });
   it('K-111: says the browser, not the relay, lacks push when it does', () => {
     useStore.setState({ vapidPublicKey: 'public-key' });
     open(); tab('Notifications');
     expect(screen.getByText('Push notifications aren’t available in this browser.')).toBeInTheDocument();
     expect(screen.queryByText('Push notifications aren’t available with this relay.')).not.toBeInTheDocument();
+    const notify = screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' });
+    expect(notify).toHaveAttribute('aria-checked', 'false');
+    expect(notify).toBeDisabled();
   });
   it('K-111: Notify me reads off in a fresh browser that is not subscribed to push', async () => {
     push.supported = true;

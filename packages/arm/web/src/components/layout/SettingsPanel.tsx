@@ -194,7 +194,8 @@ export function SettingsPanel({
     setUsageShortcut(key, enabled);
   }
   /** In a browser, notifications are Web Push: the switch shows whether this
-   *  browser is subscribed, not a preference that does nothing on its own. */
+   *  browser is subscribed, not a preference that does nothing on its own.
+   *  Without Web Push (browser or relay) it is off and cannot be turned on. */
   const webPush = !desktop && isPushSupported() && !!state.vapidPublicKey;
   async function updateNotifications(on: boolean) {
     setError(null);
@@ -439,8 +440,8 @@ export function SettingsPanel({
         <SettingsRow label={t('notifications.notify')}>
           <SettingsSwitch
             label={t('notifications.notify')}
-            on={webPush ? pushEnabled : notificationsEnabled}
-            disabled={pushLoading}
+            on={desktop ? notificationsEnabled : pushEnabled}
+            disabled={pushLoading || (!desktop && !webPush && !pushEnabled)}
             onChange={(on) => {
               void updateNotifications(on);
             }}
