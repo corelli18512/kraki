@@ -343,11 +343,20 @@ export async function cmdAuth(args: string[]): Promise<void> {
   }
 
   // Step 1: Request device code
-  const res = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const { githubUnreachableMessage } = await import('../github-reach.js');
+    process.stderr.write(`error: ${githubUnreachableMessage(err)}\n`);
+    gracefulExit(1);
+    return;
+  }
   if (!res.ok) {
     process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
     gracefulExit(1);

@@ -27,6 +27,7 @@ import {
 import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
+import { githubUnreachableMessage } from './github-reach.js';
 import { findMacAppWithBuiltIn } from './managed.js';
 import { runAgentsCheckChild, type AgentCheckResult } from './agents-check.js';
 import { isSea } from 'node:sea';
@@ -305,11 +306,17 @@ interface DeviceCodeResponse {
  * keypress); the user pastes it and approves. Saves the token for the daemon.
  */
 async function githubDeviceFlow(clientId: string): Promise<{ token: string; username: string }> {
-  const res = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(githubUnreachableMessage(err));
+  }
   if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`);
   const data = await res.json() as DeviceCodeResponse;
 

@@ -45,6 +45,7 @@ import {
   saveGitHubToken,
 } from './config.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
+import { githubUnreachableMessage } from './github-reach.js';
 
 export type SetupJsonEvent =
   | { event: 'start'; version: string }
@@ -88,12 +89,19 @@ function getArg(args: string[], flag: string): string | undefined {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 
+/** The GitHub login for `token`, null when GitHub refuses it; throws
+ *  `github_unreachable` when GitHub cannot be reached at all. */
 async function githubUser(deps: SetupJsonDeps, token: string): Promise<string | null> {
+  let res: Response;
   try {
-    const res = await deps.fetch('https://api.github.com/user', {
+    res = await deps.fetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'kraki-tentacle', Accept: 'application/json' },
       signal: AbortSignal.timeout(10_000),
     });
+  } catch (err) {
+    throw new SetupJsonError('github_unreachable', githubUnreachableMessage(err));
+  }
+  try {
     if (!res.ok) return null;
     const body = await res.json() as { login?: unknown };
     return typeof body.login === 'string' ? body.login : null;
@@ -117,11 +125,17 @@ async function resolveClientId(deps: SetupJsonDeps): Promise<string> {
 
 async function deviceFlow(deps: SetupJsonDeps): Promise<string> {
   const clientId = await resolveClientId(deps);
-  const res = await deps.fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await deps.fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new SetupJsonError('github_unreachable', githubUnreachableMessage(err));
+  }
   if (!res.ok) throw new SetupJsonError('device_code_failed', `GitHub device code request failed (${res.status})`);
   const code = await res.json() as {
     device_code: string; user_code: string; verification_uri: string; expires_in: number; interval?: number;
@@ -217,7 +231,8 @@ async function resolveToken(
   if (!forceLogin) {
     const saved = loadGitHubToken();
     if (saved) {
-      const username = await githubUser(deps, saved);
+      // Unreachable now: the fresh sign-in below reports it.
+      const username = await githubUser(deps, saved).catch(() => null);
       if (username) return { token: saved, username, source: 'saved' };
     }
   }

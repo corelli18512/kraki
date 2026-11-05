@@ -254,6 +254,21 @@ describe("runSetup — GitHub device code", () => {
   });
 });
 
+describe("runSetup — GitHub unreachable (K-324)", () => {
+  it("names github.com and the proxy setting instead of a bare 'fetch failed'", async () => {
+    mockSavedToken.mockReturnValueOnce(null);
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/config')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ githubClientId: 'cid' }) });
+      if (url.includes('github.com')) return Promise.reject(new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), { code: 'ENOTFOUND' }) }));
+      return Promise.reject(new Error(url));
+    }) as typeof fetch;
+
+    const failure = await runSetup().catch((err: Error) => err);
+    expect((failure as Error).message).toContain('Could not reach github.com (ENOTFOUND)');
+    expect((failure as Error).message).toContain('HTTPS_PROXY');
+  });
+});
+
 describe("runSetup — coding agents", () => {
   beforeEach(() => mockOfficialApi());
 
