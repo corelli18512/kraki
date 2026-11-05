@@ -1200,6 +1200,13 @@ export class PiAdapter extends AgentAdapter {
     return this.sessions.get(sessionId)?.usage ?? null;
   }
 
+  /** A respawned pi process starts from zero until its first
+   *  get_session_stats; keep the persisted totals meanwhile. */
+  override setSessionUsage(sessionId: string, usage: SessionUsage): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.usage = { ...usage };
+  }
+
   private sweepIdle(): void {
     const now = Date.now();
     for (const [id, s] of this.sessions) {

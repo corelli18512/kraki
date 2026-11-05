@@ -290,7 +290,13 @@ export function wireAdapterEvents(client: RelayClient): void {
   };
 
   client.adapter.onUsageUpdate = (sessionId, usage) => {
+    const meta = client.sessionManager.getMeta(sessionId);
+    const changed = JSON.stringify(meta?.usage) !== JSON.stringify(usage);
     client.sessionManager.setUsage(sessionId, usage);
+    // Totals that arrive after the closing idle (Pi reports them
+    // asynchronously) would otherwise show one turn late: the idle carried
+    // the previous totals. A running turn's idle will carry them.
+    if (changed && meta && meta.state !== 'active') client.broadcastSessionList();
   };
 
   client.adapter.onCompaction = (sessionId, event) => {
