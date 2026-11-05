@@ -336,8 +336,16 @@ enum VoiceVocabularyCopy {
 struct VoiceVocabularyPage: View {
     @Environment(AppState.self) private var appState
     private var store: VoiceVocabularyStore { appState.voiceVocabularyStore }
-    @State private var editing: VoiceTerm?
-    @State private var isNew = false
+    /// The word in the editor sheet and whether it is new. One value, so
+    /// the sheet never reads a stale `isNew` (the first Add Word used to
+    /// open "Edit Word").
+    @State private var editing: EditingTerm?
+
+    private struct EditingTerm: Identifiable {
+        let term: VoiceTerm
+        let isNew: Bool
+        var id: UUID { term.id }
+    }
 
     var body: some View {
         List {
@@ -361,7 +369,7 @@ struct VoiceVocabularyPage: View {
             } else {
                 Section {
                     ForEach(store.terms) { term in
-                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term) }
+                        Button { editing = EditingTerm(term: term, isNew: false) } label: { VoiceTermRow(term: term) }
                             .foregroundStyle(.primary)
                     }
                     .onDelete { offsets in
@@ -387,12 +395,12 @@ struct VoiceVocabularyPage: View {
                 ToolbarItem(placement: .topBarTrailing) { EditButton() }
             }
         }
-        .sheet(item: $editing) { term in
-            VoiceTermEditor(term: term, isNew: isNew, store: store) { editing = nil }
+        .sheet(item: $editing) { editing in
+            VoiceTermEditor(term: editing.term, isNew: editing.isNew, store: store) { self.editing = nil }
         }
     }
 
-    private func add() { isNew = true; editing = VoiceTerm() }
+    private func add() { editing = EditingTerm(term: VoiceTerm(), isNew: true) }
 }
 
 private struct VoiceTermRow: View {
@@ -544,6 +552,11 @@ enum VoiceInputCopy {
     static let correction = String(localized: "Correct Transcripts")
     static let correctionFooter = String(localized: "After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider.")
     static let unavailable = String(localized: "Voice input isn't available with this relay. Your Custom Words still sync to your other devices.")
+    /// Connected to a relay that offers no voice input (the microphone
+    /// button is hidden then): the settings say why.
+    static func showsUnavailable(connectionStatus: ConnectionStatus, voiceCapability: VoiceCapability?) -> Bool {
+        connectionStatus == .connected && voiceCapability == nil
+    }
     static let context = String(localized: "Use Conversation Context")
     static let contextFooter = String(localized: "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent.")
 }
@@ -558,6 +571,13 @@ struct VoiceInputSettingsPage: View {
 
     var body: some View {
         Form {
+            if VoiceInputCopy.showsUnavailable(connectionStatus: appState.connectionStatus,
+                                               voiceCapability: appState.voiceCapability) {
+                Section {
+                    Label(VoiceInputCopy.unavailable, systemImage: "mic.slash")
+                        .foregroundStyle(.secondary)
+                }
+            }
             Section {
                 Toggle(VoiceInputCopy.correction, isOn: $correction)
             } footer: { Text(VoiceInputCopy.correctionFooter) }
@@ -597,7 +617,8 @@ struct VoiceInputPane: View {
 
     var body: some View {
         Form {
-            if appState.connectionStatus == .connected, appState.voiceCapability == nil {
+            if VoiceInputCopy.showsUnavailable(connectionStatus: appState.connectionStatus,
+                                               voiceCapability: appState.voiceCapability) {
                 // The microphone button is hidden then; say why (like the web).
                 Section {
                     Label(VoiceInputCopy.unavailable, systemImage: "mic.slash")
