@@ -154,15 +154,17 @@ function getLease(): Promise<VoiceLease> {
 const WORKLET = `class C extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('kraki-capture',C);`;
 interface Capture { stop: () => void }
 
-/** False when this browser certainly has no microphone. Device kinds are
- *  listed before permission is granted; when they can't be listed, assume one
- *  (getUserMedia still reports it). */
+/** False when this browser certainly has no microphone. When devices can't
+ *  be listed, assume one (getUserMedia still reports it). */
 async function hasMicrophone(): Promise<boolean> {
   const media = navigator.mediaDevices;
   if (!media?.getUserMedia) return false;
   if (!media.enumerateDevices) return true;
   try {
-    return (await media.enumerateDevices()).some((device) => device.kind === 'audioinput');
+    const devices = await media.enumerateDevices();
+    // Some browsers list nothing at all before permission; only a non-empty
+    // list without an audio input proves there is no microphone.
+    return devices.length === 0 || devices.some((device) => device.kind === 'audioinput');
   } catch {
     return true;
   }

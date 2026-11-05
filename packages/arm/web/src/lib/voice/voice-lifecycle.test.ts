@@ -143,6 +143,24 @@ describe('voice.summary controller hooks', () => {
     expect(sendRaw).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'request_voice_lease' }));
     expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'permission', cause: 'mic_unavailable' }));
   });
+  it('an empty device list (privacy policy before permission) still asks for the microphone (K-233)', async () => {
+    const sendRaw = vi.fn();
+    configureVoiceTransport({ sendRaw, deviceId: () => 'd', userId: () => 'u', relayUrl: () => 'ws://localhost:4430', connected: () => true });
+    resetVoice();
+    onAuthOk({ brokerUrl: 'ws://localhost:4430/voice', resource: 'voice/doubao' }, []);
+    voiceSettings.grantConsent();
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => { throw new DOMException('none', 'NotFoundError'); },
+      enumerateDevices: async () => [],
+    } });
+    const starting = startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useVoice.getState().phase).not.toBe('failed');
+    expect(sendRaw).toHaveBeenCalledWith(expect.objectContaining({ type: 'request_voice_lease' }));
+    resetVoice();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await starting;
+  });
   it('broker socket connection failure is network, not the localized error message', async () => {
     const summary = summaries();
     vi.stubGlobal('WebSocket', class extends SpeechSocket {
