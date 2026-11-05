@@ -9,6 +9,7 @@ import { select } from '@inquirer/prompts';
 import { loadConfig, getKrakiHome, getVersion, type KrakiConfig } from '../config.js';
 import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '../daemon.js';
 import { runSetup } from '../setup.js';
+import { isSafeId } from '../session/text.js';
 import { disableWindowsAutostart } from '../windows-autostart.js';
 import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, ownerName, WINDOWS_APP_OWNER, type ManagedByMarker } from '../managed.js';
 
@@ -241,8 +242,14 @@ export async function reconfigure(): Promise<KrakiConfig> {
 /** What deleting the Kraki folder would remove, for the confirmation. */
 export function describeKrakiData(): { sessions: number; bytes: number } {
   const home = getKrakiHome();
+  // Only session folders (a session id with its meta.json); not .DS_Store,
+  // copies or other entries a user or tool left there (K-271).
+  const sessionsDir = join(home, 'sessions');
   let sessions = 0;
-  try { sessions = readdirSync(join(home, 'sessions')).length; } catch { /* none */ }
+  try {
+    sessions = readdirSync(sessionsDir)
+      .filter((name) => isSafeId(name) && existsSync(join(sessionsDir, name, 'meta.json'))).length;
+  } catch { /* none */ }
   let bytes = 0;
   const walk = (dir: string, depth: number) => {
     if (depth > 6) return;
