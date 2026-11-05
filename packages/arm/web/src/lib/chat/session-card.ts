@@ -76,7 +76,9 @@ export function sessionTimeLabel(iso: string, now = new Date()): string {
   if (Number.isNaN(date.getTime())) return '';
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((day(now) - day(date)) / 86_400_000);
-  if (days === 0) return formatDateTime(date, { hour: '2-digit', minute: '2-digit', hour12: false });
+  // A date from the future (sender clock ahead of this browser) is clamped to
+  // today: it is the newest activity, never "days ago".
+  if (days <= 0) return formatDateTime(date, { hour: '2-digit', minute: '2-digit', hour12: false });
   if (days === 1) return formatRelativeDays(1);
   const elapsedDays = days - ((now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000) < (date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds() + date.getMilliseconds() / 1000) ? 1 : 0);
   return formatRelativeDays(Math.max(elapsedDays, 2));

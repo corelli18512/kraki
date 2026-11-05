@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { SettingsAlert } from '../layout/SettingsControls';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
@@ -17,7 +17,8 @@ export function useArchivedCount(): number {
  * Collapsed "Archived (N)" group at the bottom of the session list (F2).
  * Archived sessions are not sent with the session list; expanding the group
  * asks each computer for them and shows them as normal session rows.
- * Opening one restores it.
+ * Opening one restores it. While expanded it asks again whenever a computer's
+ * archived count changes or it comes back online, so it never goes stale.
  */
 export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; selectedId?: string }) {
   const { t } = useTranslation(['sessions', 'common']);
@@ -26,20 +27,29 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
   const archived = useStore((s) => s.archivedSessions);
   const devices = useStore((s) => s.devices);
   const [open, setOpen] = useState(false);
+  /** Per computer: the archived count last asked for while expanded. */
+  const requested = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    if (!open) { requested.current.clear(); return; }
+    for (const [deviceId, i] of info) {
+      const online = devices.get(deviceId)?.online === true;
+      if (i.count === 0 || !online) { requested.current.delete(deviceId); continue; }
+      if (requested.current.get(deviceId) === i.count) continue;
+      requested.current.set(deviceId, i.count);
+      wsClient.requestArchivedSessions(deviceId);
+    }
+  }, [open, info, devices]);
 
   const rows = useMemo(() => [...archived.entries()]
+    .filter(([deviceId]) => (info.get(deviceId)?.count ?? 0) > 0)
     .flatMap(([deviceId, sessions]) => sessions.map((s) => ({ deviceId, digest: s })))
-    .sort((a, b) => (b.digest.lastActivityAt ?? '').localeCompare(a.digest.lastActivityAt ?? '')), [archived]);
+    .sort((a, b) => (b.digest.lastActivityAt ?? '').localeCompare(a.digest.lastActivityAt ?? '')), [archived, info]);
+  const anyOnline = [...info].some(([deviceId, i]) => i.count > 0 && devices.get(deviceId)?.online === true);
 
   if (count === 0) return null;
 
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next) {
-      for (const [deviceId, i] of info) if (i.count > 0) wsClient.requestArchivedSessions(deviceId);
-    }
-  };
+  const toggle = () => setOpen((v) => !v);
 
   return (
     <div className="ksb-archived">
@@ -48,7 +58,7 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
         <Archive />
         <span>{t('archive.heading', { count })}</span>
       </button>
-      {open && rows.length === 0 && <p className="ksb-archived-hint">{t('archive.loading')}</p>}
+      {open && rows.length === 0 && <p className="ksb-archived-hint">{anyOnline ? t('archive.loading') : t('archive.offline')}</p>}
       {open && rows.map(({ deviceId, digest }) => (
         <SessionRow
           key={digest.id}

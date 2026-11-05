@@ -4,7 +4,7 @@ import { normalizeSessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
-import type { CommandState } from './commands';
+import { settlePinEcho, type CommandState } from './commands';
 import { messageProvider } from './message-provider';
 import { captureMessageGeneration, isMessageGenerationCurrent } from './message-persistence-generation';
 import { ingestChunk } from './attachments';
@@ -48,6 +48,15 @@ function noteReplyProgress(msg: InnerMessage): void {
 }
 
 const PREVIEW_MAX = 80;
+/** Longest the sidebar row waits for the closing session_list after idle. */
+export const TURN_CLOSING_MAX_MS = 5_000;
+/** Fallback timer per session, so an earlier turn's timer cannot end a later turn's closing state. */
+const closingTurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearClosingTurnTimer(sid: string): void {
+  clearTimeout(closingTurnTimers.get(sid));
+  closingTurnTimers.delete(sid);
+}
 function truncPreview(s: string): string {
   return s.length > PREVIEW_MAX ? sliceGraphemes(s, PREVIEW_MAX) + '…' : s;
 }
@@ -381,6 +390,16 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'idle': {
       const idled = store.sessions.get(sid);
+      // The row's preview is still the user's prompt until the closing
+      // session_list brings the reply; keep the row "working" until then.
+      if (idled?.state === 'active') {
+        store.setTurnClosing(sid, true);
+        clearClosingTurnTimer(sid);
+        closingTurnTimers.set(sid, setTimeout(() => {
+          closingTurnTimers.delete(sid);
+          getStore().setTurnClosing(sid, false);
+        }, TURN_CLOSING_MAX_MS));
+      }
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.appendMessage(sid, msg);
       // A closing idle can arrive even if the immediately preceding agent
@@ -409,6 +428,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (activated && activated.state !== 'compacting') {
         store.upsertSession({ ...activated, state: 'active' });
       }
+      clearClosingTurnTimer(sid);
+      store.setTurnClosing(sid, false);
       store.appendMessage(sid, msg);
       break;
     }
@@ -459,6 +480,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_pinned': {
+      if (!settlePinEcho(sid)) break;
       const pinned = (msg as SessionPinnedMessage).payload?.pinned;
       const next = new Set(store.pinnedSessions);
       if (pinned) {

@@ -26,7 +26,7 @@ function resolveTheme(pref: Theme): boolean {
 function applyTheme(dark: boolean) {
   document.documentElement.classList.toggle('dark', dark);
   // Update PWA status bar color to match theme
-  const color = dark ? '#0f172a' : '#ffffff';
+  const color = dark ? '#020617' : '#ffffff'; // = index.html, manifest.json
   document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
     meta.setAttribute('content', color);
   });

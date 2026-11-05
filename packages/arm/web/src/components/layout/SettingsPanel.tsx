@@ -19,7 +19,7 @@ import {
   unsubscribeFromPush,
   getPushPermission,
 } from '../../lib/push';
-import { getCurrentChannel } from '../../lib/auth';
+import { channelSwitchFailed, getCurrentChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
@@ -28,7 +28,8 @@ import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { DeviceNameEditor } from '../devices/DeviceNameEditor';
 import { signOut } from './ProfileBar';
-import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
+import { setUsageShortcut, shortcutFromEvent, shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
+import { isMacBrowser } from '../../lib/macDownload';
 import './settings.css';
 import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
@@ -46,6 +47,15 @@ const tabKeys = {
   'This PC': 'thisPC', Devices: 'devices', About: 'about',
 } as const;
 type SettingsTab = typeof tabs[number];
+/** "This PC" runs agents on this computer: the Windows app's own service, or
+ *  (in a Windows browser) the hint to install it. A Mac, iPhone or Linux
+ *  browser has nothing to show there. */
+const settingsTabs = (): readonly SettingsTab[] => (desktop?.builtIn || desktop?.platform === 'win32' || /Windows/.test(navigator.userAgent)
+  ? tabs
+  : tabs.filter((name) => name !== 'This PC'));
+
+/** A phone browser has no keyboard to hold the usage shortcut on. */
+const phoneBrowser = (): boolean => !desktop && /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
 
 /** Same section, copy and default (on) as Mac DiagSettingsSection. */
 export function performanceDataFooter() { return translate('settings:performance.footer'); }
@@ -93,6 +103,9 @@ export function SettingsPanel({
   const { theme, setTheme } = useTheme();
   const state = useStore();
   const [tab, setTab] = useState<SettingsTab>('General');
+  const visibleTabs = settingsTabs();
+  // Settings opens on General every time, like the native apps.
+  useEffect(() => { if (!open) setTab('General'); }, [open]);
   const [diagCopied, setDiagCopied] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
@@ -240,12 +253,13 @@ export function SettingsPanel({
   const diagnostics = (english = false) => {
     const labels = english ? i18next.getFixedT('en', 'settings') : t;
     return [
-      [labels('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
+      ...(desktop ? [[labels('about.backgroundService'), os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—']] : []),
       [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
       ...[...state.devices.values()]
         .filter((d) => d.role === 'tentacle')
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : labels('about.offlineSuffix')}`]),
+        // An offline computer not seen since this page loaded has no version.
+        .map((d) => [d.name, `Kraki${state.deviceVersions.has(d.id) ? ` ${state.deviceVersions.get(d.id)}` : d.online ? ' —' : ''}${d.online ? '' : labels('about.offlineSuffix')}`]),
       [labels('about.relay'), `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
       ...(state.deviceId ? [[labels('about.deviceId'), state.deviceId]] : []),
     ];
@@ -296,7 +310,7 @@ export function SettingsPanel({
         )}
       </SettingsSection>
       <LanguageSettingsRow />
-      <SettingsSection title={t('general.accountUsage')}>
+      {(inline || !phoneBrowser()) && <SettingsSection title={t('general.accountUsage')}>
         {/* Narrow layouts (phones) have no app menu and no F6: open it here. */}
         {inline && (
           <SettingsRow label={t('general.accountUsage')}>
@@ -305,7 +319,9 @@ export function SettingsPanel({
             </button>
           </SettingsRow>
         )}
-        <SettingsRow label={t('general.holdUsage', { shortcut: shortcut.shortcut })}>
+        {/* The peek shortcut needs a keyboard: not in a phone browser (K-228). */}
+        {!phoneBrowser() && <>
+        <SettingsRow label={t('general.holdUsage', { shortcut: shortcutLabel(shortcut.shortcut) })}>
           <SettingsSwitch
             label={t('general.peekUsage')}
             on={shortcut.enabled}
@@ -319,7 +335,12 @@ export function SettingsPanel({
             type="button"
             className={`kp-button kp-shortcut${shortcut.recording ? ' is-recording' : ''}`}
             style={isWindows ? undefined : { width: 230, height: 26 }}
-            onClick={() => useUsageShortcut.setState({ recording: true })}
+            onClick={(e) => {
+              // Safari does not focus a clicked button; without focus its
+              // keydown never arrives and nothing can be recorded.
+              e.currentTarget.focus();
+              useUsageShortcut.setState({ recording: true });
+            }}
             onBlur={() => useUsageShortcut.setState({ recording: false })}
             onKeyDown={(e) => {
               if (!shortcut.recording) return;
@@ -336,13 +357,14 @@ export function SettingsPanel({
               }
             }}
           >
-            {shortcut.recording ? t('general.recordShortcut') : shortcut.shortcut}
+            {shortcut.recording ? t('general.recordShortcut') : shortcutLabel(shortcut.shortcut)}
           </button>
         </SettingsRow>
         <p className="kp-foot">
-          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : inline ? 'general.shortcutFooterInline' : 'general.shortcutFooterSidebar')}
+          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : inline ? (isMacBrowser() ? 'general.shortcutFooterInlineMac' : 'general.shortcutFooterInline') : isMacBrowser() ? 'general.shortcutFooterSidebarMac' : 'general.shortcutFooterSidebar')}
         </p>
-      </SettingsSection>
+        </>}
+      </SettingsSection>}
       {state.archiveInfo.size > 0 && <section className="kp-section">
         <h3>{t('tabs.sessions')}</h3>
         <ArchiveSettings />
@@ -603,7 +625,7 @@ export function SettingsPanel({
         <div className={isWindows ? 'kp-navigation' : undefined} style={isWindows ? undefined : { display: 'contents' }}>
           {isWindows && <><div className="kp-nav-brand"><KrakiLogo className="kp-nav-logo" /><span>Kraki</span></div><p className="kp-nav-label">{t('title')}</p></>}
           <div className="kp-tabs" role="tablist" aria-label={t('title')} aria-orientation={isWindows ? 'vertical' : undefined}>
-            {tabs.map((name) => (
+            {visibleTabs.map((name) => (
               <button
                 type="button"
                 role="tab"
@@ -622,7 +644,7 @@ export function SettingsPanel({
                       : e.key === 'End'
                         ? buttons.length - 1
                         : (index + (e.key === nextKey ? 1 : -1) + buttons.length) % buttons.length;
-                  setTab(tabs[next]);
+                  setTab(visibleTabs[next]);
                   buttons[next].focus();
                 }}
                 aria-controls="settings-pane"
@@ -680,7 +702,7 @@ export function SettingsPanel({
           {tab === 'General' && !desktop && state.user?.preferences?.internal === true && (
             <SettingsSection title={t('dogfood.title')}>
               <SettingsRow label={t('dogfood.builds')} detail={t('dogfood.detail')}>
-                <span data-testid="release-channel">{isBeta ? t('dogfood.title') : t('dogfood.switching')}</span>
+                <span data-testid="release-channel">{isBeta ? t('dogfood.title') : channelSwitchFailed() ? t('dogfood.switchFailed') : t('dogfood.switching')}</span>
               </SettingsRow>
             </SettingsSection>
           )}

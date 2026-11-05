@@ -148,6 +148,15 @@ describe('DashboardPage', () => {
     expect(screen.getByText('No computer is online. Open Kraki on a computer to start a session there.')).toBeInTheDocument();
   });
 
+  it('does not ask the first-time question before the online computer sent its session list (K-096)', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.queryByText('What should we work on first?')).not.toBeInTheDocument();
+    act(() => { useStore.getState().markSessionListReceived('d1'); });
+    expect(screen.getByText('What should we work on first?')).toBeInTheDocument();
+  });
+
   it('starts a session with the typed task on the remembered computer, agent and model', () => {
     useStore.getState().setStatus('connected');
     useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);

@@ -1,4 +1,4 @@
-import { useRef, useCallback, type ReactNode, type TouchEvent } from 'react';
+import { useRef, useCallback, type MouseEvent, type ReactNode, type TouchEvent } from 'react';
 
 const ACTION_WIDTH = 64; // px per action button
 const SWIPE_THRESHOLD = 0.4; // fraction of tray width to snap open
@@ -108,6 +108,15 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
     }
   }, [isOpen, maxTranslate, onSwipeOpen, onSwipeClose]);
 
+  // The browser took the touch (Safari edge-back gesture, scroll, alert):
+  // there is no touchend, so return the row to where it rested.
+  const handleTouchCancel = useCallback(() => {
+    if (!swiping.current) return;
+    swiping.current = false;
+    setTranslate(isOpen ? maxTranslate : 0, true);
+    if (!isOpen) setTimeout(hideTray, 200);
+  }, [isOpen, maxTranslate]);
+
   // Sync with external isOpen state (e.g. another card opened)
   const prevOpen = useRef(isOpen);
   if (prevOpen.current !== isOpen) {
@@ -119,6 +128,15 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
     }
     setTranslate(isOpen ? maxTranslate : 0, true);
   }
+
+  // A tap on an open row closes the tray (as on iOS); it must not also
+  // activate the row underneath.
+  const handleClickCapture = useCallback((e: MouseEvent) => {
+    if (!isOpen) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onSwipeClose();
+  }, [isOpen, onSwipeClose]);
 
   return (
     <div className="relative overflow-hidden rounded-lg">
@@ -143,6 +161,8 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+        onClickCapture={handleClickCapture}
         className="relative will-change-transform touch-pan-y"
         style={{ transform: isOpen ? `translateX(${maxTranslate}px)` : 'translateX(0)' }}
       >

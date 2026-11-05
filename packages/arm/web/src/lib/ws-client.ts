@@ -1151,6 +1151,8 @@ export class KrakiWSClient {
     const pinnedFromTentacle = new Set<string>();
     const unappliedReads: Array<[string, number]> = [];
     for (const ts of tentacleSessions) {
+      // The closing digest is here: the row can show the reply now (K-098).
+      store.setTurnClosing(ts.id, false);
       const currentStore = getStore();
       const previousSession = currentStore.sessions.get(ts.id);
       const device = currentStore.devices.get(tentacleDeviceId);
@@ -1202,8 +1204,9 @@ export class KrakiWSClient {
         store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
 
-      // Sync pin state from tentacle
-      if (ts.pinned) {
+      // Sync pin state from tentacle; a list sent before this app's latest pin
+      // request was applied must not undo it (K-207).
+      if (commands.pendingPin(ts.id) ?? ts.pinned) {
         pinnedFromTentacle.add(ts.id);
       }
 
@@ -1241,6 +1244,7 @@ export class KrakiWSClient {
       currentPinned.add(sid);
     }
     store.setPinnedSessions(currentPinned);
+    store.markSessionListReceived(tentacleDeviceId);
 
     for (const [sessionId, seq] of unappliedReads) this.resendRead(sessionId, seq);
 

@@ -144,6 +144,13 @@ export interface AppState {
   archiveInfo: Map<string, { count: number; days: number }>;
   /** Per computer: archived sessions, loaded when the user opens the section. */
   archivedSessions: Map<string, import('@kraki/protocol').SessionDigest[]>;
+  /** Computers whose session_list arrived on this connection (not persisted).
+   *  Until every online computer has answered, an empty list is still loading. */
+  sessionListDevices: Set<string>;
+  /** Sessions whose turn just went idle and whose closing session_list (with
+   *  the reply as preview) has not arrived yet. The sidebar row keeps showing
+   *  "working" meanwhile instead of flashing the user's prompt (K-098). */
+  closingTurns: Set<string>;
 }
 
 export interface AppActions {
@@ -199,6 +206,8 @@ export interface AppActions {
   setLocalSessions: (sessions: LocalSession[]) => void;
   setLocalSessionsLoading: (loading: boolean) => void;
   setArchiveInfo: (deviceId: string, info: { count: number; days: number }) => void;
+  markSessionListReceived: (deviceId: string) => void;
+  setTurnClosing: (sessionId: string, closing: boolean) => void;
   setArchivedSessions: (deviceId: string, sessions: import('@kraki/protocol').SessionDigest[]) => void;
   receiveDeviceUsage: (deviceId: string, payload: { accounts: import('@kraki/protocol').AccountUsage[]; requestId?: string; refreshError?: string }) => void;
   beginUsageRefresh: (deviceId: string, requestId: string) => void;

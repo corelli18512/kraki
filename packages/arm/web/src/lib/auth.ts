@@ -283,6 +283,13 @@ export function channelForAccount(prefs: Record<string, unknown> | undefined): '
 }
 
 const CHANNEL_RELOAD_KEY = 'kraki.channelReload';
+let channelSwitchBlocked = false;
+
+/** The account's channel could not be served here (the cookie does not stick,
+ *  or a reload for it already happened): Settings must not say "Switching…". */
+export function channelSwitchFailed(): boolean {
+  return channelSwitchBlocked;
+}
 
 /**
  * Serve the account's release channel. Called with the full account on
@@ -302,6 +309,7 @@ export function applyAccountChannel(prefs: Record<string, unknown> | undefined):
   setDebugLogging(prefs?.internal === true);
   if (window.krakiDesktop) return;
   const desired = channelForAccount(prefs);
+  channelSwitchBlocked = false;
   if (getCurrentChannel() === desired) {
     try { sessionStorage.removeItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
     return;
@@ -309,12 +317,14 @@ export function applyAccountChannel(prefs: Record<string, unknown> | undefined):
   setChannelCookie(desired);
   if (getCurrentChannel() !== desired) {
     logger.warn('Channel cookie not stored; staying on this build', { channel: desired });
+    channelSwitchBlocked = true;
     return;
   }
   let reloaded: string | null = null;
   try { reloaded = sessionStorage.getItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
   if (reloaded === desired) {
     logger.warn('Already reloaded for this channel; staying on this build', { channel: desired });
+    channelSwitchBlocked = true;
     return;
   }
   try { sessionStorage.setItem(CHANNEL_RELOAD_KEY, desired); } catch { /* storage unavailable */ }
