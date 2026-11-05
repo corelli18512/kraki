@@ -140,6 +140,16 @@ final class TextKitPureSpineTests: XCTestCase {
                           "user-bubble links must not be painted in the agent link blue")
     }
 
+    /// Links in a red error bubble are recolored with the text, so they are
+    /// underlined to read as links (review of K-060).
+    func testErrorBubbleLinkIsUnderlined() throws {
+        let bubble = content("error", seq: 108, body: "Failed, see [status page](https://kraki.chat/status)")
+        let body = try XCTUnwrap(bubble.body)
+        let range = (body.string as NSString).range(of: "status page")
+        XCTAssertEqual(body.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor, .systemRed)
+        XCTAssertNotNil(body.attribute(.underlineStyle, at: range.location, effectiveRange: nil))
+    }
+
     /// Light-mode pixels in the agent link color (#0056A8) of a rendered cell.
     private func agentLinkBluePixels(_ bubble: TKBubbleContent) throws -> Int {
         let width: CGFloat = 390
@@ -233,21 +243,63 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(UIPasteboard.general.string, token, "Select Text copy returns the token as written")
     }
 
+    /// Review of K-162: scripts written without spaces (Chinese, Thai) and
+    /// emoji sequences keep their own line breaking; only long ASCII tokens
+    /// get break opportunities.
+    func testLongTokenBreaksLeaveNonASCIIRunsUnchanged() {
+        let chinese = "这是一个很长的中文句子，没有任何空格，用来检查换行规则是否保持不变，标点不能出现在行首。"
+        let thai = "ภาษาไทยเขียนติดกันโดยไม่มีช่องว่างระหว่างคำเลยแม้แต่น้อยนะครับ"
+        let emoji = "👩‍💻👨‍👩‍👧‍👦🏳️‍🌈1️⃣🇨🇳👍🏽" + "👩‍💻👨‍👩‍👧‍👦🏳️‍🌈1️⃣🇨🇳👍🏽"
+        for text in [chinese, thai, emoji, "\(chinese)\(emoji)\(thai)"] {
+            let piece = NSAttributedString(string: text)
+            XCTAssertEqual(TKMarkdown.breakingLongTokens(piece).string, text)
+        }
+        // A long ASCII token next to CJK text still gets break opportunities,
+        // and they sit only inside the token.
+        let token = String(repeating: "A1b2C3d4", count: 4)
+        let mixed = TKMarkdown.breakingLongTokens(NSAttributedString(string: "\(chinese)\(token)\(chinese)")).string
+        XCTAssertTrue(mixed.hasPrefix(chinese) && mixed.hasSuffix(chinese))
+        XCTAssertEqual(mixed.filter { $0 == "\u{200B}" }.count, token.count / TKMarkdown.longTokenBreakStride - 1)
+    }
+
     private static func longCode(lines: Int) -> String {
         "Here is the file:\n\n```swift\n"
             + (1...lines).map { "let value\($0) = compute(\($0)) // line \($0)" }.joined(separator: "\n")
     }
 
-    /// K-071: a long code block is split between its lines, so a streaming
-    /// code reply re-lays out only its last chunk instead of the whole block.
+    /// K-071: a long streaming code block is split between its lines, so a
+    /// streaming code reply re-lays out only its last chunk instead of the
+    /// whole block.
     func testLongCodeBlockIsChunkedBetweenItsLines() throws {
         let body = TKMarkdown.attributed(Self.longCode(lines: 200) + "\n```\nDone.", cacheKey: "long-code-chunks")
-        let chunks = TKBodyChunks.chunks(body)
+        let chunks = TKBodyChunks.chunks(body, splitCodeBlocks: true)
         XCTAssertGreaterThan(chunks.count, 5, "a 200-line block is not one chunk")
         let ns = body.string as NSString
         for chunk in chunks.dropFirst() {
             XCTAssertEqual(ns.substring(with: NSRange(location: chunk.range.location - 1, length: 1)), "\n")
         }
+    }
+
+    /// A landed long code block stays in one chunk view, so Select Text can
+    /// select and copy the whole block (review of K-071).
+    func testLandedLongCodeBlockStaysInOneChunk() throws {
+        let body = TKMarkdown.attributed(Self.longCode(lines: 200) + "\n```\nDone.", cacheKey: "landed-long-code-chunks")
+        let ns = body.string as NSString
+        let codeStart = ns.range(of: "let value1 ").location
+        let codeEnd = NSMaxRange(ns.range(of: "// line 200"))
+        let chunks = TKBodyChunks.chunks(body)
+        let holding = chunks.filter { NSIntersectionRange($0.range, NSRange(location: codeStart, length: codeEnd - codeStart)).length > 0 }
+        XCTAssertEqual(holding.count, 1, "the whole code block is one chunk view")
+        let bubble = content("agent_message", seq: 107, body: Self.longCode(lines: 200) + "\n```\nDone.")
+        let width: CGFloat = 390
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: width, height: bubble.cellHeight(cellWidth: width)))
+        cell.configure(bubble, cellWidth: width)
+        cell.layoutIfNeeded()
+        let views = descendants(of: cell.contentView, as: TKBodyTextView.self).filter { !$0.isHidden }
+        XCTAssertTrue(views.contains { view in
+            let text = view.attributedText?.string ?? ""
+            return text.contains("let value1 ") && text.contains("// line 200")
+        }, "one view holds the first and last line of the block")
     }
 
     func testStreamingCodeBlockKeepsSettledChunksIdentical() throws {
@@ -256,11 +308,11 @@ final class TextKitPureSpineTests: XCTestCase {
         defer { TKLiveBody.discard(liveID) }
         live.update(Self.longCode(lines: 150))
         let first = try XCTUnwrap(live.body)
-        let firstChunks = TKBodyChunks.chunks(first)
+        let firstChunks = TKBodyChunks.chunks(first, splitCodeBlocks: true)
         XCTAssertGreaterThan(firstChunks.count, 3)
         live.update(Self.longCode(lines: 151))
         let second = try XCTUnwrap(live.body)
-        let secondChunks = TKBodyChunks.chunks(second)
+        let secondChunks = TKBodyChunks.chunks(second, splitCodeBlocks: true)
         for chunk in firstChunks.dropLast() {
             XCTAssertTrue(secondChunks.contains { $0.range == chunk.range }, "boundary \(chunk.range) moved")
             XCTAssertTrue(first.attributedSubstring(from: chunk.range).isEqual(to: second.attributedSubstring(from: chunk.range)),
@@ -271,7 +323,10 @@ final class TextKitPureSpineTests: XCTestCase {
     /// The code surface runs through the seam between two chunk views (no
     /// rounded corner or repeated language label at the split).
     func testSplitCodeBlockSurfaceContinuesAcrossChunkViews() throws {
-        let bubble = content("agent_message", seq: 105, body: Self.longCode(lines: 120) + "\n```")
+        let liveID = "split-code-surface-\(UUID().uuidString)"
+        defer { TKLiveBody.discard(liveID) }
+        let bubble = TKBubbleContent.live(card: MessageStore.SessionCard(text: Self.longCode(lines: 120) + "\n```"),
+                                          agent: "pi", sessionId: liveID, steps: 0)
         let width: CGFloat = 390
         let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: width, height: bubble.cellHeight(cellWidth: width)))
         cell.configure(bubble, cellWidth: width)
@@ -337,6 +392,48 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertTrue(shown().contains { $0.attributedText?.string == firstChunk })
         XCTAssertFalse(shown().contains { $0.attributedText?.string == lastChunk })
         XCTAssertLessThan(descendants(of: cell.contentView, as: TKBodyTextView.self).count, 40)
+    }
+
+    /// Review of K-017/K-058: chunk views realized after a scroll take the
+    /// cell's interaction state (links tappable at rest), and realizing does
+    /// not replace the text of a view the user is selecting in.
+    func testHugeBodyRealizedChunksKeepLinksAndSelection() throws {
+        let paragraph = String(repeating: "See [the docs](https://kraki.chat/docs) for more about the fox. ", count: 6)
+        let text = (1...300).map { "\($0). \(paragraph)" }.joined(separator: "\n\n")
+        let bubble = content("agent_message", seq: 109, body: text)
+        let width: CGFloat = 390
+        let height = bubble.cellHeight(cellWidth: width)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+        let host = UIView(frame: window.bounds)
+        window.addSubview(host)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 852 - height, width: width, height: height))
+        cell.configure(bubble, cellWidth: width)
+        host.addSubview(cell)
+        cell.setBodyInteractive(true)   // at rest
+        cell.layoutIfNeeded()
+        func shown() -> [TKBodyTextView] {
+            descendants(of: cell.contentView, as: TKBodyTextView.self).filter { !$0.isHidden && ($0.attributedText?.length ?? 0) > 0 }
+        }
+        cell.frame.origin.y = 0
+        cell.refreshRealizedChunks()
+        cell.layoutIfNeeded()
+        XCTAssertFalse(shown().isEmpty)
+        XCTAssertTrue(shown().allSatisfy(\.isUserInteractionEnabled), "newly realized chunks have live links")
+
+        cell.beginTextSelection()
+        let selected = try XCTUnwrap(shown().first { $0.selectionModeEnabled })
+        let selectedText = try XCTUnwrap(selected.attributedText)
+        let selectedRange = selected.selectedRange
+        cell.frame.origin.y = 852 - height
+        cell.refreshRealizedChunks()
+        cell.layoutIfNeeded()
+        XCTAssertTrue(selected.attributedText?.isEqual(to: selectedText) ?? false, "the selected text stays")
+        XCTAssertEqual(selected.selectedRange, selectedRange)
+        cell.endTextSelection()
     }
 
     /// K-059: a reused body view redraws its code/quote surface when it is

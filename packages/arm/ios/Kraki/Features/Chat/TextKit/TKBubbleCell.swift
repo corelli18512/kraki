@@ -492,7 +492,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         if let window {
             visible = convert(window.bounds, from: window)
         } else {
-            visible = CGRect(x: 0, y: 0, width: bounds.width, height: UIScreen.main.bounds.height)
+            // Not in a window yet: about one phone screen from the start.
+            visible = CGRect(x: 0, y: 0, width: bounds.width, height: 900)
         }
         let margin = max(visible.height, 400)
         let low = visible.minY - margin - Self.bodyTop
@@ -507,6 +508,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     /// The list scrolled: realize the chunks of a very long body that came
     /// near the screen (and release the ones that left).
     func refreshRealizedChunks() {
+        // Re-assigning would reset the selection in the selected chunk view.
+        guard !isSelectingText else { return }
         guard let content, let body = content.body, body.length > 0 else { return }
         let chunks = content.bodyChunks(cellWidth: bounds.width)
         guard chunks.count > Self.maxEagerChunks else { return }
@@ -516,6 +519,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         guard !(realizedChunks.contains(needed.lowerBound) && realizedChunks.contains(needed.upperBound - 1)),
               wanted != realizedChunks else { return }
         assignBody(content, cellWidth: bounds.width)
+        // Newly created chunk views start non-interactive; give them the
+        // cell's current state (links tappable at rest).
+        setBodyInteractive(bodyInteractionEnabled)
         setNeedsLayout()
     }
 

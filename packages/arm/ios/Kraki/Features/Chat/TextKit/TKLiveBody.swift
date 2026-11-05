@@ -141,7 +141,7 @@ final class TKLiveBody {
         let unchanged = chunkMemo.flatMap { $0.width == width ? changedFrom(since: $0.revision) : nil } ?? 0
         var y: CGFloat = 0
         var placed: [TKBodyChunks.Placed] = []
-        for (index, chunk) in TKBodyChunks.chunks(body).enumerated() {
+        for (index, chunk) in TKBodyChunks.chunks(body, splitCodeBlocks: true).enumerated() {
             y += chunk.gapBefore
             let height: CGFloat
             if index < previous.count, previous[index].range == chunk.range,
@@ -176,12 +176,15 @@ final class TKLiveBody {
 /// every paragraph whenever its text or bounds change (≈45 ms per streaming
 /// update at 8k characters). With chunks, a streaming update touches only the
 /// last chunk; settled chunks are measured and laid out once. Both the live
-/// bubble and the landed message use this same rule, so the handoff is exact.
+/// bubble and the landed message use this same rule (except long code blocks,
+/// below), so the handoff is exact.
 ///
 /// A boundary depends only on the text before it, so boundaries never move as
-/// an answer grows. Chunks never split a quote or table. A long code block is
-/// split between its lines (the views continue its surface across the seam),
-/// otherwise a streaming code block would re-lay out as one ever-growing chunk.
+/// an answer grows. Chunks never split a quote or table. While streaming
+/// (`splitCodeBlocks`), a long code block is split between its lines (the
+/// views continue its surface across the seam), otherwise it would re-lay out
+/// as one ever-growing chunk. A landed message keeps each code block in one
+/// view, so Select Text can cover the whole block.
 enum TKBodyChunks {
     static let targetLength = 500
     static let singleChunkLimit = 800
@@ -197,7 +200,7 @@ enum TKBodyChunks {
         let height: CGFloat
     }
 
-    static func chunks(_ body: NSAttributedString) -> [Chunk] {
+    static func chunks(_ body: NSAttributedString, splitCodeBlocks: Bool = false) -> [Chunk] {
         let ns = body.string as NSString
         let length = ns.length
         guard length > singleChunkLimit else {
@@ -212,7 +215,7 @@ enum TKBodyChunks {
             guard found.location != NSNotFound else { break }
             let newline = found.location
             guard newline + 1 < length else { break }
-            if isSafeBoundary(body, newline) {
+            if isSafeBoundary(body, newline, splitCodeBlocks: splitCodeBlocks) {
                 result.append(Chunk(range: NSRange(location: start, length: newline - start), gapBefore: gap))
                 gap = spacing(body, newline: newline)
                 start = newline + 1
@@ -225,10 +228,10 @@ enum TKBodyChunks {
         return result
     }
 
-    private static func isSafeBoundary(_ body: NSAttributedString, _ newline: Int) -> Bool {
+    private static func isSafeBoundary(_ body: NSAttributedString, _ newline: Int, splitCodeBlocks: Bool) -> Bool {
         guard newline > 0 else { return false }
         if let block = body.attribute(.tkBlockID, at: newline, effectiveRange: nil) as? String {
-            return isCodeLineBoundary(body, newline, block: block)
+            return splitCodeBlocks && isCodeLineBoundary(body, newline, block: block)
         }
         let before = body.attribute(.tkBlockID, at: newline - 1, effectiveRange: nil) as? String
         let after = body.attribute(.tkBlockID, at: newline + 1, effectiveRange: nil) as? String
