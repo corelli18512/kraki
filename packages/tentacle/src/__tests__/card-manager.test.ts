@@ -190,6 +190,29 @@ describe('CardManager action part', () => {
     expect(actions(sent)).toEqual([null]);
   });
 
+  it('keeps "Denied" when the denied tool reports its failure (K-171)', () => {
+    const { card, sent } = setup();
+    card.onToolStart('s1', tool('tc1', '$ rm -rf build'));
+    card.onPrompt('s1', permission('p1'));
+    card.resolvePrompt('s1', 'p1', { decision: 'deny' });
+    sent.length = 0;
+    card.onToolComplete('s1', toolDone('tc1', '$ rm -rf build', false));
+    expect(actions(sent)).toEqual([]);
+    expect(card.state('s1').action).toMatchObject({ type: 'permission', payload: { id: 'p1', decision: 'deny' } });
+    // Narration resuming retires it as usual.
+    card.onDelta('s1', 'The command was denied.');
+    expect(actions(sent)).toEqual([null]);
+  });
+
+  it('an approved tool still takes the slot when it completes', () => {
+    const { card } = setup();
+    card.onToolStart('s1', tool('tc1', '$ ls'));
+    card.onPrompt('s1', permission('p1'));
+    card.resolvePrompt('s1', 'p1', { decision: 'approve' });
+    card.onToolComplete('s1', toolDone('tc1', '$ ls', false));
+    expect(card.state('s1').action).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc1' } });
+  });
+
   it('does NOT retire a RUNNING tool when narration streams in parallel', () => {
     const { card, sent } = setup();
     card.onToolStart('s1', tool('tc1', 'slow'));

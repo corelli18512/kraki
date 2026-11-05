@@ -250,6 +250,11 @@ export class CardManager {
     const c = this.get(sessionId);
     c.runningTools.delete(toolKey(action));
     if (this.slotBlocksTool(c)) return;
+    // The tool the user just denied reports its failure: "Denied" already says
+    // why, so keep it instead of flashing it for a frame and replacing it with
+    // a red chip (K-171).
+    if (c.runningTools.size === 0 && action.payload.success === false
+      && c.action?.type === 'permission' && c.action.payload.decision === 'deny') return;
     c.action = c.runningTools.size > 0 ? this.toolActionFor(c) : action;
     this.syncAction(sessionId, c);
   }
