@@ -27,7 +27,7 @@ import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
 import { TrustStore } from './trust-store.js';
-import { DeviceTrust, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
+import { DeviceTrust, NO_RSA_KEY, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
 import { restoreAccountAccess } from './account-access.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
 import { wireAdapterEvents } from './relay/adapter-events.js';
@@ -121,6 +121,7 @@ export class RelayClient {
   localLink: LocalLinkServer | null = null;
   /** Accepted in-memory single-session subscription for each connected Arm. */
   currentSessionByArm = new Map<string, string | null>();
+  private static readonly TRUST_REJECTED_NOTICE_INTERVAL_MS = 5_000;
   /** Most apps one multicast envelope may name: the Head's
    *  `MAX_MULTICAST_TARGETS` (packages/head/src/server/shared.ts). */
   private static readonly MULTICAST_TARGET_LIMIT = 64;
@@ -1484,7 +1485,10 @@ export class RelayClient {
       // against the key pinned at pairing) decides who sent a message; the
       // Head's `src` stamp must only agree with it.
       const opened = this.deviceTrust!.open(parsed as Record<string, unknown>, sender);
-      if (opened.kind === 'rejected') return;
+      if (opened.kind === 'rejected') {
+        if (opened.notify) this.notifyTrustRejected(opened.notify.appId, opened.reason, opened.notify.inner);
+        return;
+      }
       if (opened.kind === 'pair_request') {
         this.handlePairRequest(opened.signed, opened.inner);
         return;
@@ -1551,6 +1555,40 @@ export class RelayClient {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
       return 0;
     }
+  }
+
+  /** Last time each app was told a command of it was refused (see
+   *  notifyTrustRejected). */
+  private trustRejectedNoticeAt = new Map<string, number>();
+
+  /**
+   * Tell a paired app that a command it signed was refused by device trust
+   * (its clock is off, it was delivered long after it was signed, or this
+   * computer could not record it), so it shows an error instead of waiting
+   * forever. Sent as an `error` on the command's session (or with its
+   * requestId), which every app already renders. At most one notice per app
+   * every few seconds: an app retrying with a skewed clock would otherwise
+   * get one per attempt.
+   */
+  private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
+    const now = Date.now();
+    if (now - (this.trustRejectedNoticeAt.get(appId) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
+    const sessionId = typeof inner.sessionId === 'string' ? inner.sessionId : undefined;
+    const requestId = typeof (inner.payload as { requestId?: unknown } | undefined)?.requestId === 'string'
+      ? (inner.payload as { requestId: string }).requestId
+      : undefined;
+    this.trustRejectedNoticeAt.set(appId, now);
+    const message = reason === 'from_future'
+      ? 'This computer refused the request because this device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
+      : reason === 'stale'
+        ? 'This computer refused the request because it was signed too long ago, or this device\'s clock is behind. Check the date and time, then try again.'
+        : 'This computer could not record the request securely, so it was not run. Check that Kraki on the computer can write to its data folder, then try again.';
+    logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
+    this.sendReliableUnicastTo(appId, this.consumerKeys.get(appId) ?? NO_RSA_KEY, {
+      type: 'error',
+      ...(sessionId ? { sessionId } : {}),
+      payload: { message, ...(requestId ? { requestId } : {}) },
+    });
   }
 
   /** Which hop a unicast to `deviceId` takes right now (for logs). */
