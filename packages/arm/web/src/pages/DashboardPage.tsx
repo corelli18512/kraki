@@ -12,6 +12,7 @@ import { desktop, desktopCredentials } from '../lib/desktop';
 import { DesktopSetup } from '../components/desktop/DesktopSetup';
 import { StartSessionView } from '../components/sessions/NewSessionComposer';
 import { useNarrow } from '../hooks/useNarrow';
+import { useSessionListLoading } from '../hooks/useSessionListLoading';
 import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
 
 /** GitHub mark SVG for the sign-in button */
@@ -36,6 +37,7 @@ export function DashboardPage() {
   const hasCredentials = !!loadStoredDevice()?.deviceId;
   const [scannerOpen, setScannerOpen] = useState(false);
   const sessionCount = useStore((s) => s.sessions.size);
+  const sessionListLoading = useSessionListLoading();
   const wide = !useNarrow();
 
   const handleQrScan = useCallback((url: string) => {
@@ -154,7 +156,7 @@ export function DashboardPage() {
   if (wide) {
     return (
       <StartSessionView
-        firstTime={sessionCount === 0}
+        firstTime={sessionCount === 0 && !sessionListLoading}
         onConnectPhone={desktop?.builtIn ? () => window.dispatchEvent(new Event('kraki:connect-phone')) : undefined}
       />
     );

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isMacBrowser } from './macDownload';
 
 export const useUsageShortcut = create<{ shortcut: string; enabled: boolean; recording: boolean }>(() => ({
   shortcut: localStorage.getItem('kraki:usage.shortcut') ?? 'F6',
@@ -18,6 +19,13 @@ export function shortcutFromEvent(e: KeyboardEvent): string | null {
   if (!/^F([1-9]|1[0-9]|20)$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) return null;
   return [e.metaKey && 'Super', e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.key.length === 1 ? e.key.toUpperCase() : e.key].filter(Boolean).join('+');
 }
+/** How a stored (Electron-spelled) shortcut reads to the user: in a Mac
+ *  browser the Command key is "Cmd" (stored as "Super") and Alt is "Option". */
+export function shortcutLabel(shortcut: string, mac = isMacBrowser()): string {
+  if (!mac) return shortcut;
+  return shortcut.split('+').map((part) => (part === 'Super' ? 'Cmd' : part === 'Alt' ? 'Option' : part)).join('+');
+}
+
 export function matchesUsageShortcut(e: KeyboardEvent): boolean {
   const { shortcut, enabled, recording } = useUsageShortcut.getState();
   return enabled && !recording && shortcutFromEvent(e) === shortcut;

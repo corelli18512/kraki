@@ -46,10 +46,16 @@ function freshnessLifetimeMs(a: AccountUsage): number {
   return Math.min(15_900, Math.max(60, s)) * 1000;
 }
 
-export function isStale(a: AccountUsage, now = Date.now()): boolean {
-  if (a.error) return true;
+/** The last successful reading is too old (or missing), whatever the latest
+ *  refresh attempt did. This is what the "Stale" badge says; a failed refresh
+ *  right after a fresh reading has its own status ("Rate limited…"). */
+export function isDataStale(a: AccountUsage, now = Date.now()): boolean {
   const f = fetchedDate(a);
   return f === null || now - f > freshnessLifetimeMs(a);
+}
+
+export function isStale(a: AccountUsage, now = Date.now()): boolean {
+  return !!a.error || isDataStale(a, now);
 }
 
 export function readStatus(a: AccountUsage, now = Date.now()): string | null {

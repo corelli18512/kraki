@@ -1,9 +1,10 @@
-import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { i18next } from '../../i18n';
 import { MemoryRouter } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { Sidebar } from './Sidebar';
+import { SESSION_LIST_WAIT_MS } from '../../hooks/useSessionListLoading';
 
 beforeEach(() => {
   useStore.getState().reset();
@@ -30,6 +31,37 @@ describe('Sidebar', () => {
     useStore.getState().setStatus('connected');
     render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getAllByText('No sessions yet').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not show the empty state while the session list is still arriving (K-096)', () => {
+    useStore.getState().setStatus('connecting');
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-loading')).toBeInTheDocument();
+    act(() => {
+      useStore.getState().setStatus('connected');
+      useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', kind: 'desktop', online: true }]);
+    });
+    // Connected, but the online computer has not sent its session_list yet.
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    expect(screen.queryByText(/install\.sh/)).not.toBeInTheDocument();
+    act(() => { useStore.getState().markSessionListReceived('d1'); });
+    expect(screen.queryByTestId('sidebar-loading')).not.toBeInTheDocument();
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+  });
+
+  it('shows the empty state when an online computer never sends its session list (K-096)', () => {
+    vi.useFakeTimers();
+    try {
+      useStore.getState().setStatus('connected');
+      useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', kind: 'desktop', online: true }]);
+      render(<MemoryRouter><Sidebar /></MemoryRouter>);
+      expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(SESSION_LIST_WAIT_MS); });
+      expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders device list and sessions', () => {
@@ -140,5 +172,27 @@ describe('Sidebar native search and ordering', () => {
     useStore.getState().setPinnedSessions(new Set(['pinned']));
     const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
+  });
+});
+
+describe('Sidebar narrow tabs', () => {
+  it('keeps the Sessions list scroll position across tab switches (K-242)', () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...original(query), matches: query === '(max-width: 767px)',
+    })) as typeof window.matchMedia;
+    try {
+      useStore.getState().setStatus('connected');
+      render(<MemoryRouter><Sidebar /></MemoryRouter>);
+      const scroll = screen.getByTestId('sidebar-sessions-scroll');
+      scroll.scrollTop = 640;
+      fireEvent.scroll(scroll);
+      fireEvent.click(screen.getByRole('button', { name: 'Devices' }));
+      expect(screen.queryByTestId('sidebar-sessions-scroll')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+      expect(screen.getByTestId('sidebar-sessions-scroll').scrollTop).toBe(640);
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });

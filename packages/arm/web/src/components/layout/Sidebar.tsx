@@ -1,12 +1,13 @@
 import { useTranslation } from 'react-i18next';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
-import { useUsageShortcut } from '../../lib/usage-shortcut';
+import { shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
+import { useSessionListLoading } from '../../hooks/useSessionListLoading';
 import { SessionRow } from '../sessions/SessionRow';
 import { NewSessionDialog } from '../sessions/NewSessionDialog';
 import { ImportSessionDialog } from '../sessions/ImportSessionDialog';
@@ -84,7 +85,6 @@ export function Sidebar() {
   const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
-  const status = useStore((s) => s.status);
   const reconnecting = useShowsReconnecting();
   const [query, setQuery] = useState('');
   const [newOpen, setNewOpen] = useState(false);
@@ -107,10 +107,17 @@ export function Sidebar() {
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
   const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  // The Sessions tab unmounts while Devices/Settings show; come back to the
+  // same place in the list.
+  const sessionsScrollTop = useRef(0);
+  const restoreSessionsScroll = useCallback((el: HTMLDivElement | null) => {
+    if (el) el.scrollTop = sessionsScrollTop.current;
+  }, []);
   const navigate = useNavigate();
   const sorted = useSortedSessions(query);
   const total = useStore((s) => s.sessions.size);
   const archivedCount = useArchivedCount();
+  const listLoading = useSessionListLoading();
 
   // New session on the wide layout = the composer in the idle pane (Mac):
   // leave the current session and put the cursor in the composer.
@@ -125,6 +132,8 @@ export function Sidebar() {
         <p>{t('sidebar.noResults')}</p>
         <span>{t('sidebar.trySearch')}</span>
       </div>
+    : total === 0 && archivedCount === 0 && listLoading
+    ? (reconnecting ? null : <div className="ksb-status" data-testid="sidebar-loading"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>)
     : total === 0 && archivedCount === 0
     ? (narrow
       ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
@@ -169,7 +178,7 @@ export function Sidebar() {
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
               <div className="ksb-plus-menu ksb-app-menu" role="menu">
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> {t('tabs.devices')}</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: usageShortcut }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: shortcutLabel(usageShortcut) }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> {t('sidebar.settings')}</button>
                 <ProfileBar menu />
               </div>
@@ -198,7 +207,6 @@ export function Sidebar() {
           </div>
         </div>
         {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
@@ -214,7 +222,12 @@ export function Sidebar() {
             <Brand />
             {reconnecting && <span className="kspinner ksb-spin" aria-label={t('sidebar.connectingLabel')} />}
           </div>
-          <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
+          <div
+            className="ksb-scroll"
+            ref={restoreSessionsScroll}
+            onScroll={(e) => { sessionsScrollTop.current = e.currentTarget.scrollTop; }}
+            data-testid="sidebar-sessions-scroll"
+          >{list}<div className="ksb-tabbar-space" /></div>
         </>
       )}
       {tab === 'devices' && <div className="ksb-scroll ksb-pane"><DeviceGrid /><div className="ksb-tabbar-space" /></div>}

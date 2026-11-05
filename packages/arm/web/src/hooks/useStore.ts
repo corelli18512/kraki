@@ -97,6 +97,8 @@ const initialState = {
   localSessionsLoading: false,
   archiveInfo: new Map<string, { count: number; days: number }>(),
   archivedSessions: new Map<string, import('@kraki/protocol').SessionDigest[]>(),
+  sessionListDevices: new Set<string>(),
+  closingTurns: new Set<string>(),
 };
 
 // --- Persistence ---
@@ -630,6 +632,17 @@ export const useStore = create<Store>()(persist((set) => ({
     next.set(deviceId, info);
     return { archiveInfo: next };
   }),
+  markSessionListReceived: (deviceId) => set((state) => (
+    state.sessionListDevices.has(deviceId)
+      ? state
+      : { sessionListDevices: new Set(state.sessionListDevices).add(deviceId) }
+  )),
+  setTurnClosing: (sessionId, closing) => set((state) => {
+    if (state.closingTurns.has(sessionId) === closing) return state;
+    const next = new Set(state.closingTurns);
+    if (closing) next.add(sessionId); else next.delete(sessionId);
+    return { closingTurns: next };
+  }),
   receiveDeviceUsage: (deviceId, payload) => set((state) => {
     const out: Partial<typeof state> = {};
     if (payload.requestId) {
@@ -823,6 +836,8 @@ export const useStore = create<Store>()(persist((set) => ({
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
     pendingSessions: new Set(),
+    sessionListDevices: new Set(),
+    closingTurns: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until the session_list
     // digest (the tentacle) reconciles it.
