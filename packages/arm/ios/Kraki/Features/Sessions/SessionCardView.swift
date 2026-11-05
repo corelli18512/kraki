@@ -82,7 +82,10 @@ private struct SessionCardBody: View, Equatable {
             .padding(.top, 3)
 
             VStack(alignment: .leading, spacing: 2) {
+                // Fixed below the accessibility sizes (cards keep their
+                // height and match Mac/web); grows for a second title line.
                 titleRow
+                    .frame(height: dynamicTypeSize.isAccessibilitySize ? nil : titleRowHeight)
                     .frame(minHeight: titleRowHeight)
                 metadataRow
                     .frame(minHeight: lineRowHeight)

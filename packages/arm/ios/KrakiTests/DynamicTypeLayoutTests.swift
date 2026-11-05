@@ -47,6 +47,24 @@ final class DynamicTypeLayoutTests: XCTestCase {
         }
     }
 
+    /// The second title line is for accessibility sizes only: at the default
+    /// size the card keeps its fixed 20 / 18 / 18 pt rows (64 pt in all,
+    /// like Mac and web) instead of growing to the 18 pt font's line height.
+    func testCardKeepsItsHeightAtTheDefaultTextSize() throws {
+        let app = AppState.makeUnitTestHost()
+        app.sessionStore.upsertSession(SessionInfo(
+            id: "default-card", deviceId: "dev", deviceName: "mac", agent: "pi",
+            model: "gpt-5", reasoningEffort: nil, title: "New Session",
+            state: .idle, mode: .safe, lastSeq: 0, readSeq: 0, messageCount: 0,
+            createdAt: Date(), pinned: false))
+        let host = UIHostingController(rootView: SessionCardView(sessionId: "default-card")
+            .frame(width: 353)
+            .environment(\.dynamicTypeSize, .large)
+            .environment(app))
+        let height = host.sizeThatFits(in: CGSize(width: 353, height: CGFloat.greatestFiniteMagnitude)).height
+        XCTAssertEqual(height, 2 + 20 + 2 + 18 + 2 + 18 + 2, accuracy: 0.5)
+    }
+
     func testLoginTextFollowsDynamicType() throws {
         let tree = try AccessibilityTreeHost()
         self.tree = tree
