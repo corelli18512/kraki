@@ -38,7 +38,6 @@ final class IOSLaunchGateAccessibilityTests: XCTestCase {
         tree.drain(0.8)
         XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
         XCTAssertTrue(coordinator.isLaunchGateVisible)
-        print("K078_UNDER_GATE \(tree.describeElements())")
         // Positive control: the gate's own logo is in the tree.
         XCTAssertTrue(tree.elements().contains { $0.accessibilityLabel == "Kraki" }, "\(tree.describeElements())")
         XCTAssertFalse(exposesSessionsShell(tree), "reachable under the launch gate: \(tree.describeElements())")
