@@ -13,11 +13,24 @@ function textOf(node: ReactNode): string {
   return '';
 }
 
+/** Agent text is not trusted to make this browser fetch anything: a remote
+ *  `![](https://…)` would tell a third party who read the message, and when.
+ *  An image shows as a link the user may open. */
+function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+  const url = typeof src === 'string' ? src : '';
+  const label = alt || url;
+  if (/^https?:\/\//i.test(url)) {
+    return <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>;
+  }
+  return label ? <span>{label}</span> : null;
+}
+
 /** Markdown elements styled like the native bubbles (see chat.css `.kmd`). */
 const components: Components = {
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
   ),
+  img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   // ReactMarkdown emits a newline after each hard-break node. Prose preserves
   // that newline in CSS; retaining <br> as well would introduce a blank line.
   br: () => null,
@@ -42,8 +55,8 @@ const components: Components = {
     : null),
 };
 
-/** Inline elements inside table cells (links open outside). */
-const cellComponents = { a: components.a };
+/** Inline elements inside table cells (links open outside; no remote images). */
+const cellComponents = { a: components.a, img: components.img };
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
