@@ -25,7 +25,7 @@ final class ForkNavigationTests: XCTestCase {
         app.commandSender?.resolveCreateRequest(rid, sessionId: "fork")
         XCTAssertEqual(app.sessionStore.navigateToSession, "fork")
         XCTAssertTrue(app.sessionStore.navigationPushesOnTop)
-        XCTAssertFalse(app.sessionStore.navigationReplacesPlaceholder)
+        XCTAssertNil(app.sessionStore.navigationReplacesPlaceholder)
     }
 
     func testSlowForkShowsNamedPlaceholderThenReplacesIt() async throws {
@@ -43,7 +43,7 @@ final class ForkNavigationTests: XCTestCase {
         app.sessionStore.navigateToSession = nil
         app.commandSender?.resolveCreateRequest(rid, sessionId: "fork")
         XCTAssertEqual(app.sessionStore.navigateToSession, "fork")
-        XCTAssertTrue(app.sessionStore.navigationReplacesPlaceholder)
+        XCTAssertEqual(app.sessionStore.navigationReplacesPlaceholder, placeholder)
     }
 
     func testForkAnnouncementKeepsListStateAndSeedsHistory() throws {

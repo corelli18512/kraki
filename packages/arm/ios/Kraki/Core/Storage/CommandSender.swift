@@ -1275,7 +1275,7 @@ final class CommandSender {
             }
             #if os(iOS)
             if stillOnPlaceholder {
-                appState.sessionStore.navigationReplacesPlaceholder = true
+                appState.sessionStore.navigationReplacesPlaceholder = placeholderId
                 appState.sessionStore.navigateToSession = sessionId
             } else if openWithoutPlaceholder {
                 appState.sessionStore.navigationPushesOnTop = true
