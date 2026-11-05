@@ -23,6 +23,7 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
     return () => clearInterval(t);
   }, []);
 
+  const version = deviceVersions.get(device.id);
   const update = availableUpdate(device, deviceUpdates, deviceVersions);
   const visible = progress && (isActivePhase(progress.phase) || progress.phase === 'busy' || now - progress.at < 600_000);
   if (!visible && !update) return null;
@@ -101,13 +102,15 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
         if (now - p.at <= INSTALL_RETURN_MS) {
           return box('info', device.online ? t('update.installing', { version: to }) : t('update.restarting', { name: device.name }), t('update.backSoon'));
         }
-        // Back online but still on the old version (the new one greeting us
-        // would have made this 'updated'): the update did not take.
-        if (device.online) {
+        // Decide from the version the computer greeted with; a greeting from
+        // the new version may come without any update status.
+        if (p.to && version === p.to) return box('ok', t('update.updated', { version: to }));
+        if (device.online && p.from && version === p.from) {
           return box('warn', t('update.rolledBack'), (
-            <span>{p.from ? t('update.rolledBackDetail', { name: device.name, from: p.from }) : t('update.rolledBackDetailPrevious', { name: device.name })} {dismiss}</span>
+            <span>{t('update.rolledBackDetail', { name: device.name, from: p.from })} {dismiss}</span>
           ));
         }
+        if (device.online) return box('warn', t('update.unconfirmed', { name: device.name }), dismiss);
         return box('warn', t('update.notBack', { name: device.name }), t('update.checkComputer'));
       case 'updated': return box('ok', t('update.updated', { version: to }));
       case 'rolled_back': return box('warn', t('update.rolledBack'), p.from ? t('update.rolledBackDetail', { name: device.name, from: p.from }) : t('update.rolledBackDetailPrevious', { name: device.name }));

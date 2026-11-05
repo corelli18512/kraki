@@ -115,6 +115,7 @@
     "stopsSessions": "更新会重启 {{name}} 上的 Kraki，并停止这些会话。",
     "idleDetail": "所有会话结束后，Kraki{{version}} 将立即安装到 {{name}} 上。",
     "downloading": "正在下载 Kraki{{version}}…",
+    "unconfirmed": "{{name}} 已恢复在线，但没有报告更新是否完成。请查看它显示的版本。",
     "notBack": "{{name}} 尚未恢复在线",
     "installing": "正在安装 Kraki{{version}}…",
     "restarting": "正在重启 {{name}} 上的 Kraki…",

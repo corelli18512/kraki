@@ -73,10 +73,39 @@ it('a computer back online on the old version without a status shows the update 
     const view = render(<DeviceUpdateBox device={{ ...device, online: false }} />);
     act(() => { vi.advanceTimersByTime(185_000); });
     expect(screen.getByText('My PC isn’t back online yet')).toBeInTheDocument();
+    act(() => { useStore.getState().setDeviceVersion('pc', '0.40.0'); });
     view.rerender(<DeviceUpdateBox device={device} />);
     expect(screen.queryByText('My PC isn’t back online yet')).not.toBeInTheDocument();
     expect(screen.getByText('Update didn’t work, so nothing changed')).toBeInTheDocument();
     expect(screen.getByText('The new version didn’t start on My PC, so it went back to 0.40.0.', { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(useStore.getState().updateProgress.has('pc')).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+// K-225 review: a restarted Tentacle greets with its version before it sends
+// any update status (and never sends one if its update check fails).
+it('a computer that greets with the new version without an update status shows Updated, not a rollback (K-225)', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.40.0', to: '0.41.0', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    act(() => { useStore.getState().setDeviceVersion('pc', '0.41.0'); });
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(useStore.getState().updateProgress.get('pc')?.phase).toBe('updated');
+    expect(screen.getByText('✓ Updated to Kraki 0.41.0')).toBeInTheDocument();
+    expect(screen.queryByText('Update didn’t work, so nothing changed')).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+it('a computer back online with no version known does not claim the update failed (K-225)', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.40.0', to: '0.41.0', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.queryByText('Update didn’t work, so nothing changed')).not.toBeInTheDocument();
+    expect(screen.getByText('My PC is back online, but didn’t say whether the update finished. Check the version it shows.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(useStore.getState().updateProgress.has('pc')).toBe(false);
   } finally { vi.useRealTimers(); }

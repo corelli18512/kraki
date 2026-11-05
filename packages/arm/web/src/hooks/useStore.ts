@@ -573,6 +573,15 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.deviceVersions);
       next.set(deviceId, version);
+      // A restarted Tentacle greets with its version before it knows about
+      // updates (and never, if its update check fails): that version being
+      // the target is the update having landed too.
+      const p = state.updateProgress.get(deviceId);
+      if (p && isActivePhase(p.phase) && p.to && version === p.to) {
+        const progress = new Map(state.updateProgress);
+        progress.set(deviceId, { ...p, phase: 'updated', at: Date.now() });
+        return { deviceVersions: next, updateProgress: progress };
+      }
       return { deviceVersions: next };
     }),
 
