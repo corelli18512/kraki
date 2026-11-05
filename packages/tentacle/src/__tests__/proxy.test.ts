@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseScutilProxy, detectProxy, bypassesProxy, proxyFor } from '../proxy.js';
 
 const SCUTIL = `<dictionary> {
@@ -109,5 +109,23 @@ describe('unsupported proxies are named, not silently ignored (K-328)', async ()
     expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux'))
       .toEqual({ https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', noProxy: [], source: 'env' });
     expect(unsupportedProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux')).toBeNull();
+  });
+});
+
+describe('reads the system proxy once per process (K-328)', () => {
+  it('runs scutil --proxy once for detectProxy and unsupportedProxy', async () => {
+    vi.resetModules();
+    const execFileSync = vi.fn(() => '<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 0\n}');
+    vi.doMock('node:child_process', () => ({ execFileSync }));
+    try {
+      const proxy = await import('../proxy.js');
+      expect(proxy.detectProxy({}, 'darwin')).toBeNull();
+      expect(proxy.unsupportedProxy({}, 'darwin')).toBeNull();
+      expect(proxy.unsupportedProxy({}, 'darwin')).toBeNull();
+      expect(execFileSync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('node:child_process');
+      vi.resetModules();
+    }
   });
 });

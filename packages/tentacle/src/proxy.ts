@@ -134,16 +134,30 @@ export function unsupportedProxy(env: NodeJS.ProcessEnv = process.env, platform 
     const value = rawEnvValue(env, name);
     if (value && isSocksUrl(value)) return `SOCKS proxy (${name})`;
   }
-  try {
-    if (platform === 'darwin') {
-      return parseScutilUnsupported(execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }));
-    }
-    if (platform === 'win32') {
-      return parseWindowsUnsupported(execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
-        { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }));
-    }
-  } catch { /* no system proxy information */ }
-  return null;
+  const out = systemProxyText(platform);
+  if (out === null) return null;
+  return platform === 'win32' ? parseWindowsUnsupported(out) : parseScutilUnsupported(out);
+}
+
+// One `scutil --proxy` / `reg query` per process: `kraki status --json` (polled
+// by Kraki for Mac) asks detectProxy and unsupportedProxy, and the CLI's
+// startup applyProcessProxy asked already. Proxy settings are read once per
+// process anyway (proxySettings).
+const systemProxyTexts = new Map<string, string | null>();
+
+function systemProxyText(platform: string): string | null {
+  if (platform !== 'darwin' && platform !== 'win32') return null;
+  if (!systemProxyTexts.has(platform)) {
+    let out: string | null = null;
+    try {
+      out = platform === 'win32'
+        ? execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+          { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+        : execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { /* no system proxy information */ }
+    systemProxyTexts.set(platform, out);
+  }
+  return systemProxyTexts.get(platform) ?? null;
 }
 
 /** The one-line warning for an unsupported proxy setting. */
@@ -162,22 +176,9 @@ export function detectProxy(env: NodeJS.ProcessEnv = process.env, platform = pro
     const noProxy = (envValue(env, 'NO_PROXY') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'env' };
   }
-  if (platform === 'win32') {
-    try {
-      const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
-        { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      return parseWindowsProxy(out);
-    } catch {
-      return null;
-    }
-  }
-  if (platform !== 'darwin') return null;
-  try {
-    const out = execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
-    return parseScutilProxy(out);
-  } catch {
-    return null;
-  }
+  const out = systemProxyText(platform);
+  if (out === null) return null;
+  return platform === 'win32' ? parseWindowsProxy(out) : parseScutilProxy(out);
 }
 
 function proxySettings(): ProxySettings | null {
