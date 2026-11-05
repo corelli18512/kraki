@@ -94,7 +94,13 @@ final class IOSHTMLReportViewerTests: XCTestCase {
 
     /// K-166: a dark report gets Mermaid's dark theme; a light one keeps the default.
     func testMermaidThemeFollowsTheReportBackground() async throws {
-        for (background, theme) in [("#111418", "dark"), ("#ffffff", "default")] {
+        let cases = [
+            ("#111418", "dark"), ("#ffffff", "default"),
+            // CSS Color 4 values keep their own syntax in computed style (Tailwind v4 is oklch).
+            ("oklch(0.985 0.002 247.8)", "default"), ("oklch(0.2 0.01 250)", "dark"),
+            ("color(display-p3 1 1 1)", "default"),
+        ]
+        for (background, theme) in cases {
             let html = """
             <!doctype html><html><body style="background:\(background)">
             <script>window.mermaid = { initialize: function (c) { window.__mermaidConfig = c; },

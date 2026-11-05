@@ -91,11 +91,17 @@ enum HTMLReportMermaid {
         pre.textContent = code.textContent;
       });
       function pageIsDark() {
+        // The canvas converts any computed colour (rgb, oklch, lab, color(display-p3 …)) to 0-255 sRGB.
+        var ink = document.createElement('canvas').getContext('2d');
         var layers = [document.body, document.documentElement];
         for (var i = 0; i < layers.length; i++) {
-          if (!layers[i]) continue;
-          var c = (getComputedStyle(layers[i]).backgroundColor.match(/[\\d.]+/g) || []).map(Number);
-          if (c.length < 3 || (c.length > 3 && c[3] === 0)) continue;
+          if (!layers[i] || !ink) continue;
+          ink.clearRect(0, 0, 1, 1);
+          ink.fillStyle = 'rgba(0,0,0,0)'; // an unparsable colour keeps this and is skipped
+          ink.fillStyle = getComputedStyle(layers[i]).backgroundColor;
+          ink.fillRect(0, 0, 1, 1);
+          var c = ink.getImageData(0, 0, 1, 1).data;
+          if (c[3] === 0) continue;
           return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] < 128;
         }
         var scheme = getComputedStyle(document.documentElement).colorScheme || '';
