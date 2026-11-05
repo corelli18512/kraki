@@ -29,6 +29,26 @@ struct ToolResultPreview: Equatable {
         omittedBytes = data.count - (end - data.startIndex)
     }
 
+    /// A tool's arguments (a JSON object) as sorted `key: value` lines, strings
+    /// verbatim, like the web Steps. The raw JSON showed an edit's text as one
+    /// escaped blob with literal `\n` (K-051). Not an object: shown as is.
+    static func arguments(_ data: Data, limit: Int = Self.limit) -> ToolResultPreview? {
+        guard data.count <= 4 * 1024 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ToolResultPreview(data, limit: limit)
+        }
+        let lines = object.keys.sorted().map { key -> String in
+            let value = object[key]
+            if let string = value as? String { return "\(key): \(string)" }
+            guard let value, !(value is NSNull) else { return "\(key): null" }
+            let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
+            let json = (try? JSONSerialization.data(withJSONObject: value, options: options))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? String(describing: value)
+            return "\(key): \(json)"
+        }
+        return ToolResultPreview(Data(lines.joined(separator: "\n").utf8), limit: limit)
+    }
+
     /// "Showing the first 32 KB of 5 MB." when cut.
     var truncationNotice: String? {
         guard omittedBytes > 0 else { return nil }

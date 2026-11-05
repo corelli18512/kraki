@@ -175,7 +175,7 @@ struct ToolActivityView: View {
     private func lazyBody(ref: ContentRef) -> some View {
         switch attachmentStore.state(for: ref.id) {
         case .ready(_, let data):
-            let preview = ToolResultPreview(data)
+            let preview = ref.id == argsRef?.id ? ToolResultPreview.arguments(data) : ToolResultPreview(data)
             ScrollView {
                 Text(preview?.text ?? String(localized: "(non-utf8 bytes)"))
                     .font(.caption2)
@@ -241,85 +241,6 @@ struct ToolActivityView: View {
 enum ToolActivityType {
     case start
     case complete
-}
-
-// MARK: - SimpleDiffView
-
-/// Minimal diff view showing old (red) and new (green) lines.
-///
-/// Caps each side at `maxLinesPerSide` lines to avoid the layout
-/// stall that comes from a `VStack(ForEach)` over hundreds of lines.
-/// When clipped, shows an "X more lines" affordance that lets the
-/// user expand the block at their own discretion.
-struct SimpleDiffView: View {
-    let oldText: String
-    let newText: String
-
-    @State private var expanded = false
-
-    private static let collapsedLinesPerSide = 60
-
-    var body: some View {
-        let oldLines = oldText.isEmpty ? [] : oldText.components(separatedBy: "\n")
-        let newLines = newText.isEmpty ? [] : newText.components(separatedBy: "\n")
-        let limit = expanded ? Int.max : Self.collapsedLinesPerSide
-        let oldVisible = Array(oldLines.prefix(limit))
-        let newVisible = Array(newLines.prefix(limit))
-        let oldHidden = max(0, oldLines.count - oldVisible.count)
-        let newHidden = max(0, newLines.count - newVisible.count)
-
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(oldVisible.enumerated()), id: \.offset) { _, line in
-                Text(verbatim: "- \(line)")
-                    .font(.caption2)
-                    .fontDesign(.monospaced)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                    .background(Color.red.opacity(0.08))
-            }
-            ForEach(Array(newVisible.enumerated()), id: \.offset) { _, line in
-                Text(verbatim: "+ \(line)")
-                    .font(.caption2)
-                    .fontDesign(.monospaced)
-                    .foregroundStyle(.green)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                    .background(Color.green.opacity(0.08))
-            }
-            if oldHidden > 0 || newHidden > 0 {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-                } label: {
-                    Text(expandedLabel(oldHidden: oldHidden, newHidden: newHidden))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.08))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .textSelection(.enabled)
-    }
-
-    private func expandedLabel(oldHidden: Int, newHidden: Int) -> String {
-        if expanded {
-            return String(localized: "  Collapse")
-        }
-        if oldHidden > 0 && newHidden > 0 {
-            return String(localized: "  \(oldHidden) removed, \(newHidden) added — tap to expand")
-        }
-        if oldHidden > 0 {
-            return String(localized: "  \(oldHidden) removed — tap to expand")
-        }
-        return String(localized: "  \(newHidden) added — tap to expand")
-    }
 }
 
 #endif

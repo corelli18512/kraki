@@ -26,4 +26,14 @@ final class ToolResultPreviewTests: XCTestCase {
         XCTAssertNil(preview.truncationNotice)
         XCTAssertNil(ToolResultPreview(Data([0xFF, 0xFE, 0x00])))
     }
+
+    /// K-051: lazy edit arguments were drawn as raw JSON, an edit's text one
+    /// escaped blob with literal "\n". Shown as the web does: sorted
+    /// `key: value` lines, strings verbatim.
+    func testArgumentsReadAsKeyValueLinesWithRealNewlines() throws {
+        let json = #"{"path":"a.swift","old_string":"let a = 1\nlet b = 2","new_string":"let a = 3","replace_all":false}"#
+        let preview = try XCTUnwrap(ToolResultPreview.arguments(Data(json.utf8)))
+        XCTAssertEqual(preview.text, "new_string: let a = 3\nold_string: let a = 1\nlet b = 2\npath: a.swift\nreplace_all: false")
+        XCTAssertEqual(ToolResultPreview.arguments(Data("plain".utf8))?.text, "plain")
+    }
 }
