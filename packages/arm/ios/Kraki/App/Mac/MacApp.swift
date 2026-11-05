@@ -321,10 +321,20 @@ enum MacSingleInstance {
         let isTerminated: Bool
     }
 
-    /// The instance already running, if any (never this process, never one
-    /// already quitting: an update relaunch must not exit).
-    static func runningInstance(among candidates: [Candidate], currentPID: pid_t) -> Candidate? {
-        candidates.first { $0.pid != currentPID && !$0.isTerminated }
+    /// Passed by "Relaunch Now" (`AppLanguage.relaunch`) with its own pid:
+    /// the copy it starts replaces it instead of handing back to it.
+    static let relaunchedFromArgument = "--kraki-relaunched-from"
+
+    static func relaunchedFromPID(arguments: [String]) -> pid_t? {
+        guard let flag = arguments.firstIndex(of: relaunchedFromArgument),
+              arguments.indices.contains(flag + 1) else { return nil }
+        return pid_t(arguments[flag + 1])
+    }
+
+    /// The instance already running, if any: never this process, one that
+    /// has exited, or the one this launch replaces (`ignoring`).
+    static func runningInstance(among candidates: [Candidate], currentPID: pid_t, ignoring: pid_t? = nil) -> Candidate? {
+        candidates.first { $0.pid != currentPID && $0.pid != ignoring && !$0.isTerminated }
     }
 
     /// Posted by a second launch; the running instance shows its window.
@@ -343,11 +353,23 @@ enum MacSingleInstance {
         guard let bundleId = Bundle.main.bundleIdentifier else { return }
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
         let candidates = apps.map { Candidate(pid: $0.processIdentifier, isTerminated: $0.isTerminated) }
-        guard let running = runningInstance(among: candidates, currentPID: getpid()),
+        guard let running = runningInstance(among: candidates, currentPID: getpid(),
+                                            ignoring: relaunchedFromPID(arguments: CommandLine.arguments)),
               let app = apps.first(where: { $0.processIdentifier == running.pid }) else { return }
         KLog.d("second launch: showing the running instance (pid \(running.pid)) and exiting")
+        // Brings an open window forward.
         DistributedNotificationCenter.default().postNotificationName(
             showWindowNotification(bundleId: bundleId), object: nil, userInfo: nil, deliverImmediately: true)
+        // Opening it again, as Finder does, sends the reopen event: a copy
+        // that only lives in the menu bar creates its window
+        // (applicationShouldHandleReopen), older builds included.
+        if let url = app.bundleURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = false
+            let reopened = DispatchSemaphore(value: 0)
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in reopened.signal() }
+            _ = reopened.wait(timeout: .now() + 5)
+        }
         app.activate()
         exit(0)
     }

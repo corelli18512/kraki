@@ -99,6 +99,8 @@ enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     ) {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
+        // The new copy must not hand back to this one (MacSingleInstance).
+        config.arguments = [MacSingleInstance.relaunchedFromArgument, String(getpid())]
         open(Bundle.main.bundleURL, config) { application, error in
             // Quit only once the new instance is running; if the launch
             // failed, keep this one (the choice still applies next launch).
