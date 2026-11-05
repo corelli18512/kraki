@@ -46,6 +46,8 @@
   },
   "scanner": {
     "denied": "无法访问相机。请检查浏览器或设备设置。",
+    "noCamera": "未找到相机。请连接相机，或直接在此设备上打开配对链接。",
+    "unavailable": "无法启动相机。请关闭正在使用相机的其他应用后重试。",
     "back": "返回",
     "pointAt": "将相机对准 <command>kraki connect</command> 生成的二维码"
   },

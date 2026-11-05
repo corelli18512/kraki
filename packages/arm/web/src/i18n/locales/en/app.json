@@ -46,6 +46,8 @@
   },
   "scanner": {
     "denied": "Camera access denied. Check your browser or device settings.",
+    "noCamera": "No camera found. Connect a camera, or open the pairing link on this device instead.",
+    "unavailable": "Couldn’t start the camera. Close other apps using it and try again.",
     "back": "Go back",
     "pointAt": "Point at the QR code from <command>kraki connect</command>"
   },

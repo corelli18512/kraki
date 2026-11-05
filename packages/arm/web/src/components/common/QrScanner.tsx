@@ -8,6 +8,22 @@ interface QrScannerProps {
   onClose: () => void;
 }
 
+/** Decode one camera frame. Both polarities: a code shown light-on-dark (a
+ *  dark-mode terminal or screen) never decoded with 'dontInvert'. */
+export function decodeQrFrame(data: Uint8ClampedArray, width: number, height: number): string | null {
+  return jsQR(data, width, height, { inversionAttempts: 'attemptBoth' })?.data || null;
+}
+
+export type CameraError = 'denied' | 'noCamera' | 'unavailable';
+
+/** What getUserMedia's failure means for the user: only a refusal is "denied". */
+export function cameraErrorKind(err: unknown): CameraError {
+  const name = (err as { name?: unknown } | null)?.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'denied';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') return 'noCamera';
+  return 'unavailable';
+}
+
 /**
  * Fullscreen camera overlay that decodes QR codes containing a Kraki pairing URL.
  * Uses getUserMedia for the camera feed and jsQR for decoding.
@@ -18,7 +34,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CameraError | null>(null);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -39,6 +55,8 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 
     async function start() {
       try {
+        // No mediaDevices at all: an insecure (plain-http) page.
+        if (!navigator.mediaDevices?.getUserMedia) throw new DOMException('mediaDevices unavailable', 'NotFoundError');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         });
@@ -49,8 +67,8 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
         video.srcObject = stream;
         await video.play();
         scan();
-      } catch {
-        if (mounted) setError('denied');
+      } catch (err) {
+        if (mounted) setError(cameraErrorKind(err));
       }
     }
 
@@ -69,15 +87,15 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      const code = decodeQrFrame(imageData.data, imageData.width, imageData.height);
 
-      if (code?.data) {
+      if (code) {
         try {
-          const url = new URL(code.data);
+          const url = new URL(code);
           const token = url.searchParams.get('token');
           const relay = url.searchParams.get('relay');
           if (token && relay) {
-            onScan(code.data);
+            onScan(code);
             return; // Stop scanning — parent will close us
           }
         } catch {
@@ -104,7 +122,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 
       {error ? (
         <div className="px-8 text-center">
-          <p className="text-sm text-white/80">{t('scanner.denied')}</p>
+          <p className="text-sm text-white/80">{t(`scanner.${error}`)}</p>
           <button
             onClick={handleClose}
             className="mt-4 rounded-lg bg-white/10 px-4 py-2 text-sm text-white/80 transition-colors hover:bg-white/20"
