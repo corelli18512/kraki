@@ -1,4 +1,4 @@
-// Kraki Service Worker — handles push notifications
+// Kraki Service Worker — push notifications and the offline app shell.
 // This file must be in /public so it's served at the root scope.
 
 // ── IndexedDB helpers (same DB as e2e.ts) ───────────────
@@ -170,4 +170,59 @@ self.addEventListener('notificationclick', (event) => {
       return self.clients.openWindow(fullUrl);
     })
   );
+});
+
+// ── Offline app shell ───────────────────────────────────
+// Without a fetch handler a Home Screen web app showed the browser's error
+// page offline (K-112). Pages are network-first: online, every load gets the
+// current deploy; offline, the last page seen is served, and the app shows
+// its own "can't connect" state over the cached sessions. Built assets are
+// content-hashed (immutable), so they are served from the cache once seen.
+
+const SHELL_CACHE = 'kraki-shell-v1';
+const SHELL_KEY = '/';
+const MAX_ASSETS = 120;
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(caches.keys().then((keys) => Promise.all(
+    keys.filter((key) => key.startsWith('kraki-shell-') && key !== SHELL_CACHE).map((key) => caches.delete(key)),
+  )));
+});
+
+async function pageResponse(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const response = await fetch(request);
+    if (response.ok && response.type === 'basic') await cache.put(SHELL_KEY, response.clone());
+    return response;
+  } catch (err) {
+    const shell = await cache.match(SHELL_KEY);
+    if (shell) return shell;
+    throw err;
+  }
+}
+
+async function assetResponse(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response.ok && response.type === 'basic') {
+    await cache.put(request, response.clone());
+    const keys = (await cache.keys()).filter((key) => new URL(key.url).pathname.startsWith('/assets/'));
+    await Promise.all(keys.slice(0, Math.max(0, keys.length - MAX_ASSETS)).map((key) => cache.delete(key)));
+  }
+  return response;
+}
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (request.mode === 'navigate') {
+    event.respondWith(pageResponse(request));
+  } else if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(assetResponse(request));
+  }
 });

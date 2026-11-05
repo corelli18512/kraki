@@ -16,6 +16,17 @@ export function serviceWorkerUrl(): string {
   return `/sw.js?lang=${encodeURIComponent(resolveLanguage())}`;
 }
 
+/** Install the service worker at launch so the app opens offline (K-112),
+ *  and so it learns the current UI language. Production web only: the
+ *  desktop shell serves its own files, the dev server changes every save,
+ *  and automated browsers keep request mocking deterministic without it. */
+export function registerServiceWorker(env: { prod: boolean } = { prod: import.meta.env.PROD }): void {
+  if (!env.prod || window.krakiDesktop || !('serviceWorker' in navigator) || navigator.webdriver) return;
+  navigator.serviceWorker.register(serviceWorkerUrl()).catch((err: unknown) => {
+    logger.warn('Service worker registration failed', { error: (err as Error)?.message });
+  });
+}
+
 /** Check if push notifications are supported in this browser. */
 export function isPushSupported(): boolean {
   // The desktop shell has no push service; it keeps the connection and shows
