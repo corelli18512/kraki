@@ -11,7 +11,7 @@ import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
-import { ensureDeviceKeys, sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
+import { browserCanKeepKeys, ensureDeviceKeys, sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
@@ -1270,6 +1270,13 @@ export class KrakiWSClient {
     // second auth on it ("Unknown message type: auth") and spent the token twice.
     if (epoch !== this.connectionEpoch) return;
     if (!keysReady) {
+      // A signed-in device keeps its identity through a passing key-store
+      // failure: drop this socket and let the transport back off and retry.
+      if (this.transport.storedDeviceId && browserCanKeepKeys()) {
+        getStore().setLastError(t('settings:auth.reconnecting'));
+        this.transport.retryLater('keys_unavailable');
+        return;
+      }
       this.refuseWithoutDeviceKeys();
       return;
     }
@@ -1285,6 +1292,9 @@ export class KrakiWSClient {
         redirectUri: this.transport.redirectUri,
       },
     );
+    // A socket that closed while sendAuth awaited the keys dropped the frame:
+    // keep the token and code for the next socket's auth.
+    if (epoch !== this.connectionEpoch) return;
     if (usedToken) {
       this.transport.pairingToken = undefined;
     }

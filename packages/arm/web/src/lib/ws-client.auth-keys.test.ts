@@ -94,8 +94,40 @@ describe('KrakiWSClient auth while the keys are being created', () => {
     expect(useStore.getState().status).toBe('awaiting_login');
     expect(useStore.getState().lastError).toBe(
       'This browser can’t keep Kraki’s encryption keys, so it can’t sign in. Open Kraki over HTTPS in a regular (not private) window.');
+    expect((client as unknown as { transport: { pairingToken?: string } }).transport.pairingToken).toBe('pt_nokeys');
     // No reconnect loop afterwards.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(socketOf(client)).toBeNull();
+  });
+
+  it('K-092: a signed-in device rides out a passing key-store failure and retries', async () => {
+    vi.stubGlobal('indexedDB', {}); // a browser that can keep keys
+    try {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.advanceTimersByTimeAsync(1);
+      const first = socketOf(client)!;
+      keys.settle(false); // connect()'s init
+      await vi.advanceTimersByTimeAsync(1);
+      keys.settle(false); // authenticate()'s retry
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(authsOn(first)).toHaveLength(0);
+      expect(useStore.getState().status).not.toBe('awaiting_login');
+      expect(useStore.getState().lastError).toBe('Authentication temporarily unavailable. Reconnecting…');
+      expect(useStore.getState().reconnectAttempts).toBe(1);
+
+      // The backoff reconnects and, with the key store back, signs in as before.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const second = socketOf(client)!;
+      expect(second).not.toBe(first);
+      keys.settle(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(authsOn(second)).toEqual([expect.objectContaining({ auth: expect.objectContaining({ deviceId: 'dev_test' }) })]);
+      client.disconnect();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

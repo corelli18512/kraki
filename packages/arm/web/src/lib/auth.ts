@@ -41,6 +41,13 @@ export async function ensureDeviceKeys(keyStore: AppKeyStore): Promise<boolean> 
   }
 }
 
+/** False when this browser can never keep keys: a plain-http page (no
+ *  WebCrypto), or no IndexedDB. Any other init() failure may be temporary
+ *  (WebKit drops its IndexedDB connection after backgrounding). */
+export function browserCanKeepKeys(): boolean {
+  return window.isSecureContext !== false && !!globalThis.crypto?.subtle && typeof indexedDB !== 'undefined';
+}
+
 /** Send the initial auth message; the keys must be ready (`ensureDeviceKeys`).
  *  Returns true if a pairing token was consumed. */
 export async function sendAuth(
