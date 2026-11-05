@@ -36,7 +36,15 @@ describe('QrScanner camera errors (K-239)', () => {
     expect(screen.queryByText(/Camera access denied/)).not.toBeInTheDocument();
   });
 
-  it('a page without mediaDevices (plain http) reports no camera instead of crashing into denied', async () => {
+  it('a plain-http page (camera blocked by the browser) does not claim there is no camera', async () => {
+    vi.stubGlobal('navigator', {});
+    vi.stubGlobal('isSecureContext', false);
+    render(<QrScanner onScan={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByText('Camera access denied. Check your browser or device settings.');
+    expect(screen.queryByText(/No camera found/)).not.toBeInTheDocument();
+  });
+
+  it('a secure page without mediaDevices reports no camera', async () => {
     vi.stubGlobal('navigator', {});
     render(<QrScanner onScan={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('No camera found. Connect a camera, or open the pairing link on this device instead.');

@@ -55,8 +55,13 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 
     async function start() {
       try {
-        // No mediaDevices at all: an insecure (plain-http) page.
-        if (!navigator.mediaDevices?.getUserMedia) throw new DOMException('mediaDevices unavailable', 'NotFoundError');
+        // No mediaDevices: a plain-http page, where the browser blocks the
+        // camera (the device may well have one), or a browser without cameras.
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw window.isSecureContext === false
+            ? new DOMException('insecure context', 'SecurityError')
+            : new DOMException('mediaDevices unavailable', 'NotFoundError');
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         });
