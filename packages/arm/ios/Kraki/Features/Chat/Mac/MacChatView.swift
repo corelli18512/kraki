@@ -20,6 +20,8 @@ struct MacChatView: View {
     /// Height the floating Composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
     @State private var showInfo = false
+    /// Session Info was opened by Rename…: it starts with the title being edited.
+    @State private var infoStartsRenaming = false
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
     init(
@@ -189,10 +191,14 @@ struct MacChatView: View {
             // From the menu (current chat) or a session row's Rename… (that one).
             if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
             _ = MacSessionInfoRequest.take(sessionId)
+            infoStartsRenaming = true
             showInfo = true
         }
         .onChange(of: sessionId, initial: true) { _, id in
-            if MacSessionInfoRequest.take(id) { showInfo = true }
+            if MacSessionInfoRequest.take(id) {
+                infoStartsRenaming = true
+                showInfo = true
+            }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
@@ -215,6 +221,7 @@ struct MacChatView: View {
                 stepsTarget = StepsTarget(seq: seq, live: viewModel.card != nil)
                 viewModel.requestSteps(forBubbleSeq: seq)
             case "info":
+                infoStartsRenaming = false
                 showInfo = true
             case "jumpLatest":
                 reanchorNewest(viewModel)
@@ -243,7 +250,7 @@ struct MacChatView: View {
         }
         .sheet(isPresented: $showInfo) {
             if let session {
-                MacSessionInfoSheet(session: session)
+                MacSessionInfoSheet(session: session, startsRenaming: infoStartsRenaming)
                     .environment(appState)
             }
         }
@@ -283,6 +290,7 @@ struct MacChatView: View {
         ZStack {
             if let session, !modePickerExpanded {
                 Button {
+                    infoStartsRenaming = false
                     showInfo = true
                 } label: {
                     Text(showsSyncing ? String(localized: "Syncing…") : session.displayTitle)
@@ -507,9 +515,11 @@ private struct MacSessionInfoSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let session: SessionInfo
+    /// Rename…: open with the title field focused for editing.
+    let startsRenaming: Bool
 
-    @State private var editingTitle = false
-    @State private var titleDraft = ""
+    @State private var editingTitle: Bool
+    @State private var titleDraft: String
     @State private var showDeleteConfirmation = false
     @State private var sessionIDCopied = false
     @State private var sessionIDCopyFeedbackTask: Task<Void, Never>?
@@ -517,8 +527,11 @@ private struct MacSessionInfoSheet: View {
     @State private var reasoningEffort: ReasoningEffort?
     @FocusState private var titleFocused: Bool
 
-    init(session: SessionInfo) {
+    init(session: SessionInfo, startsRenaming: Bool = false) {
         self.session = session
+        self.startsRenaming = startsRenaming
+        _editingTitle = State(initialValue: startsRenaming)
+        _titleDraft = State(initialValue: startsRenaming ? (session.title ?? session.autoTitle ?? "") : "")
         _selectedModel = State(initialValue: session.model ?? "")
         _reasoningEffort = State(initialValue: session.reasoningEffort)
     }
@@ -584,7 +597,10 @@ private struct MacSessionInfoSheet: View {
         }
         .frame(width: 440, height: 580)
         .background(Color.surfacePrimary)
-        .onAppear { syncModelConfiguration() }
+        .onAppear {
+            syncModelConfiguration()
+            if startsRenaming { DispatchQueue.main.async { titleFocused = true } }
+        }
         .onChange(of: liveSession.model) { _, _ in syncModelConfiguration() }
         .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
