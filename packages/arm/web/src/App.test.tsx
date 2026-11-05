@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, act } from '@testing-library/react';
+import { fireEvent, render, screen, act, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('./lib/ws-client', () => ({
@@ -54,8 +54,10 @@ describe('App', () => {
     const overlay = screen.getByRole('alertdialog');
     const sessionShell = screen.getByText('Session content').closest('main');
     expect(overlay).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByText('Disconnected')).toBeInTheDocument();
-    expect(screen.getByText('Lost connection to the relay server.')).toBeInTheDocument();
+    // K-087: never connected, so nothing was "lost".
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    expect(screen.getByText('Could not connect to the relay server. Make sure the head is running.')).toBeInTheDocument();
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
     expect(sessionShell).toHaveAttribute('aria-hidden', 'true');
   });
 
@@ -107,6 +109,25 @@ describe('App', () => {
     vi.mocked(wsClient.connect).mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Connect now' }));
     expect(wsClient.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('K-087: keeps the first-connect dialog up through retries and shows the spinner while one runs', () => {
+    useStore.getState().setStatus('connecting');
+    renderApp('/session/s1');
+    // The very first attempt is still running: nothing failed yet.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('error'); });
+    act(() => { useStore.getState().setStatus('disconnected'); });
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    expect(within(screen.getByRole('alertdialog')).getByText('Connecting…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect now' })).not.toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('disconnected'); });
+    expect(screen.getByRole('button', { name: 'Connect now' })).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connected'); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });
 

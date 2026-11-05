@@ -20,19 +20,10 @@ import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
 import { WindowsTitleBar } from './components/desktop/WindowsTitleBar';
 import { PerformanceNoticeHost } from './components/diag/PerformanceNotice';
 
-function RelayBlockingOverlay({
-  status,
-}: {
-  status: 'disconnected' | 'error' | 'awaiting_login' | 'connecting' | 'connected';
-}) {
+/** Shown only while the page has never been connected: the copy is about a
+ *  connection that could not be made, never a lost one (K-087). */
+function RelayBlockingOverlay({ connecting }: { connecting: boolean }) {
   const { t } = useTranslation('app');
-  const isConnecting = status === 'connecting';
-  const title = status === 'error'
-    ? t('connection.errorTitle')
-    : t('connection.disconnected');
-  const message = status === 'error'
-    ? t('connection.failed')
-    : t('connection.lost');
 
   return (
     <div
@@ -44,15 +35,15 @@ function RelayBlockingOverlay({
       <div className="w-full max-w-md rounded-2xl border border-border-primary bg-surface-primary/95 p-8 text-center shadow-2xl">
         <KrakiLogo className="mx-auto h-16 w-16 object-contain" />
         <h2 id="relay-status-title" className="mt-4 text-lg font-semibold text-text-primary">
-          {title}
+          {t('connection.errorTitle')}
         </h2>
         <p className="mt-2 text-sm text-text-secondary">
-          {message}
+          {t('connection.failed')}
         </p>
         <p className="mt-4 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted">
           {wsClient.url}
         </p>
-        {!isConnecting && (
+        {!connecting && (
           <div className="mt-5">
             <button
               type="button"
@@ -63,7 +54,7 @@ function RelayBlockingOverlay({
             </button>
           </div>
         )}
-        {isConnecting && (
+        {connecting && (
           <div className="mt-5 flex items-center justify-center gap-2">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
             <span className="text-sm text-text-muted">{t('connection.connecting')}</span>
@@ -90,11 +81,14 @@ export function App() {
   // app has been connected, a lost link only shows the non-blocking
   // "Reconnecting…" indicator: transport retries forever, and the user keeps
   // reading and queueing messages meanwhile.
+  // Once the first attempt failed, the dialog stays up through every retry
+  // (showing the spinner while one runs) instead of flashing away (K-087).
   const wasConnectedRef = useRef(false);
+  const firstConnectFailedRef = useRef(false);
   if (status === 'connected') wasConnectedRef.current = true;
+  if (!wasConnectedRef.current && (status === 'error' || status === 'disconnected')) firstConnectFailedRef.current = true;
 
-  const firstConnectFailed = !wasConnectedRef.current && (status === 'error' || status === 'disconnected');
-  const showBlockingOverlay = firstConnectFailed;
+  const showBlockingOverlay = !wasConnectedRef.current && firstConnectFailedRef.current && status !== 'connected';
 
   // Update document.title with total unread count
   const unreadCount = useStore((s) => s.unreadCount);
@@ -168,9 +162,7 @@ export function App() {
       <OwnerChoiceHost />
       {!showBlockingOverlay && <PerformanceNoticeHost />}
       {showBlockingOverlay && (
-        <RelayBlockingOverlay
-          status={status}
-        />
+        <RelayBlockingOverlay connecting={status === 'connecting'} />
       )}
     </div>
   );

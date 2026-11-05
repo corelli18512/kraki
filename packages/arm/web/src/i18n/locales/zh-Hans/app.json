@@ -6,9 +6,7 @@
   },
   "connection": {
     "errorTitle": "连接错误",
-    "disconnected": "已断开连接",
     "failed": "无法连接到中继服务器。请确认 head 正在运行。",
-    "lost": "与中继服务器的连接已断开。",
     "connect": "立即连接",
     "connecting": "正在连接…"
   },

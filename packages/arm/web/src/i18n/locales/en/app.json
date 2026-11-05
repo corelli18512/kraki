@@ -6,9 +6,7 @@
   },
   "connection": {
     "errorTitle": "Connection Error",
-    "disconnected": "Disconnected",
     "failed": "Could not connect to the relay server. Make sure the head is running.",
-    "lost": "Lost connection to the relay server.",
     "connect": "Connect now",
     "connecting": "Connecting…"
   },
