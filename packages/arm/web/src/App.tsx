@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { KrakiLogo } from './components/KrakiLogo';
 import { markNotificationEntry } from './lib/chat/unread-entry';
 import { useEffect, useRef } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
@@ -123,6 +123,21 @@ export function App() {
     navigate(`/session/${sid}`);
   }), [navigate]);
 
+  // Clicking a Web Push notification while a tab is open (public/sw.js).
+  useEffect(() => {
+    const worker = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    if (!worker) return;
+    const open = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; sessionId?: unknown } | null;
+      if (data?.type !== 'kraki:open-session' || typeof data.sessionId !== 'string') return;
+      markNotificationEntry(data.sessionId);
+      navigate(`/session/${data.sessionId}`);
+    };
+    worker.addEventListener('message', open);
+    worker.startMessages?.();
+    return () => worker.removeEventListener('message', open);
+  }, [navigate]);
+
   useEffect(() => {
     if (navigateToSession) {
       navigate(`/session/${navigateToSession}`);
@@ -141,7 +156,9 @@ export function App() {
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
-            <Outlet />
+            {/* Signed out (a removed device returning on a /session/ link):
+                the sign-in screen, not an empty chat with no way to pair. */}
+            {status === 'awaiting_login' && inSubPage ? <Navigate to="/" replace /> : <Outlet />}
           </ErrorBoundary>
         </main>
       </div>

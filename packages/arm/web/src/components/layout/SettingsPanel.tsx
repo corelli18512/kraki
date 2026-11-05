@@ -32,6 +32,7 @@ import './settings.css';
 import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
 import { deviceLastOnline } from '../../lib/device-last-online';
+import { copyText } from '../../lib/clipboard';
 import {
   notificationsEnabled as readNotificationsEnabled,
   setNotificationsEnabled as saveNotificationsEnabled,
@@ -192,6 +193,10 @@ export function SettingsPanel({
     setError(null);
     setUsageShortcut(key, enabled);
   }
+  /** In a browser, notifications are Web Push: the switch shows whether this
+   *  browser is subscribed, not a preference that does nothing on its own.
+   *  Without Web Push (browser or relay) it is off and cannot be turned on. */
+  const webPush = !desktop && isPushSupported() && !!state.vapidPublicKey;
   async function updateNotifications(on: boolean) {
     setError(null);
     if (!desktop && isPushSupported() && (state.vapidPublicKey || pushEnabled)) {
@@ -429,7 +434,10 @@ export function SettingsPanel({
               type="button"
               className="kp-button"
               onClick={() => {
-                void Notification.requestPermission().then(setPermission);
+                // With a relay that pushes, allowing is turning push on: ask
+                // for the permission and subscribe in one step (K-111).
+                if (webPush) void updateNotifications(true);
+                else void Notification.requestPermission().then(setPermission);
               }}
             >
               {t('notifications.allow')}
@@ -446,8 +454,8 @@ export function SettingsPanel({
         <SettingsRow label={t('notifications.notify')}>
           <SettingsSwitch
             label={t('notifications.notify')}
-            on={notificationsEnabled}
-            disabled={pushLoading}
+            on={desktop ? notificationsEnabled : pushEnabled}
+            disabled={pushLoading || (!desktop && !webPush && !pushEnabled)}
             onChange={(on) => {
               void updateNotifications(on);
             }}
@@ -460,11 +468,13 @@ export function SettingsPanel({
       {!desktop && (
         <SettingsSection title={t('notifications.webPush')}>
           <p className="kp-foot" style={{ border: 0 }}>
-            {state.vapidPublicKey && isPushSupported()
-              ? pushEnabled
-                ? t('notifications.pushOn')
-                : t('notifications.pushOff')
-              : t('notifications.unavailable')}
+            {!isPushSupported()
+              ? t('notifications.unsupported')
+              : state.vapidPublicKey
+                ? pushEnabled
+                  ? t('notifications.pushOn')
+                  : t('notifications.pushOff')
+                : t('notifications.unavailable')}
           </p>
         </SettingsSection>
       )}
@@ -546,8 +556,7 @@ export function SettingsPanel({
         type="button"
         className="kp-button"
         onClick={() => {
-          void navigator.clipboard
-            .writeText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
+          void copyText(diagnostics(true).map(([label, value]) => `${label}: ${value}`).join('\n'))
             .then(() => setDiagCopied(true))
             .catch(() => setError({ key: 'copyDiagnostics' }));
         }}

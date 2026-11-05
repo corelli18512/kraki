@@ -29,7 +29,9 @@ export function getPushPermission(): NotificationPermission {
 export async function isPushSubscribed(): Promise<boolean> {
   if (!isPushSupported()) return false;
   try {
-    const reg = await navigator.serviceWorker.ready;
+    // `ready` never settles when no service worker was registered.
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return false;
     const sub = await reg.pushManager.getSubscription();
     return sub !== null;
   } catch {
@@ -84,8 +86,8 @@ export async function unsubscribeFromPush(): Promise<boolean> {
   if (!isPushSupported()) return false;
 
   try {
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
     if (sub) {
       await sub.unsubscribe();
       logger.info('Push subscription removed');

@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { copyText } from '../../lib/clipboard';
 
 /** Plain rendered prose, without fence labels or table-window controls. */
 export function renderedMessageText(root: HTMLElement): string {
@@ -119,7 +120,7 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
           }}
         >
           {context.text && (
-            <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(context.text); close(true); }}>
+            <button type="button" role="menuitem" onClick={() => { void copyText(context.text).catch(() => {}); close(true); }}>
               {context.selection ? t('message.copySelection') : t('message.copy')}
             </button>
           )}

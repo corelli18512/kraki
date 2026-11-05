@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { STORAGE_KEY } from '../../lib/transport';
+import { isPushSupported, unsubscribeFromPush } from '../../lib/push';
 
 /**
  * GitHub avatar by login from GitHub's avatar CDN. `github.com/<login>.png` is
@@ -29,9 +30,19 @@ function SignOutIcon({ className }: { className?: string }) {
 export function signOut() {
     diag.phase('logout');
     const savedClientId = useStore.getState().githubClientId;
+    const browser = !desktop;
+    // This browser's push subscription and keys belong to the signed-out
+    // device: stop its pushes, and make anything still on the way
+    // undecryptable (K-006). The relay forgets the token now if this tab is
+    // connected; otherwise when the dead subscription bounces (404/410).
+    if (browser && isPushSupported()) {
+      wsClient.unregisterPushToken({ provider: 'web_push' }, { connectionScoped: true });
+      void unsubscribeFromPush();
+    }
     localStorage.removeItem(STORAGE_KEY);
     setDesktopSignedOut(true);
     wsClient.disconnect();
+    if (browser) wsClient.forgetDeviceKeys();
     resetVoice();
     useStore.getState().reset();
     useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });

@@ -23,6 +23,14 @@ describe('MessageBubble — native context actions', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('K-215: Copy still closes the menu without the Clipboard API (plain-http relay)', () => {
+    const { bubble } = setup();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    fireEvent.contextMenu(bubble);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('preserves a selection and copies only it', () => {
     const { bubble, writeText } = setup();
     const range = document.createRange();

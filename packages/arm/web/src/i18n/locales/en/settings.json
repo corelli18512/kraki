@@ -193,6 +193,7 @@
     "pushOn": "Push notifications are on, including when this browser is closed.",
     "pushOff": "Turn notifications on to receive replies and requests when this browser is closed.",
     "unavailable": "Push notifications aren’t available with this relay.",
+    "unsupported": "Push notifications aren’t available in this browser.",
     "deniedSystem": "Off — turn on in System Settings",
     "deniedSite": "Off — turn on in site Settings",
     "footerDesktop": "Shown while Kraki is running (also from the tray), except for the Session you are looking at.",
