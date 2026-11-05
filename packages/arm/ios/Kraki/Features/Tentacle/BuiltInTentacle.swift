@@ -58,7 +58,9 @@ enum TentacleMode: String, Equatable {
 
     /// Decide the mode without surprising anyone.
     ///
-    /// - An explicit user choice always wins (when still possible).
+    /// - An explicit user choice always wins. A chosen external CLI that is
+    ///   gone stays the choice: Settings then says "kraki not found" and
+    ///   offers to install or locate it, instead of silently switching.
     /// - A Mac-app ownership marker means the built-in daemon is in charge.
     /// - An existing CLI-installed daemon (its launchd plist) keeps working as
     ///   before: the user opts in to the built-in daemon from Settings.
@@ -74,7 +76,7 @@ enum TentacleMode: String, Equatable {
         guard builtInAvailable else { return .external }
         switch TentacleMode(rawValue: preference) {
         case .builtIn: return .builtIn
-        case .external: return externalCLIFound ? .external : .builtIn
+        case .external: return .external
         case nil: break
         }
         if ownershipMarkerExists { return .builtIn }

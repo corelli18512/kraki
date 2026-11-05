@@ -193,10 +193,9 @@ final class TentacleCLIManager {
     }
 
     private func detectExternalCLI() async -> (path: String, version: String?)? {
-        // User-set override always wins, if it points at an executable.
+        // User-set override always wins, if it is a kraki CLI.
         let override = binaryPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) {
-            let version = await runCapturing(binary: override, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty, let version = await krakiVersion(at: override) {
             return (override, version)
         }
 
@@ -832,6 +831,61 @@ extension TentacleCLIManager {
         }
         let reachable = Self.relayReachable(downSince: relayDownSince, now: now)
         if relayReachable != reachable { relayReachable = reachable }
+    }
+}
+
+// MARK: - Locating the kraki CLI (Settings › This Mac)
+
+extension TentacleCLIManager {
+    /// Settings › This Mac: notice a kraki CLI installed since launch (so it
+    /// can be chosen) without re-deciding which tentacle runs.
+    func refreshExternalCLI() async {
+        externalCLI = await detectExternalCLI()
+    }
+
+    /// "Locate kraki manually…": pick the CLI in a file panel. Only a kraki
+    /// CLI is kept; anything else is refused. Returns the message to show,
+    /// nil when the CLI was taken (or the panel was cancelled).
+    func locateCLIManually() async -> String? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.title = String(localized: "Locate kraki executable")
+        panel.message = String(localized: "Pick the kraki binary in your filesystem.")
+        panel.directoryURL = Self.locateStartDirectory()
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        guard await krakiVersion(at: url.path) != nil else {
+            return String(localized: "\(url.lastPathComponent) is not the kraki command-line tool.")
+        }
+        setBinaryPathOverride(url.path)
+        await refreshInstallState()
+        return nil
+    }
+
+    /// Where the panel opens: the installer's folder (~/.local/bin), else
+    /// the usual Homebrew/system folders, whichever exists.
+    static func locateStartDirectory(fileManager: FileManager = .default) -> URL? {
+        let candidates = ["\(NSHomeDirectory())/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+        return candidates.first { fileManager.fileExists(atPath: $0) }.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    /// The version a kraki CLI at `path` reports; nil for anything that is
+    /// not one (another program, or a script printing something else).
+    func krakiVersion(at path: String) async -> String? {
+        guard FileManager.default.isExecutableFile(atPath: path),
+              let result = await runCapturing(binary: path, args: ["--version"], timeout: 15),
+              result.exitCode == 0 else { return nil }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.isKrakiVersionOutput(version) ? version : nil
+    }
+
+    /// `kraki --version` prints only its version, such as 0.38.11 or
+    /// 0.39.0-beta.2.
+    nonisolated static func isKrakiVersionOutput(_ output: String) -> Bool {
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.range(of: #"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$"#,
+                          options: .regularExpression) != nil
     }
 }
 

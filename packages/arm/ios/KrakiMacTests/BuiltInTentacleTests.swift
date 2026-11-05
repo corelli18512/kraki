@@ -79,9 +79,11 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertEqual(resolve(marker: true, cliDaemon: true, cli: true), .builtIn)
     }
 
-    func testExternalPreferenceNeedsAnExternalCLI() {
+    /// Removing the chosen CLI does not silently switch to the built-in
+    /// tentacle: Settings shows "kraki not found" with install/locate (K-262).
+    func testExplicitExternalChoiceSurvivesAMissingCLI() {
         XCTAssertEqual(resolve(preference: "external", cli: true), .external)
-        XCTAssertEqual(resolve(preference: "external", cli: false), .builtIn)
+        XCTAssertEqual(resolve(preference: "external", cli: false), .external)
     }
 
     func testBuildsWithoutHelperAlwaysUseTheExternalCLI() {
