@@ -34,6 +34,7 @@ struct SessionCardView: View {
                     }(),
                     pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
                     isDeliveryOnline: appState.isFullyOnline,
+                    presenceKnown: appState.hasCompletedInitialConnect,
                     modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
                 ),
                 isAwaitingGreeting: appState.deviceStore.pendingGreetingIds.contains(session.deviceId)

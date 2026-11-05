@@ -480,7 +480,10 @@ final class AppState {
             // the window must say so instead of looking connected-but-empty.
             return hasCompletedInitialConnect || isSigningInWithCredentials
             #else
-            return hasCompletedInitialConnect
+            // A returning user (stored pairing) opens the Sessions shell from
+            // cache before the first sign-in; while that sign-in cannot
+            // complete the shell must say so, not look connected-but-offline.
+            return hasCompletedInitialConnect || hasStoredCredentials
             #endif
         default:
             return false
