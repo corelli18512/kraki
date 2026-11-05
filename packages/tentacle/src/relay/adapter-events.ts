@@ -109,18 +109,31 @@ export function wireAdapterEvents(client: RelayClient): void {
     recordTrace(client, { type: 'permission', sessionId, payload: { ...action.payload, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
   };
 
-  // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
-  client.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
-    client.card.resolvePrompt(sessionId, permissionId, { decision: 'approve' });
-    client.openPermissions.get(sessionId)?.delete(permissionId);
+  // Resolved without the operator: approved by a switch to an automatic
+  // mode, or cancelled (agent gone, Stop, mode switch). A request that is no
+  // longer open was already closed on the spine (e.g. a Stop records it as
+  // cancelled), so a late adapter cleanup must not record it again.
+  client.adapter.onPermissionAutoResolved = (sessionId, permissionId, resolution) => {
+    if (client.openPermissions.get(sessionId)?.delete(permissionId) !== true) return;
+    const approved = resolution === 'approved';
+    client.card.resolvePrompt(sessionId, permissionId, approved ? { decision: 'approve' } : undefined);
     client.broadcastSessionList();
-    recordTrace(client, { type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
+    recordTrace(client, {
+      type: 'permission',
+      sessionId,
+      payload: { id: permissionId, description: '', toolName: '', args: {}, ...(approved ? { decision: 'approve' as const } : { cancelled: true }) },
+    });
+    client.send({ type: 'permission_resolved', sessionId, payload: { permissionId, resolution } });
   };
 
-  // Withdrawn by the agent (timeout/cancel): stop routing answers to it. On
-  // the spine the question closes as unanswered once anything else follows.
+  // No longer answerable here (the agent timed it out, cancelled it or
+  // answered it itself, e.g. after a switch to delegate mode): stop routing
+  // answers to it, and tell apps that declared the feature so its choices
+  // close now (K-022). On the spine the question closes as unanswered once
+  // anything else follows.
   client.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
     removeOpenQuestion(client, sessionId, questionId);
+    client.send({ type: 'question_withdrawn', sessionId, payload: { questionId } });
     client.broadcastSessionList();
   };
 
@@ -281,7 +294,13 @@ export function wireAdapterEvents(client: RelayClient): void {
   };
 
   client.adapter.onUsageUpdate = (sessionId, usage) => {
+    const meta = client.sessionManager.getMeta(sessionId);
+    const changed = JSON.stringify(meta?.usage) !== JSON.stringify(usage);
     client.sessionManager.setUsage(sessionId, usage);
+    // Totals that arrive after the closing idle (Pi reports them
+    // asynchronously) would otherwise show one turn late: the idle carried
+    // the previous totals. A running turn's idle will carry them.
+    if (changed && meta && meta.state !== 'active') client.broadcastSessionList();
   };
 
   client.adapter.onCompaction = (sessionId, event) => {
@@ -393,6 +412,10 @@ export function wireAdapterEvents(client: RelayClient): void {
     const hasUnsettledAcceptedTurn = !!turnId
       && client.settledAdapterTurnIds.get(sessionId) !== turnId;
     const hasRecoverableQuestion = !!soleOpenQuestion(client, sessionId);
+    // The process that was compacting is gone: its end event never comes.
+    // Clear first, so a follow-up queued behind that compaction is announced
+    // before (not after) the idle that closes it below.
+    clearCompacting(client, sessionId);
     if (hasUnsettledAcceptedTurn && !hasRecoverableQuestion) {
       client.pendingTerminalErrors.set(sessionId, {
         message: 'Agent process was evicted before the active turn settled.',

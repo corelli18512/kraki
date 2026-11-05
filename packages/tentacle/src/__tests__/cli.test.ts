@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // Suppress the unhandled rejection from cli.ts's main().catch() handler.
 // When we mock process.exit as a no-op, Vitest's own interceptor still fires
@@ -28,6 +30,7 @@ const mockGetConfigDir = vi.fn().mockReturnValue('/tmp/fake-kraki');
 const mockGetConfigPath = vi.fn().mockReturnValue('/tmp/fake-kraki/config.json');
 const mockGetKrakiHome = vi.fn().mockReturnValue('/tmp/fake-kraki');
 const mockLoadChannelKey = vi.fn();
+const mockSaveChannelKey = vi.fn();
 const mockIsDaemonRunning = vi.fn();
 const mockGetDaemonStatus = vi.fn();
 const mockStartDaemon = vi.fn();
@@ -37,6 +40,11 @@ const mockShowPairingQr = vi.fn();
 const mockStartWorker = vi.fn();
 const mockPrepareDaemonWorkerBootstrap = vi.fn();
 const mockRunDaemonReleaseSmoke = vi.fn();
+const mockSaveGitHubToken = vi.fn();
+const mockLoadGitHubToken = vi.fn();
+const mockGithubLogin = vi.fn();
+const mockLoadAccountDataOwner = vi.fn();
+const mockAdoptAccountDataOwner = vi.fn();
 
 vi.mock('../config.js', () => ({
   configExists: (...args: unknown[]) => mockConfigExists(...args),
@@ -48,9 +56,10 @@ vi.mock('../config.js', () => ({
   getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
   getVersion: vi.fn(() => '1.2.3'),
   loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
+  saveChannelKey: (...args: unknown[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: vi.fn(() => 'dev_test'),
-  saveGitHubToken: vi.fn(),
-  loadGitHubToken: vi.fn(() => null),
+  saveGitHubToken: (...args: unknown[]) => mockSaveGitHubToken(...args),
+  loadGitHubToken: (...args: unknown[]) => mockLoadGitHubToken(...args),
   loadDaemonPid: vi.fn(() => null),
   loadDaemonIdentity: vi.fn(() => null),
   DEFAULT_LOG_VERBOSITY: 'normal',
@@ -66,6 +75,10 @@ vi.mock('../daemon.js', () => ({
   runDaemonReleaseSmoke: (...args: unknown[]) => mockRunDaemonReleaseSmoke(...args),
   stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
   getCliLaunchdJobState: () => mockGetCliLaunchdJobState(),
+  daemonStartRefusal: (status: { detail?: string; pid: number | null }) =>
+    status.detail === 'unverified-pid' ? `Refusing to start: the recorded daemon PID ${status.pid} is alive but could not be verified as Kraki.`
+      : status.detail === 'untracked-launchd-job' ? 'Refusing to start: the launchd job is still loaded but no verified daemon PID is available.'
+        : null,
 }));
 
 const mockGetCliLaunchdJobState = vi.fn();
@@ -92,10 +105,29 @@ vi.mock('../banner.js', () => ({
 }));
 
 const mockResolveRelay = vi.fn();
+const mockRelayAuthToken = vi.fn();
 vi.mock('../setup.js', () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
+  relayAuthToken: (...args: unknown[]) => mockRelayAuthToken(...args),
   resolveRelay: (...args: unknown[]) => mockResolveRelay(...args),
   showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
+  githubLogin: (...args: unknown[]) => mockGithubLogin(...args),
+}));
+
+vi.mock('../account-switch.js', () => ({
+  loadAccountDataOwner: (...args: unknown[]) => mockLoadAccountDataOwner(...args),
+  adoptAccountDataOwner: (...args: unknown[]) => mockAdoptAccountDataOwner(...args),
+}));
+
+const mockUnsupportedProxy = vi.fn<() => string | null>(() => null);
+vi.mock('../proxy.js', async () => ({
+  ...await vi.importActual<typeof import('../proxy.js')>('../proxy.js'),
+  unsupportedProxy: () => mockUnsupportedProxy(),
+}));
+
+const mockRunSetupJson = vi.fn();
+vi.mock('../setup-json.js', () => ({
+  runSetupJson: (...args: unknown[]) => mockRunSetupJson(...args),
 }));
 
 vi.mock('../update.js', () => ({
@@ -159,8 +191,10 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
-  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown, ...rest: unknown[]) => {
     stdoutOutput.push(String(chunk));
+    const callback = rest.find((arg) => typeof arg === 'function') as (() => void) | undefined;
+    callback?.();
     return true;
   }) as never);
   vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
@@ -183,6 +217,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  process.exitCode = undefined;
   process.argv = originalArgv;
   if (originalMetaFile === undefined) delete process.env.KRAKI_META_FILE;
   else process.env.KRAKI_META_FILE = originalMetaFile;
@@ -305,6 +340,85 @@ describe('CLI stop', () => {
     await runCli(['stop']);
     expect(consoleOutput.join('\n')).toContain('Failed');
   });
+
+  it('exits non-zero when the daemon could not be stopped (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockStopDaemon.mockReturnValue(false);
+    await runCli(['stop']);
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('CLI start when something already runs (K-266, K-030)', () => {
+  const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+
+  it('K-266: refuses with the reason instead of "already running (PID 1)" for an unverifiable PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 1, detail: 'unverified-pid' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('could not be verified');
+    expect(out).not.toContain('already running');
+    // On stderr: Kraki for Mac shows stderr when the command fails.
+    expect(vi.mocked(console.error).mock.calls.flat().join('\n')).toContain('could not be verified');
+    expect(process.exitCode).toBe(1);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    process.exitCode = 0;
+  });
+
+  it('K-266: refuses with the reason instead of "(PID null)" for a loaded launchd job without a PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('launchd job is still loaded');
+    expect(out).not.toContain('PID null');
+    process.exitCode = 0;
+  });
+
+  it('K-030: says the worker is (re)starting when only its supervisor runs', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('(re)starting');
+    expect(out).toContain('4242');
+    expect(out).not.toContain('PID null');
+  });
+
+  it('K-266: `kraki stop` explains a refusal to stop', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockStopDaemon.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['stop']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('Failed to stop.');
+    expect(out).toContain('launchd job is still loaded');
+  });
+});
+
+describe('CLI start after the account was deleted (K-277)', () => {
+  it('shows no connect code when the new daemon signed this computer out', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+    // config.json is there for `kraki start`, then the daemon learns the
+    // account was deleted, removes it and exits.
+    let signedOut = false;
+    mockLoadConfig.mockImplementation(() => (signedOut ? null : config));
+    mockIsDaemonRunning.mockImplementation(() => !signedOut && mockStartDaemon.mock.calls.length === 0 ? false : !signedOut);
+    mockStartDaemon.mockImplementation(async () => { setTimeout(() => { signedOut = true; }, 20); return 1234; });
+
+    await runCli(['start']);
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+    expect(mockShowPairingQr).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('account was deleted');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
 });
 
 describe('CLI install mode', () => {
@@ -325,6 +439,14 @@ describe('CLI install mode', () => {
 });
 
 describe('CLI restart', () => {
+  it('exits non-zero without a config (K-267)', async () => {
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['restart']);
+    expect(consoleOutput.join('\n')).toContain('no config found');
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
+
   it('starts from existing config when the daemon is stopped', async () => {
     const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
     mockLoadConfig.mockReturnValue(config);
@@ -396,6 +518,46 @@ describe('CLI status', () => {
     expect(output).toContain('42');
     expect(output).toContain('relay.test');
     expect(output).toContain('normal');
+  });
+
+  it('K-030: shows a supervisor restarting its worker as restarting, not stopped', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    const output = consoleOutput.join('\n');
+    expect(output).toContain('restarting');
+    expect(output).not.toContain('stopped');
+    await runCli(['status', '--json']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.daemon).toMatchObject({ running: true, detail: 'restarting', supervisorPid: 4242 });
+  });
+
+  it('K-123: says why a running daemon stays offline when another copy took its connection', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fs = await import('node:fs');
+    vi.mocked(fs.existsSync).mockImplementation((p) => String(p).endsWith('status.json'));
+    mkdirSync(process.env.KRAKI_HOME ?? tmpdir(), { recursive: true });
+    const home = mkdtempSync(join(process.env.KRAKI_HOME ?? tmpdir(), 'status-'));
+    mockGetKrakiHome.mockReturnValue(home);
+    writeFileSync(join(home, 'status.json'), JSON.stringify({ relayState: 'disconnected', relayIssue: 'device_replaced' }));
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 42 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    expect(consoleOutput.join('\n')).toContain("another Kraki connected with this computer's identity");
+    await runCli(['status', '--json']);
+    expect(JSON.parse(stdoutOutput.join('').trim()).daemon.relayIssue).toBe('device_replaced');
+  });
+
+  it('warns about a PAC or SOCKS proxy Kraki cannot use (K-328)', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    mockLoadConfig.mockReturnValue(null);
+    mockUnsupportedProxy.mockReturnValue('SOCKS proxy (ALL_PROXY)');
+    await runCli(['status']);
+    expect(consoleOutput.join('\n')).toContain('SOCKS proxy (ALL_PROXY), which Kraki cannot use');
+    consoleOutput = [];
+    stdoutOutput = [];
+    await runCli(['status', '--json']);
+    expect(JSON.parse(stdoutOutput.join('').trim()).unsupportedProxy).toBe('SOCKS proxy (ALL_PROXY)');
   });
 
   it('shows stopped status when no daemon', async () => {
@@ -528,6 +690,67 @@ describe('CLI resolve-relay', () => {
   });
 });
 
+describe('CLI connect (interactive)', () => {
+  it('exits non-zero when the pairing token cannot be created (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockLoadConfig.mockReturnValue({ relay: 'wss://relay.test', authMethod: 'open', device: { name: 'x' } });
+    mockRelayAuthToken.mockRejectedValue(new Error('relay down'));
+    await runCli(['connect']);
+    await vi.waitFor(() => expect(consoleOutput.join('\n')).toContain('relay down'));
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('exits non-zero when the daemon runs without a config (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['connect']);
+    expect(consoleOutput.join('\n')).toContain('No config found');
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('CLI auth', () => {
+  it('names github.com when GitHub cannot be reached (K-324)', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } })) as typeof fetch;
+    try {
+      await runCli(['auth', '--client-id', 'cid']);
+      await vi.waitFor(() => expect(stderrOutput.join('')).toContain('Could not reach github.com (ENOTFOUND)'));
+      expect(mockExit).toHaveBeenCalledWith(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe('CLI relay-info', () => {
+  it('exits non-zero when the relay cannot be reached (K-267)', async () => {
+    // A port that was just freed: the connection is refused.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    await new Promise((resolve) => server.close(resolve));
+    await runCli(['relay-info', `ws://127.0.0.1:${port}`]);
+    await vi.waitFor(() => expect(stdoutOutput.join('')).toContain('"ok":false'), { timeout: 6000 });
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('CLI setup --json', () => {
+  it('exits with the setup result once its last event is written, even while stdin stays open (K-273)', async () => {
+    mockRunSetupJson.mockResolvedValue(1);
+    await runCli(['setup', '--json', '--oauth']);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(1));
+  });
+
+  it('exits 0 after a successful setup', async () => {
+    mockRunSetupJson.mockResolvedValue(0);
+    await runCli(['setup', '--json']);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(0));
+  });
+});
+
 // ── setup --headless ────────────────────────────────────
 
 describe('CLI setup --headless', () => {
@@ -557,6 +780,76 @@ describe('CLI setup --headless', () => {
     const json = JSON.parse(stdoutOutput.join('').trim());
     expect(json.ok).toBe(true);
     expect(json.agents).toEqual(['claude']);
+  });
+
+  it('accepts --agent pi (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--agent', 'pi']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ agents: ['pi'] }));
+    expect(JSON.parse(stdoutOutput.join('').trim()).ok).toBe(true);
+  });
+
+  it('rejects an unknown --auth without saving a config (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'bogus']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json).toMatchObject({ ok: false, code: 'bad_auth' });
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('accepts --auth github, the relay\'s spelling, as github_token (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'github']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'github_token' }));
+  });
+
+  for (const relay of ['https://relay.example', 'wss://', 'wss://relay example', 'ws:// ']) {
+    it(`rejects --relay "${relay}" without saving a config (K-272)`, async () => {
+      await runCli(['setup', '--headless', '--relay', relay]);
+      const json = JSON.parse(stdoutOutput.join('').trim());
+      expect(json).toMatchObject({ ok: false, code: 'bad_relay' });
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+    });
+  }
+
+  it('treats a bare relay host as wss:// like the wizard (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', ' relay.example:4000 ']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ relay: 'wss://relay.example:4000' }));
+  });
+
+  it('saves --api-key as the channel key for an API-key relay (K-126/K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'ws://127.0.0.1:4000', '--auth', 'apikey', '--api-key', 'sekret']);
+    expect(mockSaveChannelKey).toHaveBeenCalledWith('sekret');
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'apikey', relay: 'ws://127.0.0.1:4000' }));
+  });
+
+  it('refuses --auth apikey with no key (K-272)', async () => {
+    mockLoadChannelKey.mockReturnValue(null);
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'apikey']);
+    expect(JSON.parse(stdoutOutput.join('').trim())).toMatchObject({ ok: false, code: 'missing_api_key' });
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  it('K-028: records the account a new --github-token signs in as', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github_token', device: { name: 'box', id: 'dev_old' } });
+    mockLoadAccountDataOwner.mockReturnValue(null);
+    mockLoadGitHubToken.mockReturnValue('gho_alice');
+    mockGithubLogin.mockImplementation(async (token: string) => (token === 'gho_bob' ? 'bob' : 'alice'));
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--github-token', 'gho_bob']);
+    // The data in place belongs to the previous token's account…
+    expect(mockAdoptAccountDataOwner).toHaveBeenCalledWith('alice');
+    // …and the config names the new one, so the daemon sets alice's data aside.
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ account: { login: 'bob' } }));
+    expect(mockSaveGitHubToken).toHaveBeenCalledWith('gho_bob');
+    expect(mockAdoptAccountDataOwner.mock.invocationCallOrder[0])
+      .toBeLessThan(mockSaveGitHubToken.mock.invocationCallOrder[0]);
+  });
+
+  it('K-028: records the saved token\'s account when no token is passed', async () => {
+    mockLoadGitHubToken.mockReturnValue('gho_alice');
+    mockGithubLogin.mockResolvedValue('alice');
+    await runCli(['setup', '--headless', '--relay', 'wss://r']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ account: { login: 'alice' } }));
+    expect(mockSaveGitHubToken).not.toHaveBeenCalled();
+    expect(mockAdoptAccountDataOwner).not.toHaveBeenCalled();
   });
 
   it('omits agents (auto) when --agent is auto', async () => {
@@ -596,6 +889,15 @@ describe('CLI config', () => {
     expect(consoleOutput.join('\n')).toContain('No config found');
   });
 
+  for (const args of [['config'], ['config', 'log'], ['config', 'remote-update', 'on']]) {
+    it(`kraki ${args.join(' ')} exits non-zero without a config (K-267)`, async () => {
+      mockLoadConfig.mockReturnValue(null);
+      await runCli(args);
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+    });
+  }
+
   it('shows current log verbosity', async () => {
     mockLoadConfig.mockReturnValue({
       relay: 'wss://relay.test',
@@ -633,11 +935,73 @@ describe('CLI config reset', () => {
     await runCli(['config', 'reset']);
     expect(mockRunSetup).toHaveBeenCalled();
   });
+
+  it('K-270: keeps the computer name chosen before instead of renaming it to the hostname', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://old', authMethod: 'github_token', device: { name: "Ada's studio Mac", id: 'dev_1' } });
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: "Ada's studio Mac" } });
+    await runCli(['config', 'reset']);
+    expect(mockRunSetup).toHaveBeenCalledWith({ deviceName: "Ada's studio Mac" });
+  });
+
+  it('K-124: restarts a running `kraki start` daemon so it uses the new config', async () => {
+    const fresh = { relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } };
+    mockLoadConfig.mockReturnValue(fresh);
+    mockRunSetup.mockResolvedValue(fresh);
+    // Running until restarted, then gone: start's wait for the relay
+    // connection (K-277) ends at once instead of polling into later tests.
+    mockIsDaemonRunning.mockImplementation(() => mockStartDaemon.mock.calls.length === 0);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 999_999_999 });
+    mockStopDaemon.mockReturnValue(true);
+    mockStartDaemon.mockResolvedValue(1234);
+    await runCli(['config', 'reset']);
+    expect(mockStopDaemon).toHaveBeenCalled();
+    expect(mockStartDaemon).toHaveBeenCalledWith(fresh);
+  });
+
+  it('leaves a stopped daemon stopped', async () => {
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
+    mockIsDaemonRunning.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    await runCli(['config', 'reset']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
 });
 
 // ── default (no args) ───────────────────────────────────
 
 describe('CLI default (no args)', () => {
+  const cancelled = () => Object.assign(new Error('User force closed the prompt'), { name: 'ExitPromptError' });
+
+  it('exits 130 when install.sh setup is cancelled, so the installer does not start Kraki (K-276)', async () => {
+    process.env.KRAKI_INSTALL = '1';
+    mockLoadConfig.mockReturnValue(null);
+    mockRunSetup.mockRejectedValue(cancelled());
+    await runCli([]);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(130));
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
+
+  it('tells Linux users Kraki does not come back by itself after a restart (K-276)', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github', device: { name: 'x' } });
+      mockIsDaemonRunning.mockReturnValue(false);
+      mockStartDaemon.mockResolvedValue(99);
+      await runCli(['start']);
+      await vi.waitFor(() => expect(consoleOutput.join('\n')).toContain('After a restart, run'));
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('still exits 0 when an interactive prompt is cancelled outside the installer', async () => {
+    mockLoadConfig.mockReturnValue(null);
+    mockRunSetup.mockRejectedValue(cancelled());
+    await runCli([]);
+    await vi.waitFor(() => expect(mockExit).toHaveBeenCalledWith(0));
+  });
+
   it('starts daemon when config exists and daemon not running', async () => {
     mockLoadConfig.mockReturnValue({
       relay: 'wss://r',

@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
 import { isImeComposing } from '../../lib/ime';
+import { copyText } from '../../lib/clipboard';
+import { cycleTabFocus } from '../../lib/focus-trap';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
 import { Check, Copy, GitFork, Pencil, Trash2 } from 'lucide-react';
@@ -31,20 +33,23 @@ interface Props {
   models?: string[];
   modelDetails?: ModelDetail[];
   onClose: () => void;
+  /** Rename…: open with the title already being edited. */
+  startEditingTitle?: boolean;
 }
-export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
+export function SessionInfoPanel({ session, usage, models, modelDetails, onClose, startEditingTitle = false }: Props) {
   const { t } = useTranslation('devices');
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    rootRef.current?.querySelector('button')?.focus();
+    // Rename… focuses the title field (autoFocus) instead of Done.
+    if (!startEditingTitle) rootRef.current?.querySelector('button')?.focus();
     return () => previous?.focus();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const device = useStore((s) => s.devices.get(session.deviceId));
   const version = useStore((s) => s.deviceVersions.get(session.deviceId));
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
+  const [editing, setEditing] = useState(startEditingTitle);
+  const [titleDraft, setTitleDraft] = useState(() => (startEditingTitle ? session.title ?? session.autoTitle ?? '' : ''));
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -58,7 +63,11 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
   }, [session.model, session.reasoningEffort]);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const saveTitle = () => {
-    wsClient.renameSession(session.id, titleDraft.trim());
+    // Closing Rename without changing anything must not turn the automatic
+    // title into a manual one (the Tentacle would stop updating it).
+    if (titleDraft.trim() !== (session.title ?? session.autoTitle ?? '').trim()) {
+      wsClient.renameSession(session.id, titleDraft.trim());
+    }
     setEditing(false);
   };
   const contextRatio =
@@ -73,19 +82,13 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       className="ksi-panel"
       ref={rootRef}
       onKeyDown={(e) => {
-        if (e.key !== 'Tab') return;
-        const controls = [
-          ...e.currentTarget.querySelectorAll<HTMLElement>(
-            'button:not(:disabled),input:not(:disabled),select:not(:disabled)',
-          ),
-        ];
-        if (e.shiftKey && document.activeElement === controls[0]) {
-          e.preventDefault();
-          controls.at(-1)?.focus();
-        } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
-          e.preventDefault();
-          controls[0]?.focus();
-        }
+        // Every Tab moves focus here (Safari skips buttons, so focus and Esc
+        // would leave the sheet). The Delete confirmation is rendered inside
+        // the sheet: while it is open, Tab cycles its buttons only, and a Tab
+        // its own trap already handled is left alone.
+        if (e.key !== 'Tab' || e.defaultPrevented) return;
+        const scope = e.currentTarget.querySelector<HTMLElement>('[role=alertdialog]') ?? e.currentTarget;
+        cycleTabFocus(scope, e);
       }}
     >
       <div className="ksi-header">
@@ -140,8 +143,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 type="button"
                 aria-label={copied ? t('sessionInfo.idCopied') : t('sessionInfo.copyId')}
                 onClick={() => {
-                  void navigator.clipboard
-                    .writeText(session.id)
+                  void copyText(session.id)
                     .then(() => {
                       clearTimeout(copyTimer.current);
                       setCopied(true);

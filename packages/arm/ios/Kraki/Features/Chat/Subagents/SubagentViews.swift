@@ -55,6 +55,9 @@ struct SubagentCardRow: View {
 
 struct SubagentStatusIcon: View {
     let status: SubagentInfo.Status
+    /// Grows with the text: a fixed 18 pt frame let a large-text glyph spill
+    /// over the subagent's name.
+    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 18
 
     var body: some View {
         Group {
@@ -70,7 +73,7 @@ struct SubagentStatusIcon: View {
             }
         }
         .font(.body)
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
     }
 }
 
@@ -176,7 +179,7 @@ struct SubagentPageView<StepView: View>: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             case .error(let reason):
-                Text("Couldn't load: \(reason)").font(.caption).foregroundStyle(.red)
+                Text(AttachmentState.loadFailureText(reason)).font(.caption).foregroundStyle(.red)
             default:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)

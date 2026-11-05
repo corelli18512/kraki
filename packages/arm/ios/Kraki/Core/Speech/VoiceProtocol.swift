@@ -143,8 +143,9 @@ enum VoiceInputError: LocalizedError, Equatable {
             return String(localized: "Today's voice-input quota has been used.")
         case .leaseDenied(.notEntitled, _):
             return String(localized: "Voice input isn't enabled for this account.")
-        case .leaseDenied(.invalidRequest, let detail):
-            return detail ?? String(localized: "The voice authorization request was rejected.")
+        case .leaseDenied(.invalidRequest, _):
+            // The relay's detail is English diagnostics, not user copy.
+            return String(localized: "The voice authorization request was rejected.")
         // Keep raw gateway reasons stable for diagnostics; localize only the UI copy.
         case .gateway(Self.accountResetReason):
             return String(localized: "Voice input was reset for this account. Please try again.")

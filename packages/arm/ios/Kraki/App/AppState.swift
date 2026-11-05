@@ -49,6 +49,9 @@ final class AppState {
     /// Per session, how many Stops were lost with the local link; the
     /// composer settles its Stop latch on a change.
     var stopsLostWithLocalLink: [String: Int] = [:]
+    /// Tentacles whose route switched (local link ↔ Head) since their last
+    /// subscription snapshot; that snapshot may keep the live reply on screen.
+    @ObservationIgnored var routeSwitchedTentacles: Set<String> = []
     #endif
     var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated
@@ -142,6 +145,16 @@ final class AppState {
             self?.sessionStore.flushCache()
             self?.deviceStore.flushCache()
         }
+        #elseif os(macOS)
+        // Quit: unsent drafts and the latest snapshot reach disk.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.sessionStore.flushCache()
+            self?.deviceStore.flushCache()
+        }
         #endif
     }
 
@@ -191,6 +204,13 @@ final class AppState {
         #endif
         state.devConnect(port: relayPort)
         return state
+    }
+
+    /// Tests: preferences sync on an isolated `UserDefaults`.
+    func usePreferencesManagerForTesting(defaults: UserDefaults) -> PreferencesManager {
+        let manager = PreferencesManager(appState: self, defaults: defaults)
+        preferencesManager = manager
+        return manager
     }
 
     static func makeUnitTestHost() -> AppState {
@@ -243,6 +263,7 @@ final class AppState {
     var connectionStatus: ConnectionStatus = .awaitingLogin {
         didSet {
             guard connectionStatus != oldValue else { return }
+            if connectionStatus != .authenticating { isAwaitingAuthInfo = false }
             #if os(macOS)
             if connectionStatus == .connected {
                 authRecoveryAttempts = 0
@@ -257,6 +278,9 @@ final class AppState {
                 commandSender?.resendPendingInputs(reason: "reconnected")
             } else {
                 deviceStore.interruptUsageRefreshes()
+                // Settings › About shows the version of the relay this app is
+                // connected to: none while it is not (K-192). Auth sets it again.
+                relayVersion = nil
             }
             updateReconnectingIndicator()
             guard let store = attachmentStore else { return }
@@ -444,19 +468,14 @@ final class AppState {
     /// A scanned/opened pairing link waiting for the user's decision
     /// (untrusted relay, or this phone is already connected).
     var pendingPairingPrompt: PairingLinkPrompt?
+    /// A pairing code is being signed in with (scanned, pasted or opened as a
+    /// link) and has not been answered yet. Drives the login screen's
+    /// "Connecting…" panel, its Cancel and the pairing timeout (K-035).
+    var pairingInFlightSince: Date?
+    /// Without an answer from the relay for this long, pairing gives up.
+    @ObservationIgnored static var pairingTimeout: TimeInterval = 30
     /// Key-mismatch warnings the user has already dismissed.
     var acknowledgedKeyWarnings: Set<String> = []
-
-    /// A computer-key warning to show (D4), if any is unacknowledged.
-    var keyWarning: (ids: Set<String>, message: String)? {
-        let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
-        guard !open.isEmpty else { return nil }
-        if open.contains(DeviceStore.unmatchedQRMarker) {
-            return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
-        }
-        let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
-        return (open, String(localized: "The relay reported a new encryption key for \(names.isEmpty ? String(localized: "a computer") : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code."))
-    }
 
     /// True from the moment the user taps "Sign in with GitHub" until
     /// `ASWebAuthenticationSession`'s completion handler fires (success,
@@ -464,6 +483,11 @@ final class AppState {
     /// tap doesn't appear unresponsive while the system browser sheet
     /// is materialising.
     var isOAuthInFlight: Bool = false
+
+    /// The open socket only asked the relay which sign-in methods it offers
+    /// (`auth_info`); nobody is being signed in yet. The sign-in screen keeps
+    /// its actions (Scan QR Code) instead of saying "Signing you in…".
+    var isAwaitingAuthInfo: Bool = false
 
     /// True while the WS layer is actively trying to (re)connect after
     /// a drop, or sitting authenticated-pending-handshake. Used by the
@@ -480,7 +504,10 @@ final class AppState {
             // the window must say so instead of looking connected-but-empty.
             return hasCompletedInitialConnect || isSigningInWithCredentials
             #else
-            return hasCompletedInitialConnect
+            // A returning user (stored pairing) opens the Sessions shell from
+            // cache before the first sign-in; while that sign-in cannot
+            // complete the shell must say so, not look connected-but-offline.
+            return hasCompletedInitialConnect || hasStoredCredentials
             #endif
         default:
             return false
@@ -520,28 +547,9 @@ final class AppState {
     @ObservationIgnored private var reconnectingIndicatorWork: DispatchWorkItem?
     static let reconnectingIndicatorDelay: TimeInterval = 2
 
-    func updateReconnectingIndicator() {
-        guard isReconnecting else {
-            reconnectingIndicatorWork?.cancel()
-            reconnectingIndicatorWork = nil
-            if showsReconnecting {
-                showsReconnecting = false
-                stability.reconnectingShown(false)
-            }
-            return
-        }
-        guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.reconnectingIndicatorWork = nil
-            if self.isReconnecting {
-                self.showsReconnecting = true
-                self.stability.reconnectingShown(true)
-            }
-        }
-        reconnectingIndicatorWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
-    }
+    /// VoiceOver announcements of this app graph's state changes (tests
+    /// replace it to observe them without other graphs in the process).
+    @ObservationIgnored var announceForAccessibility: (String) -> Void = { AccessibilityAnnouncer.announce($0) }
 
     /// Opening and outage summaries (metadata only; see StabilityTracker).
     @ObservationIgnored let stability = StabilityTracker()
@@ -689,6 +697,10 @@ final class AppState {
         }
         client.onRecover = { [weak self] reason, code, quietFor in
             self?.stability.transportLost(reason: reason, code: code, quietFor: quietFor)
+            if reason == "transport_error", let notice = Self.transportFailureNotice(code: code),
+               self?.lastError != notice {
+                self?.lastError = notice
+            }
         }
         client.onReconnectAttempt = { [weak self] attempt in
             self?.updateReconnectAttempt(attempt)
@@ -829,6 +841,60 @@ struct UserInfo: Codable, Equatable {
     }
 }
 
+// MARK: - Connection notices (same file: private state)
+
+extension AppState {
+    /// A computer-key warning to show (D4), if any is unacknowledged.
+    var keyWarning: (ids: Set<String>, message: String)? {
+        let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
+        guard !open.isEmpty else { return nil }
+        if open.contains(DeviceStore.unmatchedQRMarker) {
+            return (open, String(localized: "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support."))
+        }
+        let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
+        let computer = names.isEmpty ? String(localized: "a computer") : names
+        // Only the relay says the key changed (K-303): messages still reach
+        // the computer if it kept its key, so don't claim they can't.
+        #if os(macOS)
+        // A Mac cannot scan a pairing code; signing in again re-pins every computer.
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you sign out of Kraki on this Mac and sign in again to trust its new key. If you didn't, keep using it as before."))
+        #else
+        return (open, String(localized: "The relay reported a new encryption key for \(computer). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
+        #endif
+    }
+
+    func updateReconnectingIndicator() {
+        guard isReconnecting else {
+            reconnectingIndicatorWork?.cancel()
+            reconnectingIndicatorWork = nil
+            if showsReconnecting {
+                showsReconnecting = false
+                stability.reconnectingShown(false)
+                // Only a real recovery; backgrounding also clears the notice.
+                if connectionStatus == .connected {
+                    announceForAccessibility(String(localized: "Connected"))
+                }
+            }
+            return
+        }
+        guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectingIndicatorWork = nil
+            if self.isReconnecting {
+                self.showsReconnecting = true
+                self.stability.reconnectingShown(true)
+                // The header changes silently otherwise (VoiceOver users
+                // would not learn the app is offline).
+                self.announceForAccessibility(self.hasCompletedInitialConnect
+                    ? String(localized: "Connecting…") : String(localized: "Signing in…"))
+            }
+        }
+        reconnectingIndicatorWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
+    }
+}
+
 // MARK: - Opening record and background socket grace (same file: private state)
 
 extension AppState {
@@ -883,6 +949,15 @@ extension AppState {
         ))
     }
     #endif
+
+    /// A transport failure that retrying cannot fix, in the user's words.
+    /// App Transport Security refuses plain `ws://` to a host name before
+    /// anything is sent (a self-hosted relay); without this the app only
+    /// said "Connecting…" forever.
+    static func transportFailureNotice(code: Int?) -> String? {
+        guard code == NSURLErrorAppTransportSecurityRequiresSecureConnection else { return nil }
+        return String(localized: "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address.")
+    }
 
     /// `auth_ok` capabilities of this relay connection.
     func applyRelayCapabilities(_ authOk: [String: Any]) {

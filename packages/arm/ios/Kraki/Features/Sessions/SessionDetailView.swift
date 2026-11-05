@@ -13,6 +13,7 @@ struct SessionDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sessionSplit) private var split
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionId: String
 
@@ -20,19 +21,18 @@ struct SessionDetailView: View {
     /// "Syncing…" in the title once a catch-up has lasted a moment.
     @State private var showsSyncing = false
 
-    /// Connected, but this device has not stored the newest message yet.
+    /// Connected to an online computer, but this device has not stored the
+    /// newest message yet.
     private var isCatchingUp: Bool {
-        guard appState.connectionStatus == .connected, let session else { return false }
-        let expected = max(session.lastSeq, appState.messageProvider?.tentacleLastKnownSeq(sessionId) ?? 0)
-        return expected > appState.messageStore.persistedHead(sessionId)
+        guard let session else { return false }
+        return ChatEntryLoading.isCatchingUp(
+            connected: appState.connectionStatus == .connected,
+            deviceOnline: appState.deviceStore.devices[session.deviceId]?.online == true,
+            expectedLastSeq: max(session.lastSeq, appState.messageProvider?.tentacleLastKnownSeq(sessionId) ?? 0),
+            persistedHead: appState.messageStore.persistedHead(sessionId)
+        )
     }
     @State private var modePickerExpanded = HeaderModePicker.startsExpanded
-    /// Tracks whether we've ever observed a live `SessionInfo` for
-    /// this id. Used to distinguish the brand-new pending state
-    /// (session never loaded yet) from a delete-after-load (session
-    /// was loaded, then went away). Only the latter pops back to
-    /// the session list.
-    @State private var didLoadSessionOnce = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
 
@@ -92,6 +92,7 @@ struct SessionDetailView: View {
             // Capture the read position SYNCHRONOUSLY, before markRead below:
             // the chat lands on the first new message (ChatScrollPolicy).
             sessionStore.captureEntryUnreadBoundary(sessionId)
+            appState.messageProvider?.anchorEntryWindowAtFirstUnread(sessionId)
             // Defer markRead one runloop turn so ChatView's entry-scroll
             // task can snapshot the unread state before it's cleared.
             Task { @MainActor in
@@ -124,17 +125,8 @@ struct SessionDetailView: View {
                 markReadIfFocused()
             }
         }
-        // Track whether the session has ever been live for this view.
-        // Combined with the `session == nil && !isPending` check, this
-        // detects deletion (loaded → gone) and pops back to the
-        // session list.
-        .onChange(of: session?.id) { _, newId in
-            if newId != nil {
-                didLoadSessionOnce = true
-            } else if didLoadSessionOnce, !sessionStore.isPending(sessionId) {
-                dismiss()
-            }
-        }
+        // Deleted while open: SessionStore bumps `popToSessionListSignal`
+        // and MainTabView returns to the session list.
     }
 
     // MARK: - Session Content
@@ -186,6 +178,7 @@ struct SessionDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: title)
         }
         .padding(.horizontal, 16)
         .frame(height: ChatHeaderMetrics.height))
@@ -207,13 +200,14 @@ struct SessionDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: title)
                 .transition(.opacity)
             }
             HeaderModePicker(sessionId: sessionId, expanded: $modePickerExpanded)
         }
         .padding(.horizontal, 16)
         .frame(height: ChatHeaderMetrics.height)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: modePickerExpanded)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: modePickerExpanded)
     }
 
     @ViewBuilder
@@ -231,11 +225,16 @@ struct SessionDetailView: View {
             .disabled(!opensInfo)
             .accessibilityAddTraits(.isHeader)
             .accessibilityHint(opensInfo ? String(localized: "Shows session info") : "")
-            .animation(.easeInOut(duration: 0.2), value: title)
+        // A new title (the auto-title arriving) resizes the capsule. The
+        // animation must cover the glass and the capsule's frame too: scoped
+        // to the label only, the glass snapped to the new width and the old
+        // text jumped to the new centre before the cross-fade.
         if #available(iOS 26.0, *) {
             button.glassEffect(.regular.interactive(), in: Capsule())
+                .animation(.easeInOut(duration: 0.2), value: title)
         } else {
             button.background(.ultraThinMaterial, in: Capsule())
+                .animation(.easeInOut(duration: 0.2), value: title)
         }
     }
 
@@ -305,6 +304,9 @@ struct SessionDetailView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+        // Fill the page like the chat and pending routes, so the header
+        // stays at the top instead of centering with this short content.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Helpers
@@ -336,6 +338,7 @@ struct HeaderModePicker: View {
     let sessionId: String
     @Binding var expanded: Bool
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Reference-typed so UIKit control callbacks (which capture a copy of
     /// this view) always reach the one live countdown.
     @State private var idle = IdleCountdown()
@@ -382,7 +385,7 @@ struct HeaderModePicker: View {
             .animation(.easeInOut(duration: 0.3), value: current)
             .onAppear { scheduleCollapse() }
             .onDisappear { idle.cancel() }
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
             .accessibilityIdentifier("chat.mode.picker")
         } else {
             Button {
@@ -404,7 +407,7 @@ struct HeaderModePicker: View {
             .accessibilityLabel("Session mode, \(modeTitle(current))")
             .accessibilityHint("Shows the session modes")
             .accessibilityIdentifier("chat.mode.collapsed")
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
         }
     }
 

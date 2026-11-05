@@ -77,6 +77,11 @@ struct ArchivedSessionsSection: View {
                 }
             }
             .padding(.top, 6)
+            // Expanded, the group follows new archives (the session list
+            // carries the count) instead of waiting for collapse/expand.
+            .onChange(of: count) { _, _ in
+                if expanded { appState.loadArchivedSessions() }
+            }
         }
     }
 
@@ -95,20 +100,24 @@ struct ArchiveSettingsSection: View {
     @State private var confirmDelete = false
 
     private static let choices = [7, 14, 30, 60, 90, 0]
+    /// Picker tag while the computers have different values.
+    private static let varies = -1
 
     var body: some View {
         let info = appState.sessionStore.archiveInfo
         if !info.isEmpty {
-            let days = info.values.first?.days ?? 14
+            let days = appState.sessionStore.autoArchiveDays
             Section {
                 Picker("Archive After", selection: Binding(
-                    get: { days },
+                    get: { days ?? Self.varies },
                     set: { value in
-                        for deviceId in info.keys {
-                            appState.commandSender?.setAutoArchiveDays(targetDeviceId: deviceId, days: value)
-                        }
+                        guard value != Self.varies else { return }
+                        appState.commandSender?.setAutoArchiveDaysOnAllComputers(value)
                     }
                 )) {
+                    if days == nil {
+                        Text("Varies").tag(Self.varies)
+                    }
                     ForEach(Self.choices, id: \.self) { d in
                         Text(d == 0 ? String(localized: "Never") : String(localized: "\(d) days")).tag(d)
                     }

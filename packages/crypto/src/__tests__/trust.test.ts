@@ -185,6 +185,58 @@ describe('round 2 hardening', () => {
   });
 });
 
+describe('replay guard after a clock jump or lost state (K-141)', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  it('accepts fresh messages as soon as a forward clock jump is corrected', () => {
+    const real = 100_000_000_000;
+    let now = real;
+    const g = new ReplayGuard({ now: () => now });
+    const before = { from: 'a', ts: real, nonce: 'BEFORE' };
+    expect(g.check(before)).toBeNull();
+    for (let i = 0; i < 1100; i++) g.check({ from: 'a', ts: real, nonce: `n${i}` });
+    now = real + DAY; // the computer's clock jumps a day ahead...
+    expect(g.check({ from: 'a', ts: real + 60_000, nonce: 'SKEWED' })).toBe('stale');
+    g.check({ from: 'b', ts: now, nonce: 'prune' }); // pruning forgets the old nonces
+    now = real + 2 * 60_000; // ...and is corrected
+    expect(g.check({ from: 'a', ts: real + 2 * 60_000, nonce: 'AFTER' })).toBeNull();
+    // A message accepted before the jump is still refused.
+    expect(g.check(before)).not.toBeNull();
+  });
+
+  it('a state flushed while the clock was ahead does not lock out the next day after a restart', () => {
+    const real = 100_000_000_000;
+    let now = real;
+    const g1 = new ReplayGuard({ now: () => now });
+    const before = { from: 'a', ts: real, nonce: 'BEFORE' };
+    expect(g1.check(before)).toBeNull();
+    now = real + DAY;
+    const state = JSON.parse(JSON.stringify(g1.export()));
+    now = real + 2 * 60_000;
+    const g2 = new ReplayGuard({ now: () => now });
+    g2.import(state);
+    expect(g2.check(before)).toBe('stale');
+    expect(g2.check({ from: 'a', ts: real + 2 * 60_000, nonce: 'AFTER' })).toBeNull();
+  });
+
+  it('still honours the floor of a state written by the previous format', () => {
+    const now = 100_000_000_000;
+    const g = new ReplayGuard({ now: () => now });
+    g.import({ v: 2, notBefore: 0, highWater: now + DAY, entries: [] });
+    expect(g.check({ from: 'a', ts: now, nonce: 'N' })).toBe('stale');
+  });
+
+  it('a pairing request may skip the lost-state floor, a command may not', () => {
+    const now = 100_000_000_000;
+    const g = new ReplayGuard({ now: () => now });
+    g.markStateLost();
+    const m = { from: 'a', ts: now, nonce: 'PAIR' };
+    expect(g.peek(m)).toBe('stale');
+    expect(g.peek(m, { ignoreFloor: true })).toBeNull();
+    expect(g.peek({ ...m, ts: now - 16 * 60_000 }, { ignoreFloor: true })).toBe('stale');
+  });
+});
+
 describe('final review', () => {
   it('DT503-05: clock rollback in a running process cannot reopen a pruned nonce', () => {
     let now = 50_000_000;

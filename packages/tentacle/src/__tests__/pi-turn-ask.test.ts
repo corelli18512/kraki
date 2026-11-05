@@ -113,6 +113,24 @@ describe('pi idle eviction lifecycle', () => {
   });
 });
 
+describe('pi steer injected after a streamed answer (K-024)', () => {
+  it('keeps the streamed answer as a reply; the steer answer is the next one', () => {
+    const { adapter, sid, emit, narrate } = makeAdapter();
+    const onMessage = vi.fn();
+    const onNarrationTrace = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onNarrationTrace = onNarrationTrace;
+    adapter.onNarration = vi.fn();
+    adapter.onIdle = vi.fn();
+    narrate('A 14k-char essay.');
+    emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'shorter please' }] } });
+    narrate('Short version.');
+    emit({ type: 'agent_settled' });
+    expect(onMessage.mock.calls.map((c) => [c[0], c[1].content])).toEqual([[sid, 'A 14k-char essay.'], [sid, 'Short version.']]);
+    expect(onNarrationTrace).not.toHaveBeenCalled();
+  });
+});
+
 describe('pi narration → draft + TRACE', () => {
   it('message_end prose → onNarration RECONCILE now, TRACE deferred (may still graduate)', () => {
     const { adapter, session, narrate } = makeAdapter();
@@ -590,6 +608,33 @@ describe('pi inbound images (sendMessage → RPC prompt.images)', () => {
       { type: 'content_ref', id: 'abc', mimeType: 'image/png', size: 10 },
     ]);
     expect(proc.request).toHaveBeenCalledWith('prompt', { message: 'hi' }, { timeoutMs: null });
+  });
+});
+
+describe('pi inbound content_ref images (K-291)', () => {
+  it('reads a content_ref image from the attachment store and passes it in the prompt', async () => {
+    const read = vi.fn((_sid: string, id: string) => (id === 'ref-img'
+      ? { bytes: Buffer.from('ABC'), meta: { mimeType: 'image/jpeg' } }
+      : null));
+    const adapter = new PiAdapter({
+      cliPath: '/bin/true',
+      attachmentStore: { read } as unknown as import('../attachment-store.js').AttachmentStore,
+    });
+    const proc: StubProc = { alive: true, send: vi.fn(), sendRaw: vi.fn(), request: vi.fn().mockResolvedValue({}) };
+    (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      proc, cwd: '/tmp', model: 'm', mode: 'auto', usage: {}, lastActivity: Date.now(),
+      pendingPerms: new Map(), pendingQuestions: new Map(),
+      turn: turnFixture(adapter, 's1', { open: false }), lastStopReason: undefined, aborting: false,
+    });
+    await adapter.sendMessage('s1', 'look', [
+      { type: 'content_ref', id: 'ref-img', mimeType: 'image/jpeg', size: 3 },
+      { type: 'content_ref', id: 'missing', mimeType: 'image/png', size: 3 },
+    ]);
+    expect(read).toHaveBeenCalledWith('s1', 'ref-img');
+    expect(proc.request).toHaveBeenCalledWith('prompt', {
+      message: 'look',
+      images: [{ type: 'image', data: Buffer.from('ABC').toString('base64'), mimeType: 'image/jpeg' }],
+    }, { timeoutMs: null });
   });
 });
 

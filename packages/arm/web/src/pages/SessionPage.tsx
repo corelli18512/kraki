@@ -5,7 +5,7 @@ import { sessionDisplayTitle } from '../lib/session-status';
 import { useParams, useNavigate, useLocation } from 'react-router';
 import { diag } from '../lib/diag';
 import { useStore } from '../hooks/useStore';
-import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
+import { RECONNECTING_DEBOUNCE_MS, useShowsReconnecting } from '../hooks/useShowsReconnecting';
 import { ChatView } from '../components/chat/ChatView';
 import { ChatHeader, HEADER_HEIGHT, type SessionMode } from '../components/chat/ChatHeader';
 import { wsClient } from '../lib/ws-client';
@@ -18,6 +18,10 @@ import type { ContentRef } from '@kraki/protocol';
 import { setDesiredSessionSubscription } from '../lib/session-subscription-lifecycle';
 import { allowAutoRead, isAutoReadSuppressed } from '../lib/read-visibility';
 
+/** How long a link to a session not loaded yet waits for the session lists
+ *  after connecting before it says "Session not found". */
+const SESSION_LIST_WAIT_MS = 10_000;
+
 export function SessionPage() {
   const { t } = useTranslation('chat');
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -28,6 +32,15 @@ export function SessionPage() {
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
   const status = useStore((s) => s.status);
   const isReconnecting = useShowsReconnecting();
+  // A computer restart takes it offline for a moment: like "Reconnecting…",
+  // the offline banner waits out a blip instead of flashing (K-214).
+  const deviceOffline = !isReconnecting && !isDeviceOnline;
+  const [showsOffline, setShowsOffline] = useState(false);
+  useEffect(() => {
+    if (!deviceOffline) { setShowsOffline(false); return; }
+    const timer = setTimeout(() => setShowsOffline(true), RECONNECTING_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [deviceOffline]);
   const totalOtherUnread = useStore((s) => {
     let count = 0;
     for (const [sid, n] of s.unreadCount) {
@@ -38,6 +51,8 @@ export function SessionPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
+  // Opened by Rename…: the sheet starts with the title being edited.
+  const [infoRenaming, setInfoRenaming] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ContentRef | null>(null);
   const [selectedArtifactExpanded, setSelectedArtifactExpanded] = useState(false);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
@@ -64,10 +79,12 @@ export function SessionPage() {
   useEffect(() => {
     if (!sessionId) return;
     const search = new URLSearchParams(location.search);
-    const infoRequested = search.get('info') === '1';
+    const info = search.get('info');
+    const infoRequested = info === '1' || info === 'rename';
     const notificationMarked = search.get('from') === 'notification' && notifiedEntry.current === sessionId;
     if (!infoRequested && !notificationMarked) return;
     if (infoRequested) {
+      setInfoRenaming(info === 'rename');
       setMobileInfoOpen(true);
       search.delete('info');
     }
@@ -78,11 +95,26 @@ export function SessionPage() {
     });
   }, [sessionId, location, navigate]);
 
-  // Navigate home when session is deleted (removed from store while viewing)
-  // but not if it's a pending session (optimistic open before session_created)
+  // Navigate home when the session open here is deleted (removed from the
+  // store while viewing), not when a link names a session that is not loaded
+  // yet: that one arrives with the computer's session list. Signed out, the
+  // sign-in lives on the home page.
+  const shownSession = useRef<string | null>(null);
+  if (sessionId && session) shownSession.current = sessionId;
   useEffect(() => {
-    if (sessionId && !session && !isPending) navigate('/', { replace: true });
-  }, [sessionId, session, isPending, navigate]);
+    if (!sessionId || session || isPending) return;
+    if (shownSession.current === sessionId || status === 'awaiting_login') navigate('/', { replace: true });
+  }, [sessionId, session, isPending, status, navigate]);
+
+  // Connected and still unknown after a while: say so instead of waiting forever.
+  const [listWaitOver, setListWaitOver] = useState(false);
+  const hasSession = !!session;
+  useEffect(() => {
+    setListWaitOver(false);
+    if (hasSession || status !== 'connected') return;
+    const timer = setTimeout(() => setListWaitOver(true), SESSION_LIST_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [sessionId, hasSession, status]);
 
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
@@ -160,6 +192,25 @@ export function SessionPage() {
     );
   }
 
+  if (!session && !listWaitOver) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="text-center">
+          <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
+          <p className="mt-3 text-sm text-text-secondary">{status === 'connected' ? t('session.loading') : t('session.connecting')}</p>
+          {/* Offline, this can last: the narrow layout hides the sidebar and a
+              standalone PWA has no browser Back. */}
+          <button
+            onClick={() => navigate('/')}
+            className="mt-3 text-xs font-medium text-kraki-500 hover:text-kraki-400"
+          >
+            {t('session.back')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!session) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -193,11 +244,12 @@ export function SessionPage() {
               backBadge={totalOtherUnread}
               onBack={() => navigate('/')}
               onTitle={() => {
+                setInfoRenaming(false);
                 setMobileInfoOpen(true);
               }}
               onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
             />
-            {!isReconnecting && !isDeviceOnline && (
+            {deviceOffline && showsOffline && (
               <div className="kchat-banner" style={{ top: topInset }}>
                 {t('session.offline', { device: session.deviceName ?? t('session.device') })}
               </div>
@@ -220,6 +272,7 @@ export function SessionPage() {
               usage={sessionUsage}
               models={deviceModels}
               modelDetails={deviceModelDetails}
+              startEditingTitle={infoRenaming}
               onClose={() => setMobileInfoOpen(false)}
             />
           </div>

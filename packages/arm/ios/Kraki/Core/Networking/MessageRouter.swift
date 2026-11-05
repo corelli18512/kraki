@@ -214,7 +214,7 @@ final class MessageRouter {
             let reason = (json["reason"] as? String).flatMap(VoiceLeaseDeniedReason.init(rawValue:))
                 ?? .invalidRequest
             let detail = json["detail"] as? String
-            KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue)")
+            KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue) detail=\(detail ?? "-")")
             Task { @MainActor in
                 appState?.voiceInputController.receiveLeaseDenied(reason: reason, detail: detail)
             }
@@ -280,75 +280,7 @@ final class MessageRouter {
 
         // ── Messages without a sessionId ─────────────────────────────────
 
-        if type == "local_notification" {
-            // Same preview the Head forwards as `notification_preview`, sent
-            // straight over the local link. MacNotifications posts each `nid` once.
-            #if os(macOS)
-            if let preview = (dict["payload"] as? [String: Any])?["preview"] as? String {
-                MacNotifications.shared.present(decryptedPreview: preview, appState: appState, route: "link")
-            }
-            #endif
-            return
-        }
-
-        if type == "session_subscription_set" {
-            handleSessionSubscriptionSet(dict)
-            return
-        }
-
-        if type == "session_list" {
-            handleSessionList(dict)
-            return
-        }
-
-        if type == "session_replay_batch" {
-            handleReplayBatch(dict)
-            return
-        }
-
-        if type == "session_messages_batch" {
-            handleSessionMessagesBatch(dict)
-            return
-        }
-
-        if type == "session_messages_range_batch" {
-            handleSessionMessagesRangeBatch(dict)
-            return
-        }
-
-        if type == "turn_trace_batch" {
-            handleTurnTraceBatch(dict)
-            return
-        }
-
-        if type == "device_usage" {
-            handleDeviceUsage(dict)
-            return
-        }
-
-        if type == "device_greeting" {
-            handleDeviceGreeting(dict)
-            return
-        }
-
-        if type == "device_update_status" {
-            handleDeviceUpdateStatus(dict)
-            return
-        }
-
-        if type == "local_sessions_list" {
-            handleLocalSessionsList(dict)
-            return
-        }
-
-        if type == "archived_session_list" {
-            if let deviceId = dict["deviceId"] as? String {
-                let payload = dict["payload"] as? [String: Any]
-                let sessions = (payload?["sessions"] as? [[String: Any]] ?? []).compactMap { SessionDigest(json: $0) }
-                appState.sessionStore.archivedSessions[deviceId] = sessions
-            }
-            return
-        }
+        if handleSessionlessMessage(type, dict: dict, appState: appState) { return }
 
         // ── All remaining messages require a sessionId ───────────────────
 
@@ -477,7 +409,7 @@ final class MessageRouter {
             // Draft bubble (card). Keep-last: replace on `reset`, else append.
             if let content = payload?["content"] as? String {
                 let reset = payload?["reset"] as? Bool ?? false
-                appState.messageStore.applyCardMessage(sessionId, content, reset: reset)
+                appState.messageStore.applyCardMessage(sessionId, content, reset: reset, envelopeSeq: dict["seq"] as? Int)
                 // No per-delta SessionInfo.activity write: nothing displays the
                 // agent-text activity (ActivityRow has no callers), and copying
                 // the growing answer into `sessions` on every delta notified
@@ -596,7 +528,7 @@ final class MessageRouter {
         case "session_title_updated":
             let title = payload?["title"] as? String
             let autoTitle = payload?["autoTitle"] as? String
-            appState.sessionStore.setTitle(sessionId, title: title, autoTitle: autoTitle)
+            appState.sessionStore.applyTitleUpdate(sessionId, title: title, autoTitle: autoTitle)
 
         case "session_pinned":
             let pinned = payload?["pinned"] as? Bool ?? false
@@ -619,7 +551,7 @@ final class MessageRouter {
             // transient envelope with a global-counter seq that
             // would silently pollute `getLastSeq`. If a new persistent
             // type is added, give it an explicit case + handler.
-            break
+            handleLiveSessionSignal(type, sessionId: sessionId, payload: payload)
         }
     }
 
@@ -630,7 +562,63 @@ final class MessageRouter {
         encryptionHandler.drainQueue()
     }
 
+    /// Messages without a sessionId. Returns whether `type` was one of them.
+    @MainActor
+    private func handleSessionlessMessage(_ type: String, dict: [String: Any], appState: AppState) -> Bool {
+        switch type {
+        case "local_notification":
+            // Same preview the Head forwards as `notification_preview`, sent
+            // straight over the local link. MacNotifications posts each `nid` once.
+            #if os(macOS)
+            if let preview = (dict["payload"] as? [String: Any])?["preview"] as? String {
+                MacNotifications.shared.present(decryptedPreview: preview, appState: appState, route: "link")
+            }
+            #endif
+            break
+        case "session_subscription_set": handleSessionSubscriptionSet(dict)
+        case "session_list": handleSessionList(dict)
+        case "session_replay_batch": handleReplayBatch(dict)
+        case "session_messages_batch": handleSessionMessagesBatch(dict)
+        case "session_messages_range_batch": handleSessionMessagesRangeBatch(dict)
+        case "turn_trace_batch": handleTurnTraceBatch(dict)
+        case "device_usage": handleDeviceUsage(dict)
+        case "device_greeting": handleDeviceGreeting(dict)
+        case "device_update_status": handleDeviceUpdateStatus(dict)
+        case "local_sessions_list": handleLocalSessionsList(dict)
+        case "archived_session_list":
+            if let deviceId = dict["deviceId"] as? String {
+                let payload = dict["payload"] as? [String: Any]
+                let sessions = (payload?["sessions"] as? [[String: Any]] ?? []).compactMap { SessionDigest(json: $0) }
+                appState.sessionStore.archivedSessions[deviceId] = sessions
+            }
+        // A create/fork/import failure has no session yet (sessionId ""): it
+        // is correlated by the requestId the app sent. Fail the placeholder
+        // now with the computer's reason instead of a timeout 30 s later.
+        case "error" where (dict["sessionId"] as? String ?? "").isEmpty:
+            let payload = dict["payload"] as? [String: Any]
+            if let requestId = payload?["requestId"] as? String,
+               let sender = appState.commandSender, sender.pendingPlaceholderIds[requestId] != nil {
+                sender.failPendingRequest(requestId, reason: payload?["message"] as? String ?? String(localized: "Error"))
+            }
+        default:
+            return false
+        }
+        return true
+    }
+
     // MARK: - Specific Handlers
+
+    /// The archived-Session count and auto-archive setting a `session_list` carries.
+    @MainActor
+    private func applyArchiveInfo(_ payload: [String: Any]?, deviceId: String, appState: AppState) {
+        guard let count = payload?["archivedCount"] as? Int else { return }
+        let days = payload?["autoArchiveDays"] as? Int ?? 14
+        let info = ArchiveInfo(count: count, days: days)
+        if appState.sessionStore.archiveInfo[deviceId] != info {
+            appState.sessionStore.archiveInfo[deviceId] = info
+        }
+        appState.commandSender?.reconcileAutoArchiveDays(deviceId: deviceId, reported: days)
+    }
 
     @MainActor
     private func handleSessionList(_ dict: [String: Any]) {
@@ -648,13 +636,7 @@ final class MessageRouter {
 
         let tentacleDeviceId = dict["deviceId"] as? String ?? ""
         let snapshotTimestamp = dict["timestamp"] as? String
-        if let count = payload?["archivedCount"] as? Int {
-            let days = payload?["autoArchiveDays"] as? Int ?? 14
-            let info = ArchiveInfo(count: count, days: days)
-            if appState.sessionStore.archiveInfo[tentacleDeviceId] != info {
-                appState.sessionStore.archiveInfo[tentacleDeviceId] = info
-            }
-        }
+        applyArchiveInfo(payload, deviceId: tentacleDeviceId, appState: appState)
         guard appState.sessionStore.acceptsSessionListSnapshot(
             deviceId: tentacleDeviceId,
             timestamp: snapshotTimestamp
@@ -722,7 +704,8 @@ final class MessageRouter {
                 // session_list is reconnect authority. An idle digest proves no
                 // live card exists, including for an inactive Session whose
                 // concluding push may have been missed while disconnected.
-                appState.messageStore.endCardTurn(digest.id)
+                // A draft this device is behind on stays until its bubble lands.
+                appState.messageStore.endCardTurn(digest.id, afterCatchUpTo: digest.lastSeq)
             }
 
             // `reconcileSessionList` already applied Tentacle's authoritative
@@ -885,7 +868,7 @@ final class MessageRouter {
             updatePreview(
                 sessionId,
                 text: String(localized: "Session created"),
-                type: "session_created",
+                type: SessionStore.createdPlaceholderPreviewType,
                 timestamp: timestamp,
                 notify: false
             )
@@ -927,6 +910,13 @@ final class MessageRouter {
               let raw = payload["phase"] as? String,
               let phase = DeviceUpdateProgress.Phase(rawValue: raw) else { return }
         let previous = appState.deviceStore.updateProgress[deviceId]
+        // Every app gets every status. Another app's request refused while an
+        // update is running ("already in progress") is not this update's
+        // failure: keep showing the running one (K-322).
+        if phase == .failed, let previous, previous.isActive,
+           let running = previous.requestId, let failed = payload["requestId"] as? String, failed != running {
+            return
+        }
         appState.deviceStore.setUpdateProgress(deviceId, DeviceUpdateProgress(
             phase: phase,
             requestId: payload["requestId"] as? String ?? previous?.requestId,
@@ -978,7 +968,8 @@ final class MessageRouter {
     }
 
     /// Tell a Tentacle (that advertised `fragments`) this app reassembles
-    /// fragments, so it may send large payloads in small parts.
+    /// fragments, so it may send large payloads in small parts, and that it
+    /// understands `question_withdrawn`.
     func declareClientFeatures(to deviceId: String) {
         guard let appState else { return }
         _ = appState.sendEncryptedMessage([
@@ -986,7 +977,7 @@ final class MessageRouter {
             "deviceId": appState.deviceId ?? "",
             "seq": 0,
             "timestamp": ISO8601.now(),
-            "payload": ["features": [PayloadFragments.feature]],
+            "payload": ["features": [PayloadFragments.feature, Self.questionWithdrawnFeature]],
         ], routingTarget: deviceId, connectionScoped: true)
     }
 

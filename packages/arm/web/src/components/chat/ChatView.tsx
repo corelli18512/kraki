@@ -13,15 +13,17 @@ import { isSpineMessage, messageProvider } from '../../lib/message-provider';
 import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
 import { Bubble, LIVE_KEY, rowSide, type BubbleContext, type ChatRow } from './Bubble';
-import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } from './Composer';
+import { Composer, composerIntent, composerTarget, type ComposerHandle, type ComposerIntent } from './Composer';
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import { ChatAnnouncer } from './ChatAnnouncer';
 import { HistoryLoadStatus } from './HistoryLoadStatus';
 import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/chat/unread-entry';
 import './chat.css';
 
 const EMPTY: ChatMessage[] = [];
+const NO_WITHDRAWN: string[] = [];
 /** Older pages are requested this many seqs at a time. */
 const OLDER_PAGE = 60;
 /** Rows rendered on entry; revealing older rows grows it by a page. */
@@ -104,13 +106,15 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // and answerable (Mac ChatViewModel excludes failed answers too).
   const pendingAnswerTo = useMemo(() => pending.flatMap((e) => (e.answerTo && e.state !== 'failed' ? [e.answerTo] : [])), [pending]);
   const answerKey = pendingAnswerTo.join(',');
+  // The agent withdrew these (timeout, cancel): no longer answerable.
+  const withdrawn = useStore((s) => s.withdrawnQuestions.get(sessionId)) ?? NO_WITHDRAWN;
   const spine = useMemo(
-    () => spineRows(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead, i18n.language],
+    () => spineRows(messages, pendingAnswerTo, atHead, withdrawn),
+    [messages, answerKey, atHead, withdrawn, i18n.language],
   );
   const questions = useMemo(
-    () => openQuestions(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead, i18n.language],
+    () => openQuestions(messages, pendingAnswerTo, atHead, withdrawn),
+    [messages, answerKey, atHead, withdrawn, i18n.language],
   );
 
   const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
@@ -467,6 +471,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   }), [sessionId, afterSubmit, onOpenArtifact]);
 
   const intent = composerIntent(sessionActive, questions.length > 0, permissionOpen);
+  const target = composerTarget(permissionOpen ? String(action.payload.id) : undefined, questions.at(-1)?.id);
   const canAbort = sessionActive || showLive;
   const reachable = connected && deviceOnline;
   const navigationColors = agentNavigationColors(sessionId);
@@ -503,6 +508,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
         entranceSide={entranceSide}
       />
+      <ChatAnnouncer sessionId={sessionId} />
       {session && rows.length === 0 && !showHistoryStatus && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>
           <p>{t('view.empty')}</p>
@@ -547,6 +553,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           ref={composerRef}
           sessionId={sessionId}
           intent={intent}
+          target={target}
           canAbort={canAbort}
           reachable={reachable}
           busy={sessionActive}

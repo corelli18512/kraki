@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ClaudeAdapter } from '../adapters/claude.js';
-import { broadcastPendingResolutions, handleAskUserQuestion } from '../adapters/claude-permissions.js';
+import { broadcastPendingResolutions, emitQuestionCard, handleAskUserQuestion } from '../adapters/claude-permissions.js';
 import { TurnTracker } from '../adapters/turn-tracker.js';
 
 type CapturedResult = {
@@ -106,7 +106,7 @@ describe('Claude AskUserQuestion answers key', () => {
     });
   });
 
-  it('broadcastPendingResolutions echoes questions with an empty answers map', () => {
+  it('K-283: broadcastPendingResolutions (Stop) denies an open question instead of answering it empty', () => {
     const adapter = new ClaudeAdapter();
     let captured: CapturedResult | undefined;
     const questions = [{ question: 'still open?' }];
@@ -117,9 +117,9 @@ describe('Claude AskUserQuestion answers key', () => {
 
     broadcastPendingResolutions(adapter, 's1');
 
-    expect(captured?.behavior).toBe('allow');
-    expect(captured?.updatedInput?.questions).toEqual(questions);
-    expect(captured?.updatedInput?.answers).toEqual({});
+    expect(captured?.behavior).toBe('deny');
+    expect(captured?.updatedInput).toBeUndefined();
+    expect((captured as { message?: string } | undefined)?.message).toMatch(/Not answered/);
   });
 
   it('asks multiple questions one at a time and resolves with every answer keyed by text', async () => {
@@ -161,5 +161,32 @@ describe('Claude AskUserQuestion answers key', () => {
     });
     expect(result.updatedInput?.questions).toEqual(input.questions);
     expect(pendingQuestions.size).toBe(0);
+  });
+});
+
+describe('Claude AskUserQuestion multiSelect (K-172)', () => {
+  const ask = (multiSelect: boolean | undefined) => {
+    const adapter = new ClaudeAdapter();
+    const emitted: Array<{ question: string; choices?: string[] }> = [];
+    adapter.onQuestionRequest = (_s, q) => { emitted.push({ question: q.question, choices: q.choices }); };
+    const pendingQuestions = new Map();
+    emitQuestionCard(adapter, 's1', () => {}, [{
+      question: 'Which databases?', header: 'DB',
+      options: [{ label: 'Postgres', description: '' }, { label: 'SQLite', description: '' }],
+      ...(multiSelect !== undefined && { multiSelect }),
+    }], 0, {}, pendingQuestions);
+    return emitted[0];
+  };
+
+  it('tells the human that several options may be chosen', () => {
+    const card = ask(true);
+    expect(card.choices).toEqual(['Postgres', 'SQLite']);
+    expect(card.question).toMatch(/^Which databases\?\n\n/);
+    expect(card.question).toMatch(/more than one/i);
+  });
+
+  it('leaves a single-choice question unchanged', () => {
+    expect(ask(false).question).toBe('Which databases?');
+    expect(ask(undefined).question).toBe('Which databases?');
   });
 });

@@ -37,6 +37,7 @@ import {
   DEFAULT_LOG_VERBOSITY,
   type KrakiConfig,
   getConfigPath,
+  getKrakiHome,
   getOrCreateDeviceId,
   getVersion,
   loadConfig,
@@ -45,6 +46,8 @@ import {
   saveGitHubToken,
 } from './config.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
+import { githubUnreachableMessage } from './network-errors.js';
+import { adoptAccountDataOwner, loadAccountDataOwner } from './account-switch.js';
 
 export type SetupJsonEvent =
   | { event: 'start'; version: string }
@@ -83,17 +86,29 @@ class SetupJsonError extends Error {
   }
 }
 
+function isPermissionDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
 function getArg(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 
+/** The GitHub login for `token`, null when GitHub refuses it; throws
+ *  `github_unreachable` when GitHub cannot be reached at all. */
 async function githubUser(deps: SetupJsonDeps, token: string): Promise<string | null> {
+  let res: Response;
   try {
-    const res = await deps.fetch('https://api.github.com/user', {
+    res = await deps.fetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'kraki-tentacle', Accept: 'application/json' },
       signal: AbortSignal.timeout(10_000),
     });
+  } catch (err) {
+    throw new SetupJsonError('github_unreachable', githubUnreachableMessage(err));
+  }
+  try {
     if (!res.ok) return null;
     const body = await res.json() as { login?: unknown };
     return typeof body.login === 'string' ? body.login : null;
@@ -117,11 +132,17 @@ async function resolveClientId(deps: SetupJsonDeps): Promise<string> {
 
 async function deviceFlow(deps: SetupJsonDeps): Promise<string> {
   const clientId = await resolveClientId(deps);
-  const res = await deps.fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await deps.fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new SetupJsonError('github_unreachable', githubUnreachableMessage(err));
+  }
   if (!res.ok) throw new SetupJsonError('device_code_failed', `GitHub device code request failed (${res.status})`);
   const code = await res.json() as {
     device_code: string; user_code: string; verification_uri: string; expires_in: number; interval?: number;
@@ -217,7 +238,8 @@ async function resolveToken(
   if (!forceLogin) {
     const saved = loadGitHubToken();
     if (saved) {
-      const username = await githubUser(deps, saved);
+      // Unreachable now: the fresh sign-in below reports it.
+      const username = await githubUser(deps, saved).catch(() => null);
       if (username) return { token: saved, username, source: 'saved' };
     }
   }
@@ -284,6 +306,14 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     deps.emit({ event: 'relay', relay, region, fallback });
 
     const existing = loadConfig();
+    // Installs from before account.json: name the account the data in place
+    // belongs to while its token is still here, so the daemon can move it
+    // aside if this sign-in is another account.
+    if (existing && !loadAccountDataOwner()) {
+      const saved = source === 'saved' ? null : loadGitHubToken();
+      const previous = existing.account?.login ?? (saved ? await githubUser(deps, saved) : null);
+      if (previous) adoptAccountDataOwner(previous);
+    }
     const deviceName = getArg(args, '--device-name')
       ?? existing?.device.name
       ?? hostname().replace(/\.local$/, '');
@@ -291,6 +321,7 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
       ...(existing ?? {}),
       relay,
       authMethod: 'github_token',
+      account: { login: username },
       device: { name: deviceName, id: getOrCreateDeviceId() },
       logging: existing?.logging ?? { verbosity: DEFAULT_LOG_VERBOSITY },
     };
@@ -299,6 +330,16 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     deps.emit({ event: 'done', configPath: getConfigPath(), relay, username, deviceName });
     return 0;
   } catch (err) {
+    if (!(err instanceof SetupJsonError) && isPermissionDenied(err)) {
+      // Typically a Kraki folder created by `sudo kraki`: say how to fix it.
+      const home = getKrakiHome();
+      deps.emit({
+        event: 'error',
+        code: 'home_not_writable',
+        message: `Kraki cannot write to ${home} (${(err as Error).message}). Fix it in Terminal: sudo chown -R "$USER" "${home}"`,
+      });
+      return 1;
+    }
     const code = err instanceof SetupJsonError ? err.code : 'unexpected';
     deps.emit({ event: 'error', code, message: (err as Error).message });
     return 1;

@@ -12,6 +12,7 @@
  */
 
 import { wsProxyOptions } from './proxy.js';
+import { relayConnectErrorMessage } from './network-errors.js';
 import { WebSocket } from 'ws';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -39,6 +40,11 @@ export async function requestPairingToken(
   relayUrl: string,
   authToken?: string,
 ): Promise<PairingInfo> {
+  // A connect code is for a signed-in computer. When its account was deleted
+  // the daemon removed config.json and this computer's identity; a request
+  // now would sign the GitHub user up again and the code below would
+  // re-create the identity files (K-277).
+  if (!loadConfig()) throw new Error('This computer is signed out of Kraki. Run `kraki` to set it up again.');
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl, wsProxyOptions(relayUrl));
     const timeout = setTimeout(() => {
@@ -60,6 +66,12 @@ export async function requestPairingToken(
 
       if (msg.type === 'pairing_token_created') {
         clearTimeout(timeout);
+        ws.close();
+        // Signed out while the request was in flight (see above).
+        if (!loadConfig()) {
+          reject(new Error('This computer is signed out of Kraki. Run `kraki` to set it up again.'));
+          return;
+        }
         const km = new KeyManager();
         const identity = km.getPublicIdentity();
         resolve({
@@ -85,7 +97,7 @@ export async function requestPairingToken(
 
     ws.on('error', (err) => {
       clearTimeout(timeout);
-      reject(new Error(`Connection failed: ${err.message}`));
+      reject(new Error(`Connection failed: ${relayConnectErrorMessage(err)}`));
     });
   });
 }

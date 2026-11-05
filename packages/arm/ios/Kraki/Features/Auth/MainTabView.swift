@@ -5,6 +5,12 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     let allowsInitialNavigation: Bool
+    /// The pre-iOS 26 tab bar on any system (tests run on iOS 26 only).
+    #if DEBUG
+    var forcesLegacyTabs = false
+    #else
+    let forcesLegacyTabs = false
+    #endif
     /// Open Sessions, oldest first. On wide windows the first one is shown
     /// beside the list (the Mac's selection) and later ones (forks) are
     /// pushed over it; on narrow windows all are pushed over the list. The
@@ -13,22 +19,33 @@ struct MainTabView: View {
     @State private var devicePath = NavigationPath()
     @State private var selectedTab: Int = 0
     @State private var showNewSession = false
+    /// From presenting the New Session sheet until its dismissal finished.
+    /// A Session started from it opens only then: pushed while the sheet and
+    /// its keyboard were still sliding away, the new page appeared beside the
+    /// keyboard and under the sheet.
+    @State private var newSessionSheetOnScreen = false
 
     var body: some View {
         Group {
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), !forcesLegacyTabs {
                 modernTabView
             } else {
                 legacyTabView
             }
         }
         .tint(.krakiPrimary)
-        .sheet(isPresented: $showNewSession) {
+        .overlay(alignment: .top) { SignedInErrorToast() }
+        .sheet(isPresented: $showNewSession, onDismiss: {
+            newSessionSheetOnScreen = false
+            guard allowsInitialNavigation else { return }
+            consumePendingSessionNavigation()
+        }) {
             NewSessionSheet()
                 .environment(appState)
+                .onAppear { newSessionSheetOnScreen = true }
         }
         .onChange(of: appState.sessionStore.navigateToSession) { _, _ in
-            guard allowsInitialNavigation else { return }
+            guard allowsInitialNavigation, !newSessionSheetOnScreen else { return }
             consumePendingSessionNavigation()
         }
         .onAppear {
@@ -85,46 +102,45 @@ struct MainTabView: View {
 
     private func consumePendingSessionNavigation() {
         guard let target = appState.sessionStore.navigateToSession else { return }
-        let replacesPlaceholder = appState.sessionStore.navigationReplacesPlaceholder
+        let placeholder = appState.sessionStore.navigationReplacesPlaceholder
         let pushesOnTop = appState.sessionStore.navigationPushesOnTop
-        appState.sessionStore.navigationReplacesPlaceholder = false
+        appState.sessionStore.navigationReplacesPlaceholder = nil
         appState.sessionStore.navigationPushesOnTop = false
         appState.sessionStore.navigateToSession = nil
-        if pushesOnTop, selectedTab == 0, !sessionPath.isEmpty {
-            // A fork opened from its source chat: a plain push, so the source
-            // never reappears mid-transition and Back returns to it.
-            sessionPath.append(SessionNavID(id: target))
-            return
-        }
+        let route = SessionNavigationRoute.open(
+            target, in: sessionPath, replacingPlaceholder: placeholder,
+            pushesOnTop: pushesOnTop, sessionsTabSelected: selectedTab == 0)
         selectedTab = 0
-        if replacesPlaceholder, sessionPath.count == 1 {
-            // "Starting session…" → the created Session: swap the top route in
-            // place, without a pop/push transition. The destination is keyed
-            // by id, so the real Session's page runs its own lifecycle
-            // (subscription, viewing state, read state) instead of inheriting
-            // the placeholder's.
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                sessionPath.removeLast()
-                sessionPath.append(SessionNavID(id: target))
-            }
+        guard route.inPlace else {
+            sessionPath = route.path
             return
         }
-        sessionPath = []
-        sessionPath.append(SessionNavID(id: target))
+        // "Starting session…" / "Copying session…" → the created Session: swap
+        // the route in place, without a pop/push transition. The destination
+        // is keyed by id, so the real Session's page runs its own lifecycle
+        // (subscription, viewing state, read state) instead of inheriting the
+        // placeholder's.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { sessionPath = route.path }
     }
 
     private func consumePendingDeviceNavigation() {
         guard let target = appState.deviceStore.navigateToDeviceId else { return }
         // Switch to Devices and push only after launch preparation. This keeps
         // a notification-created detail hierarchy from materializing behind the
-        // cold-launch gate.
+        // cold-launch gate. The Sessions stack is kept, like a manual tab
+        // switch: the chat the user came from is still there on Sessions.
         selectedTab = 1
-        sessionPath = []
         devicePath = NavigationPath()
         devicePath.append(DeviceNavID(id: target))
         appState.deviceStore.navigateToDeviceId = nil
+    }
+
+    /// Sessions tab badge: hidden at 0, capped at "99+".
+    static func unreadBadge(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count > 99 ? "99+" : String(count)
     }
 
     // MARK: - Sub-views (shared)
@@ -206,7 +222,7 @@ struct MainTabView: View {
                     LucideIconType.botMessageSquare.tabImage()
                 }
             }
-            .badge(appState.sessionStore.totalUnread)
+            .badge(Self.unreadBadge(appState.sessionStore.totalUnread).map { Text(verbatim: $0) })
 
             Tab(value: 1) {
                 devicesContent
@@ -262,8 +278,11 @@ struct MainTabView: View {
 
     // MARK: - Pre-iOS 26 fallback
 
+    /// The trailing "+" is a plain tab item here, made an action by the same
+    /// interceptor as the iOS 26 search-role tab: it opens the New Session
+    /// sheet and is never selected.
     private var legacyTabView: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             sessionsContent
                 .tag(0)
                 .tabItem {
@@ -273,7 +292,7 @@ struct MainTabView: View {
                         LucideIconType.botMessageSquare.tabImage()
                     }
                 }
-                .badge(appState.sessionStore.totalUnread)
+                .badge(Self.unreadBadge(appState.sessionStore.totalUnread).map { Text(verbatim: $0) })
 
             devicesContent
                 .tag(1)
@@ -294,7 +313,72 @@ struct MainTabView: View {
                         LucideIconType.userCog.tabImage()
                     }
                 }
+
+            Color.clear
+                .tag(3)
+                .tabItem {
+                    Label("New Session", systemImage: "plus")
+                }
         }
+        .background {
+            TabActionInterceptor(actionTitle: String(localized: "New Session")) { showNewSession = true }
+                .frame(width: 0, height: 0)
+        }
+    }
+}
+
+/// Errors raised while signed in (`AppState.lastError`: a refused region
+/// redirect, an auth outage that is being retried, a refused server command)
+/// used to be rendered only on the sign-in screen, i.e. never. Show them over
+/// the signed-in shell; tapping dismisses, and a newer error replaces it.
+struct SignedInErrorToast: View {
+    @Environment(AppState.self) private var appState
+    static let visibleSeconds: Double = 8
+
+    var body: some View {
+        ZStack {
+            if let message = Self.visibleMessage(appState.lastError) {
+                content(message)
+                    .id(message)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: message) {
+                        try? await Task.sleep(for: .seconds(Self.visibleSeconds))
+                        guard !Task.isCancelled else { return }
+                        dismiss(message)
+                    }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: appState.lastError)
+    }
+
+    static func visibleMessage(_ lastError: String?) -> String? {
+        guard let lastError, !lastError.isEmpty else { return nil }
+        return lastError
+    }
+
+    /// Clears the error only if it is still the one shown.
+    private func dismiss(_ message: String) {
+        if appState.lastError == message { appState.lastError = nil }
+    }
+
+    private func content(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.primary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .frame(maxWidth: 420)
+            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+            .onTapGesture { dismiss(message) }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(Text("Dismiss"))
+            .accessibilityIdentifier("signed-in.error")
     }
 }
 

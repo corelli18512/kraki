@@ -6,7 +6,7 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fsp, accessSync, constants, statSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -195,25 +195,79 @@ export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 
   { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
 ];
 
+/** Full path of `bin` as the shell would find it on PATH, or null. POSIX:
+ *  an executable file; Windows: `bin` plus each PATHEXT extension. Decides
+ *  "installed" for checkAgentCli without reading the shell's (localized)
+ *  error text or exit code. */
+export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env, os: string = platform()): string | null {
+  const win = os === 'win32';
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+  const dirs = (env[pathKey] ?? '').split(win ? ';' : ':').filter(Boolean);
+  const exts = win ? ['', ...(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)] : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = join(dir, bin + ext);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        if (!win) accessSync(candidate, constants.X_OK);
+        else if (!ext) continue; // cmd.exe runs only PATHEXT files
+        return candidate;
+      } catch { /* not here */ }
+    }
+  }
+  return null;
+}
+
+/** First line of a failed `--version` (stderr, else the error message). */
+function versionFailure(err: unknown): string {
+  const e = err as { stderr?: unknown; message?: string; signal?: string | null; code?: string };
+  if (e?.code === 'ETIMEDOUT' || e?.signal === 'SIGTERM') return '--version did not finish';
+  const stderr = String(e?.stderr ?? '').trim().split('\n').find((l) => l.trim()) ?? '';
+  return (stderr || e?.message || 'failed').slice(0, 300);
+}
+
 /** Is `bin` runnable, and which version (leading semver when present)? Looks on
- *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts). */
-export function checkAgentCli(bin: string): CliCheckResult & { path?: string } {
+ *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts).
+ *  A CLI that is there but fails `--version` is `found` with `error`: it is
+ *  installed and broken, not missing (K-128). */
+export interface AgentCliDeps {
+  /** `<bin> --version` through the shell; throws like execSync on failure. */
+  runVersion: (bin: string) => string;
+  resolveOnPath: (bin: string) => string | null;
+  findBundled: (bin: string) => string | null | undefined;
+}
+
+const defaultAgentCliDeps: AgentCliDeps = {
+  // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
+  runVersion: (bin) => execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }),
+  resolveOnPath: (bin) => resolveOnPath(bin),
+  findBundled: (bin) => findAppBundledCli(bin),
+};
+
+export function checkAgentCli(bin: string, deps: AgentCliDeps = defaultAgentCliDeps): CliCheckResult & { path?: string; error?: string } {
   const parse = (output: string, path?: string) => {
     const first = output.trim().split('\n')[0] ?? '';
     const match = first.match(/(\d+\.\d+\.\d+)/);
     return { found: true, version: match?.[1] ?? (first || undefined), ...(path && { path }) };
   };
+  let failure: string | undefined;
   try {
-    // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
-    return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }));
-  } catch { /* not on PATH */ }
-  const bundled = findAppBundledCli(bin);
+    return parse(deps.runVersion(bin));
+  } catch (err) {
+    // On PATH but failing (even exit 127 from a missing `#!/usr/bin/env node`)
+    // is a broken install; not on PATH is "not installed".
+    if (deps.resolveOnPath(bin)) failure = versionFailure(err);
+  }
+  const bundled = deps.findBundled(bin);
   if (bundled) {
     try {
       return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }), bundled);
-    } catch { /* broken app install */ }
+    } catch (err) {
+      // Broken app install.
+      failure ??= versionFailure(err);
+    }
   }
-  return { found: false };
+  return failure ? { found: true, error: failure } : { found: false };
 }
 
 export function checkClaudeCli(): CliCheckResult {
@@ -437,6 +491,10 @@ export async function probeFdaDetailed(): Promise<FdaProbeResult> {
   return blocked ? { status: 'denied', blockedPath: blocked.rel, code: blocked.code } : { status: 'missing' };
 }
 
+/** `kraki fda` flag for the bundle instance probeFdaAsApp starts: probe
+ *  in-process instead of launching the bundle again. */
+export const FDA_IN_PROCESS_FLAG = '--in-process';
+
 /**
  * Poll Full Disk Access at regular intervals until granted or the signal
  * is aborted. Never triggers a system dialog — uses the same multi-path
@@ -457,7 +515,7 @@ export async function probeFdaAsApp(): Promise<FdaStatus> {
   if (!app) return probeFda();
   const out = join(tmpdir(), `kraki-fda-${process.pid}-${Date.now()}.json`);
   try {
-    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json'], {
+    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json', FDA_IN_PROCESS_FLAG], {
       stdio: 'ignore',
       timeout: 15_000,
     });
@@ -678,13 +736,21 @@ export function getProcessBundleIdentity(pid: number): string | null {
 export function getDaemonTccIdentity(
   daemonPid: number | null,
   identityProof?: { pid: number; bundleId: string } | null,
+  managedByMacApp = false,
 ): {
   bundled: boolean;
   bundlePath: string | null;
   daemonPid: number | null;
   daemonBundleId: string | null;
   healthy: boolean;
+  managedBy?: 'kraki-mac';
 } {
+  if (managedByMacApp) {
+    // Kraki for Mac's helper has no Launch Services identity of its own: TCC
+    // attributes it to the enclosing Kraki for Mac bundle (its responsible
+    // process), whose grants survive updates. chat.kraki.cli does not apply.
+    return { bundled: true, bundlePath: null, daemonPid, daemonBundleId: null, healthy: true, managedBy: 'kraki-mac' };
+  }
   const bundlePath = getKrakiAppBundlePath();
   const bundled = bundlePath !== null;
   const daemonBundleId = daemonPid !== null

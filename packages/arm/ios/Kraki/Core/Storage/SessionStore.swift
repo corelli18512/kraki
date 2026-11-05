@@ -40,6 +40,17 @@ struct SessionInfo: Identifiable, Equatable, Codable {
 
     var displayTitle: String { title ?? autoTitle ?? String(localized: "New Session") }
 
+    /// The title to send when the title editor commits `draft`, or nil when
+    /// nothing changed. The editor opens with the shown title (manual or
+    /// auto); committing it unchanged must not turn an auto title into a
+    /// manual one, and clearing a title that was never set is a no-op.
+    func titleEdit(_ draft: String) -> String? {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == (title ?? autoTitle ?? "") { return nil }
+        if trimmed.isEmpty && title == nil { return nil }
+        return trimmed
+    }
+
     // MARK: - Codable
     //
     // SessionStore's on-disk snapshot uses these keys. Transient
@@ -175,6 +186,19 @@ final class SessionStore {
 
     var archivedCount: Int { archiveInfo.values.reduce(0) { $0 + $1.count } }
 
+    /// Archive After chosen here but not yet confirmed by that computer's
+    /// `session_list` (it was offline): sent when it next reports (K-082).
+    var pendingAutoArchiveDays: [String: Int] = [:]
+
+    /// The Archive After value to show: the one every computer has (or will
+    /// get), `nil` when they differ.
+    var autoArchiveDays: Int? {
+        let computers = Set(archiveInfo.keys).union(pendingAutoArchiveDays.keys)
+        let values = Set(computers.compactMap { pendingAutoArchiveDays[$0] ?? archiveInfo[$0]?.days })
+        if values.isEmpty { return 14 }
+        return values.count == 1 ? values.first : nil
+    }
+
     func archivedCount(deviceId: String?) -> Int {
         guard let deviceId else { return archivedCount }
         return archiveInfo[deviceId]?.count ?? 0
@@ -247,18 +271,23 @@ final class SessionStore {
     var sessionModes: [String: SessionMode] = [:]
     var sessionUsage: [String: SessionUsage] = [:]
     var sessionPreviews: [String: SessionPreview] = [:]
-    var drafts: [String: String] = [:]
+    /// Unsent composer text per Session. Saved to disk (`drafts.json`) so it
+    /// survives the app being killed or quit.
+    var drafts: [String: String] = [:] {
+        didSet { if drafts != oldValue { scheduleDraftsSave() } }
+    }
     /// Fences async voice updates, including edit-then-restore-to-the-same-text.
     private(set) var draftRevisions: [String: UInt64] = [:]
     /// The image staged in a Session's composer, kept beside its draft so it
     /// survives switching Sessions (the Chat view is rebuilt per Session).
-    /// In memory only, like the drafts. Set through `setStagedImage`.
+    /// In memory only, unlike the drafts. Set through `setStagedImage`.
     var stagedImages: [String: StagedComposerImage] = [:]
     var navigateToSession: String?
-    /// Set with `navigateToSession` when the target replaces a still-visible
-    /// pending placeholder (create/fork/import resolved). The navigation layer
-    /// then swaps the top route in place instead of pop-to-root + push.
-    var navigationReplacesPlaceholder = false
+    /// Set with `navigateToSession` to the id of a still-pending placeholder
+    /// route the target replaces (create/fork/import resolved). The navigation
+    /// layer swaps that route in place, wherever it sits in the stack (a slow
+    /// fork's placeholder is above its source chat), instead of resetting it.
+    var navigationReplacesPlaceholder: String?
     /// Set with `navigateToSession` to push the target on top of the current
     /// page (a fork opened from its source) instead of resetting the stack.
     var navigationPushesOnTop = false
@@ -275,7 +304,9 @@ final class SessionStore {
     /// Newest session_list timestamp per computer. Device trust resets it
     /// on a computer's first signed list (an unsigned one may be forged).
     var lastSessionListSnapshotAt: [String: Date] = [:]
-    /// Bumped when a session is deleted while it's being viewed.
+    /// Bumped when a session is deleted while it's being viewed — from
+    /// this device, another device (`session_deleted`) or a computer's
+    /// session list that no longer contains it.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the
     /// "Session not found" placeholder. Counter (not boolean) so two
@@ -288,6 +319,16 @@ final class SessionStore {
     /// a freshly-created Session even when its `createdAt` was newer.
     var navigationOrderedSessions: [SessionInfo] {
         sortedSessions
+    }
+
+    /// The filter of the visible session list (Mac sidebar search and
+    /// computer filter). Keyboard navigation (⌘1–9, Previous/Next Session)
+    /// walks `filteredNavigationSessions`, so it never opens a hidden Session.
+    var navigationFilter = SessionListFilter()
+
+    var filteredNavigationSessions: [SessionInfo] {
+        filteredSessions(navigationOrderedSessions, deviceId: navigationFilter.deviceId,
+                         matching: navigationFilter.query)
     }
 
     // MARK: - Disk snapshot
@@ -331,10 +372,26 @@ final class SessionStore {
         KrakiDataPaths.persistentDirectory()
             .appendingPathComponent("sessions.json", isDirectory: false)
     }()
+    private static let draftsURL: URL = {
+        KrakiDataPaths.persistentDirectory()
+            .appendingPathComponent("drafts.json", isDirectory: false)
+    }()
+    /// Drafts change on every keystroke: written once typing pauses this
+    /// long (a trailing debounce), and on every `flushCache` (background,
+    /// terminate).
+    private static let draftsSaveDebounce: TimeInterval = 1.0
+    private var draftsSaveTask: DispatchWorkItem?
 
     init(persistenceEnabled: Bool = true) {
         self.persistenceEnabled = persistenceEnabled
         guard persistenceEnabled else { return }
+        if let data = try? Data(contentsOf: Self.draftsURL),
+           let saved = try? JSONDecoder().decode([String: String].self, from: data) {
+            drafts = saved
+            // Restoring is not an edit: nothing to write back.
+            draftsSaveTask?.cancel()
+            draftsSaveTask = nil
+        }
         let path = Self.snapshotURL.path
         guard FileManager.default.fileExists(atPath: path) else {
             KLog.d("📂 [snapshot] init: no file at \(path) — starting empty")
@@ -399,6 +456,7 @@ final class SessionStore {
     /// fires.
     func flushCache() {
         guard persistenceEnabled else { return }
+        if draftsSaveTask != nil { flushDrafts() }
         saveTask?.cancel()
         saveTask = nil
         guard let snapshot = pendingSnapshot else { return }
@@ -421,6 +479,24 @@ final class SessionStore {
         }
     }
 
+    private func scheduleDraftsSave() {
+        guard persistenceEnabled else { return }
+        draftsSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.flushDrafts() }
+        draftsSaveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.draftsSaveDebounce, execute: task)
+    }
+
+    private func flushDrafts() {
+        draftsSaveTask?.cancel()
+        draftsSaveTask = nil
+        if drafts.isEmpty {
+            try? FileManager.default.removeItem(at: Self.draftsURL)
+        } else if let data = try? JSONEncoder().encode(drafts) {
+            try? data.write(to: Self.draftsURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
     /// Wipe the persisted snapshot file (called by logout / reset).
     /// In-memory state is untouched; callers usually clear it
     /// separately.
@@ -431,6 +507,9 @@ final class SessionStore {
         pendingSnapshot = nil
         lastFlushedHash = nil
         try? FileManager.default.removeItem(at: Self.snapshotURL)
+        draftsSaveTask?.cancel()
+        draftsSaveTask = nil
+        try? FileManager.default.removeItem(at: Self.draftsURL)
         KLog.d("📂 [snapshot] clearPersistentSnapshot: file removed")
     }
 
@@ -498,70 +577,6 @@ final class SessionStore {
 
     func didLoadFail(_ id: String) -> Bool {
         loadFailedSessions.contains(id)
-    }
-
-    // MARK: - Computed unread (seq-derived)
-
-    /// Session-level unread indicator. The cursor gap is intentionally not a
-    /// message count: Tentacle owns both cursors and Clients project one dot.
-    func unreadCount(_ id: String) -> Int {
-        guard let s = sessions[id] else { return 0 }
-        return s.readSeq < s.lastSeq ? 1 : 0
-    }
-
-    /// Convenience boolean for badge-style consumers (red dot).
-    func isUnread(_ id: String) -> Bool {
-        unreadCount(id) > 0
-    }
-
-    // MARK: - Test-Compat Shims
-    //
-    // Earlier versions of the store kept an explicit counter-based
-    // unread map (`unreadCounts`) and helpers like `incrementUnread`
-    // / `clearUnread`. The seq-based model replaced those, but the
-    // existing `SessionStoreTests` suite still drives the legacy
-    // surface. We keep these shims so the test suite stays
-    // authoritative without rewriting every test, while production
-    // code continues to use the seq-based API directly.
-
-    /// Compatibility map for callers that still consume count-shaped state.
-    /// Values remain boolean-shaped to match the product contract.
-    var unreadCounts: [String: Int] {
-        Dictionary(uniqueKeysWithValues: sessions.keys.compactMap { id in
-            let count = unreadCount(id)
-            return count > 0 ? (id, count) : nil
-        })
-    }
-
-    /// Simulate "a new message arrived" by bumping `lastSeq` on the
-    /// session. Mirrors what an incoming router event would do.
-    func incrementUnread(_ id: String) {
-        guard var s = sessions[id] else { return }
-        s.lastSeq += 1
-        sessions[id] = s
-    }
-
-    /// Mark every message read up to `lastSeq`.
-    func clearUnread(_ id: String) {
-        guard var s = sessions[id] else { return }
-        s.readSeq = s.lastSeq
-        sessions[id] = s
-    }
-
-    /// Update the session's display title (preserves the legacy
-    /// setter name used by tests; production code uses
-    /// `upsertSession` with a new digest). The `autoTitle` flag is
-    /// honored by routing the title into `autoTitle` instead of
-    /// `title` when the caller is signalling a tentacle-generated
-    /// name.
-    func setSessionTitle(_ id: String, title: String, autoTitle: Bool = false) {
-        guard var s = sessions[id] else { return }
-        if autoTitle {
-            s.autoTitle = title
-        } else {
-            s.title = title
-        }
-        sessions[id] = s
     }
 
     // MARK: - Computed
@@ -654,6 +669,7 @@ final class SessionStore {
     }
 
     private static let attentionPreviewTypes: Set<String> = ["question", "permission"]
+    static let createdPlaceholderPreviewType = "session_created"
 
     /// Resolve one preview update without allowing an older websocket snapshot
     /// to move a Session backwards. Authoritative snapshots may still clear a
@@ -676,6 +692,13 @@ final class SessionStore {
             return nil
         }
         guard let existing else { return incoming }
+        // "Session created" is a local placeholder (MessageRouter), not
+        // content: any real preview replaces it, whatever its timestamp. An
+        // imported or prompt-started session's first line can predate the
+        // session_created envelope the placeholder was stamped with.
+        if existing.type == Self.createdPlaceholderPreviewType, incoming.type != existing.type {
+            return incoming
+        }
         let oldDate = ISO8601.parse(existing.timestamp)
         let newDate = ISO8601.parse(incoming.timestamp)
         switch (oldDate, newDate) {
@@ -743,7 +766,7 @@ final class SessionStore {
             existing.agent = digest.agent
             existing.model = digest.model
             existing.reasoningEffort = digest.reasoningEffort
-            existing.title = digest.title
+            existing.title = listedTitle(digest)
             existing.autoTitle = digest.autoTitle
             existing.state = digest.state
             existing.mode = mode
@@ -839,7 +862,11 @@ final class SessionStore {
             return false
         }
 
+        if let active = activeSessionId, removedIDs.contains(active) {
+            popToSessionListSignal &+= 1
+        }
         for id in removedIDs {
+            unconfirmedTitles.removeValue(forKey: id)
             nextSessions.removeValue(forKey: id)
             nextPinned.remove(id)
             nextModes.removeValue(forKey: id)
@@ -864,7 +891,7 @@ final class SessionStore {
                 existing.agent = digest.agent
                 existing.model = digest.model
                 existing.reasoningEffort = digest.reasoningEffort
-                existing.title = digest.title
+                existing.title = listedTitle(digest)
                 existing.autoTitle = digest.autoTitle
                 existing.state = digest.state
                 existing.mode = digest.mode
@@ -882,25 +909,9 @@ final class SessionStore {
                     nextAutoReadSuppressed.remove(digest.id)
                 }
             } else {
-                nextSessions[digest.id] = SessionInfo(
-                    id: digest.id,
-                    deviceId: deviceId,
-                    deviceName: deviceName,
-                    agent: digest.agent,
-                    model: digest.model,
-                    reasoningEffort: digest.reasoningEffort,
-                    title: digest.title,
-                    autoTitle: digest.autoTitle,
-                    state: digest.state,
-                    mode: digest.mode,
-                    lastSeq: lastSeq,
-                    readSeq: readSeq,
-                    messageCount: digest.messageCount,
-                    createdAt: parsedDate ?? Date(),
-                    usage: digest.usage,
-                    pinned: pinned,
-                    currentToolName: nil,
-                    currentToolHeadline: nil
+                nextSessions[digest.id] = Self.sessionInfo(
+                    listed: digest, deviceId: deviceId, deviceName: deviceName,
+                    lastSeq: lastSeq, readSeq: readSeq, createdAt: parsedDate ?? Date(), pinned: pinned
                 )
             }
 
@@ -940,17 +951,27 @@ final class SessionStore {
         return discardingStagedImages(of: removedIDs)
     }
 
-    func removeSession(_ id: String) {
+    /// `keepingComposer` keeps the Session's unsent draft and staged image
+    /// (in memory only): used when a removed computer takes its sessions off
+    /// the list, so the text is back if the computer returns (K-317).
+    func removeSession(_ id: String, keepingComposer: Bool = false) {
         if sessionListRevealId == id {
             sessionListRevealId = nil
         }
+        // Deleted while open (here or on another device): leave the chat.
+        if activeSessionId == id, sessions[id] != nil {
+            popToSessionListSignal &+= 1
+        }
         sessions.removeValue(forKey: id)
+        unconfirmedTitles.removeValue(forKey: id)
         pinnedSessions.remove(id)
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
-        drafts.removeValue(forKey: id)
-        stagedImages.removeValue(forKey: id)
+        if !keepingComposer {
+            drafts.removeValue(forKey: id)
+            stagedImages.removeValue(forKey: id)
+        }
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
     }
@@ -977,6 +998,39 @@ final class SessionStore {
         if let title { sessions[id]?.title = title.isEmpty ? nil : title }
         if let autoTitle { sessions[id]?.autoTitle = autoTitle.isEmpty ? nil : autoTitle }
         scheduleSave()
+    }
+
+    /// Manual titles renamed on this device that the computer has not echoed
+    /// yet ("" = cleared). A session_list the computer sent before it got the
+    /// rename (offline rename, then reconnect) must not flash the old title.
+    @ObservationIgnored private(set) var unconfirmedTitles: [String: String] = [:]
+
+    /// A rename sent from this device: shown at once, kept until confirmed.
+    func renameLocally(_ id: String, title: String) {
+        setTitle(id, title: title, autoTitle: nil)
+        unconfirmedTitles[id] = title
+    }
+
+    /// The computer's `session_title_updated`: authoritative for the manual
+    /// title, where absent means none is set (it was cleared). One that does
+    /// not carry this device's pending rename (an auto title the computer
+    /// sent before it got the rename) updates only the auto title; the
+    /// computer echoes renames in order, so ours still arrives and confirms.
+    func applyTitleUpdate(_ id: String, title: String?, autoTitle: String?) {
+        if let pending = unconfirmedTitles[id], (title ?? "") != pending {
+            setTitle(id, title: nil, autoTitle: autoTitle)
+            return
+        }
+        unconfirmedTitles.removeValue(forKey: id)
+        setTitle(id, title: title ?? "", autoTitle: autoTitle)
+    }
+
+    /// A listed session's manual title, unless this device renamed it and the
+    /// list predates that rename.
+    private func listedTitle(_ digest: SessionDigest) -> String? {
+        guard let renamed = unconfirmedTitles[digest.id] else { return digest.title }
+        if (digest.title ?? "") == renamed { unconfirmedTitles.removeValue(forKey: digest.id) }
+        return renamed.isEmpty ? nil : renamed
     }
 
     func setState(_ id: String, _ state: SessionState) {
@@ -1158,6 +1212,7 @@ final class SessionStore {
     func reset() {
         KLog.d("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
         sessions.removeAll()
+        unconfirmedTitles.removeAll()
         activeSessionId = nil
         autoReadSuppressedSessions.removeAll()
         pinnedSessions.removeAll()
@@ -1168,7 +1223,7 @@ final class SessionStore {
         draftRevisions.removeAll()
         stagedImages.removeAll()
         navigateToSession = nil
-        navigationReplacesPlaceholder = false
+        navigationReplacesPlaceholder = nil
         navigationPushesOnTop = false
         sessionListRevealId = nil
         loadingSessions.removeAll()
@@ -1180,124 +1235,41 @@ final class SessionStore {
         clearPersistentSnapshot()
     }
 
-    // MARK: - Convenience Methods (called by MessageRouter)
-
-    /// Look up a session by ID (alias for sessions[id]).
-    func session(for id: String) -> SessionInfo? {
-        sessions[id]
-    }
-
-    // MARK: - Pending sessions (optimistic UI)
-
-    /// Mark a session id as pending. The placeholder id is used as a
-    /// navigation token by `SessionDetailView` while the real session
-    /// is being created server-side.
-    func addPendingSession(_ id: String) {
-        pendingSessions.insert(id)
-        pendingSessionErrors.removeValue(forKey: id)
-    }
-
-    /// Clear a pending entry without affecting any real session that
-    /// has since been added under the same id.
-    func removePendingSession(_ id: String) {
-        pendingSessions.remove(id)
-        pendingSessionErrors.removeValue(forKey: id)
-        pendingSessionTitles.removeValue(forKey: id)
-    }
-
     /// Title for a placeholder page (e.g. "Fork of Plan" while a fork is
     /// made); nil shows "New Session".
     var pendingSessionTitles: [String: String] = [:]
+}
 
-    /// Record a server-side error reason for a pending session so the
-    /// placeholder view can render a friendly error state.
-    func setPendingError(_ id: String, reason: String) {
-        guard pendingSessions.contains(id) else { return }
-        pendingSessionErrors[id] = reason
-    }
-
-    func isPending(_ id: String) -> Bool {
-        pendingSessions.contains(id)
-    }
-
-    /// Update session state from a string value.
-    func updateState(_ id: String, state: String) {
-        if let s = SessionState(rawValue: state) {
-            setState(id, s)
-        } else if state == "ended" {
-            setState(id, .idle)
-        }
-    }
-
-    /// Set session mode from a string value.
-    func setSessionMode(_ id: String, mode: String) {
-        guard let m = SessionMode(rawValue: mode) else { return }
-        setMode(id, m)
-    }
-
-    /// Set session model (alias).
-    func setSessionModel(
-        _ id: String,
-        model: String,
-        reasoningEffort: ReasoningEffort? = nil
-    ) {
-        setModel(id, model, reasoningEffort: reasoningEffort)
-    }
-
-    /// Set session pinned state (alias).
-    func setSessionPinned(_ id: String, pinned: Bool) {
-        setPinned(id, pinned)
-    }
-
-    /// Apply Tentacle's authoritative session_read cursor (alias).
-    func setSessionReadSeq(_ id: String, seq: Int) {
-        applyAuthoritativeReadSeq(id, seq: seq)
-    }
-
-    /// Set session usage from a raw dictionary.
-    func setSessionUsage(_ id: String, usage: [String: Any]) {
-        let input = usage["inputTokens"] as? Int ?? 0
-        let output = usage["outputTokens"] as? Int ?? 0
-        let cacheRead = usage["cacheReadTokens"] as? Int ?? 0
-        let cacheWrite = usage["cacheWriteTokens"] as? Int ?? 0
-        let cost = usage["totalCost"] as? Double ?? 0
-        let duration = usage["totalDurationMs"] as? Double ?? 0
-        let contextTokens = usage["contextTokens"] as? Int
-        let parsed = SessionUsage(
-            inputTokens: input, outputTokens: output,
-            cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
-            totalCost: cost, totalDurationMs: duration,
-            contextTokens: contextTokens
+extension SessionStore {
+    /// A Session a `session_list` reports that this device did not have yet.
+    private static func sessionInfo(
+        listed digest: SessionDigest,
+        deviceId: String,
+        deviceName: String,
+        lastSeq: Int,
+        readSeq: Int,
+        createdAt: Date,
+        pinned: Bool
+    ) -> SessionInfo {
+        SessionInfo(
+            id: digest.id,
+            deviceId: deviceId,
+            deviceName: deviceName,
+            agent: digest.agent,
+            model: digest.model,
+            reasoningEffort: digest.reasoningEffort,
+            title: digest.title,
+            autoTitle: digest.autoTitle,
+            state: digest.state,
+            mode: digest.mode,
+            lastSeq: lastSeq,
+            readSeq: readSeq,
+            messageCount: digest.messageCount,
+            createdAt: createdAt,
+            usage: digest.usage,
+            pinned: pinned,
+            currentToolName: nil,
+            currentToolHeadline: nil
         )
-        setUsage(id, parsed)
-    }
-
-    /// Set session preview text — pure data plumbing. Unread lives on
-    /// Tentacle's authoritative cursor pair, so preview has no side effect.
-    func setSessionPreview(
-        _ id: String,
-        text: String,
-        type: String,
-        timestamp: String?
-    ) {
-        setPreview(id, text: text, type: type, timestamp: timestamp ?? "")
-    }
-
-    /// Upsert a SessionInfo directly (used by handleSessionCreated).
-    func upsertSession(_ session: SessionInfo) {
-        sessions[session.id] = session
-        sessionModes[session.id] = session.mode
-        if let usage = session.usage {
-            sessionUsage[session.id] = usage
-        }
-        if session.pinned {
-            pinnedSessions.insert(session.id)
-        }
-        scheduleSave()
-    }
-
-    /// Sync sessions from a parsed session list.
-    func syncSessions(_ summaries: [SessionDigest], deviceId: String = "", deviceName: String = "") {
-        reconcileSessionList(summaries, deviceId: deviceId, deviceName: deviceName)
     }
 }

@@ -26,6 +26,15 @@ function sameFields(a: object | undefined, b: object | undefined): boolean {
   return true;
 }
 
+/** A Session's titles are text or absent. A Tentacle (or an old persisted
+ *  snapshot) that sends anything else must not reach rendering (K-005). */
+function withTextTitles(session: WebSessionSummary): WebSessionSummary {
+  const title = typeof session.title === 'string' ? session.title : undefined;
+  const autoTitle = typeof session.autoTitle === 'string' ? session.autoTitle : undefined;
+  if (title === session.title && autoTitle === session.autoTitle) return session;
+  return { ...session, title, autoTitle };
+}
+
 // --- Custom Map/Set JSON serialization ---
 
 function replacer(_key: string, value: unknown): unknown {
@@ -72,6 +81,7 @@ const initialState = {
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
   cardHoldUntil: new Map<string, number>(),
+  withdrawnQuestions: new Map<string, string[]>(),
   historyCaughtUpThrough: new Map<string, number>(),
   runtimeStatuses: new Map<string, import('../types/store').SessionRuntimeStatus>(),
   pinnedSessions: new Set<string>(),
@@ -97,11 +107,37 @@ const initialState = {
   localSessionsLoading: false,
   archiveInfo: new Map<string, { count: number; days: number }>(),
   archivedSessions: new Map<string, import('@kraki/protocol').SessionDigest[]>(),
+  sessionListDevices: new Set<string>(),
+  closingTurns: new Set<string>(),
 };
 
 // --- Persistence ---
 
+/** The localStorage key of the persisted store. */
+const STORE_KEY = 'kraki-store';
+
 type PersistedStore = Pick<Store, 'sessions' | 'devices' | 'unreadCount' | 'pinnedSessions' | 'sessionModes' | 'sessionPreviews' | 'drafts'>;
+
+const PERSISTED_MAPS = ['sessions', 'devices', 'unreadCount', 'sessionModes', 'sessionPreviews', 'drafts'] as const;
+
+/** Rehydrate only what this build persists (partialize below). Older builds
+ *  stored more (the first one kept `messages` and `lastSeq` here, now in
+ *  IndexedDB): merging those would show obsolete history (K-232). A value of
+ *  the wrong shape keeps the default instead of breaking the app. */
+export function mergePersistedStore(persisted: unknown, current: Store): Store {
+  if (!persisted || typeof persisted !== 'object') return current;
+  const saved = persisted as Record<string, unknown>;
+  const next: Partial<PersistedStore> = {};
+  for (const key of PERSISTED_MAPS) {
+    if (saved[key] instanceof Map) (next as Record<string, unknown>)[key] = saved[key];
+  }
+  const pinned = saved.pinnedSessions;
+  if (pinned instanceof Set) next.pinnedSessions = pinned as Set<string>;
+  else if (Array.isArray(pinned)) next.pinnedSessions = new Set(pinned.filter((id): id is string => typeof id === 'string'));
+  // An old persisted snapshot may hold non-text titles (K-005).
+  if (next.sessions) next.sessions = new Map([...next.sessions].map(([id, session]) => [id, withTextTitles(session)]));
+  return { ...current, ...next };
+}
 
 let persistedSessionsSource: Store['sessions'] | undefined;
 let persistedSessionsValue: Store['sessions'] = new Map();
@@ -132,32 +168,101 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
   return next;
 }
 
+/** Set while drafts from another tab's write are applied (adoptStoredDrafts). */
+let adoptingDrafts = false;
+/** Drafts this tab changed since its last write (text, or null when cleared).
+ *  A write lays only these over the stored drafts, so it never carries a stale
+ *  copy of another tab's draft (K-323). */
+const draftEdits = new Map<string, string | null>();
+/** Sign-out replaced every draft: the next write stores this tab's map as is. */
+let draftsReplaced = false;
+
+/** `value` with its drafts merged into the ones already stored under `name`. */
+function withStoredDrafts(storage: PersistStorage<PersistedStore>, name: string, value: StorageValue<PersistedStore>): StorageValue<PersistedStore> {
+  const edits = new Map(draftEdits);
+  const replaced = draftsReplaced;
+  draftEdits.clear();
+  draftsReplaced = false;
+  if (replaced || !value.state.drafts) return value;
+  const stored = storage.getItem(name);
+  const storedDrafts = stored && !(stored instanceof Promise) ? stored.state.drafts : undefined;
+  if (!(storedDrafts instanceof Map)) return value;
+  const drafts = new Map(storedDrafts);
+  for (const [id, text] of edits) {
+    if (text) drafts.set(id, text);
+    else drafts.delete(id);
+  }
+  return { ...value, state: { ...value.state, drafts } };
+}
+
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
- *  stored JSON is already current. */
+ *  stored JSON is already current. A synchronous burst of sets (the first
+ *  session_list of 500 sessions made ~1000) is coalesced into one write at the
+ *  end of the current task (microtask), so nothing is lost on unload. */
+let storageFullReported = false;
 function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
   if (!storage) return storage;
   let written: StorageValue<PersistedStore> | null = null;
+  let pending: { name: string; value: StorageValue<PersistedStore> } | null = null;
   const unchanged = (value: StorageValue<PersistedStore>) => written !== null
     && written.version === value.version
     && (Object.keys(value.state) as Array<keyof PersistedStore>).every((key) => written!.state[key] === value.state[key])
     && Object.keys(written.state).length === Object.keys(value.state).length;
+  const flush = () => {
+    if (!pending) return;
+    const { name, value } = pending;
+    pending = null;
+    if (unchanged(value)) return;
+    // Full storage (quota) must not make every store update throw (K-201):
+    // the in-memory state stays authoritative for this page.
+    try {
+      storage.setItem(name, withStoredDrafts(storage, name, value));
+    } catch (err) {
+      if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
+      storageFullReported = true;
+    }
+    // Also after a failure: don't serialize and fail again for the same state.
+    written = value;
+  };
   return {
-    getItem: (name) => storage.getItem(name),
+    getItem: (name) => { flush(); return storage.getItem(name); },
     setItem: (name, value) => {
-      if (unchanged(value)) return;
-      storage.setItem(name, value);
-      written = value;
+      // Drafts adopted from another tab's write are already stored; echoing
+      // them would put this tab's other slices over that tab's. A change of
+      // this tab's own already queued in this task is still written.
+      if (adoptingDrafts && !pending) {
+        written = value;
+        return;
+      }
+      if (!pending) queueMicrotask(flush);
+      pending = { name, value };
     },
     removeItem: (name) => {
+      pending = null;
       written = null;
       return storage.removeItem(name);
     },
   };
 }
 
-export const useStore = create<Store>()(persist((set) => ({
+/** A device removed from the account takes its sessions with it: sidebar,
+ *  unread count and cached history (K-317). They stay on the computer and come
+ *  back if it signs in again, and so do unsent drafts: this can follow from
+ *  the relay's list alone, with no user action, so typed text is kept. */
+function forgetDeviceSessions(get: () => Store, set: (partial: Partial<Store>) => void, deviceId: string): void {
+  const kept = new Map<string, string>();
+  for (const session of [...get().sessions.values()]) {
+    if (session.deviceId !== deviceId) continue;
+    const draft = get().drafts.get(session.id);
+    if (draft !== undefined) kept.set(session.id, draft);
+    get().removeSession(session.id);
+  }
+  if (kept.size > 0) set({ drafts: new Map([...get().drafts, ...kept]) });
+}
+
+export const useStore = create<Store>()(persist((set, get) => ({
   ...initialState,
 
   setStatus: (status) => set({ status }),
@@ -185,13 +290,14 @@ export const useStore = create<Store>()(persist((set) => ({
         }
       }
       return {
-        sessions: new Map(sessions.map((session) => [session.id, session])),
+        sessions: new Map(sessions.map((session) => [session.id, withTextTitles(session)])),
         unreadCount,
       };
     }),
 
-  upsertSession: (session) =>
+  upsertSession: (incoming) =>
     set((state) => {
+      const session = withTextTitles(incoming);
       // The Tentacle re-broadcasts the whole list after every reply; an
       // unchanged digest must not notify every subscriber.
       if (sameFields(state.sessions.get(session.id), session)) {
@@ -214,6 +320,7 @@ export const useStore = create<Store>()(persist((set) => ({
     // provider listeners can enqueue more work. No store access occurs during
     // message-provider module initialization (its store adapter is lazy).
     const deletion = beginSessionDeletion(sessionId);
+    draftEdits.set(sessionId, null);
     messageProvider.invalidateSession(sessionId);
     import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId, deletion)).catch((e) => {
       deletion.reject(e);
@@ -250,12 +357,18 @@ export const useStore = create<Store>()(persist((set) => ({
 
   // The device list is authoritative for names: a computer renamed while this
   // app was offline must relabel its persisted sessions (as Swift does).
-  setDevices: (devices) =>
+  // A computer we knew that is missing from the list was removed from the
+  // account while this app was away: its sessions go too (K-317).
+  setDevices: (devices) => {
+    const listed = new Set(devices.map((d) => d.id));
+    const removed = [...get().devices.keys()].filter((id) => !listed.has(id));
+    for (const id of removed) forgetDeviceSessions(get, set, id);
     set((state) => {
       let sessions = state.sessions;
       for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
       return { devices: new Map(devices.map((d) => [d.id, d])), sessions };
-    }),
+    });
+  },
 
   upsertDevice: (device) =>
     set((state) => {
@@ -264,12 +377,14 @@ export const useStore = create<Store>()(persist((set) => ({
       return { devices: next, sessions: relabelSessions(state.sessions, device.id, device.name) };
     }),
 
-  removeDevice: (deviceId) =>
+  removeDevice: (deviceId) => {
+    forgetDeviceSessions(get, set, deviceId);
     set((state) => {
       const next = new Map(state.devices);
       next.delete(deviceId);
       return { devices: next };
-    }),
+    });
+  },
 
   renameDevice: (deviceId, name, defaultName) =>
     set((state) => {
@@ -456,6 +571,14 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
+  withdrawQuestion: (sessionId, questionId) => set((state) => {
+    const current = state.withdrawnQuestions.get(sessionId) ?? [];
+    if (current.includes(questionId)) return state;
+    const withdrawnQuestions = new Map(state.withdrawnQuestions);
+    withdrawnQuestions.set(sessionId, [...current, questionId]);
+    return { withdrawnQuestions };
+  }),
+
   holdCard: (sessionId, untilSeq) => set((state) => {
     const cardHoldUntil = new Map(state.cardHoldUntil);
     if (untilSeq > 0) cardHoldUntil.set(sessionId, untilSeq);
@@ -521,7 +644,8 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionPreviews: previews };
     }),
 
-  setDraft: (sessionId, text) =>
+  setDraft: (sessionId, text) => {
+    draftEdits.set(sessionId, text || null);
     set((state) => {
       const next = new Map(state.drafts);
       if (text) {
@@ -530,7 +654,8 @@ export const useStore = create<Store>()(persist((set) => ({
         next.delete(sessionId);
       }
       return { drafts: next };
-    }),
+    });
+  },
 
   setLastError: (message) => set({ lastError: message }),
 
@@ -573,6 +698,15 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.deviceVersions);
       next.set(deviceId, version);
+      // A restarted Tentacle greets with its version before it knows about
+      // updates (and never, if its update check fails): that version being
+      // the target is the update having landed too.
+      const p = state.updateProgress.get(deviceId);
+      if (p && isActivePhase(p.phase) && p.to && version === p.to) {
+        const progress = new Map(state.updateProgress);
+        progress.set(deviceId, { ...p, phase: 'updated', at: Date.now() });
+        return { deviceVersions: next, updateProgress: progress };
+      }
       return { deviceVersions: next };
     }),
 
@@ -629,6 +763,17 @@ export const useStore = create<Store>()(persist((set) => ({
     const next = new Map(state.archiveInfo);
     next.set(deviceId, info);
     return { archiveInfo: next };
+  }),
+  markSessionListReceived: (deviceId) => set((state) => (
+    state.sessionListDevices.has(deviceId)
+      ? state
+      : { sessionListDevices: new Set(state.sessionListDevices).add(deviceId) }
+  )),
+  setTurnClosing: (sessionId, closing) => set((state) => {
+    if (state.closingTurns.has(sessionId) === closing) return state;
+    const next = new Set(state.closingTurns);
+    if (closing) next.add(sessionId); else next.delete(sessionId);
+    return { closingTurns: next };
   }),
   receiveDeviceUsage: (deviceId, payload) => set((state) => {
     const out: Partial<typeof state> = {};
@@ -819,10 +964,13 @@ export const useStore = create<Store>()(persist((set) => ({
     lastError: null,
     cards: new Map(),
     cardHoldUntil: new Map(),
+    withdrawnQuestions: new Map(),
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     sessionUsage: new Map(),
     pendingSessions: new Set(),
+    sessionListDevices: new Set(),
+    closingTurns: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until the session_list
     // digest (the tentacle) reconciles it.
@@ -832,13 +980,14 @@ export const useStore = create<Store>()(persist((set) => ({
   }),
 
   // Sign-out / credential wipe: unsent messages belong to the old account.
-  reset: () => (outbox.reset(), set({
+  reset: () => (outbox.reset(), draftsReplaced = true, set({
     ...initialState,
     sessions: new Map(),
     devices: new Map(),
     messages: new Map(),
     cards: new Map(),
     cardHoldUntil: new Map(),
+    withdrawnQuestions: new Map(),
     historyCaughtUpThrough: new Map(),
     runtimeStatuses: new Map(),
     pinnedSessions: new Set(),
@@ -862,11 +1011,12 @@ export const useStore = create<Store>()(persist((set) => ({
     nextReconnectDelayMs: null,
   })),
 }), {
-  name: 'kraki-store',
+  name: STORE_KEY,
   storage: unchangedSkippingStorage(createJSONStorage<PersistedStore>(() => localStorage, {
     replacer,
     reviver,
   })),
+  merge: mergePersistedStore,
   partialize: (state) => ({
     sessions: persistedSessions(state.sessions),
     devices: state.devices,
@@ -883,4 +1033,40 @@ export const useStore = create<Store>()(persist((set) => ({
 // browser console or a Playwright probe.
 if (typeof window !== 'undefined' && (import.meta.env.DEV || window.location.hostname === 'localhost')) {
   (window as unknown as { __krakiStore: typeof useStore }).__krakiStore = useStore;
+}
+
+/** Another tab persisted the store: adopt its drafts, so this tab shows (and
+ *  sends) what was typed elsewhere (K-323). The draft of the Session this tab
+ *  is editing (focused) stays as typed: a write that crossed a keystroke must
+ *  not take characters out of the live field. */
+export function adoptStoredDrafts(stored: string | null): void {
+  if (!stored) return;
+  let drafts: unknown;
+  try {
+    drafts = (JSON.parse(stored, reviver) as { state?: { drafts?: unknown } }).state?.drafts;
+  } catch {
+    return;
+  }
+  if (!(drafts instanceof Map)) return;
+  const { drafts: current, activeSessionId } = useStore.getState();
+  const next = new Map(drafts as Map<string, string>);
+  const editing = document.hasFocus() ? activeSessionId : null;
+  if (editing) {
+    const mine = current.get(editing);
+    if (mine === undefined) next.delete(editing);
+    else next.set(editing, mine);
+  }
+  if (current.size === next.size && [...next].every(([id, text]) => current.get(id) === text)) return;
+  adoptingDrafts = true;
+  try {
+    useStore.setState({ drafts: next });
+  } finally {
+    adoptingDrafts = false;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORE_KEY && event.storageArea === localStorage) adoptStoredDrafts(event.newValue);
+  });
 }

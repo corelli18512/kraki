@@ -1,12 +1,13 @@
 import { useTranslation } from 'react-i18next';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
-import { useUsageShortcut } from '../../lib/usage-shortcut';
+import { shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
+import { useSessionListLoading } from '../../hooks/useSessionListLoading';
 import { SessionRow } from '../sessions/SessionRow';
 import { NewSessionDialog } from '../sessions/NewSessionDialog';
 import { ImportSessionDialog } from '../sessions/ImportSessionDialog';
@@ -17,7 +18,8 @@ import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
 import { desktop } from '../../lib/desktop';
-import { sessionTimestamp } from '../../lib/chat/session-card';
+import { focusFirstMenuItem, isContextMenuKey, onMenuKeyDown } from '../../lib/menu-keyboard';
+import { sortSessionsForList } from '../../lib/chat/session-card';
 import './sidebar.css';
 
 function Brand() {
@@ -30,32 +32,26 @@ function Brand() {
   );
 }
 
+/** Longest the New Session sheet waits for the created session to open. */
+const NEW_SESSION_WAIT_MS = 10_000;
+
+/** Case- and accent-insensitive form for search (iOS/Mac localizedStandardContains). */
+function searchFold(text: string): string {
+  return text.normalize('NFD').replace(/\p{Mn}/gu, '').toLocaleLowerCase();
+}
+
 function useSortedSessions(query: string) {
   const sessions = useStore((s) => s.sessions);
   const pinned = useStore((s) => s.pinnedSessions);
   const previews = useStore((s) => s.sessionPreviews);
   return useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return [...sessions.values()]
-      .filter((s) => {
-        if (!q) return true;
-        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
-        return hay.includes(q);
-      })
-      .map((session) => ({
-        session,
-        timestamp: Date.parse(sessionTimestamp(previews.get(session.id)?.timestamp, session.createdAt)) || 0,
-        createdAt: Date.parse(session.createdAt ?? '') || 0,
-      }))
-      .sort((a, b) => {
-        const pa = pinned.has(a.session.id) ? 0 : 1;
-        const pb = pinned.has(b.session.id) ? 0 : 1;
-        if (pa !== pb) return pa - pb;
-        if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
-        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-        return a.session.id.localeCompare(b.session.id);
-      })
-      .map(({ session }) => session);
+    const q = searchFold(query.trim());
+    const matching = [...sessions.values()].filter((s) => {
+      if (!q) return true;
+      const hay = searchFold(`${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`);
+      return hay.includes(q);
+    });
+    return sortSessionsForList(matching, pinned, previews);
   }, [sessions, pinned, previews, query]);
 }
 
@@ -84,18 +80,45 @@ export function Sidebar() {
   const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
-  const status = useStore((s) => s.status);
   const reconnecting = useShowsReconnecting();
+  // The field shows what is typed; the list filters on `query`, which an open
+  // IME composition (raw pinyin/kana) does not update until it is committed.
+  const [searchText, setSearchText] = useState('');
   const [query, setQuery] = useState('');
+  const composingSearch = useRef(false);
   const [newOpen, setNewOpen] = useState(false);
+  // After Start the sheet stays up until the new session's route renders
+  // (closing first showed the list for a frame, K-240); a session that never
+  // arrives (offline) still releases it, and a create error releases it at
+  // once so the error banner under the sheet is visible.
+  const [awaitingCreated, setAwaitingCreated] = useState<string | undefined | null>(null);
+  useEffect(() => {
+    if (awaitingCreated === null) return;
+    const done = () => { setAwaitingCreated(null); setNewOpen(false); };
+    if (sessionId && sessionId !== awaitingCreated) { done(); return; }
+    const timer = setTimeout(done, NEW_SESSION_WAIT_MS);
+    const unsubscribe = useStore.subscribe((state, prev) => {
+      if (state.lastError && state.lastError !== prev.lastError) done();
+    });
+    return () => { clearTimeout(timer); unsubscribe(); };
+  }, [awaitingCreated, sessionId]);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
-  // Escape dismisses either rail menu wherever focus is (the native menus do).
+  const appMenuButton = useRef<HTMLButtonElement>(null);
+  const appMenuRef = useRef<HTMLDivElement>(null);
+  const plusButton = useRef<HTMLButtonElement>(null);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  // An opened rail menu takes focus on its first item (arrow keys move on).
+  useEffect(() => { if (appMenu) focusFirstMenuItem(appMenuRef.current); }, [appMenu]);
+  useEffect(() => { if (plusMenu) focusFirstMenuItem(plusMenuRef.current); }, [plusMenu]);
+  // Escape dismisses either rail menu wherever focus is (the native menus do)
+  // and gives focus back to the button that opened it.
   useEffect(() => {
     if (!appMenu && !plusMenu) return;
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      (appMenu ? appMenuButton : plusButton).current?.focus();
       setAppMenu(false);
       setPlusMenu(false);
     };
@@ -107,10 +130,17 @@ export function Sidebar() {
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
   const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  // The Sessions tab unmounts while Devices/Settings show; come back to the
+  // same place in the list.
+  const sessionsScrollTop = useRef(0);
+  const restoreSessionsScroll = useCallback((el: HTMLDivElement | null) => {
+    if (el) el.scrollTop = sessionsScrollTop.current;
+  }, []);
   const navigate = useNavigate();
   const sorted = useSortedSessions(query);
   const total = useStore((s) => s.sessions.size);
   const archivedCount = useArchivedCount();
+  const listLoading = useSessionListLoading();
 
   // New session on the wide layout = the composer in the idle pane (Mac):
   // leave the current session and put the cursor in the composer.
@@ -125,6 +155,8 @@ export function Sidebar() {
         <p>{t('sidebar.noResults')}</p>
         <span>{t('sidebar.trySearch')}</span>
       </div>
+    : total === 0 && archivedCount === 0 && listLoading
+    ? (reconnecting ? null : <div className="ksb-status" data-testid="sidebar-loading" aria-hidden><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>)
     : total === 0 && archivedCount === 0
     ? (narrow
       ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
@@ -154,22 +186,29 @@ export function Sidebar() {
 
   const dialogs = (
     <>
-      <NewSessionDialog open={newOpen} onClose={() => setNewOpen(false)} />
+      <NewSessionDialog open={newOpen} onClose={() => { setAwaitingCreated(null); setNewOpen(false); }} onCreated={() => setAwaitingCreated(sessionId)} />
       <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
     </>
   );
 
+  // Always mounted, so screen readers announce the text when it changes
+  // (a live region inserted together with its text is often not read).
+  // Spoken: reconnecting, or the list still waiting for the computers' session
+  // lists (the visible spinner in the list, K-096).
+  const loadingList = !query.trim() && total === 0 && archivedCount === 0 && listLoading;
+  const connectingShown = reconnecting || loadingList;
+  const connectingStatus = <span role="status" className="sr-only">{connectingShown ? t(narrow ? 'sidebar.connectingLabel' : 'sidebar.connecting') : ''}</span>;
   if (!narrow) {
     return (
       <div className="ksb is-wide">
         <div className="ksb-top">
           <div className="ksb-app-menu-wrap">
-            <button type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
+            <button ref={appMenuButton} type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-haspopup="menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
             {appMenu && <>
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
-              <div className="ksb-plus-menu ksb-app-menu" role="menu">
+              <div ref={appMenuRef} className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={onMenuKeyDown}>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> {t('tabs.devices')}</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: usageShortcut }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: shortcutLabel(usageShortcut) }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> {t('sidebar.settings')}</button>
                 <ProfileBar menu />
               </div>
@@ -177,28 +216,39 @@ export function Sidebar() {
           </div>
           <label className="ksb-search">
             <Search aria-hidden />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('sidebar.search')} aria-label={t('sidebar.searchSessions')} />
+            <input
+              value={searchText}
+              onChange={(e) => { setSearchText(e.target.value); if (!composingSearch.current) setQuery(e.target.value); }}
+              onCompositionStart={() => { composingSearch.current = true; }}
+              onCompositionEnd={(e) => { composingSearch.current = false; setQuery(e.currentTarget.value); }}
+              placeholder={t('sidebar.search')}
+              aria-label={t('sidebar.searchSessions')}
+            />
           </label>
           <div className="ksb-plus-wrap">
             <button
+              ref={plusButton}
               type="button"
               className={`ksb-icon ksb-new${sessionId ? '' : ' is-composing'}`}
               aria-label={t('sidebar.newSessionLabel')}
+              aria-keyshortcuts="Shift+F10"
               title={t('sidebar.newSessionShortcut')}
               onClick={startNewSession}
               onContextMenu={(e) => { e.preventDefault(); setPlusMenu((v) => !v); }}
+              // The right-click menu from the keyboard: Menu key, Shift+F10 or ↓.
+              onKeyDown={(e) => { if (isContextMenuKey(e) || e.key === 'ArrowDown') { e.preventDefault(); setPlusMenu(true); } }}
               data-testid="sidebar-new-session"
             ><Plus /></button>
             {plusMenu && (
-              <div className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)}>
+              <div ref={plusMenuRef} className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)} onKeyDown={onMenuKeyDown}>
                 <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); startNewSession(); }}><Plus /> {t('sidebar.newSession')}</button>
                 <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> {t('sidebar.importSession')}</button>
               </div>
             )}
           </div>
         </div>
-        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
+        {reconnecting && <div className="ksb-status" aria-hidden><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
+        {connectingStatus}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
@@ -212,9 +262,15 @@ export function Sidebar() {
         <>
           <div className="ksb-hero">
             <Brand />
-            {reconnecting && <span className="kspinner ksb-spin" aria-label={t('sidebar.connectingLabel')} />}
+            {reconnecting && <span className="kspinner ksb-spin" aria-hidden />}
+            {connectingStatus}
           </div>
-          <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
+          <div
+            className="ksb-scroll"
+            ref={restoreSessionsScroll}
+            onScroll={(e) => { sessionsScrollTop.current = e.currentTarget.scrollTop; }}
+            data-testid="sidebar-sessions-scroll"
+          >{list}<div className="ksb-tabbar-space" /></div>
         </>
       )}
       {tab === 'devices' && <div className="ksb-scroll ksb-pane"><DeviceGrid /><div className="ksb-tabbar-space" /></div>}

@@ -10,6 +10,7 @@ import SwiftUI
 /// Relay URL: monospace, bg-surface-secondary rounded-lg pill
 struct LoginView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var showPairing = false
 
@@ -34,92 +35,22 @@ struct LoginView: View {
             // as light no matter what we set preferredColorScheme to.
             Color.kraki950.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                AccountDeletedNotice()
-
-                Spacer()
-
-                // Logo — 160×160, circle-clip reveal + blur animation
-                Image("KrakiLogo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 160, height: 160)
-                    .blur(radius: logoBlur)
-                    .opacity(logoOpacity)
-                    .clipShape(Circle().scale(clipRadius))
-                    .padding(.bottom, 16)
-
-                // "Welcome to Kraki" — fade-up, 1s delay
-                Text("Welcome to Kraki")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.textTitle)
-                    .opacity(showTitle ? 1 : 0)
-                    .offset(y: showTitle ? 0 : 8)
-
-                // Subtitle — only when OAuth available, fade-up 1s delay
-                if oauthAvailable {
-                    Text("Sign in to connect to your coding agent sessions.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
-                        .padding(.top, 8)
-                        .opacity(showTitle ? 1 : 0)
-                        .offset(y: showTitle ? 0 : 8)
+            // Short screens (landscape) and large text sizes scroll instead of
+            // cutting off the logo; otherwise the layout is unchanged.
+            ViewThatFits(in: .vertical) {
+                loginColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ScrollView {
+                    loginColumn
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: .infinity)
                 }
-
-                Spacer()
-
-                // Action area: GitHub button + "or" + Scan QR, OR the
-                // inline status panel while the connection is in flight.
-                // Swapping in place avoids a separate full-screen overlay
-                // and keeps the logo + title visible the whole time.
-                // The fixed minHeight reserves the same vertical real
-                // estate for both branches so the logo doesn't shift up
-                // when the action area is swapped for the spinner.
-                ZStack {
-                    if isConnecting {
-                        inlineStatusPanel
-                            .transition(.opacity)
-                    } else {
-                        VStack(spacing: 0) { actionArea }
-                            .transition(.opacity)
-                    }
-                }
-                .frame(minHeight: 220)
-                // Instant flip on tap → spinner with no fade delay.
-                // The reverse direction (spinner → login) keeps a brief
-                // cross-fade so OAuth cancel doesn't feel jarring.
-                .animation(isConnecting ? nil : .easeInOut(duration: 0.2), value: isConnecting)
-
-                // Relay URL pill — hidden on the login screen to keep
-                // the page clean. Layout-only placeholder preserves
-                // the spacing of the staggered fade-up sequence.
-                Color.clear
-                    .frame(height: 0)
-                    .padding(.top, 24)
-
-                #if DEBUG
-                // Dev bypass — connect to local relay with open auth
-                Button {
-                    appState.devConnect()
-                } label: {
-                    Label("Dev Login (localhost)", systemImage: "hammer.fill")
-                        .font(.system(size: 13))
-                }
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .controlSize(.small)
-                .padding(.top, 8)
-                .padding(.bottom, 16)
-                .opacity(showInstructions ? 1 : 0)
-                .offset(y: showInstructions ? 0 : 8)
-                #else
-                Spacer().frame(height: 16)
-                #endif
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(.horizontal, 32)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // GitHub sign-in arrives with the relay's `auth_info`, possibly
+            // after the actions are already shown: ease the subtitle and
+            // button in instead of snapping the layout.
+            .animation(.easeInOut(duration: 0.25), value: oauthAvailable)
         }
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
@@ -134,16 +65,119 @@ struct LoginView: View {
         }
     }
 
+    private var loginColumn: some View {
+        VStack(spacing: 0) {
+            AccountDeletedNotice()
+
+            Spacer()
+
+            // Logo — 160×160, circle-clip reveal + blur animation
+            Image("KrakiLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 160, height: 160)
+                .blur(radius: logoBlur)
+                .opacity(logoOpacity)
+                .clipShape(Circle().scale(clipRadius))
+                .padding(.bottom, 16)
+
+            // "Welcome to Kraki" — fade-up, 1s delay
+            Text("Welcome to Kraki")
+                .scaledFont(18, weight: .semibold)
+                .foregroundStyle(Color.textTitle)
+                .opacity(showTitle ? 1 : 0)
+                .offset(y: showTitle ? 0 : 8)
+
+            // Subtitle — only when OAuth available, fade-up 1s delay
+            if oauthAvailable {
+                Text("Sign in to connect to your coding agent sessions.")
+                    .scaledFont(14)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+                    .padding(.top, 8)
+                    .opacity(showTitle ? 1 : 0)
+                    .offset(y: showTitle ? 0 : 8)
+            }
+
+            Spacer()
+
+            // Action area: GitHub button + "or" + Scan QR, OR the
+            // inline status panel while the connection is in flight.
+            // Swapping in place avoids a separate full-screen overlay
+            // and keeps the logo + title visible the whole time.
+            // The fixed minHeight reserves the same vertical real
+            // estate for both branches so the logo doesn't shift up
+            // when the action area is swapped for the spinner.
+            ZStack {
+                if isConnecting {
+                    inlineStatusPanel
+                        .transition(.opacity)
+                } else {
+                    VStack(spacing: 0) { actionArea }
+                        .transition(.opacity)
+                }
+            }
+            .frame(minHeight: 220)
+            // Instant flip on tap → spinner with no fade delay.
+            // The reverse direction (spinner → login) keeps a brief
+            // cross-fade so OAuth cancel doesn't feel jarring.
+            .animation(isConnecting ? nil : .easeInOut(duration: 0.2), value: isConnecting)
+
+            // Relay URL pill — hidden on the login screen to keep
+            // the page clean. Layout-only placeholder preserves
+            // the spacing of the staggered fade-up sequence.
+            Color.clear
+                .frame(height: 0)
+                .padding(.top, 24)
+
+            #if DEBUG
+            // Dev bypass — connect to local relay with open auth
+            Button {
+                appState.devConnect()
+            } label: {
+                Label("Dev Login (localhost)", systemImage: "hammer.fill")
+                    .scaledFont(13)
+            }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+            .controlSize(.small)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+            .opacity(showInstructions ? 1 : 0)
+            .offset(y: showInstructions ? 0 : 8)
+            #else
+            Spacer().frame(height: 16)
+            #endif
+        }
+        .padding(.horizontal, 32)
+    }
+
     // MARK: - Action Area & Inline Status
 
-    /// True while the auth/connect handshake is in flight. Drives the
+    /// True while a sign-in the user started is in flight. Drives the
     /// in-place swap of the action area for a status panel.
     private var isConnecting: Bool {
-        if appState.isOAuthInFlight { return true }
-        switch appState.connectionStatus {
-        case .connecting, .authenticating: return true
-        default: return false
-        }
+        Self.showsStatusPanel(oauthInFlight: appState.isOAuthInFlight,
+                              pairingInFlight: appState.pairingInFlightSince != nil,
+                              status: appState.connectionStatus,
+                              isAwaitingAuthInfo: appState.isAwaitingAuthInfo)
+    }
+
+    /// Only a sign-in the user started replaces the actions with "Signing
+    /// you in…". The background connection that only fetches the sign-in
+    /// options keeps them: while the relay is unreachable (`.connecting`
+    /// with nothing started, K-035) or slow to answer `auth_info` (K-185),
+    /// "Scan QR Code" must stay available.
+    static func showsStatusPanel(oauthInFlight: Bool, pairingInFlight: Bool, status: ConnectionStatus,
+                                 isAwaitingAuthInfo: Bool = false) -> Bool {
+        if oauthInFlight || pairingInFlight { return true }
+        return status == .authenticating && !isAwaitingAuthInfo
+    }
+
+    /// Still reaching the relay, nothing started: a quiet line above the actions.
+    private var isReachingRelay: Bool {
+        !isConnecting && appState.connectionStatus == .connecting
     }
 
     /// User-facing wording for each in-flight status. Tries to describe
@@ -154,7 +188,7 @@ struct LoginView: View {
         switch appState.connectionStatus {
         case .connecting:     return String(localized: "Connecting to relay…")
         case .authenticating: return String(localized: "Signing you in…")
-        default:              return ""
+        default:              return appState.pairingInFlightSince != nil ? String(localized: "Connecting to relay…") : ""
         }
     }
 
@@ -168,7 +202,7 @@ struct LoginView: View {
         case .authenticating:
             return String(localized: "Verifying your account and pairing this device.")
         default:
-            return ""
+            return appState.pairingInFlightSince != nil ? String(localized: "Establishing a secure channel to your relay.") : ""
         }
     }
 
@@ -176,6 +210,16 @@ struct LoginView: View {
     /// pairing instructions, and Scan QR button.
     @ViewBuilder
     private var actionArea: some View {
+        if isReachingRelay {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Connecting to relay…")
+            }
+            .font(.footnote)
+            .foregroundStyle(Color.secondary.opacity(0.7))
+            .padding(.bottom, 12)
+            .accessibilityIdentifier("login.reaching-relay")
+        }
         if let error = appState.lastError, !error.isEmpty {
             Label(error, systemImage: "exclamationmark.circle")
                 .font(.footnote)
@@ -198,7 +242,7 @@ struct LoginView: View {
                     GitHubMark()
                         .frame(width: 20, height: 20)
                     Text("Sign in with GitHub")
-                        .font(.system(size: 14, weight: .medium))
+                        .scaledFont(14, weight: .medium)
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 20)
@@ -217,7 +261,7 @@ struct LoginView: View {
                     .fill(Color.secondary.opacity(0.3))
                     .frame(width: 48, height: 1)
                 Text("or")
-                    .font(.system(size: 12))
+                    .scaledFont(12)
                     .foregroundStyle(Color.secondary.opacity(0.6))
                 Rectangle()
                     .fill(Color.secondary.opacity(0.3))
@@ -232,7 +276,7 @@ struct LoginView: View {
         // Pairing instructions — fade-up, 1.6s delay.
         VStack(spacing: 8) {
             Text("Scan a pairing QR code from your terminal to connect.")
-                .font(.system(size: 12))
+                .scaledFont(12)
                 .foregroundStyle(Color.secondary.opacity(0.6))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
@@ -256,7 +300,7 @@ struct LoginView: View {
                 Text("to generate a new one.", comment: "After the kraki connect code badge; generates a new pairing QR code")
                     .foregroundStyle(Color.secondary.opacity(0.6))
             }
-            .font(.system(size: 12))
+            .scaledFont(12)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Run kraki connect to generate a new one.")
         }
@@ -268,7 +312,7 @@ struct LoginView: View {
             showPairing = true
         } label: {
             Label("Scan QR Code", systemImage: "qrcode.viewfinder")
-                .font(.system(size: 14))
+                .scaledFont(14)
         }
         .buttonStyle(.bordered)
         .tint(Color.kraki300)
@@ -290,13 +334,19 @@ struct LoginView: View {
 
             VStack(spacing: 6) {
                 Text(statusHeadline)
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(15, weight: .medium)
                     .foregroundStyle(Color.textTitle)
                 Text(statusSubline)
-                    .font(.system(size: 12))
+                    .scaledFont(12)
                     .foregroundStyle(Color.secondary.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
+            }
+            if appState.pairingInFlightSince != nil {
+                Button("Cancel") { appState.cancelPairing() }
+                    .font(.system(size: 14))
+                    .tint(Color.kraki300)
+                    .accessibilityIdentifier("login.cancel-pairing")
             }
         }
         .transition(.opacity.combined(with: .offset(y: 6)))
@@ -312,6 +362,16 @@ struct LoginView: View {
 
     @MainActor
     private func runIntroAnimations() async {
+        // Reduce Motion: no reveal, blur or fade-up; the page starts complete.
+        if reduceMotion {
+            clipRadius = 1.5
+            logoBlur = 0
+            logoOpacity = 1
+            showTitle = true
+            showDivider = true
+            showInstructions = true
+            return
+        }
         // Logo: circle-clip reveal over 4s, blur-to-clear over 3s — both start immediately
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 4)) {
             clipRadius = 1.5 // circle scale >1 to fill the square

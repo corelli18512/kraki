@@ -90,6 +90,31 @@ final class IOSUnreadEntryTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5)
     }
 
+    /// K-042: more new messages than the entry window holds. The chat opens
+    /// on the first one, not on whatever row starts the newest window.
+    func testBacklogLargerThanTheWindowOpensAtTheFirstUnread() throws {
+        let fx = try open(stored: 200, readSeq: 10)
+        drain(1_000)
+        let firstNew = try XCTUnwrap(screenY(fx, seq: 11), "first new message on screen: \(visible(fx))")
+        XCTAssertTrue(landingRange.contains(firstNew), "first new message starts under the glass, got \(firstNew)")
+        XCTAssertEqual(fx.vc.automationUnreadEntry, .anchored)
+        XCTAssertTrue(fx.vc.automationControlsVisible.down, "↓ offers the newest message")
+
+        // ↓ still reaches the newest message of the whole conversation.
+        fx.vc.automationTapDown()
+        drain(1_800)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 200)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5)
+    }
+
+    /// Backlog that already fits in the newest window keeps that window.
+    func testBacklogInsideTheWindowKeepsTheNewestWindow() throws {
+        let fx = try open(stored: 200, readSeq: 190, overrides: [191: long(2_500)])
+        drain(800)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 200)
+        XCTAssertNotNil(screenY(fx, seq: 191))
+    }
+
     // MARK: Scenario 2 — killed in the background, notification tap
 
     /// The cached list is stale (it still thinks everything is read); the
@@ -231,6 +256,7 @@ final class IOSUnreadEntryTests: XCTestCase {
         _ = app.messageStore.loadInitialWindow(sid)
         if fromNotification { app.sessionStore.notificationEntrySessions.insert(sid) }
         app.sessionStore.captureEntryUnreadBoundary(sid)
+        app.messageProvider?.anchorEntryWindowAtFirstUnread(sid)
 
         let vc = ChatPerfListVC(sessionId: sid, appState: app, agent: "claude", bottomContentInset: 54)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))

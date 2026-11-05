@@ -326,6 +326,143 @@ describe('device trust (enforced) — a compromised Head cannot command the comp
   });
 });
 
+describe('device trust — a paired app is told when its signed request is refused (K-142)', () => {
+  function paired() {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    expect(env.client.deviceTrust!.isTrusted(phone.id)).toBe(true);
+    return { env, phone };
+  }
+  /** A signed command with an explicit signing time. */
+  function signedAt(env: Env, app: FakeApp, msg: Record<string, unknown>, ts: number): Record<string, unknown> {
+    const signed = signMessage(JSON.stringify({ deviceId: app.id, seq: 0, timestamp: new Date(ts).toISOString(), ...msg }), app.id, TENTACLE, app.ik.privateKey, { ts });
+    return { v: 2, blob: encryptV2(JSON.stringify(signed), [{ recipientId: TENTACLE, publicKey: env.tentacle.encryptionKey }]) };
+  }
+  const errorsFor = (env: Env, app: FakeApp) =>
+    readable(env, app).filter((m) => m.type === 'error') as Array<{ sessionId?: string; seq?: number; deviceId?: string; timestamp?: string; payload: { message: string; requestId?: string } }>;
+  const appendMessage = (env: Env) => (env.client.sessionManager as unknown as { appendMessage: ReturnType<typeof vi.fn> }).appendMessage;
+
+  it('a command signed by a device whose clock is >10 min ahead gets a signed error on its session', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi', clientId: 'c1' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    expect(sendInputCalls(env)).toHaveLength(0);
+    const errors = errorsFor(env, phone);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ sessionId: 's1', deviceId: TENTACLE, __signed: true });
+    expect(errors[0]!.payload.message).toMatch(/clock is ahead/);
+    // A session error like any other: a spine seq, persisted, so every app
+    // (iOS/Mac drop seq-less session messages) shows it and keeps it.
+    expect(errors[0]!.seq).toBeGreaterThan(0);
+    expect(typeof errors[0]!.timestamp).toBe('string');
+    expect(appendMessage(env)).toHaveBeenCalledWith('s1', 'error', expect.any(String), false);
+  });
+
+  it('a refused command on a session this computer does not have is not answered', async () => {
+    const { env, phone } = paired();
+    (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's-unknown', payload: { text: 'hi' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(0);
+    expect(appendMessage(env)).not.toHaveBeenCalledWith('s-unknown', 'error', expect.any(String), expect.anything());
+  });
+
+  it('refused background traffic is not answered and does not use up the notice for a user command', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    const ahead = Date.now() + 11 * 60_000;
+    env.deliver(signedAt(env, phone, { type: 'client_features', payload: { features: [] } }, ahead), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'set_session_subscription', sessionId: 's1', payload: { requestId: 'sub-1' } }, ahead), phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(0);
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi' } }, ahead), phone.id);
+    await flush();
+    expect(errorsFor(env, phone).map((e) => e.sessionId)).toEqual(['s1']);
+  });
+
+  it('two refused commands on different sessions within the limit are both answered', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    const behind = Date.now() - 16 * 60_000;
+    env.deliver(signedAt(env, phone, { type: 'delete_session', sessionId: 's1', payload: {} }, behind), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'rename_session', sessionId: 's2', payload: { title: 'x' } }, behind), phone.id);
+    await flush();
+    expect(errorsFor(env, phone).map((e) => e.sessionId).sort()).toEqual(['s1', 's2']);
+  });
+
+  it('a durable command delivered more than 15 min after it was signed is reported, not dropped silently', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'delete_session', sessionId: 's2', payload: {} }, Date.now() - 16 * 60_000), phone.id);
+    await flush();
+    expect((env.client.sessionManager as unknown as { deleteSession: ReturnType<typeof vi.fn> }).deleteSession).not.toHaveBeenCalled();
+    const errors = errorsFor(env, phone);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ sessionId: 's2' });
+    expect(errors[0]!.payload.message).toMatch(/signed too long ago/);
+  });
+
+  it('a sessionless request keeps its requestId so the app can fail its placeholder', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'create_session', payload: { requestId: 'req-1', agent: 'pi' } }, Date.now() + 20 * 60_000), phone.id);
+    await flush();
+    const errors = errorsFor(env, phone);
+    expect(errors).toHaveLength(1);
+    // The envelope apps route sessionless errors by: sessionId '' and a seq.
+    expect(errors[0]).toMatchObject({ sessionId: '', deviceId: TENTACLE });
+    expect(errors[0]!.seq).toBeGreaterThan(0);
+    expect(typeof errors[0]!.timestamp).toBe('string');
+    expect(errors[0]!.payload.requestId).toBe('req-1');
+    // Only the sender is told.
+    expect(env.sent.filter((s) => readable({ ...env, sent: [s] }, phone).some((m) => m.type === 'error')).every((s) => s.target === phone.id)).toBe(true);
+  });
+
+  it('a replay is not answered, and repeated refusals on one session are rate-limited', async () => {
+    const { env, phone } = paired();
+    const captured = appSend(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'once' } });
+    env.deliver(captured, phone.id);
+    env.sent.length = 0;
+    env.deliver(captured, phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(0);
+    for (let i = 0; i < 3; i++) {
+      env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: `x${i}` } }, Date.now() + 30 * 60_000), phone.id);
+    }
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(1);
+  });
+});
+
+describe('device trust — lost replay state (K-141)', () => {
+  it('re-pairing still works right after the replay state was lost; commands are refused and the app is told', async () => {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    expect(env.client.deviceTrust!.isTrusted(phone.id)).toBe(true);
+    const replayFiles = readdirSync(home, { recursive: true }).map(String).filter((f) => f.endsWith('replay.json'));
+    expect(replayFiles.length).toBe(1);
+    rmSync(join(home, replayFiles[0]!));
+
+    const restarted = setup('compatible');
+    joined(restarted, phone);
+    restarted.deliver(appSend(restarted, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi' } }), phone.id);
+    await flush();
+    expect(sendInputCalls(restarted)).toHaveLength(0);
+    expect(readable(restarted, phone).some((m) => m.type === 'error' && (m as { sessionId?: string }).sessionId === 's1')).toBe(true);
+
+    restarted.sent.length = 0;
+    restarted.deliver(pairRequest(restarted, phone, createPairingSecret(home)), phone.id);
+    const result = readable(restarted, phone).find((m) => m.type === 'pair_result') as { payload?: { ok?: boolean } } | undefined;
+    expect(result?.payload?.ok).toBe(true);
+  });
+});
+
 describe('device trust (enforced) — a compromised Head cannot read', () => {
   it('a key swap for a paired app and a device the Head added receive nothing they can open', async () => {
     const env = setup('enforce');

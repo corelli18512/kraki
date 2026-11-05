@@ -146,6 +146,33 @@ final class IOSUnderfilledHistoryTests: XCTestCase {
         XCTAssertFalse(vc.allowsEdgePaging)
     }
 
+    /// K-040: history exists only on an offline computer — the empty chat has
+    /// nothing to jump to, so ↓ stays hidden.
+    func testEmptyChatWithUnreachableHistoryShowsNoJumpToLatest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("underfilled-\(UUID().uuidString)")
+        roots.append(root)
+        let db = try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite"))
+        let app = AppState(testDatabase: db)
+        states.append(app)
+        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: 40, deviceId: "test-device")
+        _ = app.messageStore.loadInitialWindow(sid)
+        let vc = ChatPerfListVC(sessionId: sid, appState: app, agent: "claude", bottomContentInset: 60)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = vc
+        window.makeKeyAndVisible()
+        windows.append(window)
+        vc.view.frame = window.bounds
+        vc.loadViewIfNeeded()
+        vc.beginAppearanceTransition(true, animated: false)
+        vc.view.layoutIfNeeded()
+        vc.endAppearanceTransition()
+        await settle()
+        vc.updateJumpButtonVisibility()
+        XCTAssertTrue(vc.items.isEmpty)
+        XCTAssertNotEqual(vc.jumpButtonVisibilityTargets[ObjectIdentifier(vc.jumpButton)], true,
+                          "no ↓ in an empty chat")
+    }
+
     private func fixture(total: Int, height: CGFloat, nonvisualTail: Bool = false, nonvisualHead: Int = 0,
                          storedFrom: Int = 1) throws -> ChatPerfListVC {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("underfilled-\(UUID().uuidString)")

@@ -93,7 +93,10 @@ struct MacCommands: Commands {
             } label: {
                 Label("Zoom In", systemImage: "plus.magnifyingglass")
             }
-            .keyboardShortcut("=", modifiers: .command)   // ⌘+
+            // ⌘+ as typed on every layout (a German keyboard has its own +
+            // key; the layout-mapped "=" became ⌘*). ⌘= also zooms in, as in
+            // browsers (MacZoomShortcut).
+            .keyboardShortcut("+", modifiers: .command, localization: .custom)
             Button {
                 NotificationCenter.default.post(name: .macZoomOut, object: nil)
             } label: {
@@ -111,7 +114,10 @@ struct MacCommands: Commands {
         // Session menu — operations on the currently selected session.
         CommandMenu("Session") {
             Button("New Session") {
-                NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+                MacNewSessionRequest.request { openWindow(id: "main") }
+                // Also when the main window is hidden (login launch),
+                // minimised or behind Settings: the new Session is shown.
+                MacPresenceController.shared.showMainWindow()
             }
             .keyboardShortcut("n", modifiers: .command)
 
@@ -140,9 +146,10 @@ struct MacCommands: Commands {
 
             Divider()
 
-            // ⌘1–⌘9 open the first nine sessions in sidebar order, by title.
-            // The list is sorted once per menu update (not once per item).
-            let firstNine = Array(appState.sessionStore.navigationOrderedSessions.prefix(9))
+            // ⌘1–⌘9 open the first nine sessions the sidebar shows (search and
+            // computer filter applied), by title. The list is sorted once per
+            // menu update (not once per item).
+            let firstNine = Array(appState.sessionStore.filteredNavigationSessions.prefix(9))
             ForEach(Array(firstNine.enumerated()), id: \.element.id) { index, session in
                 Button(Self.menuTitle(session.displayTitle)) {
                     NotificationCenter.default.post(
@@ -284,6 +291,7 @@ struct MacCommands: Commands {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)
             }
+            .disabled(!MacUpdateController.updatesAvailable())
             Divider()
             Button("Connect Your Phone…") {
                 NotificationCenter.default.post(name: .macOpenPairing, object: nil)
@@ -308,25 +316,64 @@ struct MacCommands: Commands {
     }
 }
 
-/// Reconnecting restarts the service on this Mac, which stops every running
-/// turn here: ask first when one is running.
+/// Reconnecting, or switching which tentacle runs agents here, restarts the
+/// service on this Mac, which stops every running turn here: ask first when
+/// one is running.
 @MainActor
 enum MacReconnectConfirmation {
-    static func runningSessionsHere(appState: AppState, tentacleCLI: TentacleCLIManager) -> Int {
-        guard let here = tentacleCLI.configInfo?.deviceId else { return 0 }
-        return appState.sessionStore.sessions.values.filter { $0.deviceId == here && $0.state != .idle }.count
+    enum Action: Equatable {
+        /// This Mac › Reconnect, Settings › This Mac › Reconnect.
+        case reconnect
+        /// Settings › This Mac › Run agents with (built in / external CLI).
+        case switchMode
     }
 
-    static func confirm(appState: AppState, tentacleCLI: TentacleCLIManager) -> Bool {
+    struct Prompt: Equatable {
+        let title: String
+        let message: String
+        let confirmButton: String
+    }
+
+    nonisolated static func runningSessions(in sessions: some Sequence<SessionInfo>, deviceId: String?) -> Int {
+        guard let deviceId else { return 0 }
+        return sessions.filter { $0.deviceId == deviceId && $0.state != .idle }.count
+    }
+
+    static func runningSessionsHere(appState: AppState, tentacleCLI: TentacleCLIManager) -> Int {
+        runningSessions(in: appState.sessionStore.sessions.values, deviceId: tentacleCLI.configInfo?.deviceId)
+    }
+
+    /// The question, or nil when nothing runs here and no question is needed.
+    nonisolated static func prompt(for action: Action, running: Int) -> Prompt? {
+        guard running > 0 else { return nil }
+        switch action {
+        case .reconnect:
+            return Prompt(
+                title: String(localized: "Reconnect this Mac?"),
+                message: running == 1
+                    ? String(localized: "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.")
+                    : String(localized: "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them."),
+                confirmButton: String(localized: "Reconnect")
+            )
+        case .switchMode:
+            return Prompt(
+                title: String(localized: "Switch how this Mac runs agents?"),
+                message: running == 1
+                    ? String(localized: "A session is running on this Mac. Switching restarts Kraki here and stops it.")
+                    : String(localized: "\(running) sessions are running on this Mac. Switching restarts Kraki here and stops them."),
+                confirmButton: String(localized: "Switch")
+            )
+        }
+    }
+
+    static func confirm(appState: AppState, tentacleCLI: TentacleCLIManager, action: Action = .reconnect) -> Bool {
         let running = runningSessionsHere(appState: appState, tentacleCLI: tentacleCLI)
-        guard running > 0 else { return true }
+        guard let prompt = prompt(for: action, running: running) else { return true }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = String(localized: "Reconnect this Mac?")
-        alert.informativeText = running == 1
-            ? String(localized: "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.")
-            : String(localized: "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them.")
-        alert.addButton(withTitle: String(localized: "Reconnect"))
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.addButton(withTitle: prompt.confirmButton)
         alert.addButton(withTitle: String(localized: "Cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
@@ -353,7 +400,6 @@ extension TentacleCLIManager {
 // MARK: - Notifications
 
 extension Notification.Name {
-    static let macOpenLogs        = Notification.Name("mac.openLogs")
     static let macOpenPairing     = Notification.Name("mac.openPairing")
     static let macOpenNewSession  = Notification.Name("mac.openNewSession")
     static let macFocusNewSessionComposer = Notification.Name("mac.focusNewSessionComposer")
@@ -365,6 +411,37 @@ extension Notification.Name {
     static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
     /// Object: the `MacUpdateChannel` to switch to (Settings › General).
     static let macSwitchUpdateChannel = Notification.Name("mac.switchUpdateChannel")
+}
+
+/// New Session (⌘N) asked for while no main window was there to receive it:
+/// the main window starts a new Session as soon as it appears. The request
+/// expires, so a window that only appears much later (after sign-in) does not
+/// replace the Session it restored with a new one.
+@MainActor
+enum MacNewSessionRequest {
+    static let lifetime: TimeInterval = 5
+    private(set) static var requestedAt: Date?
+
+    static var pending: Bool { requestedAt != nil }
+
+    /// Session › New Session. With the main window closed (only Settings, or
+    /// no window) nothing receives the notification: `openMainWindow`, which
+    /// takes the request when it appears.
+    static func request(now: Date = Date(), openMainWindow: () -> Void) {
+        requestedAt = now
+        NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+        if pending { openMainWindow() }
+    }
+
+    static func take(now: Date = Date()) -> Bool {
+        defer { requestedAt = nil }
+        guard let requestedAt else { return false }
+        return now.timeIntervalSince(requestedAt) < lifetime
+    }
+
+    static func clear() {
+        requestedAt = nil
+    }
 }
 
 /// Session Info asked for a Session whose chat may not be open yet (a row's

@@ -1,4 +1,5 @@
-/// The iOS chat bubble cell and its private subviews (rounded background, pill label, HTML artifact cards).
+/// The iOS chat bubble cell and its private subviews (rounded background, pill label).
+/// The HTML artifact cards are in TKHTMLArtifactCardsView.swift.
 
 import UIKit
 import SwiftUI
@@ -29,11 +30,10 @@ private final class TKRoundedView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
+    /// The bubble outline: `rect` with each corner's own radius.
+    static func path(in r: CGRect, radii: (CGFloat, CGFloat, CGFloat, CGFloat)) -> UIBezierPath {
         let (tl, tr, bl, br) = radii
         let path = UIBezierPath()
-        let r = bounds
         path.move(to: CGPoint(x: r.minX + tl, y: r.minY))
         path.addLine(to: CGPoint(x: r.maxX - tr, y: r.minY))
         path.addArc(withCenter: CGPoint(x: r.maxX - tr, y: r.minY + tr),
@@ -48,7 +48,12 @@ private final class TKRoundedView: UIView {
         path.addArc(withCenter: CGPoint(x: r.minX + tl, y: r.minY + tl),
                     radius: tl, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
         path.close()
-        let newPath = path.cgPath
+        return path
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let newPath = Self.path(in: bounds, radii: radii).cgPath
         let oldPath = shape.presentation()?.path ?? shape.path
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -85,140 +90,6 @@ private final class TKPillLabel: UILabel {
     }
 }
 
-private final class TKHTMLArtifactButton: UIControl {
-    private let iconBackground = UIView()
-    private let iconView = UIImageView()
-    private let titleLabel = UILabel()
-    private let detailLabel = UILabel()
-    private let openIcon = UIImageView()
-    private var artifact: ContentRef?
-    private var onOpen: ((ContentRef) -> Void)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        layer.cornerRadius = 8
-        layer.borderWidth = 0.5
-        backgroundColor = .secondarySystemBackground
-        layer.borderColor = UIColor.separator.withAlphaComponent(0.55).cgColor
-
-        iconBackground.backgroundColor = UIColor.tintColor.withAlphaComponent(0.12)
-        iconBackground.layer.cornerRadius = 7
-        iconBackground.isUserInteractionEnabled = false
-        addSubview(iconBackground)
-
-        iconView.image = UIImage(systemName: "doc.richtext")
-        iconView.tintColor = .tintColor
-        iconView.contentMode = .scaleAspectFit
-        iconBackground.addSubview(iconView)
-
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = .label
-        titleLabel.lineBreakMode = .byTruncatingTail
-        addSubview(titleLabel)
-
-        detailLabel.font = .systemFont(ofSize: 10)
-        detailLabel.textColor = .secondaryLabel
-        detailLabel.lineBreakMode = .byTruncatingTail
-        addSubview(detailLabel)
-
-        openIcon.image = UIImage(systemName: "chevron.right")
-        openIcon.tintColor = .tertiaryLabel
-        openIcon.contentMode = .scaleAspectFit
-        addSubview(openIcon)
-
-        addTarget(self, action: #selector(openArtifact), for: .touchUpInside)
-        isAccessibilityElement = true
-        accessibilityTraits = .button
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(artifact: ContentRef, onOpen: @escaping (ContentRef) -> Void) {
-        self.artifact = artifact
-        self.onOpen = onOpen
-        let nonEmpty: (String?) -> String? = { text in
-            guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
-            return trimmed
-        }
-        let title = nonEmpty(artifact.caption) ?? nonEmpty(artifact.name) ?? String(localized: "Report")
-        titleLabel.text = title
-        detailLabel.text = String(localized: "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
-        accessibilityLabel = title
-        accessibilityValue = detailLabel.text
-        accessibilityHint = String(localized: "Opens report preview")
-    }
-
-    func reset() {
-        artifact = nil
-        onOpen = nil
-        titleLabel.text = nil
-        detailLabel.text = nil
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        iconBackground.frame = CGRect(x: 10, y: 10, width: 34, height: 34)
-        iconView.frame = iconBackground.bounds.insetBy(dx: 8, dy: 8)
-        openIcon.frame = CGRect(x: bounds.width - 25, y: 20, width: 10, height: 14)
-        let textX: CGFloat = 54
-        let textWidth = max(1, bounds.width - textX - 36)
-        titleLabel.frame = CGRect(x: textX, y: 9, width: textWidth, height: 18)
-        detailLabel.frame = CGRect(x: textX, y: 29, width: textWidth, height: 14)
-    }
-
-    @objc private func openArtifact() {
-        guard let artifact else { return }
-        onOpen?(artifact)
-    }
-}
-
-final class TKHTMLArtifactCardsView: UIView {
-    static let cardHeight: CGFloat = 54
-    static let spacing: CGFloat = 6
-    private var buttons: [TKHTMLArtifactButton] = []
-
-    static func height(for count: Int) -> CGFloat {
-        guard count > 0 else { return 0 }
-        return CGFloat(count) * cardHeight + CGFloat(count - 1) * spacing
-    }
-
-    func configure(artifacts: [ContentRef], onOpen: @escaping (ContentRef) -> Void) {
-        while buttons.count < artifacts.count {
-            let button = TKHTMLArtifactButton(frame: .zero)
-            addSubview(button)
-            buttons.append(button)
-        }
-        for (index, button) in buttons.enumerated() {
-            if index < artifacts.count {
-                button.isHidden = false
-                button.configure(artifact: artifacts[index], onOpen: onOpen)
-            } else {
-                button.isHidden = true
-                button.reset()
-            }
-        }
-        isHidden = artifacts.isEmpty
-        setNeedsLayout()
-    }
-
-    func reset() {
-        buttons.forEach {
-            $0.reset()
-            $0.isHidden = true
-        }
-        isHidden = true
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        var y: CGFloat = 0
-        for button in buttons where !button.isHidden {
-            button.frame = CGRect(x: 0, y: y, width: bounds.width, height: Self.cardHeight)
-            y += Self.cardHeight + Self.spacing
-        }
-    }
-}
-
 /// Flat, single-message TextKit cell used by the production chat list.
 final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
     static let reuseID = "TKBubbleCell"
@@ -249,6 +120,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var actionFrameForRegression: CGRect { actionHost.frame }
     var bubbleFrameForRegression: CGRect { bubbleBG.frame }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
+    /// How far the drawn bubble reaches below the drawn clip: > 0 means its
+    /// rounded bottom is cut off flat on screen.
+    var bubbleClippedDepthForRegression: CGFloat { (bubbleBG.layer.presentation()?.frame ?? bubbleBG.frame).maxY - (renderClipView.layer.presentation()?.bounds.height ?? renderClipView.bounds.height) }
     /// Pending CA animations on the bubble background (must be none after a
     /// configure outside a UIView animation — no color/shape morph).
     var bubbleBackgroundAnimationKeysForRegression: [String] {
@@ -281,6 +155,13 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var bodyChunkStrings: [NSAttributedString?] = []
     private var bodyChunkRanges: [NSRange] = []
     private var bodyChunkHasTable: [Bool] = []
+    /// Chunks that have a text view: all of them, except for a very long
+    /// body, where only the chunks near the visible part of the cell do
+    /// (`bodyViews[i]` shows chunk `realizedChunks.lowerBound + i`). A 1 MB
+    /// reply has ~1100 chunks; a text view each froze entry and used GBs.
+    private var realizedChunks: Range<Int> = 0..<0
+    /// Bodies with more chunks than this realize only a window of them.
+    static let maxEagerChunks = 24
     private var assignedLive: (body: TKLiveBody, revision: Int)?
     private let moreButton = UIButton(type: .system)
     private let actionHost = BubbleActionHostView()
@@ -289,6 +170,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var tableViews: [TKTableScrollView] = []
     private var tableAttachmentIDs: [ObjectIdentifier] = []
     private var bodyHasLinks = false
+    /// Last `setBodyInteractive` state (on at rest, off while the list
+    /// scrolls). Tables created by a later layout pass start in it.
+    private var bodyInteractionEnabled = false
     private var content: TKBubbleContent?
     /// Action SwiftUI can finish a layout pass while UIKit is laying out the
     /// reusable cell. Defer the collection-view invalidation to the next main
@@ -318,8 +202,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         configuration.baseForegroundColor = .secondaryLabel
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 7, bottom: 2, trailing: 7)
         configuration.background.cornerRadius = 10
+        // A fixed-size glyph chip (its label is "Show steps"). The configuration
+        // title otherwise follows Dynamic Type; at the largest sizes the chip,
+        // centred on the bubble's top edge, covered the message above it.
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var attributes = attributes
+            attributes.font = .systemFont(ofSize: 14, weight: .bold)
+            return attributes
+        }
         moreButton.configuration = configuration
-        moreButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
         moreButton.addTarget(self, action: #selector(openSteps), for: .touchUpInside)
         moreButton.accessibilityLabel = String(localized: "Show steps")
         contentView.addSubview(moreButton)
@@ -344,6 +235,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
             (cell: TKBubbleCell, _: UITraitCollection) in
             cell.refreshBubbleAppearance()
+            // Quote surfaces use dynamic colors resolved when the body draws.
+            cell.bodyViews.forEach { $0.setNeedsDisplay() }
         }
     }
 
@@ -356,6 +249,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         view.isSelectable = true
         view.isUserInteractionEnabled = false
         view.isOpaque = false
+        // The code/quote surfaces are drawn by this view (`draw(_:)`). A
+        // reused view resized after its last draw must redraw them, not
+        // stretch or keep the previous message's pixels.
+        view.contentMode = .redraw
         view.tintColor = .clear
         view.backgroundColor = .clear
         view.subviews.forEach {
@@ -372,7 +269,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                                          height: CGFloat.greatestFiniteMagnitude)
         view.adjustsFontForContentSizeCategory = true
         view.dataDetectorTypes = []
-        view.linkTextAttributes = [.foregroundColor: IOSMarkdownPalette.link]
+        // Links carry their own color in the attributed body (agent blue, or
+        // white + underline on the user's navy bubble). UIKit's default link
+        // attributes would repaint every link in one color.
+        view.linkTextAttributes = [:]
         return view
     }
 
@@ -380,6 +280,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     /// changed. While an answer streams, that is just the last chunk.
     private func assignBody(_ content: TKBubbleContent, cellWidth: CGFloat) {
         guard let body = content.body, body.length > 0 else {
+            realizedChunks = 0..<0
             for (index, view) in bodyViews.enumerated() {
                 if bodyChunkStrings[index] != nil { view.attributedText = nil }
                 bodyChunkStrings[index] = nil
@@ -397,7 +298,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
            let assigned = assignedLive, assigned.body === live {
             unchangedPrefix = live.changedFrom(since: assigned.revision) ?? 0
         }
-        let chunks = content.bodyChunks(cellWidth: cellWidth)
+        let allChunks = content.bodyChunks(cellWidth: cellWidth)
+        realizedChunks = realizedRange(of: allChunks)
+        let chunks = Array(allChunks[realizedChunks])
         while bodyViews.count < chunks.count {
             let view = Self.makeBodyView()
             renderClipView.insertSubview(view, aboveSubview: bodyViews.last ?? bubbleBG)
@@ -449,6 +352,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window != nil { refreshRealizedChunks() }
         // A representable can configure cells before it inherits the window's
         // final forced color scheme. Re-resolve the bubble on attachment so an
         // entering Session never paints one light/dark frame before settling.
@@ -652,6 +556,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     func setBodyInteractive(_ enabled: Bool) {
         if isSelectingText { return }
+        bodyInteractionEnabled = enabled
         // Plain text never needs UITextView selection: whole-message Copy and
         // Steps are provided by the cell context menu. Only link-bearing text
         // receives UITextView touches, which prevents iOS selection highlights
@@ -817,7 +722,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 view.onShowAll = { [weak self] in
                     self?.onShowTable?(placement.attachment.tableLayout)
                 }
-                view.isUserInteractionEnabled = bodyView.isUserInteractionEnabled
+                // Not the body's state: plain text without links is never
+                // interactive, but its tables (Open, Copy, sort) are.
+                view.isUserInteractionEnabled = bodyInteractionEnabled
                 renderClipView.addSubview(view)
                 return view
             }
@@ -846,39 +753,6 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     @objc private func openSteps() {
         guard let content, content.canShowSteps else { return }
         onOpenSteps?(content.message)
-    }
-
-    func messageActions() -> [UIAction] {
-        guard let content else { return [] }
-        var actions: [UIAction] = []
-        if let text = TKMarkdown.plainText(content.body), !text.isEmpty {
-            actions.append(UIAction(title: String(localized: "Copy"), image: UIImage(systemName: "doc.on.doc")) { _ in
-                UIPasteboard.general.string = text
-            })
-            if content.liveBody == nil {
-                actions.append(UIAction(title: String(localized: "Select Text"), image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
-                    // After the context menu finishes dismissing.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.beginTextSelection() }
-                })
-            }
-        }
-        if content.canShowSteps {
-            actions.append(UIAction(title: String(localized: "Show Steps"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
-                self?.openSteps()
-            })
-        }
-        if content.pendingDeliveryState == "correcting", let clientID = pendingClientID {
-            actions.append(contentsOf: correctingActions(clientID))
-        }
-        if ["failed", "unconfirmed"].contains(content.pendingDeliveryState ?? ""), let clientID = pendingClientID {
-            actions.insert(UIAction(title: String(localized: "Retry"), image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
-                self?.onPendingAction?(clientID, .retry)
-            }, at: 0)
-            actions.append(UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                self?.onPendingAction?(clientID, .delete)
-            })
-        }
-        return actions
     }
 
     // MARK: In-bubble text selection
@@ -946,32 +820,45 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     /// Voice input still being corrected: don't wait (send the original
     /// transcript), or drop it.
-    private func correctingActions(_ clientID: String) -> [UIAction] {
-        [
-            UIAction(title: String(localized: "Send Original"), image: UIImage(systemName: "paperplane")) { [weak self] _ in
-                self?.onPendingAction?(clientID, .retry)
-            },
-            UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                self?.onPendingAction?(clientID, .delete)
-            },
-        ]
-    }
-
     func contextMenuInteraction(
         _ interaction: UIContextMenuInteraction,
         configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-        guard bubbleBG.frame.contains(location), !messageActions().isEmpty else { return nil }
+        // Built now, at the long-press: a streaming bubble keeps growing under
+        // the open menu, and Copy must copy what the user pressed, not what
+        // the bubble had become when Copy was tapped.
+        let actions = messageActions()
+        guard bubbleBG.frame.contains(location), !actions.isEmpty else { return nil }
         lastMenuLocation = location
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            UIMenu(children: self?.messageActions() ?? [])
+        return UIContextMenuConfiguration(identifier: Self.menuIdentifier, previewProvider: nil) { _ in
+            UIMenu(children: actions)
         }
+    }
+
+    /// Lift the bubble itself (rounded, only its on-screen part), not a
+    /// rectangle of the whole cell: a tall reply's cell preview was a cropped
+    /// square that scrolled inside the menu.
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        highlightPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
+    }
+
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        dismissalPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         renderClipView.frame = contentView.bounds
         guard let content else { return }
+        refreshRealizedChunks()
         let cellWidth = bounds.width
         let bubbleWidth = content.bubbleWidth(cellWidth: cellWidth)
         let x: CGFloat
@@ -986,11 +873,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         var cursorY = y + TKMetrics.msgPadV
         let textHeight = content.bodyTextHeight(cellWidth: cellWidth)
         if textHeight > 0 {
-            let chunks = content.bodyChunks(cellWidth: cellWidth)
-            for (index, chunk) in chunks.enumerated() where index < bodyViews.count {
-                let frame = CGRect(x: innerX, y: cursorY + chunk.y, width: innerWidth, height: chunk.height)
-                if bodyViews[index].frame != frame { bodyViews[index].frame = frame }
-            }
+            layoutBodyViews(content.bodyChunks(cellWidth: cellWidth), x: innerX, top: cursorY, width: innerWidth)
             cursorY += textHeight
         }
         syncTableViews()
@@ -1016,7 +899,11 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         cursorY += TKMetrics.msgPadV
         let bubbleHeight: CGFloat
         if content.hasBubbleContent {
-            bubbleHeight = max(cursorY - y, 1)
+            // Never taller than the cell drawing it: when content grows first
+            // (a permission card arrives) and the cell follows in an animated
+            // resize, the clip would cut the bubble's bottom off flat. Held to
+            // the cell, the bubble grows with it, rounded (K-070).
+            bubbleHeight = min(max(cursorY - y, 1), max(1, bounds.height - y - TKMetrics.outerV))
             bubbleBG.isHidden = false
             bubbleBG.frame = CGRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
         } else {
@@ -1028,9 +915,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         let attachmentWidth = content.attachmentWidth(cellWidth: cellWidth)
         let imageHeight = content.imagesHeight(cellWidth: cellWidth)
         if imageHeight > 0 {
-            let imageY = content.hasBubbleContent
-                ? y + bubbleHeight + TKMetrics.attachmentSpacing
-                : y
+            let imageY = content.hasBubbleContent ? y + bubbleHeight + TKMetrics.attachmentSpacing : y
             let imageX: CGFloat
             switch content.kind {
             case .agent:
@@ -1065,5 +950,160 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             x: x + 8,
             y: y - buttonSize.height / 2,
             width: buttonSize.width, height: buttonSize.height)
+    }
+}
+
+// MARK: - Long-body chunk realization (same file: shares the cell's private state)
+
+extension TKBubbleCell {
+    /// First chunk for which `isPast` holds (chunks are in y order).
+    private static func firstChunk(in chunks: [TKBodyChunks.Placed],
+                                   where isPast: (TKBodyChunks.Placed) -> Bool) -> Int {
+        var low = 0, high = chunks.count
+        while low < high {
+            let mid = (low + high) / 2
+            if isPast(chunks[mid]) { high = mid } else { low = mid + 1 }
+        }
+        return low
+    }
+
+    /// Top of the body text inside the cell (see `layoutSubviews`).
+    private static let bodyTop = TKMetrics.outerV + TKMetrics.msgPadV
+
+    /// The chunks to realize: all of an ordinary body; for a very long one,
+    /// those within a screen of the cell's visible part (the start of the
+    /// body while the cell is not in a window yet).
+    private func realizedRange(of chunks: [TKBodyChunks.Placed]) -> Range<Int> {
+        guard chunks.count > Self.maxEagerChunks else { return 0..<chunks.count }
+        let visible: CGRect
+        if let window {
+            visible = convert(window.bounds, from: window)
+        } else {
+            // Not in a window yet: about one phone screen from the start.
+            visible = CGRect(x: 0, y: 0, width: bounds.width, height: 900)
+        }
+        let margin = max(visible.height, 400)
+        let low = visible.minY - margin - Self.bodyTop
+        let high = visible.maxY + margin - Self.bodyTop
+        var first = Self.firstChunk(in: chunks) { $0.y + $0.height >= low }
+        first = min(first, chunks.count - 1)
+        var end = Self.firstChunk(in: chunks) { $0.y > high }
+        end = max(end, first + 1)
+        return first..<end
+    }
+
+    /// Frames of the realized chunk views (`bodyViews[i]` shows chunk
+    /// `realizedChunks.lowerBound + i`), the body text starting at `top`.
+    private func layoutBodyViews(_ chunks: [TKBodyChunks.Placed], x: CGFloat, top: CGFloat, width: CGFloat) {
+        for (index, view) in bodyViews.enumerated() {
+            let chunkIndex = realizedChunks.lowerBound + index
+            guard chunkIndex < min(realizedChunks.upperBound, chunks.count) else { break }
+            let chunk = chunks[chunkIndex]
+            let frame = CGRect(x: x, y: top + chunk.y, width: width, height: chunk.height)
+            if view.frame != frame { view.frame = frame }
+        }
+    }
+
+    /// The list scrolled: realize the chunks of a very long body that came
+    /// near the screen (and release the ones that left).
+    func refreshRealizedChunks() {
+        // Re-assigning would reset the selection in the selected chunk view.
+        guard !isSelectingText else { return }
+        guard let content, let body = content.body, body.length > 0 else { return }
+        let chunks = content.bodyChunks(cellWidth: bounds.width)
+        guard chunks.count > Self.maxEagerChunks else { return }
+        let wanted = realizedRange(of: chunks)
+        // Re-assign only once the visible part nears the realized edge.
+        let needed = realizedNeededRange(of: chunks)
+        guard !(realizedChunks.contains(needed.lowerBound) && realizedChunks.contains(needed.upperBound - 1)),
+              wanted != realizedChunks else { return }
+        assignBody(content, cellWidth: bounds.width)
+        // Newly created chunk views start non-interactive; give them the
+        // cell's current state (links tappable at rest).
+        setBodyInteractive(bodyInteractionEnabled)
+        setNeedsLayout()
+    }
+
+    /// Chunks actually on screen (no margin).
+    private func realizedNeededRange(of chunks: [TKBodyChunks.Placed]) -> Range<Int> {
+        guard let window else { return realizedChunks }
+        let visible = convert(window.bounds, from: window)
+        var first = Self.firstChunk(in: chunks) { $0.y + $0.height >= visible.minY - Self.bodyTop }
+        first = min(first, chunks.count - 1)
+        let end = max(Self.firstChunk(in: chunks) { $0.y > visible.maxY - Self.bodyTop }, first + 1)
+        return first..<end
+    }
+}
+
+// MARK: - Message menu (same file: shares the cell's private state)
+
+extension TKBubbleCell {
+    func messageActions() -> [UIAction] {
+        guard let content else { return [] }
+        var actions: [UIAction] = []
+        if let text = TKMarkdown.plainText(content.body), !text.isEmpty {
+            actions.append(UIAction(title: String(localized: "Copy"), image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = text
+            })
+            if content.liveBody == nil {
+                actions.append(UIAction(title: String(localized: "Select Text"), image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
+                    // After the context menu finishes dismissing.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.beginTextSelection() }
+                })
+            }
+        }
+        // The "Turn failed" reason sits in the SwiftUI action slot, under this
+        // cell's long-press menu, so the menu offers it (it cannot be selected).
+        if content.action?.type == "failed",
+           let reason = content.action?.payload["message"]?.stringValue, !reason.isEmpty {
+            actions.append(UIAction(title: String(localized: "Copy Error"), image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = reason
+            })
+        }
+        if content.canShowSteps {
+            actions.append(UIAction(title: String(localized: "Show Steps"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
+                self?.openSteps()
+            })
+        }
+        if content.pendingDeliveryState == "correcting", let clientID = pendingClientID {
+            actions.append(contentsOf: correctingActions(clientID))
+        }
+        if ["failed", "unconfirmed"].contains(content.pendingDeliveryState ?? ""), let clientID = pendingClientID {
+            actions.insert(UIAction(title: String(localized: "Retry"), image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                self?.onPendingAction?(clientID, .retry)
+            }, at: 0)
+            actions.append(UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onPendingAction?(clientID, .delete)
+            })
+        }
+        return actions
+    }
+
+    private func correctingActions(_ clientID: String) -> [UIAction] {
+        [
+            UIAction(title: String(localized: "Send Original"), image: UIImage(systemName: "paperplane")) { [weak self] _ in
+                self?.onPendingAction?(clientID, .retry)
+            },
+            UIAction(title: String(localized: "Delete"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onPendingAction?(clientID, .delete)
+            },
+        ]
+    }
+
+    private static let menuIdentifier = "chat.kraki.bubble" as NSString
+
+
+    func bubblePreview() -> UITargetedPreview? {
+        guard renderClipView.window != nil, !bubbleBG.isHidden, bubbleBG.frame.width > 0 else { return nil }
+        var visible = bubbleBG.frame
+        if let scrollView = sequence(first: superview, next: { $0?.superview }).lazy.compactMap({ $0 as? UIScrollView }).first {
+            visible = visible.intersection(renderClipView.convert(scrollView.bounds, from: scrollView))
+        }
+        guard !visible.isNull, visible.height > 1 else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        let outline = TKRoundedView.path(in: bubbleBG.frame, radii: bubbleBG.radii).cgPath
+        parameters.visiblePath = UIBezierPath(cgPath: outline.intersection(CGPath(rect: visible, transform: nil)))
+        return UITargetedPreview(view: renderClipView, parameters: parameters)
     }
 }

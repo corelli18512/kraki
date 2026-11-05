@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { KrakiLogo } from './components/KrakiLogo';
 import { markNotificationEntry } from './lib/chat/unread-entry';
 import { useEffect, useRef } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
@@ -12,6 +12,7 @@ import { useNarrow } from './hooks/useNarrow';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 import { desktopNeedsYou } from './lib/desktop-needs-you';
+import { attentionCount } from './lib/session-status';
 import { desktop, desktopCredentials, isDesktop } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
@@ -20,19 +21,13 @@ import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
 import { WindowsTitleBar } from './components/desktop/WindowsTitleBar';
 import { PerformanceNoticeHost } from './components/diag/PerformanceNotice';
 
-function RelayBlockingOverlay({
-  status,
-}: {
-  status: 'disconnected' | 'error' | 'awaiting_login' | 'connecting' | 'connected';
-}) {
+/** Shown only while the page has never been connected: the copy is about a
+ *  connection that could not be made, never a lost one (K-087). */
+function RelayBlockingOverlay({ connecting }: { connecting: boolean }) {
   const { t } = useTranslation('app');
-  const isConnecting = status === 'connecting';
-  const title = status === 'error'
-    ? t('connection.errorTitle')
-    : t('connection.disconnected');
-  const message = status === 'error'
-    ? t('connection.failed')
-    : t('connection.lost');
+  // The relay answered but is retrying on the backoff (for example a
+  // transient auth error, K-198): say that, not "make sure the head is running".
+  const lastError = useStore((s) => s.lastError);
 
   return (
     <div
@@ -44,15 +39,15 @@ function RelayBlockingOverlay({
       <div className="w-full max-w-md rounded-2xl border border-border-primary bg-surface-primary/95 p-8 text-center shadow-2xl">
         <KrakiLogo className="mx-auto h-16 w-16 object-contain" />
         <h2 id="relay-status-title" className="mt-4 text-lg font-semibold text-text-primary">
-          {title}
+          {t('connection.errorTitle')}
         </h2>
         <p className="mt-2 text-sm text-text-secondary">
-          {message}
+          {lastError || t('connection.failed')}
         </p>
         <p className="mt-4 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted">
           {wsClient.url}
         </p>
-        {!isConnecting && (
+        {!connecting && (
           <div className="mt-5">
             <button
               type="button"
@@ -63,7 +58,7 @@ function RelayBlockingOverlay({
             </button>
           </div>
         )}
-        {isConnecting && (
+        {connecting && (
           <div className="mt-5 flex items-center justify-center gap-2">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
             <span className="text-sm text-text-muted">{t('connection.connecting')}</span>
@@ -90,19 +85,29 @@ export function App() {
   // app has been connected, a lost link only shows the non-blocking
   // "Reconnecting…" indicator: transport retries forever, and the user keeps
   // reading and queueing messages meanwhile.
+  // Once the first attempt failed, the dialog stays up through every retry
+  // (showing the spinner while one runs) instead of flashing away (K-087).
   const wasConnectedRef = useRef(false);
+  const firstConnectFailedRef = useRef(false);
   if (status === 'connected') wasConnectedRef.current = true;
+  if (!wasConnectedRef.current && (status === 'error' || status === 'disconnected')) firstConnectFailedRef.current = true;
+  // The relay was reached and asks for sign-in: a pairing that follows must
+  // not start under the failed-connect dialog.
+  if (status === 'awaiting_login') firstConnectFailedRef.current = false;
 
-  const firstConnectFailed = !wasConnectedRef.current && (status === 'error' || status === 'disconnected');
-  const showBlockingOverlay = firstConnectFailed;
+  const showBlockingOverlay = !wasConnectedRef.current && firstConnectFailedRef.current && status !== 'connected';
 
-  // Update document.title with total unread count
+  // document.title counts unread messages and Sessions waiting on you; the
+  // Kraki for Windows badge counts unread messages.
   const unreadCount = useStore((s) => s.unreadCount);
+  const attention = useStore((s) => attentionCount(s.unreadCount, s.sessions.keys(), s.cards, s.sessionPreviews));
   useEffect(() => {
     const BASE_TITLE = 'Kraki';
+    document.title = attention > 0 ? `(${attention}) ${BASE_TITLE}` : BASE_TITLE;
+  }, [attention]);
+  useEffect(() => {
     let total = 0;
     for (const count of unreadCount.values()) total += count;
-    document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
     desktop?.setBadge(total);
   }, [unreadCount]);
 
@@ -123,6 +128,21 @@ export function App() {
     navigate(`/session/${sid}`);
   }), [navigate]);
 
+  // Clicking a Web Push notification while a tab is open (public/sw.js).
+  useEffect(() => {
+    const worker = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    if (!worker) return;
+    const open = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; sessionId?: unknown } | null;
+      if (data?.type !== 'kraki:open-session' || typeof data.sessionId !== 'string') return;
+      markNotificationEntry(data.sessionId);
+      navigate(`/session/${data.sessionId}`);
+    };
+    worker.addEventListener('message', open);
+    worker.startMessages?.();
+    return () => worker.removeEventListener('message', open);
+  }, [navigate]);
+
   useEffect(() => {
     if (navigateToSession) {
       navigate(`/session/${navigateToSession}`);
@@ -141,7 +161,9 @@ export function App() {
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
-            <Outlet />
+            {/* Signed out (a removed device returning on a /session/ link):
+                the sign-in screen, not an empty chat with no way to pair. */}
+            {status === 'awaiting_login' && inSubPage ? <Navigate to="/" replace /> : <Outlet />}
           </ErrorBoundary>
         </main>
       </div>
@@ -153,7 +175,9 @@ export function App() {
       <WindowsTitleBar />
       <ErrorBanner />
       <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px]'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
-        <Sidebar />
+        <ErrorBoundary>
+          <Sidebar />
+        </ErrorBoundary>
       </aside>
       <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${narrow ? '' : 'app-main-wide'} ${!narrow || inSubPage ? 'flex' : 'hidden'}`} aria-hidden={showBlockingOverlay}>
         <ErrorBoundary>
@@ -166,9 +190,7 @@ export function App() {
       <OwnerChoiceHost />
       {!showBlockingOverlay && <PerformanceNoticeHost />}
       {showBlockingOverlay && (
-        <RelayBlockingOverlay
-          status={status}
-        />
+        <RelayBlockingOverlay connecting={status === 'connecting'} />
       )}
     </div>
   );

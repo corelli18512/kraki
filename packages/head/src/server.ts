@@ -18,7 +18,7 @@ import { RemoteAuthBackend, type EdgeRevocation } from './remote-auth-backend.js
 import type { AuthErrorCode } from '@kraki/protocol';
 import { broadcastDeviceJoined, broadcastDeviceLeft, broadcastDevicePending } from './server/presence.js';
 import { handleRequestVoiceLease } from './server/voice-lease.js';
-import { type ClientState, type HeadServerOptions, DEFAULT_MAX_PAYLOAD, DEFAULT_AUTH_TIMEOUT_MS, DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS, MAX_MULTICAST_TARGETS, MAX_WS_BUFFERED_BYTES, LIVENESS_SWEEP_INTERVAL_MS, PONG_GRACE_MS, isValidMessage, isValidAuth } from './server/shared.js';
+import { type ClientState, type HeadServerOptions, DEFAULT_MAX_PAYLOAD, DEFAULT_AUTH_TIMEOUT_MS, DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS, MAX_MULTICAST_TARGETS, MAX_WS_BUFFERED_BYTES, STALLED_SEND_TIMEOUT_MS, LIVENESS_SWEEP_INTERVAL_MS, PONG_GRACE_MS, isValidMessage, isValidAuth } from './server/shared.js';
 export type { HeadServerOptions } from './server/shared.js';
 
 export class HeadServer {
@@ -495,6 +495,10 @@ export class HeadServer {
       const requested = [...new Set(msg.to)];
       if (requested.length === 0 || requested.length > MAX_MULTICAST_TARGETS) {
         this.sendError(ws, `multicast target count must be between 1 and ${MAX_MULTICAST_TARGETS}`);
+        // Consume the frame anyway (see the unicast branch): left unacked, the
+        // sender would retransmit it forever and every later seq on that
+        // stream would wait behind it.
+        this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse, to: [] });
         return;
       }
       const allowed = requested.filter((targetId) => {
@@ -565,7 +569,8 @@ export class HeadServer {
       return;
     }
 
-    this.sendError(ws, `Unknown message type: ${msg.type}`);
+    // The type is the sender's: bound what is echoed back (and logged).
+    this.sendError(ws, `Unknown message type: ${String(msg.type).slice(0, 64)}`);
   }
 
   // --- Voice lease issuance ---
@@ -580,15 +585,30 @@ export class HeadServer {
     const online = !!ws && ws.readyState === WebSocket.OPEN;
     trace('HUB-TX-WS', { to: deviceId, online, pulseB64Len: pulseB64.length });
     if (!online) return false;
-    // Backpressure: a connected but stalled client would otherwise grow the
-    // socket's send buffer without bound. Drop the connection instead; every
-    // reliable frame is still in the pulse outbox and resends on reconnect.
-    if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
-      metrics().inc('conn.stalledClosed');
-      getLogger().warn('Closing stalled connection (send buffer full)', { deviceId, bufferedBytes: ws.bufferedAmount });
-      ws.terminate();
-      return false;
+    // Backpressure: the send buffer must stay bounded. Over the ceiling, hold
+    // the frame back instead of queueing it: every reliable frame stays in
+    // the Pulse outbox, and the gap is resent once the client has caught up
+    // (its ACKs and heartbeats report the hole). Disconnecting here instead
+    // turned a slow link into a loop: each reconnect resent the backlog at
+    // once and filled the buffer again. Only a client whose buffer does not
+    // drain at all is stalled and disconnected.
+    const state = this.clients.get(ws);
+    const buffered = ws.bufferedAmount;
+    if (buffered > MAX_WS_BUFFERED_BYTES) {
+      const now = Date.now();
+      const pressure = state?.sendBackpressure;
+      if (!pressure || buffered < pressure.bytes) {
+        if (state) state.sendBackpressure = { at: now, bytes: buffered };
+        if (!pressure) getLogger().info('Send buffer full; holding frames back until it drains', { deviceId, bufferedBytes: buffered });
+      } else if (now - pressure.at >= STALLED_SEND_TIMEOUT_MS) {
+        metrics().inc('conn.stalledClosed');
+        getLogger().warn('Closing stalled connection (send buffer full, not draining)', { deviceId, bufferedBytes: buffered });
+        ws.terminate();
+        return false;
+      }
+      return true;
     }
+    if (state?.sendBackpressure) state.sendBackpressure = undefined;
     // `to` lets the receiver's own pulse layer know which stream this is; blob
     // is empty because the payload (if any) is inside the pulse frame.
     ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));

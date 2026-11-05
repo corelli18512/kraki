@@ -72,4 +72,45 @@ describe('ChatScroller touch momentum', () => {
     scrollTo(500);
     expect(onNearTop).not.toHaveBeenCalled();
   });
+
+  it('K-105: a page prepended during the fling keeps the reader on the same row (WebKit drops scrollTop writes mid-momentum)', async () => {
+    const ROW = 100;
+    const older = Array.from({ length: 10 }, (_, i) => ({ key: `o${i + 1}` }));
+    let top = 2_000;
+    let coasting = false;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const key = this.dataset.scrollKey;
+      if (key === undefined) return DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 800 });
+      const index = [...this.parentElement!.children].indexOf(this);
+      return DOMRect.fromRect({ x: 0, y: index * ROW - top, width: 400, height: ROW });
+    });
+    try {
+      const view = (list: { key: string }[]) => <ChatScroller rows={list} renderRow={(row) => <p>{row.key}</p>} topInset={0} bottomInset={0} />;
+      const { container, rerender } = render(view(rows));
+      const el = container.querySelector<HTMLDivElement>('[data-chat-scroll]')!;
+      let count = rows.length;
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => count * ROW + 800 });
+      Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 800 });
+      Object.defineProperty(el, 'scrollTop', {
+        configurable: true,
+        get: () => top,
+        // Model of the WebKit behaviour: while momentum coasts a write is
+        // lost unless the momentum has been stopped (overflow hidden).
+        set: (v: number) => { if (!coasting || el.style.overflowY === 'hidden') top = v; },
+      });
+      const scrollTo = (value: number) => { top = value; fireEvent.scroll(el); };
+      scrollTo(1_000);
+      fireEvent.touchStart(el, { touches: [{ clientY: 100 }] });
+      fireEvent.touchMove(el, { touches: [{ clientY: 180 }] });
+      scrollTo(900);
+      fireEvent.touchEnd(el, { touches: [] });
+      coasting = true;
+      scrollTo(500); // reading row 6 at the top
+      count = rows.length + older.length;
+      rerender(view([...older, ...rows]));
+      expect(top).toBe(500 + older.length * ROW);
+      await frame();
+      expect(el.style.overflowY).toBe('');
+    } finally { rect.mockRestore(); }
+  });
 });

@@ -20,7 +20,7 @@ CoreGraphics and owns:
 - newer-page suppression after an older request until explicit newer intent;
 - animated-navigation paging suppression;
 - shared older/newer edge trigger distances;
-- shared navigation-control visibility thresholds, animation timing, and safety timeout;
+- shared navigation-control animation timing and safety timeout;
 - the shared 24pt bottom tolerance and 0.5pt movement epsilon.
 
 The native adapters remain responsible for mechanics that cannot safely be
@@ -45,6 +45,11 @@ a negative offset delta means older-history movement on both platforms.
 3. Explicit older-history movement wins over the 24pt bottom tolerance.
 4. Stationary layout/inset reflections cannot erase older intent.
 5. Newer movement reattaches to the tail only inside the shared tolerance.
+   A view that comes to rest on the tail follows it again, even when its last
+   movement was a rubber-band bounce back from overscroll past the tail.
+   While newer history is paged out of the window, the loaded bottom is not
+   the tail (iOS feeds an infinite tail distance), so newer pages land below
+   the reader instead of re-pinning past them.
 6. Explicit tail pinning clears older intent but does not itself release the
    entry lock, because initial layout uses the same operation.
 7. One continuous interaction can consume at most one older-page request.
@@ -52,8 +57,11 @@ a negative offset delta means older-history movement on both platforms.
 9. An older-page request suppresses newer recovery until explicit newer intent.
 10. Animated latest-start/tail navigation suppresses edge paging and hides both
     navigation controls until it lands or is cancelled by user interaction.
-11. Both platforms use a `max(320pt, 2 × viewport)` older prefetch band, a
-    320pt newer trigger, and the same navigation-control thresholds.
+11. Both platforms use a `max(320pt, 2 × viewport)` older prefetch band and a
+    320pt newer trigger. The ↓ (jump to latest) control shows whenever the
+    view is not at the conversation's newest message (unloaded newer history
+    counts as not there); the earlier 1.5-viewport threshold was dropped on
+    purpose for both platforms (Mac #330 parity with the confirmed iOS rule).
 12. A new Session resets the complete policy atomically.
 
 ## Event mapping
@@ -69,7 +77,6 @@ a negative offset delta means older-history movement on both platforms.
   `refreshFollowingTail`, never a synthetic user movement
 - either platform edge approach → `shouldRequestOlderPage` /
   `shouldRequestNewerPage`
-- either platform navigation rail → `navigationControlVisibility`
 - either platform pin-to-bottom → `pinToTail`
 
 ## Validation

@@ -822,4 +822,50 @@ extension SessionStoreTests {
         XCTAssertEqual(store.unreadSessionIDs, expected())
         XCTAssertEqual(store.totalUnread, expected().count)
     }
+
+    // MARK: - Drafts (K-083)
+
+    /// A typed draft is still there after the app is killed and relaunched.
+    func testDraftsSurviveRelaunch() {
+        store.setDraft("sess-1", "half-typed thought")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts["sess-1"], "half-typed thought")
+
+        store.setDraft("sess-1", "")
+        store.flushCache()
+        XCTAssertNil(SessionStore().drafts["sess-1"], "a sent or cleared draft does not come back")
+    }
+
+    func testRemovedSessionAndResetForgetPersistedDrafts() {
+        store.setDraft("gone", "for a deleted session")
+        store.setDraft("kept", "still here")
+        store.removeSession("gone")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts, ["kept": "still here"])
+
+        store.reset()
+        XCTAssertEqual(SessionStore().drafts, [:], "sign-out leaves no draft on disk")
+    }
+
+    // MARK: - Open session removed (K-039)
+
+    /// K-039: a session deleted while it is open (here, from another device,
+    /// or missing from its computer's session list) returns to the list.
+    func testDeletingTheOpenSessionSignalsReturnToTheSessionList() {
+        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
+        store.upsertSession(makeDigest(id: "other"), deviceId: "dev-1", deviceName: "MB")
+        store.activeSessionId = "open"
+        let before = store.popToSessionListSignal
+
+        store.removeSession("other")
+        XCTAssertEqual(store.popToSessionListSignal, before, "another session's delete keeps the chat open")
+
+        store.removeSession("open")
+        XCTAssertEqual(store.popToSessionListSignal, before &+ 1, "session_deleted for the open chat")
+
+        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
+        store.reconcileSessionList([makeDigest(id: "kept")], deviceId: "dev-1", deviceName: "MB")
+        XCTAssertNil(store.sessions["open"])
+        XCTAssertEqual(store.popToSessionListSignal, before &+ 2, "dropped from its computer's session list")
+    }
 }

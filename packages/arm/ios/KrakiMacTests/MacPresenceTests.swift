@@ -138,7 +138,51 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertNotNil(NSImage(named: "MenuBarKraki"), "logo silhouette asset missing")
     }
 
+    /// K-250: VoiceOver read the status item only as "Kraki".
+    func testStatusItemLabelSaysWhetherThisMacIsOnline() {
+        XCTAssertEqual(MacMenuBarIcon.accessibilityLabel(status: .online, isDevBuild: false),
+                       "Kraki – \(MacOnlineStatus.online.title)")
+        XCTAssertEqual(MacMenuBarIcon.accessibilityLabel(status: .offline, isDevBuild: false),
+                       "Kraki – \(MacOnlineStatus.offline.title)")
+        XCTAssertEqual(MacMenuBarIcon.image(status: .offline, needsYou: false, isDevBuild: false).accessibilityDescription,
+                       "Kraki – \(MacOnlineStatus.offline.title)")
+    }
+
+    /// K-359: Kraki Dev's status item looked exactly like the release app's.
+    func testDevBuildIconIsMarkedAndStaysATemplate() throws {
+        func pixels(_ image: NSImage) throws -> Data {
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        }
+        let release = MacMenuBarIcon.image(status: .online, needsYou: false, isDevBuild: false)
+        let dev = MacMenuBarIcon.image(status: .online, needsYou: false, isDevBuild: true)
+        XCTAssertTrue(dev.isTemplate, "tinted by macOS like the release icon")
+        XCTAssertNotEqual(try pixels(dev), try pixels(release), "the Dev icon carries a mark")
+        XCTAssertTrue(MacMenuBarIcon.accessibilityLabel(status: .online, isDevBuild: true).hasPrefix("Kraki Dev"))
+        XCTAssertTrue(MacMenuBarIcon.isDevBuild, "this test host is Kraki Dev")
+    }
+
+    /// K-249: the status row opened Settings on whichever tab was used last.
+    func testStatusRowOpensSettingsOnThisMac() {
+        PreferencesTabSelection.shared.tab = .about
+        MenuBarExtraView.selectThisMacSettingsTab()
+        XCTAssertEqual(PreferencesTabSelection.shared.tab, .thisMac)
+        PreferencesTabSelection.shared.tab = .general
+    }
+
     // MARK: Needs you
+
+    /// K-251: a title long enough to wrap pushed the reason line out of the menu.
+    func testNeedsYouTitleFitsOneMenuLine() {
+        let long = String(repeating: "Refactor the session list reconciliation ", count: 4)
+        let items = MenuBarNeedsYou.items(
+            titles: ["a": long],
+            previews: ["a": SessionPreview(text: "?", type: "question", timestamp: "2026-10-07T10:00:00Z")])
+        let title = items.first?.title ?? ""
+        XCTAssertLessThanOrEqual(title.count, 48)
+        XCTAssertTrue(title.hasSuffix("…"))
+        XCTAssertEqual(items.first?.reason, "Asked you a question")
+    }
 
     func testNeedsYouListsOnlyPermissionsAndQuestionsOfLiveSessions() {
         let previews: [String: SessionPreview] = [
@@ -209,6 +253,33 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 1))
     }
 
+    /// macOS reopening Kraki at login without the login-item event can create
+    /// the window, run its startup and never show it. The Dock icon must
+    /// still go once launch settled (it stayed, with zero windows: K-334).
+    func testASettledLaunchWithoutAWindowDropsTheDockIcon() {
+        let startedHidden = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: true, visibleWindows: 0)
+        XCTAssertTrue(startedHidden.dropDockIcon)
+        XCTAssertFalse(startedHidden.startWithoutWindow, "startup already ran")
+        let nothingStarted = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: false, visibleWindows: 0)
+        XCTAssertTrue(nothingStarted.dropDockIcon)
+        XCTAssertTrue(nothingStarted.startWithoutWindow)
+        let windowShown = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: true, visibleWindows: 1)
+        XCTAssertFalse(windowShown.dropDockIcon)
+        XCTAssertFalse(windowShown.startWithoutWindow)
+    }
+
+    /// Quitting right after launch, while launch was still bringing this Mac
+    /// online, left the service registered and the Mac online with no app
+    /// (K-118). The quit marks the manager so that startBuiltIn and
+    /// reRegisterBuiltIn refuse to register the job again. Seam test only:
+    /// registering the real job is not possible in tests.
+    func testGoingOfflineForQuitIsRemembered() async {
+        let tentacle = TentacleCLIManager()
+        XCTAssertFalse(tentacle.quittingOffline)
+        await tentacle.goOfflineForQuit()
+        XCTAssertTrue(tentacle.quittingOffline)
+    }
+
     func testQuitEventDescriptorsAreClassified() {
         let target = NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier)
         let userQuit = NSAppleEventDescriptor(
@@ -232,5 +303,55 @@ final class MacPresenceTests: XCTestCase {
         open.setParam(NSAppleEventDescriptor(enumCode: OSType(keyAELaunchedAsLogInItem)), forKeyword: AEKeyword(keyAEPropData))
         XCTAssertTrue(MacPresenceController.wasLaunchedAsLoginItem(open))
         XCTAssertFalse(MacPresenceController.wasLaunchedAsLoginItem(nil))
+    }
+
+    // MARK: QA fixes (mac-lifecycle-a)
+
+    /// K-331 / K-333: the login item is added only after the user chose to run
+    /// agents here, and never from a copy that won't stay.
+    func testLoginItemOnlyForAnInstalledMacThatRunsAgents() {
+        typealias P = MacPresenceController
+        let installed = "/Applications/Kraki.app"
+        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true, bundlePath: installed))
+        // First launch: no role chosen and nothing set up yet (K-333).
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: false, bundlePath: installed))
+        // An install from before the role step runs agents and keeps opening at login.
+        XCTAssertTrue(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: true, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: false, role: .remoteOnly, configured: true, bundlePath: installed))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true,
+                                                 bundlePath: "/Volumes/Kraki/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .runsAgents, configured: true,
+                                                 bundlePath: "/private/var/folders/x/AppTranslocation/A/d/Kraki.app"))
+        XCTAssertFalse(P.shouldRegisterLoginItem(managesPresence: true, role: .undecided, configured: true,
+                                                 bundlePath: "/Users/me/.Trash/Kraki.app"))
+    }
+
+    /// K-256: Debug KRAKI_MAC_FORCE_SIGNED_OUT survives app activation.
+    func testForcedSignedOutLaunchIsNotUndoneByActivation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("forced-signed-out-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        // Never the real ~/.kraki: a regression must not sign the test host in.
+        var lookedForLogin = false
+        AuthManager.debugCLICredentialLoader = { _ in lookedForLogin = true; return nil }
+        defer { AuthManager.debugCLICredentialLoader = nil }
+        let coordinator = MacLaunchCoordinator()
+        coordinator.forceSignedOut = true
+        await coordinator.retryLogin(appState: app)
+        XCTAssertFalse(lookedForLogin, "activation must not even look for a login")
+        XCTAssertEqual(coordinator.phase, .launching)
+        XCTAssertFalse(coordinator.loginCheckFailed)
+        XCTAssertTrue(coordinator.forceSignedOut)
+    }
+
+    /// K-350: the 2 s launch-gate limit counts from when the gate appeared.
+    func testLaunchGateWatchdogCountsFromTheGate() {
+        typealias C = MacLaunchCoordinator
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 0), 2, accuracy: 0.001)
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 0.9), 1.1, accuracy: 0.001)
+        // The shell still gets a moment to lay out.
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 1.9), 0.5, accuracy: 0.001)
+        XCTAssertEqual(C.presentationWatchdogDelay(gateVisibleFor: 5), 0.5, accuracy: 0.001)
     }
 }

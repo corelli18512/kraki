@@ -204,9 +204,10 @@ struct MacStepsView: View {
                     .textSelection(.enabled)
             }
         case "error":
-            Label(message.content ?? message.result ?? String(localized: "Error"), systemImage: "exclamationmark.triangle")
+            Label(ErrorStep.text(message), systemImage: "exclamationmark.triangle")
                 .font(.system(size: 15))
                 .foregroundStyle(.red)
+                .textSelection(.enabled)
         case "permission":
             VStack(alignment: .leading, spacing: 3) {
                 Label(PermissionStep.title(message), systemImage: "lock")

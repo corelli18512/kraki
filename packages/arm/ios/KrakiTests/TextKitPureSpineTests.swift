@@ -23,7 +23,7 @@ final class TextKitPureSpineTests: XCTestCase {
         }
     }
 
-    private func descendants<T: UIView>(of root: UIView, as type: T.Type = T.self) -> [T] {
+    func descendants<T: UIView>(of root: UIView, as type: T.Type = T.self) -> [T] {
         root.subviews.flatMap { subview in
             (subview as? T).map { [$0] } ?? descendants(of: subview, as: type)
         }
@@ -62,7 +62,7 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(collection.contentOffset.y, 240)
     }
 
-    private func message(_ type: String, seq: Int, content: String? = nil) -> ChatMessage {
+    func message(_ type: String, seq: Int, content: String? = nil) -> ChatMessage {
         var payload: [String: AnyCodable] = [:]
         if let content { payload["content"] = AnyCodable(content) }
         return ChatMessage(
@@ -75,7 +75,7 @@ final class TextKitPureSpineTests: XCTestCase {
         )
     }
 
-    private func content(_ type: String, seq: Int, body: String, steps: Int? = nil) -> TKBubbleContent {
+    func content(_ type: String, seq: Int, body: String, steps: Int? = nil) -> TKBubbleContent {
         var message = message(type, seq: seq, content: body)
         if let steps { message.payload["steps"] = AnyCodable(steps) }
         TKBubbleContent.bust(message.id)
@@ -617,10 +617,12 @@ final class TextKitPureSpineTests: XCTestCase {
         """
         let rendered = TKMarkdown.attributed(source, cacheKey: "code-badge-space-test")
         let withBadge = TKMeasure.height(rendered, width: 220)
-        let plain = TKMeasure.height(NSAttributedString(
+        // The same line wrapped the way the bubble wraps code (long tokens
+        // break without inserted hyphens).
+        let plain = TKMeasure.height(TKMarkdown.breakingLongTokens(NSAttributedString(
             string: "let extremelyLongVariableNameThatMustWrap = makeBubble(configuration: .production)",
             attributes: [.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)]
-        ), width: 196)
+        )), width: 196)
         XCTAssertGreaterThanOrEqual(withBadge, plain + 24)
     }
 

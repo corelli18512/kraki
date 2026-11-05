@@ -89,7 +89,7 @@ import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { logger as relayLogger } from '../relay/shared.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
-import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
+import { PayloadAssembler, QUESTION_WITHDRAWN_FEATURE, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -217,6 +217,7 @@ function createSessionManager(): Record<string, unknown> {
     updateContext: vi.fn(),
     getContext: vi.fn(() => null),
     getMeta: vi.fn(() => null),
+    getInputLedger: vi.fn(() => []),
     getInputLedgerEntry: vi.fn(() => null),
     findUserMessageSeqByClientId: vi.fn(() => null),
     recordInputLedger: vi.fn(),
@@ -338,6 +339,41 @@ describe('RelayClient auth negotiation', () => {
     expect(deleted).toHaveBeenCalledTimes(1);
     expect(fatal).not.toHaveBeenCalled();
     expect(sockets).toHaveLength(1);
+  });
+
+  it('K-123: does not reconnect after the relay replaced it with another connection of this device id (4009)', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const replaced = vi.fn();
+    const fatal = vi.fn();
+    client.onDeviceReplaced = replaced;
+    client.onFatalError = fatal;
+
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('close', 4009, Buffer.from('replaced'));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Reconnecting would evict the other copy, which would evict this one:
+    // the two traded the connection forever.
+    expect(sockets).toHaveLength(1);
+    expect(replaced).toHaveBeenCalledTimes(1);
+    expect(fatal).not.toHaveBeenCalled();
+    expect(client.getState()).toBe('disconnected');
+
+    // An explicit connect (restart) takes the connection back.
+    client.connect();
+    expect(sockets).toHaveLength(2);
+    client.disconnect();
   });
 
   it.each(['service_unavailable', 'auth_unavailable'])('reconnects (never goes fatal) on a transient %s auth error', async (code) => {
@@ -1171,7 +1207,7 @@ describe('RelayClient set_session_model', () => {
     expect(modelSet.sessionId).toBe('sess_1');
   });
 
-  it('does not acknowledge a failed model change and rolls persisted metadata back', async () => {
+  it('does not acknowledge a failed model change, rolls metadata back and restates the previous model (K-010)', async () => {
     const { adapter, sm } = buildConnectedClient();
     sm.getMeta.mockReturnValue({
       id: 'sess_1',
@@ -1195,7 +1231,10 @@ describe('RelayClient set_session_model', () => {
     expect(sm.setModel).toHaveBeenNthCalledWith(1, 'sess_1', 'missing/model', undefined);
     expect(sm.setModel).toHaveBeenNthCalledWith(2, 'sess_1', 'old-model', 'low');
     const sent = decodePulseSends(ws.sent);
-    expect(sent.find(m => m.type === 'session_model_set')).toBeUndefined();
+    const modelSets = sent.filter(m => m.type === 'session_model_set');
+    expect(modelSets).toHaveLength(1);
+    expect(modelSets[0].sessionId).toBe('sess_1');
+    expect(modelSets[0].payload).toEqual({ model: 'old-model', reasoningEffort: 'low' });
     expect(sent.find(m => m.type === 'error')?.payload.message).toContain('unknown provider');
   });
 
@@ -1868,6 +1907,22 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('K-315: an attachment request with an unsafe id is answered not_found, not dropped silently', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: '../../config', sessionId: 'sess_1' },
+      })));
+      const replies = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(replies).toHaveLength(1);
+      expect(replies[0].payload).toMatchObject({ id: '../../config', error: 'not_found', data: '' });
+    } finally { cleanup(); }
+  });
+
   it('sends account usage to apps: broadcast on update, unicast to a joining app, never before any reading', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {
@@ -1890,15 +1945,17 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('advertises account_usage only when the monitor is enabled', () => {
+  it('advertises account_usage only when the monitor is enabled, account_usage_off otherwise (K-084)', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {
       const first = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
       expect((first?.payload as { features: string[] }).features).not.toContain('account_usage');
+      expect((first?.payload as { features: string[] }).features).toContain('account_usage_off');
       ws.sent.length = 0;
       client.setAccountUsageEnabled(true);
       const again = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
       expect((again?.payload as { features: string[] }).features).toContain('account_usage');
+      expect((again?.payload as { features: string[] }).features).not.toContain('account_usage_off');
     } finally { cleanup(); }
   });
 
@@ -2153,6 +2210,86 @@ describe('RelayClient tool message lazy-load shape', () => {
       ws.sent.length = 0;
       pull();
       expect(pulsePayloads(ws.sent).filter((p) => isPayloadFragment(p.payload))).toHaveLength(0);
+    } finally { cleanup(); }
+  });
+
+  it('splits a multicast to more online apps than the Head accepts into envelopes of at most 64 (K-136)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      const others = Array.from({ length: 69 }, (_, i) => `app-${i}`);
+      for (const id of others) {
+        ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_joined', device: { id, role: 'app', encryptionKey: `pub-${id}` } })));
+      }
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'to everyone' });
+      const envelopes = ws.sent.map((raw) => JSON.parse(raw) as { type: string; to?: unknown }).filter((e) => e.type === 'multicast');
+      expect(envelopes.length).toBeGreaterThan(1);
+      expect(envelopes.every((e) => Array.isArray(e.to) && e.to.length <= 64)).toBe(true);
+      const reached = new Set(envelopes.flatMap((e) => e.to as string[]));
+      expect([...reached].sort()).toEqual(['consumer-dev', ...others].sort());
+      expect(decodePulseSends(ws.sent).filter((m) => m.type === 'agent_message')).toHaveLength(envelopes.length);
+    } finally { cleanup(); }
+  });
+
+  it('never sends a payload whole through the relay above its message limit (K-038)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      loggedLines.length = 0;
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'x'.repeat(8 * 1024 * 1024) });
+      // consumer-dev never declared fragments: nothing for it on the wire.
+      expect(pulsePayloads(ws.sent)).toHaveLength(0);
+      expect(loggedLines.some((a) => typeof a[1] === 'string' && /too large to send whole/.test(a[1]))).toBe(true);
+
+      // The same payload goes as fragments once the app can reassemble them.
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'y'.repeat(8 * 1024 * 1024) });
+      const frags = pulsePayloads(ws.sent);
+      expect(frags.length).toBeGreaterThan(100);
+      expect(frags.every((f) => isPayloadFragment(f.payload))).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('does not send fragments an app would discard as over its reassembly budget (K-038)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      loggedLines.length = 0;
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'z'.repeat(49 * 1024 * 1024) });
+      expect(pulsePayloads(ws.sent)).toHaveLength(0);
+      expect(loggedLines.some((a) => typeof a[1] === 'string' && /larger than an app reassembles/.test(a[1]))).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('keeps the fragments declaration of an app that stayed online across a relay reconnect (K-302)', async () => {
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.emit('close', 1006, Buffer.from(''));
+      await vi.advanceTimersByTimeAsync(100);
+      const next = sockets.at(-1)!;
+      expect(next).not.toBe(ws);
+      next.emit('open');
+      next.emit('message', Buffer.from(JSON.stringify({
+        type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'open' },
+        devices: [{ id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub', online: true }],
+      })));
+      const ref = store.put('sess_1', Buffer.alloc(120 * 1024, 0x61), 'application/octet-stream');
+      next.sent.length = 0;
+      next.emit('message', Buffer.from(consumerJson({
+        type: 'request_attachment', deviceId: 'consumer-dev', sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 0 },
+      })));
+      const frags = pulsePayloads(next.sent).filter((p) => isPayloadFragment(p.payload));
+      expect(frags.length).toBeGreaterThan(2);
     } finally { cleanup(); }
   });
 
@@ -3306,6 +3443,34 @@ describe('RelayClient pending-question digest', () => {
     askQ('q1');
     (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
     expect(preview()?.type).not.toBe('question');
+  });
+
+  /** Every online app declares `features` the way `client_features` does. */
+  const declareAppFeatures = (client: RelayClient, features: string[]) => {
+    for (const id of (client as unknown as { onlineApps(): string[] }).onlineApps()) client.appFeatures.set(id, new Set(features));
+  };
+
+  it('tells apps that a withdrawn question is closed (K-022)', () => {
+    const { adapter, client, ws, askQ, digest } = buildClient();
+    askQ('q1');
+    expect(digest()).toBeDefined(); // an app is connected
+    declareAppFeatures(client, [QUESTION_WITHDRAWN_FEATURE, 'fragments']);
+    ws.sent.length = 0;
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    const withdrawn = decodePulseSends(ws.sent).find((m) => m.type === 'question_withdrawn');
+    expect(withdrawn).toMatchObject({ sessionId: 'sess_1', payload: { questionId: 'q1' } });
+  });
+
+  it('does not send question_withdrawn to an app that did not declare it (older apps would cache it as a row)', () => {
+    const { adapter, client, ws, askQ, digest } = buildClient();
+    askQ('q1');
+    expect(digest()).toBeDefined(); // an app is connected
+    declareAppFeatures(client, ['fragments']);
+    ws.sent.length = 0;
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    const sent = decodePulseSends(ws.sent);
+    expect(sent.some((m) => m.type === 'question_withdrawn')).toBe(false);
+    expect(sent.some((m) => m.type === 'session_list')).toBe(true);
   });
 
   it('clears BOTH question and permission attention on terminal turn end (no short-circuit leak)', () => {
@@ -4568,6 +4733,22 @@ describe('RelayClient pending-question digest', () => {
     expect(ack?.payload?.snapshot?.card?.draft ?? '').toBe('');
     // The card no longer carries the question (it is on the spine).
     expect(ack?.payload?.snapshot?.card?.action ?? null).toBeNull();
+  });
+
+  it('answers a subscription to an unsafe session id with session_not_found instead of silence (K-299)', () => {
+    const { client, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', relaySeq: 9003,
+      device: { id: 'app-fresh-3', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+    })));
+    ws.sent.length = 0;
+    handleConsumerMessage(client, {
+      type: 'set_session_subscription', deviceId: 'app-fresh-3', seq: 1, timestamp: '',
+      payload: { sessionId: '../../etc', requestId: 'req-9' },
+    });
+    const ack = decodePulseSends(ws.sent).find((m) => m.type === 'session_subscription_set');
+    expect(ack?.payload).toMatchObject({ accepted: false, requestId: 'req-9', error: { code: 'session_not_found' } });
+    expect(client.currentSessionByArm.get('app-fresh-3')).not.toBe('../../etc');
   });
 
   it('does not push a card snapshot for sessions with no active card', () => {

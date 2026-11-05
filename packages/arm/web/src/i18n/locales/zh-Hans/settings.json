@@ -91,7 +91,11 @@
     "holdUsage": "按住 {{shortcut}} 速览账户用量",
     "shortcutFooterFloating": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开；在其他应用上方时则悬浮显示。托盘中的“账户用量”可随时打开面板。",
     "shortcutFooterTray": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。托盘中的“账户用量”可随时打开面板。",
-    "shortcutFooterSidebar": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。侧边栏中的“账户用量”可随时打开面板。"
+    "shortcutFooterSidebar": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。侧边栏中的“账户用量”可随时打开面板。",
+    "shortcutFooterSidebarMac": "单击快捷键可选择其他按键：F1–F20，或与 Control、Option 或 Command 组合。Kraki 在前台时，面板在其窗口内打开。侧边栏中的“账户用量”可随时打开面板。",
+    "shortcutFooterInline": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。上方的“显示账户用量”可随时打开面板。",
+    "shortcutFooterInlineMac": "单击快捷键可选择其他按键：F1–F20，或与 Control、Option 或 Command 组合。Kraki 在前台时，面板在其窗口内打开。上方的“显示账户用量”可随时打开面板。",
+    "showUsage": "显示账户用量"
   },
   "title": "设置",
   "voice": {
@@ -121,6 +125,7 @@
       "leaseTimeout": "语音授权请求超时。",
       "noMicrophone": "没有可用的麦克风。请连接麦克风后重试。",
       "permission": "需要麦克风访问权限。请在系统隐私设置中允许 Kraki 访问。",
+      "permissionBrowser": "麦克风访问被阻止。请在浏览器的网站设置中允许此网站使用麦克风，然后重试。",
       "unavailable": "此地区暂不支持语音输入。",
       "offline": "无法连接 Kraki。请检查网络连接后重试。",
       "invalidAddress": "语音服务地址无效。",
@@ -166,6 +171,7 @@
     "disablePush": "无法关闭推送通知。",
     "blockedNotifications": "通知已被阻止。请在网站设置中开启。",
     "updatePush": "无法更新推送通知。",
+    "pushRefused": "中继服务器未接受此浏览器的推送通知。Kraki 打开时仍会显示通知。",
     "copyDiagnostics": "无法复制诊断信息。"
   },
   "account": {
@@ -192,6 +198,7 @@
     "pushOn": "推送通知已开启，关闭此浏览器后仍可接收。",
     "pushOff": "开启通知可在关闭此浏览器后接收回复和请求。",
     "unavailable": "此中继服务器不支持推送通知。",
+    "unsupported": "此浏览器不支持推送通知。",
     "deniedSystem": "已关闭 — 请在系统设置中开启",
     "deniedSite": "已关闭 — 请在网站设置中开启",
     "footerDesktop": "Kraki 运行时（包括在托盘中运行时）显示通知，但你正在查看的会话除外。",
@@ -227,7 +234,8 @@
     "scanAgain": "身份验证失败。请扫描新的配对二维码。",
     "reconnecting": "身份验证暂时不可用。正在重新连接…",
     "signIn": "身份验证失败。请使用 GitHub 登录或扫描配对二维码。",
-    "scan": "身份验证失败。请扫描配对二维码。"
+    "scan": "身份验证失败。请扫描配对二维码。",
+    "untrustedRedirect": "此服务器要求将你转到一个 Kraki 不信任的服务器。正在重试…"
   },
   "performanceNotice": {
     "title": "帮助改进 Kraki",
@@ -235,5 +243,12 @@
     "settingsHint": "你可以随时在设置 › 隐私中更改此选项。",
     "decline": "不共享",
     "ok": "好"
+  },
+  "dogfood": {
+    "switchFailed": "无法在此浏览器中切换",
+    "title": "内测",
+    "builds": "版本",
+    "detail": "内部账户：你会最先收到每个新版本。",
+    "switching": "正在切换…"
   }
 }

@@ -24,96 +24,13 @@ import AppKit
 typealias ChatTableFont = NSFont
 #endif
 
-extension NSAttributedString.Key {
-    /// Marks an inline-code run inside a table cell (drawn with a chip).
-    static let chatTableCode = NSAttributedString.Key("chat.kraki.tableCode")
-}
-
-enum ChatTableStyle {
-    #if os(iOS)
-    static let bodySize: CGFloat = 14
-    #else
-    static let bodySize: CGFloat = 13.5
-    #endif
-    static let headerSize: CGFloat = 12.5
-    static let padH: CGFloat = 10
-    static let padV: CGFloat = 7
-    static let cornerRadius: CGFloat = 10
-    static let footerHeight: CGFloat = 34
-    static let previewRowLimit = 8
-    static let cardFieldLimit = 4
-    /// Below this bubble width a text-heavy table may become cards.
-    static let compactWidth: CGFloat = 480
-    static let minTokenCap: CGFloat = 200
-    static let preferredCap: CGFloat = 420
-    /// Column width cap when the grid scrolls sideways.
-    static let scrollColumnCap: CGFloat = 260
-
-    static func system(_ size: CGFloat, _ weight: ChatTableFont.Weight = .regular) -> ChatTableFont {
-        .systemFont(ofSize: size, weight: weight)
-    }
-    static func digits(_ size: CGFloat, _ weight: ChatTableFont.Weight = .regular) -> ChatTableFont {
-        .monospacedDigitSystemFont(ofSize: size, weight: weight)
-    }
-    static func mono(_ size: CGFloat) -> ChatTableFont {
-        .monospacedSystemFont(ofSize: size - 1, weight: .regular)
-    }
-    static func italic(_ font: ChatTableFont) -> ChatTableFont {
-        #if os(iOS)
-        guard let descriptor = font.fontDescriptor.withSymbolicTraits(.traitItalic) else { return font }
-        return UIFont(descriptor: descriptor, size: font.pointSize)
-        #else
-        let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
-        return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
-        #endif
-    }
-
-    static var text: PlatformColor {
-        #if os(iOS)
-        .label
-        #else
-        .labelColor
-        #endif
-    }
-    static var secondary: PlatformColor {
-        #if os(iOS)
-        .secondaryLabel
-        #else
-        .secondaryLabelColor
-        #endif
-    }
-    static let link: PlatformColor = {
-        #if os(iOS)
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0x8F / 255, green: 0xD5 / 255, blue: 1, alpha: 1)
-                : UIColor(red: 0x00 / 255, green: 0x56 / 255, blue: 0xA8 / 255, alpha: 1)
-        }
-        #else
-        return NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(red: 0x8F / 255, green: 0xD5 / 255, blue: 1, alpha: 1)
-                : NSColor(red: 0x00 / 255, green: 0x56 / 255, blue: 0xA8 / 255, alpha: 1)
-        }
-        #endif
-    }()
-}
-
-/// Colors resolved by the view for the current appearance, right before drawing.
-struct ChatTablePaint {
-    var hairline: CGColor
-    var headerFill: CGColor
-    var codeFill: CGColor
-    /// Opaque fill under pinned/sticky cells (the surface behind the table).
-    var surface: CGColor
-    var highlight: CGColor
-    var accent: CGColor
-}
-
 // MARK: - Model
 
 final class ChatTable {
     let source: [[String]]
+    /// The rows as the message wrote them (header first). Sorting "off"
+    /// returns to this order.
+    let originalSource: [[String]]
     let alignments: [TableAlignment]
     let columnCount: Int
     let numeric: [Bool]
@@ -161,13 +78,14 @@ final class ChatTable {
             // Numbers read best right-aligned unless the author centered them.
             return numeric[column] && explicit == .leading ? .trailing : explicit
         }
-        self.init(source: normalized, header: headerRow, body: bodyRows, alignments: aligned,
-                  numeric: numeric, sortColumn: nil, sortAscending: true)
+        self.init(source: normalized, originalSource: normalized, header: headerRow, body: bodyRows,
+                  alignments: aligned, numeric: numeric, sortColumn: nil, sortAscending: true)
     }
 
-    private init(source: [[String]], header: [String], body bodyRows: [[String]],
+    private init(source: [[String]], originalSource: [[String]], header: [String], body bodyRows: [[String]],
                  alignments: [TableAlignment], numeric: [Bool], sortColumn: Int?, sortAscending: Bool) {
         self.source = source
+        self.originalSource = originalSource
         self.alignments = alignments
         self.columnCount = header.count
         self.numeric = numeric
@@ -209,12 +127,23 @@ final class ChatTable {
         self.headerWidths = headerWidths
     }
 
-    /// The same table with its body rows reordered by one column (nil = source order).
+    /// A header tap: first in the column's natural direction (numbers
+    /// largest first, text A→Z), then the other direction, then off.
+    func nextSort(tappingColumn column: Int) -> ChatTable {
+        let first = column < numeric.count ? !numeric[column] : true
+        guard sortColumn == column else { return sorted(by: column, ascending: first) }
+        return sortAscending == first ? sorted(by: column, ascending: !first) : sorted(by: nil, ascending: true)
+    }
+
+    /// The same table with its body rows reordered by one column (nil = the
+    /// message's own order).
     func sorted(by column: Int?, ascending: Bool) -> ChatTable {
-        let header = source.first ?? []
-        var rows = Array(source.dropFirst())
+        let header = originalSource.first ?? []
+        var rows = Array(originalSource.dropFirst())
         if let column, column < columnCount {
-            let keyed = rows.enumerated().map { index, row in (index, row, ChatTable.sortKey(plainBody[index][column])) }
+            let keyed = rows.enumerated().map { index, row in
+                (index, row, ChatTable.sortKey(ChatTable.plainText(row[column])))
+            }
             rows = keyed.sorted { a, b in
                 // Empty cells sink to the bottom in both directions.
                 if case .empty = a.2 { if case .empty = b.2 { return a.0 < b.0 }; return false }
@@ -224,8 +153,8 @@ final class ChatTable {
                 return ascending ? order == .orderedAscending : order == .orderedDescending
             }.map(\.1)
         }
-        return ChatTable(source: [header] + rows, header: header, body: rows, alignments: alignments,
-                         numeric: numeric, sortColumn: column, sortAscending: ascending)
+        return ChatTable(source: [header] + rows, originalSource: originalSource, header: header, body: rows,
+                         alignments: alignments, numeric: numeric, sortColumn: column, sortAscending: ascending)
     }
 
     /// Height the table occupies inside a bubble of this width.
@@ -268,7 +197,10 @@ final class ChatTable {
     /// GFM Markdown (cell Markdown preserved).
     func markdown() -> String {
         func line(_ cells: [String]) -> String {
-            "| " + cells.map { $0.replacingOccurrences(of: "|", with: "\\|") }.joined(separator: " | ") + " |"
+            // Cells keep their source Markdown, where a literal pipe is
+            // already written `\|`; escape only the bare ones.
+            "| " + cells.map { $0.replacingOccurrences(of: #"(?<!\\)\|"#, with: #"\\|"#, options: .regularExpression) }
+                .joined(separator: " | ") + " |"
         }
         let separator = "|" + alignments.map { alignment -> String in
             switch alignment {
@@ -342,6 +274,11 @@ final class ChatTable {
     }
 
     private enum SortKey { case number(Double), text(String), empty }
+
+    /// A cell's rendered text (what `plainBody` holds).
+    private static func plainText(_ cell: String) -> String {
+        parseMarkdownInline(cell).map(\.text).joined()
+    }
 
     private static func sortKey(_ text: String) -> SortKey {
         let trimmed = text.trimmingCharacters(in: .whitespaces)

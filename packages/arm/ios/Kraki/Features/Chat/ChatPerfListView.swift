@@ -78,6 +78,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// time they are displayed: the user's from the trailing edge, the AI's
     /// from the leading edge. Expire if never shown.
     var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
+    /// Entrances recorded by applies in quick succession. A catch-up lands as
+    /// several applies a few ms apart: together they are one burst (K-062).
+    var entranceBurst: (ids: [String], lastAt: CFTimeInterval) = ([], 0)
+    static let entranceBurstGap: CFTimeInterval = 0.4
     static let entranceDuration: CFTimeInterval = 0.32
     static let entranceOffset: CGFloat = 48
     static let entranceTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
@@ -303,6 +307,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     let overlay = UILabel()
     var codeHighlightObserver: NSObjectProtocol?
     private var composerSubmitObserver: NSObjectProtocol?
+    private var becomeActiveObserver: NSObjectProtocol?
     var textSizeObserver: NSObjectProtocol?
     /// The text size this list's rows were laid out for (see TKTextSize).
     var laidOutTextSize = ""
@@ -342,6 +347,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                   note.userInfo?["sessionId"] as? String == self.sessionId else { return }
             self.returnToNewestAfterLocalSubmit()
         }
+        becomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshBodyInteractionAfterReturn() }
+        }
         if Self.perfOverlayEnabled {
             setupOverlay()
         }
@@ -360,6 +372,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         if let textSizeObserver {
             NotificationCenter.default.removeObserver(textSizeObserver)
+        }
+        if let becomeActiveObserver {
+            NotificationCenter.default.removeObserver(becomeActiveObserver)
         }
         displayLink?.invalidate()
         warmKickWork?.cancel()
@@ -545,6 +560,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// scroll (the UITextInteraction is the only per-cell fling cost), on at rest.
     private func setVisibleBodiesInteractive(_ on: Bool) {
         for c in collectionView.visibleCells { (c as? TKBubbleCell)?.setBodyInteractive(on) }
+    }
+
+    /// Back from another app (a link opened in Safari): links in visible
+    /// bubbles stayed dead until the list was scrolled, which re-arms each
+    /// body's text interaction. Re-arm them here the same way, at rest.
+    func refreshBodyInteractionAfterReturn() {
+        guard collectionView != nil, !collectionView.isDragging, !collectionView.isDecelerating else { return }
+        setVisibleBodiesInteractive(false)
+        setVisibleBodiesInteractive(true)
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
@@ -778,6 +802,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var lastLiveRenderCost: CFTimeInterval = 0
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         scrollIndicator.didScroll()
+        // Very long bodies keep text views only near the screen.
+        for cell in collectionView.visibleCells { (cell as? TKBubbleCell)?.refreshRealizedChunks() }
         // Finger drag AND its momentum are the user's scroll (momentum toward
         // older keeps loading history); our own anchor compensation is not.
         var userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
@@ -811,7 +837,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmWindow()
         pager.resume()
         setVisibleBodiesInteractive(true)
-        scrollPolicy.endUserInteraction()
+        scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
         settleEdges()
     }
 
@@ -826,7 +852,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             warmWindow()
             pager.resume()
             setVisibleBodiesInteractive(true)
-            scrollPolicy.endUserInteraction()
+            scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
             settleEdges()
             // `isDragging` can still read true inside this callback.
             DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility() }
@@ -844,7 +870,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         codeHighlightSettleWork?.cancel()
         // NOTE: we deliberately do NOT flush a pending page here. The pending
@@ -859,7 +885,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // Re-sample after cancelling programmatic glide state. The shared
         // policy preserves a harmless tail grab until movement establishes
         // explicit older/newer intent.
-        scrollPolicy.refreshFollowingTail(distanceToBottom: distanceToBottom())
+        scrollPolicy.refreshFollowingTail(distanceToBottom: tailFollowDistance())
         // Stand down warming AND page measurement for the duration of the
         // gesture/fling so no expensive self-size competes with scroll frames.
         // Discard stale visible-height jobs from the old viewport; the new visible
@@ -884,12 +910,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         scrollIndicator.beginScrolling()
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollPolicy.recordUserIntent(
             .older,
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollingToTop = true
         return true

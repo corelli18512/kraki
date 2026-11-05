@@ -422,6 +422,14 @@
 .kfailed-mark.is-correcting { color: rgba(0, 0, 0, 0.5); }
 .dark .kfailed-mark.is-correcting { color: rgba(255, 255, 255, 0.55); }
 .kfailed-mark svg { width: 14px; height: 14px; }
+/* A restored input whose attachments could not be kept (outbox K-100). */
+.kpending-note {
+  max-width: 280px;
+  margin: 4px 0 0;
+  color: var(--k-text-2);
+  font-size: 12px;
+  text-align: right;
+}
 .kmenu {
   position: absolute;
   bottom: 28px;
@@ -465,6 +473,11 @@
   box-shadow: inset 0 0 0 0.5px var(--k-border), 0 5px 16px rgba(0, 0, 0, 0.22);
   color: var(--k-text);
   font: 13px/18px var(--k-font);
+}
+/* Touch: a long press opens the message menu (MessageBubble), like the iOS
+ * bubble menu, instead of the browser's one-word selection (K-107, K-237). */
+@media (hover: none) and (pointer: coarse) {
+  .kbubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }
 .dark .kmessage-menu {
   --k-bg: #262626;
@@ -939,6 +952,9 @@
   display: flex;
   min-height: 48px;
   flex: 1;
+  /* Shrink below the textarea's intrinsic width: at 320 px the Send button
+   * otherwise ends up off-screen. */
+  min-width: 0;
   align-items: flex-end;
   border: 0.5px solid var(--k-border);
   border-radius: 24px;
@@ -1365,6 +1381,11 @@
   .dark .kreport-header button:hover { background: none; }
 }
 .kreport-header button svg { width: 13px; height: 13px; }
+/* 26px glyph buttons, but a 34x44 touch target on touch screens (K-235). */
+@media (pointer: coarse) {
+  .kreport-header button { position: relative; }
+  .kreport-header button::after { content: ''; position: absolute; inset: -9px -4px; }
+}
 .kreport-frame { min-height: 0; flex: 1; width: 100%; border: 0; background: white; }
 .kreport-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; font-size: 12px; color: var(--k-text-2); }
 .kreport-state svg { width: 16px; height: 16px; }

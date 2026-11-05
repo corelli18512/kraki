@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { i18next } from '../../i18n';
 import { useStore } from '../../hooks/useStore';
 import { ImportSessionDialog } from './ImportSessionDialog';
@@ -27,5 +27,33 @@ describe('ImportSessionDialog localization', () => {
     render(<ImportSessionDialog open onClose={vi.fn()} />);
     expect(screen.getByText('未找到本地会话')).toBeInTheDocument();
     expect(screen.getByText('在终端运行 copilot 以创建会话')).toBeInTheDocument();
+  });
+});
+
+// K-204: a computer that never answers the scan does not leave "Scanning…"
+// forever; the user can try again.
+describe('ImportSessionDialog scan with no answer (K-204)', () => {
+  it('stops scanning after the timeout and offers Try again', async () => {
+    const { wsClient } = await import('../../lib/ws-client');
+    const request = vi.spyOn(wsClient, 'requestLocalSessions').mockImplementation(() => {
+      useStore.getState().setLocalSessionsLoading(true);
+      return 'req';
+    });
+    vi.useFakeTimers();
+    try {
+      useStore.getState().setDevices([{ id: 'pc', name: 'Office PC', role: 'tentacle', online: true }]);
+      render(<ImportSessionDialog open onClose={vi.fn()} />);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Scanning local sessions…')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(30_000); });
+      expect(screen.queryByText('Scanning local sessions…')).not.toBeInTheDocument();
+      expect(screen.getByText('Office PC didn’t answer.')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('Scanning local sessions…')).toBeInTheDocument();
+      // A late answer still shows the list.
+      act(() => { useStore.getState().setLocalSessions([]); useStore.getState().setLocalSessionsLoading(false); });
+      expect(screen.getByText('No local sessions found')).toBeInTheDocument();
+    } finally { vi.useRealTimers(); request.mockRestore(); }
   });
 });

@@ -1,6 +1,6 @@
 /** status, logs, fda, permissions, doctor, relay-info: looking at what Kraki is doing. */
 
-import { wsProxyOptions } from '../proxy.js';
+import { unsupportedProxy, unsupportedProxyMessage, wsProxyOptions } from '../proxy.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -8,8 +8,9 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { loadConfig, getKrakiHome, getLogVerbosity, getVersion } from '../config.js';
 import { getCliLaunchdJobState, isDaemonRunning, getDaemonStatus } from '../daemon.js';
 import { readStatusFile } from '../status-file.js';
-import { loadManagedBy, ownerName } from '../managed.js';
+import { MAC_APP_OWNER, loadManagedBy, ownerName } from '../managed.js';
 import { gracefulExit } from './exit.js';
+import type { FdaStatus } from '../checks.js';
 
 export function cmdStatus(jsonOutput = false): void {
   const status = getDaemonStatus();
@@ -30,10 +31,14 @@ export function cmdStatus(jsonOutput = false): void {
         pid: status.pid,
         // Additive fields for Kraki for Mac's onboarding and ownership logic.
         owner: managed ? managed.by : (cliJob.plistExists ? 'cli' : null),
-        supervisorPid: status.running ? (statusFile?.supervisorPid ?? null) : null,
+        supervisorPid: status.running ? (status.supervisorPid ?? statusFile?.supervisorPid ?? null) : null,
+        // Why a running daemon has no verified PID: 'restarting' (supervisor
+        // between worker restarts), 'unverified-pid', 'untracked-launchd-job'.
+        detail: status.detail ?? null,
         managedLabel: managed?.label ?? null,
         cliLaunchdJob: cliJob,
         relayState: status.running ? (statusFile?.relayState ?? null) : null,
+        relayIssue: status.running ? (statusFile?.relayIssue ?? null) : null,
         daemonVersion: status.running ? (statusFile?.version ?? null) : null,
         fda: status.running ? (statusFile?.fda ?? null) : null,
         fdaCheckedAt: status.running ? (statusFile?.fdaCheckedAt ?? null) : null,
@@ -50,6 +55,8 @@ export function cmdStatus(jsonOutput = false): void {
             remoteUpdate: config.remoteUpdate !== false,
           }
         : { exists: false },
+      // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+      unsupportedProxy: unsupportedProxy(),
     };
     process.stdout.write(JSON.stringify(payload) + '\n');
     return;
@@ -61,11 +68,22 @@ export function cmdStatus(jsonOutput = false): void {
 
   const managedBy = loadManagedBy();
   const owner = managedBy ? `, managed by ${ownerName(managedBy.by)}` : '';
-  if (status.running) {
+  if (status.detail === 'restarting') {
+    console.log(`  Status:  ${chalk.yellow('restarting')} ${chalk.dim(`(the background worker is (re)starting; supervisor PID ${status.supervisorPid}${owner})`)}`);
+    console.log(chalk.dim('           See `kraki logs`; `kraki stop` stops it.'));
+  } else if (status.detail === 'unverified-pid') {
+    console.log(`  Status:  ${chalk.yellow('unknown')} ${chalk.dim(`(PID ${status.pid} is alive but could not be verified as Kraki${owner})`)}`);
+  } else if (status.detail === 'untracked-launchd-job') {
+    console.log(`  Status:  ${chalk.yellow('launchd job loaded, no verified daemon')} ${chalk.dim(`(it may be failing to start; see \`kraki logs\`${owner})`)}`);
+  } else if (status.running) {
     const relay = statusFile?.relayState;
     const link = relay === 'connected' ? chalk.green(', connected')
       : relay ? chalk.yellow(`, ${relay}`) : '';
     console.log(`  Status:  ${chalk.green('running')}${link} ${chalk.dim(`(PID ${status.pid}${owner})`)}`);
+    if (statusFile?.relayIssue === 'device_replaced') {
+      console.log(chalk.yellow('  Offline: another Kraki connected with this computer\'s identity (a second daemon, or a'));
+      console.log(chalk.yellow('           copy of this Kraki folder on another computer). Stop that copy, then `kraki restart`.'));
+    }
     const daemonVersion = statusFile?.version;
     if (daemonVersion && daemonVersion !== getVersion()) {
       console.log(chalk.yellow(`  Running: ${daemonVersion} (installed ${getVersion()}; run \`kraki restart\` to switch)`));
@@ -73,6 +91,8 @@ export function cmdStatus(jsonOutput = false): void {
   } else {
     console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) console.log(chalk.yellow(`  Proxy:   ${unsupportedProxyMessage(ignoredProxy)}`));
 
   if (config) {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
@@ -152,9 +172,26 @@ export function cmdLogs(follow: boolean): void {
 
 // ── kraki fda — macOS Full Disk Access status ───────────
 
+/**
+ * Full Disk Access of Kraki itself. Run from a terminal (or over ssh), an
+ * in-process probe reports the terminal's access, so `kraki fda --watch`
+ * never turned "granted" after the user enabled Kraki (K-356). Probe through
+ * the Kraki app bundle like setup does; only the instance Launch Services
+ * started as that bundle (or Kraki for Mac's helper, whose access is the
+ * app's) probes in-process.
+ */
+async function probeKrakiFda(args: string[]): Promise<FdaStatus> {
+  const { probeFda, probeFdaAsApp, KRAKI_BUNDLE_ID, FDA_IN_PROCESS_FLAG } = await import('../checks.js');
+  const { isEmbeddedMacHelper } = await import('./lifecycle.js');
+  if (args.includes(FDA_IN_PROCESS_FLAG) || process.env.__CFBundleIdentifier === KRAKI_BUNDLE_ID || isEmbeddedMacHelper()) {
+    return probeFda();
+  }
+  return probeFdaAsApp();
+}
+
 export async function cmdFda(args: string[]): Promise<void> {
   const watch = args.includes('--watch');
-  const { probeFda } = await import('../checks.js');
+  const probeFda = () => probeKrakiFda(args);
 
   if (process.platform !== 'darwin') {
     process.stdout.write(JSON.stringify({ ok: true, status: 'not_applicable', platform: process.platform }) + '\n');
@@ -267,9 +304,9 @@ export async function cmdDoctor(): Promise<void> {
   } = await import('../checks.js');
   const { loadDaemonPid, loadDaemonIdentity } = await import('../config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
-  // multi-adapter logger (created at module load) defaults to info-level
-  // stdout (dev) which would interleave pino lines into the output, so
-  // force it silent before importing the module.
+  // multi-adapter logger (created at module load) logs at info level (to
+  // stderr outside the daemon, K-129); keep it silent so callers that merge
+  // stderr see only the JSON.
   const prevLogLevel = process.env.LOG_LEVEL;
   process.env.LOG_LEVEL = 'silent';
   const { detectAvailableAgents } = await import('../adapters/multi.js');
@@ -317,7 +354,7 @@ export async function cmdDoctor(): Promise<void> {
       // Services bundle identity? A bundled, registered, correctly signed app
       // still reports healthy:false when its daemon was started by absolute
       // path — that combination is what made this bug recur six times.
-      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity()),
+      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity(), loadManagedBy()?.by === MAC_APP_OWNER),
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
@@ -342,6 +379,8 @@ export async function cmdDoctor(): Promise<void> {
     // Agents that can actually be started right now (SDK importable + CLI present).
     available,
     pinnedAgents: config?.agents ?? null,
+    // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+    unsupportedProxy: unsupportedProxy(),
   };
 
   process.stdout.write(JSON.stringify(result) + '\n');
@@ -397,4 +436,5 @@ export async function cmdRelayInfo(args: string[]): Promise<void> {
   });
 
   process.stdout.write(result + '\n');
+  if (!(JSON.parse(result) as { ok: boolean }).ok) gracefulExit(1);
 }

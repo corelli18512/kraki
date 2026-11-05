@@ -39,18 +39,34 @@ export function markdownToPlainText(markdown: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Cut `text` to at most `maxBytes` UTF-8 bytes on a code-point boundary,
- *  ending with an ellipsis when anything was dropped. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** Cut `text` to at most `maxBytes` UTF-8 bytes on a grapheme boundary (never
+ *  half a surrogate pair or ZWJ/flag emoji), ending with an ellipsis when
+ *  anything was dropped. */
 export function truncateUtf8(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
   const budget = maxBytes - Buffer.byteLength('…', 'utf8');
   let used = 0;
   let out = '';
-  for (const ch of text) {
-    const size = Buffer.byteLength(ch, 'utf8');
+  for (const { segment } of graphemes.segment(text)) {
+    const size = Buffer.byteLength(segment, 'utf8');
     if (used + size > budget) break;
     used += size;
-    out += ch;
+    out += segment;
   }
   return `${out.trimEnd()}…`;
+}
+
+/** The first `maxGraphemes` user-perceived characters of `text`: never half a
+ *  surrogate pair or ZWJ/flag emoji. */
+export function sliceGraphemes(text: string, maxGraphemes: number): string {
+  let out = '';
+  let count = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (count === maxGraphemes) break;
+    out += segment;
+    count += 1;
+  }
+  return out;
 }

@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { Markdown } from './Markdown';
-import { MessageBubble } from './MessageBubble';
+import { LONG_PRESS_MS, MessageBubble } from './MessageBubble';
 
 function setup(onShowSteps?: () => void, text = 'Hello **world**.\nSecond line.') {
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -20,6 +20,14 @@ describe('MessageBubble — native context actions', () => {
     expect(screen.queryByRole('menuitem', { name: 'Show Steps' })).toBeNull();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith('Hello world.\nSecond line.');
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('K-215: Copy still closes the menu without the Clipboard API (plain-http relay)', () => {
+    const { bubble } = setup();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    fireEvent.contextMenu(bubble);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
@@ -88,5 +96,90 @@ describe('MessageBubble — native context actions', () => {
     fireEvent.contextMenu(bubble);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith('print("Hello")\n\nName\tValue\nAlpha\t123');
+  });
+});
+
+describe('MessageBubble — touch long press (K-107) and code blocks (K-237)', () => {
+  // jsdom has no PointerEvent.
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number; pointerType: string; isPrimary: boolean;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1; this.pointerType = init.pointerType ?? 'mouse'; this.isPrimary = init.isPrimary ?? true;
+    }
+  }
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (window as unknown as { PointerEvent: unknown }).PointerEvent = TestPointerEvent;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (window as unknown as { PointerEvent?: unknown }).PointerEvent;
+  });
+  const touch = { pointerId: 7, pointerType: 'touch', isPrimary: true };
+
+  it('a resting long press opens the menu (iOS Safari fires no contextmenu)', () => {
+    const onShowSteps = vi.fn();
+    const { bubble, writeText } = setup(onShowSteps);
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS - 1); });
+    expect(screen.queryByRole('menu')).toBeNull();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', 'Show Steps']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith('Hello world.\nSecond line.');
+  });
+
+  it("copies the whole message, not the word the long press selected", () => {
+    const { bubble, writeText } = setup();
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    const range = document.createRange();
+    range.selectNodeContents(bubble.querySelector('strong')!);
+    window.getSelection()?.addRange(range);
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith('Hello world.\nSecond line.');
+  });
+
+  it('lifting after the long press does not send the mouse events that would close the menu', () => {
+    const { bubble } = setup();
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    fireEvent.pointerUp(bubble, touch);
+    // fireEvent returns false when the default (compatibility mouse events) was prevented.
+    expect(fireEvent.touchEnd(bubble)).toBe(false);
+    expect(screen.getByRole('menu')).toBeTruthy();
+    // A plain tap keeps its click.
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    fireEvent.pointerUp(bubble, touch);
+    expect(fireEvent.touchEnd(bubble)).toBe(true);
+  });
+
+  it('a scroll, a lift or a mouse press opens nothing', () => {
+    const { bubble } = setup();
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    fireEvent.pointerMove(bubble, { ...touch, clientX: 50, clientY: 90 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    fireEvent.pointerUp(bubble, touch);
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    fireEvent.pointerDown(bubble, { pointerId: 1, pointerType: 'mouse', clientX: 50, clientY: 60 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('over a code block the menu also copies just the code', () => {
+    const { bubble, writeText } = setup(undefined, 'Run this:\n\n```sh\npnpm install\npnpm test\n```');
+    fireEvent.pointerDown(bubble.querySelector('code')!, { ...touch, clientX: 50, clientY: 60 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', 'Copy Code']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Code' }));
+    expect(writeText).toHaveBeenCalledWith('pnpm install\npnpm test');
+    // A right click: on the code it offers the code, on prose it does not.
+    fireEvent.contextMenu(bubble.querySelector('pre')!);
+    expect(screen.getByRole('menuitem', { name: 'Copy Code' })).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    fireEvent.contextMenu(bubble.querySelector('p')!);
+    expect(screen.queryByRole('menuitem', { name: 'Copy Code' })).toBeNull();
   });
 });

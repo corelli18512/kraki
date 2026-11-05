@@ -27,6 +27,27 @@ enum MessageComposerPolicy {
         if hasQuestion { return .answerQuestion }
         return isBusy ? .steer : .prompt
     }
+
+    /// Whether a submission takes the staged image. Images are attached only
+    /// while the agent is idle, so they go with a prompt (or an answer the
+    /// agent takes images in); a steer or a deny reason leaves the image
+    /// staged for the next prompt.
+    static func carriesImage(_ intent: MessageComposerIntent, agent: String?) -> Bool {
+        switch intent {
+        case .prompt: return true
+        case .answerQuestion: return ComposerAnswerImages.allowed(agent: agent)
+        case .steer, .denyPermission: return false
+        }
+    }
+
+    /// Send becomes Stop as soon as the field empties while the agent runs:
+    /// a second tap this soon after a submission is a double tap on Send,
+    /// not a Stop.
+    static let stopGraceAfterSubmit: TimeInterval = 0.6
+    static func acceptsStop(lastSubmitAt: Date?, now: Date = Date()) -> Bool {
+        guard let lastSubmitAt else { return true }
+        return now.timeIntervalSince(lastSubmitAt) >= stopGraceAfterSubmit
+    }
 }
 
 enum IOSComposerMetrics {
@@ -71,6 +92,13 @@ struct MessageInputView: View {
     @State private var submitFailureTask: Task<Void, Never>?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    /// What the draft was started for (see ComposerDraftTarget).
+    @State private var draftTarget: ComposerDraftTarget?
+    /// When the composer last submitted (see `MessageComposerPolicy.acceptsStop`).
+    @State private var lastSubmitAt: Date?
+    /// When a hardware Shift/Option/Control-Return was pressed: the newline
+    /// it types next is text (see `isLiteralNewlineFresh`).
+    @State private var literalNewlineKeyAt: Date?
     @State private var showVoiceConsent = false
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
@@ -83,7 +111,8 @@ struct MessageInputView: View {
     private static let micWidth: CGFloat = 44
     private static let clearWidth: CGFloat = 30
 
-    private var showsClear: Bool { hasText || hasImage }
+    /// Any draft, whitespace included, can be cleared.
+    private var showsClear: Bool { !text.isEmpty || hasImage }
 
     /// Multi-line drafts use two rows: the text spans the box, the controls
     /// sit in a row below. Decided from the one-row width only, so it
@@ -92,7 +121,9 @@ struct MessageInputView: View {
         guard hasText, restingWidth > 1 else { return false }
         let oneRowText = restingWidth - 48 - (showsClear ? Self.clearWidth : 0)
             - (canShowVoiceToggle ? Self.micWidth : 0) - 6
-        return IOSComposerTextMetrics.height(text, width: oneRowText, maxHeight: .greatestFiniteMagnitude)
+        // Only "more than one line" matters: capped at two lines, a huge draft
+        // is never measured in full.
+        return IOSComposerTextMetrics.height(text, width: oneRowText, maxHeight: IOSComposerTextMetrics.lineHeight * 2)
             > IOSComposerTextMetrics.lineHeight + 0.5
     }
     @State private var transcriptWidth: CGFloat = 0
@@ -121,6 +152,14 @@ struct MessageInputView: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { stagedImage != nil }
+    private var liveTarget: ComposerDraftTarget {
+        ComposerDraftTarget(permissionID: pendingPermission?.id, questionID: pendingQuestion?.id)
+    }
+    private var drafting: Bool { hasText || hasImage || isRecordingHere }
+    /// The staged image goes with this submission.
+    private var submissionCarriesImage: Bool {
+        MessageComposerPolicy.carriesImage(submissionIntent, agent: session?.agent)
+    }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
     private var voice: IOSVoiceComposer { appState.iosVoiceComposer }
     private var isRecordingHere: Bool { voice.isRecording(in: sessionId) }
@@ -136,20 +175,21 @@ struct MessageInputView: View {
         if submissionIntent == .answerQuestion {
             return ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
         }
-        return isStructuredResponse ? hasText : (hasText || hasImage)
+        return isStructuredResponse ? hasText : (hasText || (hasImage && submissionCarriesImage))
     }
     private var canAttachImage: Bool {
         ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
                                        agent: session?.agent)
     }
     /// Agent running and nothing typed: the primary button stops the turn.
-    /// As soon as there is something to send it becomes Send (steer).
-    private var showsStop: Bool { canShowAbort && !hasText && !hasImage }
+    /// As soon as there is something to send it becomes Send (steer). A
+    /// staged image alone is not: a steer does not take it.
+    private var showsStop: Bool { canShowAbort && !hasText && !(hasImage && submissionCarriesImage) }
     private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
 
     /// True when we can actually deliver a message right now —
     /// tentacle is online AND the relay channel is up. Drives the
-    /// send button's enabled state and the offline-hint pill.
+    /// send button's enabled state.
     /// Typing/voice/image picker remain fully functional regardless
     /// so the user can compose a message in advance.
     private var isDeviceReachable: Bool {
@@ -159,22 +199,11 @@ struct MessageInputView: View {
         return device.online && !appState.showsReconnecting
     }
 
-    /// Short banner text to surface above the input row when sending
-    /// wouldn't deliver right now. `nil` ⇒ no pill rendered.
-    private var unreachableHint: String? {
-        if let submitFailure { return submitFailure }
-        guard let deviceId = session?.deviceId else { return nil }
-        let device = appState.deviceStore.devices[deviceId]
-        if device?.online != true {
-            if let name = device?.name ?? session?.deviceName {
-                return String(localized: "\(name) is offline — message will deliver when it reconnects.")
-            }
-            return String(localized: "Device is offline — message will deliver when it reconnects.")
-        }
-        // Reconnecting is silent here (the title says "Connecting…"); input
-        // keeps working and queues until the connection is back.
-        return nil
-    }
+    /// The transient "couldn't send" hint above the input row. A computer
+    /// that is offline is shown by the chat (`IOSComposerOfflineNotice`, part
+    /// of the reserved bottom footprint); reconnecting is silent here (the
+    /// title says "Connecting…") and input queues until it is back.
+    private var unreachableHint: String? { submitFailure }
 
     /// Voice transcription is available anywhere this composer accepts text,
     /// including active-turn steering and structured responses.
@@ -208,10 +237,8 @@ struct MessageInputView: View {
                 Text(VoiceConsent.message)
             }
             .overlay(alignment: .top) {
-                // Offline / reconnecting hint pill. Sits a few points
-                // above the input row, full-width centered, low-key
-                // tertiary text so it informs without alarming. Hidden
-                // when the device is reachable.
+                // Transient "couldn't send" pill a few points above the input
+                // row, low-key tertiary text so it informs without alarming.
                 unreachableHintPill
                     .offset(y: -28)
                     .allowsHitTesting(false)
@@ -236,13 +263,17 @@ struct MessageInputView: View {
                 if focused && !programmaticVoiceFocus { voice.takeOver(sessionID: sessionId) }
                 programmaticVoiceFocus = false
             }
+            .onChange(of: drafting, initial: true) { _, now in
+                draftTarget = now ? (draftTarget ?? liveTarget) : nil
+            }
+            .onChange(of: sessionId) { _, _ in draftTarget = drafting ? liveTarget : nil }
             .settlesComposerLatches(sessionId: sessionId, state: session?.state,
-                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending,
+                                    onStopRejected: { showSubmitFailure($0, seconds: 6) })
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
-            .alert(
-                "Couldn't attach image",
+            .alert("Couldn't attach image",
                 isPresented: Binding(
                     get: { imageAttachError != nil },
                     set: { if !$0 { imageAttachError = nil } }
@@ -352,7 +383,10 @@ struct MessageInputView: View {
         // One layout places the same views in one or two rows: the field
         // (focus, IME) is never rebuilt when the draft wraps.
         IOSComposerRestingLayout(stacked: stacksRows, showsClear: showsClear, showsMic: canShowVoiceToggle) {
+            // Above the text field: the remove-image target reaches past the
+            // slot's trailing edge.
             imageSlot
+                .zIndex(1)
             textFieldForMode
                 .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
                 // The TextField only hit-tests its glyph rect: any other tap in
@@ -462,24 +496,8 @@ struct MessageInputView: View {
         .accessibilityHint("Starts listening. Then send, edit the text, or cancel.")
     }
 
-    @ViewBuilder
     private var voiceFailureRow: some View {
-        HStack(spacing: 8) {
-            Text(voiceStatusText)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Dismiss") {
-                voiceController.clearFailure()
-            }
-            .buttonStyle(.plain)
-            .font(.caption.weight(.medium))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: Capsule())
-        .padding(.horizontal, 48)
+        IOSVoiceFailureRow(text: voiceStatusText) { voiceController.clearFailure() }
     }
 
     private var voiceStatusText: String {
@@ -511,6 +529,10 @@ struct MessageInputView: View {
     /// structured reply (answer / deny reason) is reviewed in the field first.
     private func sendVoice() {
         guard isRecordingHere else { return }
+        guard confirmDraftTarget() else {
+            withAnimation(Self.expandAnimation) { voice.finishToDraft() }
+            return
+        }
         switch submissionIntent {
         case .denyPermission:
             // A deny reason resolves a permission, not a message: review it.
@@ -520,8 +542,7 @@ struct MessageInputView: View {
             // bubble-corrected send as a prompt.
             let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
             let answerTo = submissionIntent == .answerQuestion ? pendingQuestion?.id : nil
-            let attachments = answerTo == nil ? imageAttachments
-                : ComposerAnswerImages.attachments(imageAttachments, agent: session?.agent)
+            let attachments = submissionCarriesImage ? imageAttachments : nil
             let staged = withAnimation(Self.expandAnimation) {
                 voice.send(attachments: attachments, delivery: delivery, answerTo: answerTo)
             }
@@ -580,6 +601,13 @@ struct MessageInputView: View {
         return submissionIntent == .steer ? "arrow.turn.right.up" : "arrow.up"
     }
 
+    /// The Stop square only ever shows on the red fill, so it stays white
+    /// while it fades out: switching it to the inactive grey with the role
+    /// (outside the fade) flashed a dark square when a turn stopped.
+    static func primaryGlyphColor(_ name: String, active: Bool) -> Color {
+        name == "stop.fill" || active ? .white : .secondary
+    }
+
     /// One circle for every role: its fill and glyph morph (Send ↔ Stop,
     /// grey ↔ active, dictation Send) instead of swapping views.
     private var primaryButton: some View {
@@ -603,7 +631,7 @@ struct MessageInputView: View {
                 ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
                     Image(systemName: name)
                         .font(.system(size: name == "stop.fill" ? 14 : 18, weight: .bold))
-                        .foregroundStyle(active ? Color.white : Color.secondary)
+                        .foregroundStyle(Self.primaryGlyphColor(name, active: active))
                         .animation(morph) {
                             $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
                                 .scaleEffect(name == glyph ? 1 : 0.6)
@@ -643,7 +671,8 @@ struct MessageInputView: View {
     }
 
     private func requestAbort() {
-        guard canShowAbort, !abortPending, isDeviceReachable else { return }
+        guard canShowAbort, !abortPending, isDeviceReachable,
+              MessageComposerPolicy.acceptsStop(lastSubmitAt: lastSubmitAt) else { return }
         if appState.commandSender?.abortSession(sessionId: sessionId) == true {
             abortPending = true
         }
@@ -668,6 +697,9 @@ struct MessageInputView: View {
                             .frame(width: 44, height: Self.inputBoxHeight)
                             .contentShape(Rectangle())
                     }
+                    // Plain: with Button Shapes on, the default style draws
+                    // its own (offset) shape around the picker label.
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Replace image")
                     Button { clearImage() } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -675,10 +707,14 @@ struct MessageInputView: View {
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, Color.black.opacity(0.6))
                             .frame(width: 22, height: 22)
+                            // The glyph stays put; its touch target grows to
+                            // 32 pt into the free space right of the thumbnail
+                            // instead of being only the 22 pt glyph.
+                            .padding(EdgeInsets(top: 3, leading: 0, bottom: 7, trailing: 10))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .offset(x: -1, y: 3)
+                    .offset(x: 9)
                     .accessibilityLabel("Remove image")
                 }
             } else {
@@ -687,6 +723,7 @@ struct MessageInputView: View {
                         .frame(width: 44, height: Self.inputBoxHeight)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Attach image")
             }
         }
@@ -757,15 +794,31 @@ struct MessageInputView: View {
                 // Only a single typed newline at the end is the return key:
                 // pasted text that happens to end with a newline is kept as
                 // a draft, not sent.
-                if Self.isReturnKeySubmit(old: text, new: newValue) {
-                    let trimmed = String(newValue.dropLast())
-                    sessionStore.setDraft(sessionId, trimmed)
+                let literalNewline = Self.isLiteralNewlineFresh(literalNewlineKeyAt, now: Date())
+                // The key press is spent by the newline it typed; an unrelated
+                // edit leaves it to expire.
+                if literalNewline, newValue.count == text.count + 1 { literalNewlineKeyAt = nil }
+                if Self.isReturnKeySubmit(old: text, new: newValue, literalNewline: literalNewline) {
+                    // The field already shows the newline. Store it as well,
+                    // so a draft that is not sent (empty / whitespace) is
+                    // written back without it and the field follows; storing
+                    // the unchanged text never reached the field.
+                    sessionStore.setDraft(sessionId, newValue)
                     handleModeSubmit()
+                    if text == newValue { dropReturnNewline(newValue) }
                 } else {
                     sessionStore.setDraft(sessionId, newValue)
                 }
             }
         ), selection: selectionBinding, axis: .vertical)
+        // Hardware keyboard: Return sends (through the newline path above).
+        // Shift-, Option- or Control-Return type a newline: the field inserts
+        // it as for Return, and the edit above keeps it instead of sending.
+        .onKeyPress(.return, phases: .down) { press in
+            guard Self.isLiteralNewlineKey(press.modifiers) else { return .ignored }
+            literalNewlineKeyAt = Date()
+            return .ignored
+        }
         // Grows up to 5 lines, then scrolls inside the field.
         .lineLimit(1...5)
         .textFieldStyle(.plain)
@@ -793,6 +846,15 @@ struct MessageInputView: View {
         .accessibilityIdentifier("chat-composer-text")
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }
+    }
+
+    /// Return on a draft that was not sent: remove the newline it typed on
+    /// the next update (after SwiftUI has taken the field's text).
+    private func dropReturnNewline(_ typed: String) {
+        DispatchQueue.main.async {
+            guard text == typed else { return }
+            sessionStore.setDraft(sessionId, String(typed.dropLast()))
+        }
     }
 
     // MARK: - Permission Action Row
@@ -829,6 +891,7 @@ struct MessageInputView: View {
         guard !isRecordingHere, !voiceSendPending else { return }
         // A correction still flowing into this draft stops at what is visible.
         if voice.sessionID == sessionId, voice.operation?.phase == .toDraft { voice.retireKeepingDraft() }
+        guard confirmDraftTarget() else { return }
         switch submissionIntent {
         case .denyPermission:
             handlePermissionDenyWithReason()
@@ -869,6 +932,7 @@ struct MessageInputView: View {
     /// Anything submitted from the composer is a new message: return the
     /// conversation to its newest edge. The keyboard stays up for follow-ups.
     private func didSubmitFromComposer() {
+        lastSubmitAt = Date()
         submitFailureTask?.cancel()
         // Any submission resolves a voice failure note ("text is back in the box").
         if voiceController.hasFailure(for: sessionId) { voiceController.clearFailure() }
@@ -878,14 +942,25 @@ struct MessageInputView: View {
                                         userInfo: ["sessionId": sessionId])
     }
 
-    private func showSubmitFailure() {
+    /// False when the draft was started for another permission / question
+    /// than the one open now: the send is held once, the draft rebinds to the
+    /// open one and the user is told (a second press sends it).
+    private func confirmDraftTarget() -> Bool {
+        guard ComposerDraftTarget.changed(boundTo: draftTarget, live: liveTarget) else { return true }
+        draftTarget = liveTarget
+        showSubmitFailure(ComposerDraftTarget.changedNotice)
+        return false
+    }
+
+    private func showSubmitFailure(_ message: String = String(localized: "Couldn't send — your text is kept. Try again."),
+                                   seconds: Int = 3) {
         submitFailureTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) {
-            submitFailure = String(localized: "Couldn't send — your text is kept. Try again.")
+            submitFailure = message
         }
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         submitFailureTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { submitFailure = nil }
         }
@@ -897,7 +972,8 @@ struct MessageInputView: View {
             Text(hint)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                // A failure note (e.g. why Stop did not stop) may need its reason.
+                .lineLimit(submitFailure == nil ? 1 : 3)
                 .truncationMode(.tail)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -918,7 +994,7 @@ struct MessageInputView: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendText = trimmed.isEmpty ? "[image]" : trimmed
 
-        let attachments = imageAttachments
+        let attachments = submissionCarriesImage ? imageAttachments : nil
 
         let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
         guard appState.commandSender?.sendInput(
@@ -932,7 +1008,7 @@ struct MessageInputView: View {
         }
 
         sessionStore.setDraft(sessionId, "")
-        clearImage()
+        if attachments != nil { clearImage() }
         if delivery == .prompt { awaitingActive = true }
         didSubmitFromComposer()
     }

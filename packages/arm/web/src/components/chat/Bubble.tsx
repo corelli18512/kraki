@@ -98,6 +98,7 @@ function SystemRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
 }
 
 function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
+  const { t } = useTranslation('chat');
   const text = row.kind === 'pending' ? row.entry.text : row.kind === 'spine' ? contentOf(row.item.message) : '';
   const attachments = row.kind === 'pending' ? row.entry.attachments ?? [] : row.kind === 'spine' ? attachmentsOf(row.item.message) : [];
   const state = row.kind === 'pending' ? row.entry.state : undefined;
@@ -117,6 +118,9 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
         )}
         {images.length > 0 && (
           <div className="kattachments kattachments-user"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
+        )}
+        {row.kind === 'pending' && !!row.entry.attachmentsDropped && (
+          <p className="kpending-note" role="note">{t('bubble.attachmentsNotKept')}</p>
         )}
         {state && state !== 'sending' && row.kind === 'pending' && (
           <PendingMark clientId={row.entry.clientId} state={state} ctx={ctx} />

@@ -131,6 +131,46 @@ final class SessionSplitLayoutTests: XCTestCase {
         XCTAssertFalse(marked("chat-back-button").isEmpty)
         XCTAssertNil(table.selectedSessionId, "no highlight in single-column layout")
     }
+
+    /// K-039: the open chat is deleted on another device → back to the list.
+    func testOpenSessionDeletedElsewhereReturnsToTheList() throws {
+        let app = try mount(width: 402, height: 874)
+        let open = try XCTUnwrap(app.sessionStore.sessions[fixtures.sid])
+        app.sessionStore.sessions["other-session"] = SessionInfo(
+            id: "other-session", deviceId: open.deviceId, deviceName: open.deviceName, agent: open.agent,
+            model: open.model, title: "other", state: .idle, mode: .auto, lastSeq: 0, readSeq: 0,
+            messageCount: 0, createdAt: .distantPast, pinned: false)
+        drain(500)
+        let table = try XCTUnwrap(sessionTables.first)
+        let tableView = try XCTUnwrap(all(table.view).compactMap { $0 as? UITableView }.first)
+        table.tableView(tableView, didSelectRowAt: IndexPath(row: 0, section: 0))
+        drain(1500)
+        XCTAssertEqual(chats.count, 1, "the chat is open")
+        let opened = try XCTUnwrap(app.sessionStore.activeSessionId)
+        // What MessageRouter does for `session_deleted`.
+        app.sessionStore.removeSession(opened)
+        drain(1500)
+        XCTAssertTrue(chats.isEmpty, "the deleted chat is closed")
+        XCTAssertEqual(sessionTables.count, 1, "the session list is shown, not 'Session not found'")
+    }
+
+    /// K-143: the 'Session not found' page keeps Back in the header row.
+    func testSessionNotFoundKeepsBackAtTheTop() throws {
+        let fx = try fixtures.makeFixture(total: 4, onScreen: true)
+        fx.vc.view.window?.isHidden = true
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window = UIWindow(windowScene: scene)
+        window.windowLevel = .alert + 2
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            SessionDetailView(sessionId: "missing-session").environment(fx.app)
+        })
+        window.makeKeyAndVisible()
+        drain(1000)
+        let back = try XCTUnwrap(marked("chat-back-button").first)
+        let frame = back.convert(back.bounds, to: window)
+        XCTAssertLessThan(frame.midY, 200, "Back sits in the header, not mid-screen (\(frame))")
+    }
 }
 
 private extension UIView {

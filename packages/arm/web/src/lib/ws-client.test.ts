@@ -3,11 +3,12 @@ import type { SessionLiveSnapshot } from '@kraki/protocol';
 import { useAccountDeletion } from './account-deletion';
 import { decodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import type { CardActionState } from '@kraki/protocol';
-import { KrakiWSClient, wsClient } from '../lib/ws-client';
+import { KrakiWSClient, PUSH_REGISTRATION_TIMEOUT_MS, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
 import { diag } from './diag';
+import { serverErrorText } from './server-errors';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -211,6 +212,52 @@ describe('KrakiWSClient', () => {
       expect(state.status).toBe('connected');
       expect(state.deviceId).toBe('dev-web-123');
       expect(state.devices.size).toBe(1);
+    });
+
+    it('K-032: a browser tab tells the Head whether the user is looking at it', async () => {
+      const visibility = () => lastWsInstance.sentMessages.map((m) => JSON.parse(m)).filter((m) => m.type === 'app_visibility');
+      let hidden = false;
+      let focused = true;
+      const stateSpy = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible');
+      const focusSpy = vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+      try {
+        for (const [features, expected] of [[['app_visibility'], 1], [[], 0], [undefined, 0]] as const) {
+          const client = new KrakiWSClient('ws://localhost:9999');
+          client.connect();
+          await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+          lastWsInstance.sentMessages = [];
+          lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [], ...(features ? { features } : {}) });
+          expect(visibility(), String(features)).toEqual(expected ? [{ type: 'app_visibility', visible: true }] : []);
+          client.disconnect();
+        }
+
+        // A tab that signs in while hidden is pushed to at once.
+        hidden = true;
+        const client = new KrakiWSClient('ws://localhost:9999');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance.sentMessages = [];
+        lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [], features: ['app_visibility'] });
+        expect(visibility()).toEqual([{ type: 'app_visibility', visible: false }]);
+
+        // Coming on screen, losing focus, and hiding again are reported once each.
+        lastWsInstance.sentMessages = [];
+        hidden = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('focus'));
+        focused = false;
+        window.dispatchEvent(new Event('blur'));
+        hidden = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(visibility()).toEqual([
+          { type: 'app_visibility', visible: true },
+          { type: 'app_visibility', visible: false },
+        ]);
+        client.disconnect();
+      } finally {
+        stateSpy.mockRestore();
+        focusSpy.mockRestore();
+      }
     });
 
     it('does not send replay requests on auth_ok (session sync is triggered by session_list)', async () => {
@@ -779,6 +826,17 @@ describe('KrakiWSClient', () => {
       expect(sent.payload.text).toBe('Hello agent');
     });
 
+    it('K-216: sendInput preview is cut on a grapheme boundary (no lone surrogate or split ZWJ emoji)', async () => {
+      const client = await setupClient();
+      const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+      client.sendInput('sess-1', `${'a'.repeat(79)}\u{1F600} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-1')?.text).toBe('a'.repeat(79));
+      client.sendInput('sess-2', `${'a'.repeat(76)}${family} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-2')?.text).toBe('a'.repeat(76));
+      client.sendInput('sess-3', `${'a'.repeat(70)}${family} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-3')?.text).toBe(`${'a'.repeat(70)}${family} t`);
+    });
+
     it('sendInput carries active-turn steer delivery', async () => {
       const client = await setupClient();
       client.sendInput('sess-1', 'Change direction', { delivery: 'steer' });
@@ -951,7 +1009,7 @@ describe('KrakiWSClient', () => {
       const client = await connected();
       client.requestAccountDeletion();
       lastWsInstance._receive({ type: 'server_error', message: 'Try again later' });
-      expect(useAccountDeletion.getState().state).toEqual({ kind: 'failed', message: 'Try again later' });
+      expect(useAccountDeletion.getState().state).toEqual({ kind: 'failed', message: "The server couldn't complete that. Try again." });
     });
 
     it('an offline device learns it from auth_error account_deleted', async () => {
@@ -1446,7 +1504,44 @@ describe('KrakiWSClient', () => {
         requestId: 'req-123',
       });
 
-      expect(useStore.getState().lastError).toBe('Target device "dev-xyz" is not online');
+      // K-218: raw relay text is not shown; unknown errors read generically.
+      expect(useStore.getState().lastError).toBe("The server couldn't complete that. Try again.");
+    });
+
+    it('K-227: a refused push token answers registerPushToken, not the error banner', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      const answer = client.registerPushToken({ provider: 'web_push', token: 'bad' });
+      lastWsInstance._receive({ type: 'server_error', message: 'Invalid push token: unsupported Web Push subscription' });
+      await expect(answer).resolves.toBe('refused');
+      expect(useStore.getState().lastError).toBeNull();
+    });
+
+    it('K-227: offline or unanswered, a push token is unconfirmed, not refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        // Offline: nothing is sent (it would queue and land after Settings gave up).
+        await expect(client.registerPushToken({ provider: 'web_push', token: 'tok' })).resolves.toBe('unconfirmed');
+        await connectAndAuth(client);
+        const sent = lastWsInstance.sentMessages.length;
+        const answer = client.registerPushToken({ provider: 'web_push', token: 'tok' });
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(sent);
+        await vi.advanceTimersByTimeAsync(PUSH_REGISTRATION_TIMEOUT_MS);
+        await expect(answer).resolves.toBe('unconfirmed');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('K-227: push_token_registered confirms the token; unrelated errors still show', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      const answer = client.registerPushToken({ provider: 'web_push', token: 'good' });
+      lastWsInstance._receive({ type: 'server_error', message: 'unicast target is not reachable' });
+      expect(useStore.getState().lastError).toBe(serverErrorText('unicast target is not reachable'));
+      lastWsInstance._receive({ type: 'push_token_registered', payload: { provider: 'web_push' } });
+      await expect(answer).resolves.toBe('registered');
     });
 
     it('clears pending prompt on server_error with matching requestId', async () => {
@@ -2103,20 +2198,46 @@ describe('KrakiWSClient', () => {
       }
     });
 
-    it('a silent authenticated socket is abandoned after 22 s and replaced', async () => {
+    it('a silent authenticated socket is abandoned 22 s after an unanswered ping and replaced', async () => {
       vi.useFakeTimers();
       try {
         const client = new KrakiWSClient('ws://localhost:9999');
         await connectAndAuth(client);
         const dead = lastWsInstance;
         // The relay stops answering (half-open): our pings go unanswered.
+        // The first ping goes out ~10 s after open; 22 s later the link is dead.
         // (Assert on the socket itself: clients from other tests may create
         // sockets meanwhile.)
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(30_000);
         expect(dead.onmessage).not.toBeNull();
         await vi.advanceTimersByTimeAsync(5_000);
         expect(dead.onmessage).toBeNull(); // abandoned
         expect(dead.readyState).toBe(3);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('K-311: a 20 s latency spike does not drop a live link', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const ws = lastWsInstance;
+        // Every ping is answered, but each pong arrives 20 s after its ping.
+        const answered = new Set<number>();
+        for (let t = 0; t < 120_000; t += 500) {
+          await vi.advanceTimersByTimeAsync(500);
+          ws.sentMessages.forEach((m: string, i: number) => {
+            if (JSON.parse(m).type !== 'ping' || answered.has(i)) return;
+            answered.add(i);
+            setTimeout(() => ws._receive({ type: 'pong' }), 20_000);
+          });
+        }
+        expect(answered.size).toBeGreaterThan(5);
+        expect(ws.onmessage).not.toBeNull();
+        expect(ws.readyState).toBe(1);
         client.disconnect();
       } finally {
         vi.useRealTimers();
@@ -2444,7 +2565,7 @@ describe('KrakiWSClient', () => {
 
       await vi.waitFor(() => {
         const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean) as Array<Record<string, unknown>>;
-        expect(sent.find((m) => m.type === 'client_features')?.payload).toMatchObject({ features: ['fragments'], targetDeviceId: 'dev-t' });
+        expect(sent.find((m) => m.type === 'client_features')?.payload).toMatchObject({ features: ['fragments', 'question_withdrawn'], targetDeviceId: 'dev-t' });
         expect(sent.filter((m) => m.type === 'send_input').map((m) => (m.payload as { clientId: string }).clientId)).toEqual([clientId]);
       });
       outbox.reset();

@@ -108,14 +108,15 @@ export interface SpineItem {
  * - anything else → unanswered. When that is the draft-less terminal status
  *   of the turn, its outcome is drawn inside the question bubble and the empty
  *   status row itself is not rendered (`shouldRender`);
- * - nothing yet: open at the conversation head, otherwise undetermined.
+ * - nothing yet: open at the conversation head, otherwise undetermined;
+ *   unanswered once the agent withdrew it (`withdrawn`, K-022).
  */
 /** Runtime signals that ride beside the spine. They say nothing about a
  *  question: `active` with a broadcast seq can sort after a question the
  *  agent asked later (range merges order by seq), and must not close it. */
 const RUNTIME_SIGNALS = new Set(['active', 'compacting', 'pending_input']);
 
-export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
+export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): SpineItem[] {
   const items: SpineItem[] = raw.map((message) => ({ message }));
   if (!raw.some((m) => questionSpecOf(m))) return items;
   for (let index = 0; index < raw.length; index++) {
@@ -134,6 +135,7 @@ export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], 
     if (!presentation) {
       presentation = pendingAnswerTo.includes(spec.id)
         ? { state: 'answered' }
+        : withdrawn.includes(spec.id) ? { state: 'unanswered' }
         : { state: atHead ? 'open' : 'undetermined' };
     }
     items[index] = { message: raw[index], question: presentation };
@@ -320,9 +322,9 @@ export function shouldRender(item: SpineItem): boolean {
 }
 
 /** The whole pipeline the chat list draws (spine + derived question state). */
-export function spineRows(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
+export function spineRows(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): SpineItem[] {
   const visible: SpineItem[] = [];
-  for (const item of projectTurns(presentQuestions(raw, pendingAnswerTo, atHead))) {
+  for (const item of projectTurns(presentQuestions(raw, pendingAnswerTo, atHead, withdrawn))) {
     if (shouldRender(item)) {
       visible.push(item);
       continue;
@@ -382,9 +384,9 @@ export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
 }
 
 /** Open questions (oldest first); the composer answers the newest one. */
-export function openQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): QuestionSpec[] {
+export function openQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): QuestionSpec[] {
   if (!raw.some((m) => questionSpecOf(m))) return [];
-  return presentQuestions(raw, pendingAnswerTo, atHead)
+  return presentQuestions(raw, pendingAnswerTo, atHead, withdrawn)
     .filter((item) => item.question?.state === 'open')
     .map((item) => questionSpecOf(item.message)!)
     .filter(Boolean);

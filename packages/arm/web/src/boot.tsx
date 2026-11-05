@@ -6,7 +6,8 @@
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { Routes, Route, Navigate } from 'react-router';
+import { AppRouter } from './AppRouter';
 import { App } from './App';
 import { DashboardPage } from './pages/DashboardPage';
 import { SessionPage } from './pages/SessionPage';
@@ -16,16 +17,21 @@ import { trackVisualViewport } from './lib/visual-viewport';
 import { desktop } from './lib/desktop';
 import { syncDesktopLanguage } from './i18n/desktop-bridge';
 import { desktopBuildNumber, desktopDiagHttp, diag } from './lib/diag';
+import { registerServiceWorker } from './lib/push';
+import { onLanguageChanged } from './i18n';
 
 trackVisualViewport();
 syncDesktopLanguage();
+registerServiceWorker();
+// The worker's notification texts follow the UI language.
+onLanguageChanged((lang) => registerServiceWorker({ prod: import.meta.env.PROD, lang }));
 // Performance data (Settings › Share Performance Data): Windows shell only.
 diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktopBuildNumber() });
 
 function Root() {
   useTheme();
   return (
-    <BrowserRouter>
+    <AppRouter>
       <Routes>
         <Route element={<App />}>
           <Route index element={<DashboardPage />} />
@@ -35,7 +41,7 @@ function Root() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </AppRouter>
   );
 }
 

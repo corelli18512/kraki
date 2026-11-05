@@ -189,6 +189,68 @@ final class GcTests: XCTestCase {
         XCTAssertGreaterThan(w.resetsB.count, 0)
     }
 
+    // MARK: - 5b. §11.2 a purged TAIL gap is announced (K-139, mirrors gc.test.ts)
+
+    private func resetOldests(_ effects: [Effect]) -> [UInt64] {
+        effects.compactMap { effect -> UInt64? in
+            guard case let .transmit(bytes) = effect,
+                  case let .reset(_, oldest)? = decodeFrame(bytes) else { return nil }
+            return oldest
+        }
+    }
+
+    private func helloFromPeer(recvCursor: UInt64) -> Frame {
+        .hello(epoch: "peer", recvEpoch: "e1", recvCursor: recvCursor, durableSupported: false, maxRetentionMs: 0)
+    }
+
+    func testPurgedTailIsAnnouncedWhenPurgeEmptiesTheOutbox() {
+        let ep = Endpoint(epoch: "e1", random: { 0.5 })
+        _ = ep.onConnected(0)
+        _ = ep.send([1]); _ = ep.send([2]); _ = ep.send([3])
+        _ = ep.purgeNonDurable()
+        XCTAssertEqual(ep.outboxSize, 0)
+        // Peer reconnects having received nothing: tell it to skip past 3.
+        let resets = resetOldests(ep.onFrame(helloFromPeer(recvCursor: 0), 1_000))
+        XCTAssertTrue(resets.contains(4), "resets: \(resets)")
+    }
+
+    func testPurgedTailLetsTheNextSendDeliverWithoutAStall() {
+        let w = World(a: Endpoint(epoch: "A", random: { 0.5 }), b: Endpoint(epoch: "B", random: { 0.5 }))
+        w.connect()
+        w.disconnect()
+        _ = w.a.send([1]); _ = w.a.send([2])
+        _ = w.a.purgeNonDurable()   // dropped before B ever saw them
+        w.reopen()
+        w.advance(1)               // handshake: B learns where A's stream continues
+        w.sendA([9])
+        w.advance(1)
+        XCTAssertEqual(payloads(w.deliveredB), [9])
+    }
+
+    func testPureInFlightLossNeverAnnouncesATail() {
+        let ep = Endpoint(epoch: "e1", random: { 0.5 })
+        _ = ep.onConnected(0)
+        _ = ep.send([1]); _ = ep.send([2]); _ = ep.send([3])
+        // Peer acks 1; 2..3 are still retained and must be resent, not skipped.
+        XCTAssertEqual(resetOldests(ep.onFrame(.heartbeat(ack: 1), params.heartbeatIntervalMs + 1)), [])
+    }
+
+    func testMiddleHoleWithRetainedTailIsNotOverAnnounced() {
+        let ep = Endpoint(epoch: "e1", random: { 0.5 })
+        _ = ep.onConnected(0)
+        _ = ep.send([1]); let s2 = ep.send([2]).seq; _ = ep.send([3])
+        _ = ep.purge { seq, _, _, _ in seq == s2 }
+        XCTAssertEqual(resetOldests(ep.onFrame(.heartbeat(ack: 0), params.heartbeatIntervalMs + 1)), [3])
+    }
+
+    func testTailPurgedWithAnEarlierEntryRetainedAnnouncesOnlyTheTail() {
+        let ep = Endpoint(epoch: "e1", random: { 0.5 })
+        _ = ep.onConnected(0)
+        _ = ep.send([1]); let s2 = ep.send([2]).seq; let s3 = ep.send([3]).seq
+        _ = ep.purge { seq, _, _, _ in seq == s2 || seq == s3 }
+        XCTAssertEqual(resetOldests(ep.onFrame(.heartbeat(ack: 0), params.heartbeatIntervalMs + 1)), [4])
+    }
+
     // MARK: - 6. snapshotDurable
 
     func testSnapshotDurableSerializesOnlyDurable() {

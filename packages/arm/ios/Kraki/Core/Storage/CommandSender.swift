@@ -386,6 +386,19 @@ final class CommandSender {
         bucket[clientId] = message
         outbox[sessionId] = bucket
         persistOutbox()
+        announceDeliveryProblem(state)
+    }
+
+    /// The bubble's status changes away from the VoiceOver cursor: say it.
+    private func announceDeliveryProblem(_ state: PendingState) {
+        switch state {
+        case .failed:
+            appState?.announceForAccessibility(SessionDeliveryStatus.failed.accessibilityLabel)
+        case .unconfirmed:
+            appState?.announceForAccessibility(SessionDeliveryStatus.unconfirmed.accessibilityLabel)
+        default:
+            break
+        }
     }
 
     /// Confirmation is the Tentacle echo. Only *stalled* time counts: the
@@ -419,7 +432,8 @@ final class CommandSender {
                     }
                     continue
                 }
-                guard !self.isLinkBusy, !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
+                guard !self.isLinkBusy, !self.isUploading,
+                      !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
                 stalled += step
                 if !resent, stalled >= timeout / 2, self.canResendAutomatically(sessionId) {
                     resent = true
@@ -452,6 +466,24 @@ final class CommandSender {
         #endif
         return appState.deviceId != nil || appState.hasStoredCredentials
     }
+
+    /// Our own paced upload (e.g. a photo on a slow uplink) is still going
+    /// out. The echo cannot come back before the input has arrived, so that
+    /// time is not a stall: counting it re-sent a second copy of the photo
+    /// halfway through and showed "Awaiting confirmation" mid-upload. An
+    /// upload with no progress for `uploadProgressWindowSeconds` is a stall.
+    private var isUploading: Bool {
+        #if DEBUG
+        if let testUploadProgress {
+            let upload = testUploadProgress()
+            return PulseManager.isUploadMoving(queued: upload.queued, lastProgressAt: upload.lastProgressAt, now: Date())
+        }
+        #endif
+        return appState?.pulseManager?.isUploadMoving == true
+    }
+    #if DEBUG
+    @ObservationIgnored var testUploadProgress: (() -> (queued: Bool, lastProgressAt: Date?))?
+    #endif
 
     private var isLinkBusy: Bool {
         #if DEBUG
@@ -1063,22 +1095,23 @@ final class CommandSender {
 
     // MARK: - Device Lifecycle
 
-    /// Remove a device from the user's account. Routed through the
-    /// command layer (not raw `sendEncryptedMessage`) so it shares the
-    /// same connectivity/queue semantics as other commands and won't
-    /// silently disappear if the socket is mid-reconnect.
-    func removeDevice(deviceId: String) {
+    /// Remove a device from the user's account. Returns false when the
+    /// relay link is down and nothing was sent; the caller shows that.
+    @discardableResult
+    func removeDevice(deviceId: String) -> Bool {
         // Relay-terminated: the relay must read it, so it goes as plaintext
         // control. It used to be end-to-end encrypted to the computers, which
         // ignore it, so the relay never removed anything.
-        appState?.sendRelayControl(["type": "remove_device", "deviceId": deviceId])
+        appState?.sendRelayControl(["type": "remove_device", "deviceId": deviceId]) ?? false
     }
 
     /// Give a device of this account a custom name (`""` goes back to its
     /// own). Relay-terminated like `remove_device`; the relay answers every
-    /// device of the account with `device_renamed`.
-    func renameDevice(deviceId: String, name: String) {
-        appState?.sendRelayControl(["type": "rename_device", "deviceId": deviceId, "name": name])
+    /// device of the account with `device_renamed`. Returns false when the
+    /// relay link is down and nothing was sent.
+    @discardableResult
+    func renameDevice(deviceId: String, name: String) -> Bool {
+        appState?.sendRelayControl(["type": "rename_device", "deviceId": deviceId, "name": name]) ?? false
     }
 
     // MARK: - Local sessions (import picker)
@@ -1128,48 +1161,12 @@ final class CommandSender {
 
     func renameSession(sessionId: String, title: String) {
         guard let appState else { return }
-        // Optimistic
-        appState.sessionStore.setTitle(sessionId, title: title.isEmpty ? nil : title, autoTitle: nil)
-        send(["type": "rename_session", "payload": ["title": title]], sessionId: sessionId)
-    }
-
-    // MARK: - Archive (F2)
-
-    func archiveSession(sessionId: String, archived: Bool) {
-        send(["type": "archive_session", "payload": ["archived": archived]], sessionId: sessionId)
-    }
-
-    func requestArchivedSessions(targetDeviceId: String) {
-        send(["type": "request_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
-    }
-
-    func setAutoArchiveDays(targetDeviceId: String, days: Int) {
-        send(["type": "set_auto_archive_days", "targetDeviceId": targetDeviceId, "payload": ["days": days]])
-    }
-
-    func deleteArchivedSessions(targetDeviceId: String) {
-        guard send(["type": "delete_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]]) else {
-            appState?.lastError = String(localized: "Couldn't delete archived sessions while offline. Try again when connected.")
+        // Optimistic ("" clears the manual title; the auto title shows again).
+        guard send(["type": "rename_session", "payload": ["title": title]], sessionId: sessionId) else {
+            appState.sessionStore.setTitle(sessionId, title: title, autoTitle: nil)
             return
         }
-        appState?.sessionStore.archivedSessions[targetDeviceId] = []
-    }
-
-    /// Restore an archived session and show it right away; the computer's
-    /// next session_list confirms it.
-    func openArchivedSession(_ digest: SessionDigest, deviceId: String) {
-        guard let appState else { return }
-        let name = appState.deviceStore.device(for: deviceId)?.name ?? deviceId
-        appState.sessionStore.upsertSession(digest, deviceId: deviceId, deviceName: name)
-        appState.sessionStore.archivedSessions[deviceId]?.removeAll { $0.id == digest.id }
-        archiveSession(sessionId: digest.id, archived: false)
-    }
-
-    func pinSession(sessionId: String, pinned: Bool) {
-        guard let appState else { return }
-        // Optimistic
-        appState.sessionStore.setPinned(sessionId, pinned)
-        send(["type": "pin_session", "payload": ["pinned": pinned]], sessionId: sessionId)
+        appState.sessionStore.renameLocally(sessionId, title: title)
     }
 
     // MARK: - Replay
@@ -1275,7 +1272,7 @@ final class CommandSender {
             }
             #if os(iOS)
             if stillOnPlaceholder {
-                appState.sessionStore.navigationReplacesPlaceholder = true
+                appState.sessionStore.navigationReplacesPlaceholder = placeholderId
                 appState.sessionStore.navigateToSession = sessionId
             } else if openWithoutPlaceholder {
                 appState.sessionStore.navigationPushesOnTop = true
@@ -1318,6 +1315,14 @@ final class CommandSender {
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) { recoverNewSessionText(prompt) }
         pendingCreateTitles.removeValue(forKey: requestId)
         forkSources.removeValue(forKey: requestId)
+    }
+
+    /// Inputs this device has not had confirmed by their computer, including
+    /// first prompts of sessions still being created (a fork or an empty new
+    /// session has no prompt and is not a message). Signing out (or a device
+    /// revocation) discards them.
+    var unsentMessageCount: Int {
+        outbox.values.reduce(0) { $0 + $1.count } + pendingCreateRequests.values.filter { !$0.isEmpty }.count
     }
 
     func reset() {

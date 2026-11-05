@@ -56,6 +56,15 @@ describe('createLogger()', () => {
     expect((logger as unknown as { bindings: () => { name: string } }).bindings().name).toBe('my-component');
   });
 
+  it('writes to stderr, never stdout, outside production so CLI --json output stays parseable (K-129)', async () => {
+    delete process.env.NODE_ENV; // CLI commands run without NODE_ENV
+    const pino = (await import('pino')).default;
+    ({ createLogger } = await import('../logger.js'));
+    const logger = createLogger('cli-cmd');
+    const stream = (logger as unknown as Record<symbol, { fd?: number }>)[pino.symbols.streamSym];
+    expect(stream.fd).toBe(2);
+  });
+
   it('writes <name>.log under the Kraki home in production mode on an npm install too (one naming scheme)', async () => {
     process.env.NODE_ENV = 'production';
     const { existsSync } = await import('node:fs');
@@ -64,6 +73,37 @@ describe('createLogger()', () => {
     const logger = createLogger('prod-test', { sync: true });
     logger.info('hello');
     expect(existsSync(join(process.env.KRAKI_HOME!, 'logs', 'prod-test.log'))).toBe(true);
+  });
+
+  it('K-122: a full disk drops log lines instead of throwing (the daemon crash-looped on ENOSPC)', async () => {
+    process.env.NODE_ENV = 'production';
+    const fs = (await import('node:fs')).default;
+    ({ createLogger } = await import('../logger.js'));
+    const syncLogger = createLogger('enospc-sync', { sync: true });
+    const asyncLogger = createLogger('enospc-async');
+    await new Promise((resolve) => setTimeout(resolve, 50)); // async destination opens
+    const enospc = () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); };
+    const writeSync = vi.spyOn(fs, 'writeSync').mockImplementation(enospc);
+    const write = vi.spyOn(fs, 'write').mockImplementation(((_fd: number, _buf: unknown, ...rest: unknown[]) => {
+      const cb = rest.at(-1) as (err: Error) => void;
+      process.nextTick(() => cb(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })));
+    }) as never);
+    const uncaught: Error[] = [];
+    const onUncaught = (err: Error) => { uncaught.push(err); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      expect(() => syncLogger.info('disk is full')).not.toThrow();
+      asyncLogger.info('disk is full'.repeat(1000));
+      (asyncLogger as unknown as { flush: () => void }).flush();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      writeSync.mockRestore();
+      write.mockRestore();
+    }
+    // Logging works again once there is space.
+    expect(() => syncLogger.info('space again')).not.toThrow();
   });
 });
 

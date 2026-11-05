@@ -10,7 +10,8 @@
             "value" : "  新增 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  %lld removed — tap to expand" : {
       "localizations" : {
@@ -20,7 +21,8 @@
             "value" : "  删除 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  %lld removed, %lld added — tap to expand" : {
       "localizations" : {
@@ -36,7 +38,8 @@
             "value" : "  删除 %lld 行，新增 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  Collapse" : {
       "localizations" : {
@@ -44,6 +47,169 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "  收起"
+          }
+        }
+      },
+      "extractionState" : "stale"
+    },
+    "Already answered on another device." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在另一台设备上回答。"
+          }
+        }
+      }
+    },
+    "%@ revoked this device's pairing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已撤销此设备的配对"
+          }
+        }
+      }
+    },
+    "%lld drafts haven't been sent. Logging out discards them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld draft hasn't been sent. Logging out discards it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld drafts haven't been sent. Logging out discards them."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 份草稿尚未发送，退出登录会将其丢弃。"
+          }
+        }
+      }
+    },
+    "%lld messages haven't been delivered yet. Logging out discards them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld message hasn't been delivered yet. Logging out discards it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld messages haven't been delivered yet. Logging out discards them."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 条消息尚未送达，退出登录会将其丢弃。"
+          }
+        }
+      }
+    },
+    "%lld sessions are still working. They keep running on your computer." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld session is still working. It keeps running on your computer."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld sessions are still working. They keep running on your computer."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个会话仍在工作，它们会在你的电脑上继续运行。"
+          }
+        }
+      }
+    },
+    "%lld undelivered messages were removed from this device with its sign-in." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld undelivered message was removed from this device with its sign-in."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld undelivered messages were removed from this device with its sign-in."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条未送达的消息已随此设备的登录信息一并移除。"
+          }
+        }
+      }
+    },
+    "Camera Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相机不可用"
+          }
+        }
+      }
+    },
+    "%lld sessions are running on this Mac. Switching restarts Kraki here and stops them." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 上有 %lld 个会话正在运行。切换会重启这里的 Kraki 并停止这些会话。"
+          }
+        }
+      }
+    },
+    "A session is running on this Mac. Switching restarts Kraki here and stops it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 上有一个会话正在运行。切换会重启这里的 Kraki 并停止该会话。"
           }
         }
       }
@@ -54,6 +220,172 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "连不上 Kraki 服务器。请检查这台 Mac 的网络连接。"
+          }
+        }
+      }
+    },
+    "Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿"
+          }
+        }
+      }
+    },
+    "Couldn't load steps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载步骤"
+          }
+        }
+      }
+    },
+    "Showing the first %@ of %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Showing the first %1$@ of %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅显示前 %1$@（共 %2$@）。"
+          }
+        }
+      }
+    },
+    "Steps come from your computer. Check that it is online, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "步骤来自你的电脑。请确认它在线后重试。"
+          }
+        }
+      }
+    },
+    "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 无法连接使用主机名的未加密 ws:// 地址。请使用中继服务器的 wss:// 地址或其 IP 地址。"
+          }
+        }
+      }
+    },
+    "Couldn't reach the relay to pair. Check your connection, then scan the code again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接中继服务器完成配对。请检查网络连接，然后重新扫码。"
+          }
+        }
+      }
+    },
+    "Its replies are no longer signed for this device, so Kraki holds them back. Reset the saved connection to keep using %@ with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的回复不再为此设备签名，因此 Kraki 暂不显示。重置已保存的连接即可继续通过你的账户使用 %@，或扫描它的二维码重新配对。"
+          }
+        }
+      }
+    },
+    "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥加密。如果你在该电脑上重新安装了 Kraki，在你于该电脑上运行 `kraki connect` 并扫描新二维码之前，它无法读取新消息。如果没有，照常使用即可。"
+          }
+        }
+      }
+    },
+    "This device's camera can't be used to scan. Enter the pairing URL from your terminal instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的相机无法用于扫码。请改为输入终端中显示的配对 URL。"
+          }
+        }
+      }
+    },
+    "This device's clock is off. Check the date and time, then scan the code again, or reset the saved connection to use %@ without pairing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的时钟不准确。请检查日期和时间后重新扫码，或重置已保存的连接，在不配对的情况下使用 %@。"
+          }
+        }
+      }
+    },
+    "This device's pairing was revoked. Reset the saved connection to keep using the computer with your account, or scan its code to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的配对已被撤销。重置已保存的连接即可继续通过你的账户使用这台电脑，或扫描它的二维码重新配对。"
+          }
+        }
+      }
+    },
+    "Kraki didn't start on this Mac. Try again, or open the logs to see why." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 没有在这台 Mac 上启动。请重试，或打开日志查看原因。"
+          }
+        }
+      }
+    },
+    "Switch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换"
+          }
+        }
+      }
+    },
+    "Switch how this Mac runs agents?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换这台 Mac 运行 Agent 的方式？"
+          }
+        }
+      }
+    },
+    "Kraki can't save its settings in the .kraki folder in your home folder. If you ran kraki with sudo, run this in Terminal, then try again: sudo chown -R \"$USER\" ~/.kraki" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 无法在你个人文件夹中的 .kraki 文件夹里保存设置。如果你曾用 sudo 运行过 kraki，请在终端中运行以下命令，然后重试：sudo chown -R \"$USER\" ~/.kraki"
+          }
+        }
+      }
+    },
+    "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. Quit Kraki and use Finder to move it into Applications (if it's already there, move it out and back in), then open it again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 正从 macOS 存放下载应用的临时位置运行，因此无法持续在后台工作。请退出 Kraki，在访达中将它移到“应用程序”（如果已经在那里，请先移出再移回），然后重新打开。"
           }
         }
       }
@@ -933,6 +1265,34 @@
         }
       }
     },
+    "%lld unsent drafts were removed from this device with its sign-in." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent draft was removed from this device with its sign-in."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld unsent drafts were removed from this device with its sign-in."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 份未发送的草稿已随此设备的登录信息一并移除。"
+          }
+        }
+      }
+    },
     "%lldd" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1349,16 +1709,6 @@
         }
       }
     },
-    "All" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部"
-          }
-        }
-      }
-    },
     "All Computers" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1745,16 +2095,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "认证失败。请扫描新的配对二维码。"
-          }
-        }
-      }
-    },
-    "Authentication failed. Scan a pairing QR code to get started." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "认证失败。请扫描配对二维码以开始使用。"
           }
         }
       }
@@ -2753,6 +3093,16 @@
         }
       }
     },
+    "Copy Error" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制错误信息"
+          }
+        }
+      }
+    },
     "Copy kraki connect command" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2913,6 +3263,16 @@
         }
       }
     },
+    "Could not reach GitHub. Check your network connection or proxy, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 GitHub。请检查网络连接或代理设置后重试。"
+          }
+        }
+      }
+    },
     "Could not reach Kraki. Check your network connection, then try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3043,6 +3403,16 @@
         }
       }
     },
+    "Couldn't load this attachment" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载此附件"
+          }
+        }
+      }
+    },
     "Couldn’t load this report" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3153,6 +3523,26 @@
         }
       }
     },
+    "Couldn't remove the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法移除设备。请在连接后重试。"
+          }
+        }
+      }
+    },
+    "Couldn't rename the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法重命名设备。请在连接后重试。"
+          }
+        }
+      }
+    },
     "Couldn't send — your text is kept. Try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3193,6 +3583,16 @@
         }
       }
     },
+    "Couldn't stop the agent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止 Agent。"
+          }
+        }
+      }
+    },
     "Couldn't stop the command-line Kraki." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3209,6 +3609,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法停止命令行版 Kraki。%@"
+          }
+        }
+      }
+    },
+    "Couldn't stop: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止：%@"
           }
         }
       }
@@ -5005,6 +5415,16 @@
         }
       }
     },
+    "Kraki Dev – %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki Dev – %@"
+          }
+        }
+      }
+    },
     "Kraki didn't answer. Check the connection and try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -5121,16 +5541,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Kraki 正在 %@ 上重新启动。"
-          }
-        }
-      }
-    },
-    "Kraki is running from a temporary location macOS uses for downloaded apps, so it can't keep working in the background. In Finder, drag Kraki from Downloads into Applications, then open it again." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kraki 正从 macOS 存放下载应用的临时位置运行，因此无法持续在后台工作。请在访达中将 Kraki 从“下载”拖到“应用程序”，然后重新打开。"
           }
         }
       }
@@ -5947,16 +6357,6 @@
         }
       }
     },
-    "Needs your approval · Safe mode" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要你批准 · 安全模式"
-          }
-        }
-      }
-    },
     "Never" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6253,16 +6653,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未选择会话"
-          }
-        }
-      }
-    },
-    "No sessions for this device" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此设备上没有会话"
           }
         }
       }
@@ -8662,16 +9052,6 @@
         }
       }
     },
-    "Show all devices" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示所有设备"
-          }
-        }
-      }
-    },
     "Show Code…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8728,26 +9108,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在访达中显示日志"
-          }
-        }
-      }
-    },
-    "Show sessions on %@" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示 %@ 上的会话"
-          }
-        }
-      }
-    },
-    "Show sessions on all devices" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示所有设备上的会话"
           }
         }
       }
@@ -8968,6 +9328,26 @@
         }
       }
     },
+    "Sign-in failed. Try again, or scan a pairing QR code." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录失败。请重试，或扫描配对二维码。"
+          }
+        }
+      }
+    },
+    "Sign-in is temporarily unavailable. Try again in a moment." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录暂时不可用。请稍后再试。"
+          }
+        }
+      }
+    },
     "Sign-in needed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9044,6 +9424,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "部分账户无法更新"
+          }
+        }
+      }
+    },
+    "Some computers have the same name. Open one and tap its name to rename it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有几台电脑同名。打开其中一台，轻点名称即可重命名。"
           }
         }
       }
@@ -9614,6 +10004,16 @@
         }
       }
     },
+    "The agent's request changed. Check your message, then send again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 的请求已变化。请检查消息后再发送。"
+          }
+        }
+      }
+    },
     "The audio input changed during recording. Please try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -9790,12 +10190,22 @@
         }
       }
     },
-    "The relay reported a new encryption key for %@. Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code." : {
+    "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you sign out of Kraki on this Mac and sign in again to trust its new key. If you didn't, keep using it as before." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥，因此无法向该电脑发送消息。如果你在该电脑上重新安装了 Kraki，请运行 `kraki connect` 并扫描新二维码。"
+            "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥加密。如果你在该电脑上重新安装了 Kraki，在你于这台 Mac 上退出 Kraki 账户并重新登录以信任它的新密钥之前，它无法读取新消息。如果没有，照常使用即可。"
+          }
+        }
+      }
+    },
+    "The report stopped responding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告已停止响应。"
           }
         }
       }
@@ -10070,16 +10480,6 @@
         }
       }
     },
-    "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此设备的配对已被撤销。请扫描电脑的二维码重新配对，或选择“忘记配对”，以在不使用设备信任的情况下连接。"
-          }
-        }
-      }
-    },
     "This iPhone is already connected as %@. To connect a different account, log out first." : {
       "localizations" : {
         "zh-Hans" : {
@@ -10256,6 +10656,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此服务器要求 Kraki 连接到不受信任的地址。"
+          }
+        }
+      }
+    },
+    "This server doesn't accept new pairings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务器不接受新的配对。"
           }
         }
       }
@@ -10857,6 +11267,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "也在手机上使用 Kraki"
+          }
+        }
+      }
+    },
+    "Varies" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不一致"
           }
         }
       }
@@ -11497,6 +11917,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台 Mac 只接收正式版。"
+          }
+        }
+      }
+    },
+    "%@ is not the kraki command-line tool." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不是 kraki 命令行工具。"
+          }
+        }
+      }
+    },
+    "To run agents with the kraki command-line tool instead, install it first." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要改用 kraki 命令行工具运行 Agent，请先安装它。"
+          }
+        }
+      }
+    },
+    "Kraki is set to run agents with the kraki command-line tool, which is not installed. Install it in Terminal, or choose Kraki (built in) in Settings › This Mac." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 已设为用 kraki 命令行工具运行 Agent，但它尚未安装。请在终端中安装，或在“设置 › 这台 Mac”中选择 Kraki（内置）。"
           }
         }
       }

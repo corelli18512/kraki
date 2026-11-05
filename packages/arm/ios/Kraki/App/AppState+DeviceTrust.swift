@@ -57,8 +57,15 @@ final class DeviceTrustModel {
     var info: [String: ComputerTrustInfo] = [:]
     /// Computers (without a pin) that said they only serve paired apps.
     var pairingRequired: Set<String> = []
-    /// Short-lived message after a scan/paste ("Paired with …").
-    var feedback: PairingFeedback?
+    /// Short-lived message after a scan/paste ("Paired with …"). Each new
+    /// result is also announced: the toast appears away from the VoiceOver
+    /// cursor.
+    var feedback: PairingFeedback? {
+        didSet {
+            guard let feedback, feedback != oldValue else { return }
+            AccessibilityAnnouncer.announce(feedback.accessibilityAnnouncement)
+        }
+    }
     /// Computers the user dismissed the "needs pairing" banner for.
     var dismissedBanners: Set<String> = []
     /// Paired computers that sent unsigned messages since their last signed one.
@@ -68,6 +75,10 @@ final class DeviceTrustModel {
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
     @ObservationIgnored var retryScheduled = false
+    #if DEBUG
+    /// Tests: reconnects asked for after a saved connection was reset.
+    @ObservationIgnored var resyncRequestsForTesting = 0
+    #endif
     static let retryInterval: TimeInterval = 10
 
     init() {
@@ -95,10 +106,52 @@ final class DeviceTrustModel {
     func clearPairRequest(_ tentacleId: String) { lastPairRequest[tentacleId] = nil }
 }
 
+/// User-facing copy for a relay `auth_error`. The relay's `message` is English
+/// developer text (logged by `AuthManager.handleAuthError`); the user always
+/// sees the app's localized copy for the situation.
+enum RelayAuthErrorText {
+    static func describe(code: String?, fallback: String) -> String {
+        switch code {
+        case "invalid_pairing_token":
+            // Same situation as a refused device-trust proof: the scanned code
+            // was already used or has expired.
+            return PairingFailureText.describe("bad_proof")
+        case "pairing_disabled":
+            return String(localized: "This server doesn't accept new pairings.")
+        default:
+            return fallback
+        }
+    }
+
+    /// Text for a failed sign-in with no paired device: a relay outage asks
+    /// for a retry, anything else stays neutral (it may be a GitHub sign-in,
+    /// not a pairing).
+    static func describeSignInFailure(code: String?) -> String {
+        switch code {
+        case "service_unavailable", "auth_unavailable":
+            return String(localized: "Sign-in is temporarily unavailable. Try again in a moment.")
+        default:
+            return describe(code: code, fallback: String(localized: "Sign-in failed. Try again, or scan a pairing QR code."))
+        }
+    }
+}
+
 enum PairingFeedback: Equatable, Identifiable {
     case pairing(name: String)
     case paired(name: String)
     case failed(name: String, reason: String)
+
+    /// What the toast says, as one sentence for VoiceOver.
+    var accessibilityAnnouncement: String {
+        switch self {
+        case .pairing(let name): return String(localized: "Pairing with \(name)…")
+        case .paired(let name): return String(localized: "Paired with \(name)")
+        case .failed(let name, let reason):
+            let detail = (try? AttributedString(markdown: PairingFailureText.describe(reason)))
+                .map { String($0.characters) } ?? PairingFailureText.describe(reason)
+            return String(localized: "Couldn't pair with \(name)") + "\n" + detail
+        }
+    }
 
     var id: String {
         switch self {
@@ -118,7 +171,7 @@ enum PairingFailureText {
         case "no_local_enrollment": return String(localized: "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again.")
         case "stale", "from_future": return String(localized: "This device's clock is off. Check the date and time, then scan again.")
         case "trust_required": return String(localized: "This computer only accepts paired devices. Scan its code to pair.")
-        case "revoked": return String(localized: "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust.")
+        case "revoked": return String(localized: "This device's pairing was revoked. Reset the saved connection to keep using the computer with your account, or scan its code to pair again.")
         case "policy_conflict": return String(localized: "The setting was just changed on the computer or another device. Check it and try again.")
         case "policy_unconfirmed": return String(localized: "The computer didn't confirm the change. Check that it's online, then try again.")
         case "local_keys_missing": return String(localized: "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again.")
@@ -202,6 +255,7 @@ extension AppState {
 
     /// Pair this (signed-in) app with the computer whose QR was scanned.
     func pairWithComputer(_ link: PairingLink) {
+        pendingPairingPrompt = nil
         pinFromPairingLink(link)
         if let id = link.trust?.tentacleId {
             deviceTrust.feedback = .pairing(name: deviceStore.devices[id]?.name ?? String(localized: "your computer"))
@@ -453,8 +507,9 @@ extension AppState {
     /// there): forget its keys and go back to the unpaired connection. If the
     /// computer still signs, tell it to forget this app too.
     func forgetPairing(_ tentacleId: String) {
-        if TentacleTrustStore.shared.pairedPin(tentacleId) != nil, !deviceTrust.stoppedSigning.contains(tentacleId),
-           let selfId = deviceId {
+        let computerStillTrustsUs = TentacleTrustStore.shared.pairedPin(tentacleId) != nil
+            && !deviceTrust.stoppedSigning.contains(tentacleId)
+        if computerStillTrustsUs, let selfId = deviceId {
             revokeTrustedDevice(selfId, on: tentacleId)
         }
         TentacleTrustStore.shared.update(tentacleId) { $0 = nil }
@@ -464,6 +519,21 @@ extension AppState {
         deviceTrust.pairingRequired.remove(tentacleId)
         deviceTrust.clearPairRequest(tentacleId)
         KLog.d("🔓 device trust: forgot pairing with \(tentacleId.prefix(12))")
+        // What the computer sent unsigned while it was pinned was dropped,
+        // and its sessions wait for those messages: only a fresh session list
+        // brings them back (K-182). A computer told to revoke us sends one;
+        // otherwise reconnect, so it greets this device again.
+        if !computerStillTrustsUs { resyncAfterTrustReset() }
+    }
+
+    private func resyncAfterTrustReset() {
+        // Not connected: the next connection resyncs anyway.
+        guard connectionStatus == .connected else { return }
+        #if DEBUG
+        deviceTrust.resyncRequestsForTesting += 1
+        #endif
+        KLog.d("🔄 device trust: reconnecting to resync after a saved-connection reset")
+        wsClient?.recover(reason: "device_trust_reset")
     }
 
     /// Logout / account deletion: computers must pair this install again.

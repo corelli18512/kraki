@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { KrakiWSClient } from './ws-client';
 import { useStore } from '../hooks/useStore';
-import { REPLACED_ELSEWHERE_MESSAGE } from './transport';
+import { replacedElsewhereMessage } from './transport';
 
 vi.mock('./message-db', () => ({
   putMessage: async () => {}, putMessages: async () => {}, getMessages: async () => [],
@@ -76,7 +76,7 @@ describe('two Web tabs with one stored identity', () => {
     tabB.connect();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(relay.auths).toBeLessThanOrEqual(2);
-    expect(useStore.getState().lastError).toBe(REPLACED_ELSEWHERE_MESSAGE);
+    expect(useStore.getState().lastError).toBe(replacedElsewhereMessage());
     expect(useStore.getState().reconnectAttempts).toBe(0); // no "Reconnecting…"
 
     // Focusing the replaced tab takes the connection back (once).
@@ -87,6 +87,102 @@ describe('two Web tabs with one stored identity', () => {
     expect(relay.auths).toBeLessThanOrEqual(before + 2);
     tabA.disconnect();
     tabB.disconnect();
+  }, 30_000);
+
+  // K-318: signing out in one tab must not be undone by the other one.
+  async function twoSettledTabs() {
+    vi.useFakeTimers();
+    useStore.getState().reset();
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://relay', deviceId: 'dev_web_shared' }));
+    const relay = installRelay(4009);
+    const tabA = new KrakiWSClient('ws://relay');
+    const tabB = new KrakiWSClient('ws://relay');
+    tabA.connect();
+    tabB.connect();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(useStore.getState().lastError).toBe(replacedElsewhereMessage());
+    // B authenticated last: it holds the connection, A was replaced.
+    return { relay, live: tabB, replaced: tabA };
+  }
+
+  it('a replaced tab does not reconnect with the identity another tab signed out', async () => {
+    const { relay, live, replaced } = await twoSettledTabs();
+    // The live tab signs out (ProfileBar.signOut); the replaced one missed
+    // the storage event.
+    localStorage.removeItem('kraki_device');
+    live.disconnect();
+    const before = relay.auths;
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(relay.auths).toBe(before);
+    expect(localStorage.getItem('kraki_device')).toBeNull();
+    expect(useStore.getState().status).toBe('awaiting_login');
+    replaced.disconnect();
+  }, 30_000);
+
+  it('a sign-out in another tab signs this tab out at once (storage event)', async () => {
+    const { relay, live, replaced } = await twoSettledTabs();
+    useStore.getState().setSessions([{ id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', messageCount: 1 }]);
+    localStorage.removeItem('kraki_device');
+    live.disconnect();
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kraki_device', oldValue: '{}', newValue: null }));
+    expect(useStore.getState().status).toBe('awaiting_login');
+    expect(useStore.getState().sessions.size).toBe(0);
+    const before = relay.auths;
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(relay.auths).toBe(before);
+    expect(localStorage.getItem('kraki_device')).toBeNull();
+    replaced.disconnect();
+  }, 30_000);
+
+  it('a scheduled reconnect does not sign the identity in again after a sign-out in another tab', async () => {
+    vi.useFakeTimers();
+    useStore.getState().reset();
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://relay', deviceId: 'dev_web_shared' }));
+    const relay = installRelay(1006);
+    const tab = new KrakiWSClient('ws://relay');
+    tab.connect();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(relay.auths).toBe(1);
+    // The network drops while another tab signs out; this tab (frozen) missed
+    // the storage event.
+    localStorage.removeItem('kraki_device');
+    const sock = relay.live!;
+    sock.readyState = 3;
+    sock.onclose?.({ code: 1006, reason: '', wasClean: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(relay.auths).toBe(1);
+    expect(localStorage.getItem('kraki_device')).toBeNull();
+    expect(useStore.getState().status).toBe('awaiting_login');
+    tab.disconnect();
+  }, 30_000);
+
+  it('a tab whose identity was replaced by a new pairing in another tab reloads into it', async () => {
+    vi.useFakeTimers();
+    useStore.getState().reset();
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://relay', deviceId: 'dev_web_shared' }));
+    const relay = installRelay(1006);
+    const tab = new KrakiWSClient('ws://relay');
+    tab.connect();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const reload = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, reload } });
+    try {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://relay', deviceId: 'dev_web_new' }));
+      const sock = relay.live!;
+      sock.readyState = 3;
+      sock.onclose?.({ code: 1006, reason: '', wasClean: false });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(relay.auths).toBe(1);
+      expect(localStorage.getItem('kraki_device')).toContain('dev_web_new');
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+      tab.disconnect();
+    }
   }, 30_000);
 
   it('control: an unexplained drop (1006) still reconnects', async () => {

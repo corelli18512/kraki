@@ -91,7 +91,11 @@
     "holdUsage": "Hold {{shortcut}} to peek at account usage",
     "shortcutFooterFloating": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window; over other apps it floats. “Account Usage” in the tray opens it any time.",
     "shortcutFooterTray": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the tray opens it any time.",
-    "shortcutFooterSidebar": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time."
+    "shortcutFooterSidebar": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time.",
+    "shortcutFooterSidebarMac": "Click the shortcut to choose another key: F1–F20, or a combination with Control, Option or Command. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time.",
+    "shortcutFooterInline": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Show Account Usage” above opens it any time.",
+    "shortcutFooterInlineMac": "Click the shortcut to choose another key: F1–F20, or a combination with Control, Option or Command. With Kraki in front the panel opens inside its window. “Show Account Usage” above opens it any time.",
+    "showUsage": "Show Account Usage"
   },
   "title": "Settings",
   "voice": {
@@ -121,6 +125,7 @@
       "leaseTimeout": "The voice authorization request timed out.",
       "noMicrophone": "No microphone is available. Connect a microphone and try again.",
       "permission": "Microphone access is required. Allow it for Kraki in your system privacy settings.",
+      "permissionBrowser": "Microphone access is blocked. Allow it for this site in your browser’s settings, then try again.",
       "unavailable": "Voice input isn't available in this region.",
       "offline": "Couldn't connect to Kraki. Check your connection and try again.",
       "invalidAddress": "The voice service address is invalid.",
@@ -166,6 +171,7 @@
     "disablePush": "Couldn’t turn off push notifications.",
     "blockedNotifications": "Notifications are blocked. Turn them on in site Settings.",
     "updatePush": "Couldn’t update push notifications.",
+    "pushRefused": "The relay didn’t accept push notifications from this browser. Notifications still appear while Kraki is open.",
     "copyDiagnostics": "Couldn’t copy diagnostics."
   },
   "account": {
@@ -192,6 +198,7 @@
     "pushOn": "Push notifications are on, including when this browser is closed.",
     "pushOff": "Turn notifications on to receive replies and requests when this browser is closed.",
     "unavailable": "Push notifications aren’t available with this relay.",
+    "unsupported": "Push notifications aren’t available in this browser.",
     "deniedSystem": "Off — turn on in System Settings",
     "deniedSite": "Off — turn on in site Settings",
     "footerDesktop": "Shown while Kraki is running (also from the tray), except for the Session you are looking at.",
@@ -227,7 +234,8 @@
     "scanAgain": "Authentication failed. Please scan a new pairing QR code.",
     "reconnecting": "Authentication temporarily unavailable. Reconnecting…",
     "signIn": "Authentication failed. Sign in with GitHub or scan a pairing QR code.",
-    "scan": "Authentication failed. Scan a pairing QR code."
+    "scan": "Authentication failed. Scan a pairing QR code.",
+    "untrustedRedirect": "This server asked to move you to a server Kraki doesn't trust. Retrying…"
   },
   "performanceNotice": {
     "title": "Help Improve Kraki",
@@ -235,5 +243,12 @@
     "settingsHint": "You can change this anytime in Settings › Privacy.",
     "decline": "Don't Share",
     "ok": "OK"
+  },
+  "dogfood": {
+    "switchFailed": "Couldn’t switch in this browser",
+    "title": "Dogfood",
+    "builds": "Builds",
+    "detail": "Internal account: you get every new build first.",
+    "switching": "Switching…"
   }
 }

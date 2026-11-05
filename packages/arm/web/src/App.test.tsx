@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, act } from '@testing-library/react';
+import { fireEvent, render, screen, act, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('./lib/ws-client', () => ({
@@ -35,10 +35,62 @@ function renderApp(route = '/') {
   );
 }
 
+describe('App — tab title (K-220)', () => {
+  it('counts a Session waiting on an approval, not only unread messages', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd', agent: 'pi', state: 'active', messageCount: 0 },
+      { id: 's2', deviceId: 'd', agent: 'pi', state: 'idle', messageCount: 0 },
+    ]);
+    renderApp();
+    expect(document.title).toBe('Kraki');
+    act(() => useStore.getState().setSessionPreview('s1', { text: 'Run rm -rf build?', type: 'permission', timestamp: new Date().toISOString() }));
+    expect(document.title).toBe('(1) Kraki');
+    // An unread waiting Session counts once; another unread one adds.
+    act(() => useStore.getState().incrementUnread('s1'));
+    act(() => useStore.getState().incrementUnread('s2'));
+    expect(document.title).toBe('(2) Kraki');
+    act(() => useStore.getState().setSessionPreview('s1', { text: 'Done', type: 'agent', timestamp: new Date().toISOString() }));
+    act(() => useStore.getState().clearUnread('s1'));
+    expect(document.title).toBe('(1) Kraki');
+  });
+});
+
 describe('App', () => {
   it('renders without crashing', () => {
     const { container } = renderApp();
     expect(container.firstChild).toBeTruthy();
+  });
+
+  it('K-088: a signed-out browser on a /session/ link gets the sign-in screen, not an empty chat', () => {
+    useStore.getState().setStatus('awaiting_login');
+    renderApp('/session/s1');
+    expect(screen.queryByText('Session content')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+  });
+
+  it('K-088: a device removed while a session is open lands on the sign-in screen', () => {
+    useStore.getState().setStatus('connected');
+    renderApp('/session/s1');
+    expect(screen.getByText('Session content')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('awaiting_login'); });
+    expect(screen.queryByText('Session content')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+  });
+
+  it('K-109: a Web Push notification click opens its Session in this tab', () => {
+    const worker = new EventTarget() as EventTarget & { startMessages: () => void };
+    worker.startMessages = vi.fn();
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: worker });
+    try {
+      useStore.getState().setStatus('connected');
+      renderApp('/');
+      expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+      act(() => { worker.dispatchEvent(new MessageEvent('message', { data: { type: 'kraki:open-session', sessionId: 's1' } })); });
+      expect(screen.getByText('Session content')).toBeInTheDocument();
+    } finally {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    }
   });
 
   it('renders the session sidebar', () => {
@@ -54,8 +106,10 @@ describe('App', () => {
     const overlay = screen.getByRole('alertdialog');
     const sessionShell = screen.getByText('Session content').closest('main');
     expect(overlay).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByText('Disconnected')).toBeInTheDocument();
-    expect(screen.getByText('Lost connection to the relay server.')).toBeInTheDocument();
+    // K-087: never connected, so nothing was "lost".
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    expect(screen.getByText('Could not connect to the relay server. Make sure the head is running.')).toBeInTheDocument();
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
     expect(sessionShell).toHaveAttribute('aria-hidden', 'true');
   });
 
@@ -107,5 +161,60 @@ describe('App', () => {
     vi.mocked(wsClient.connect).mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Connect now' }));
     expect(wsClient.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('K-087: keeps the first-connect dialog up through retries and shows the spinner while one runs', () => {
+    useStore.getState().setStatus('connecting');
+    renderApp('/session/s1');
+    // The very first attempt is still running: nothing failed yet.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('error'); });
+    act(() => { useStore.getState().setStatus('disconnected'); });
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    expect(within(screen.getByRole('alertdialog')).getByText('Connecting…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect now' })).not.toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('disconnected'); });
+    expect(screen.getByRole('button', { name: 'Connect now' })).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connected'); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('K-087: a failed first attempt followed by sign-in and pairing shows no connect-failure dialog', () => {
+    renderApp('/session/s1');
+    act(() => { useStore.getState().setStatus('error'); });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('awaiting_login'); });
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('K-087: the first-connect dialog says why when the relay answered and asked to retry', () => {
+    renderApp('/session/s1');
+    act(() => {
+      useStore.getState().setLastError('Authentication temporarily unavailable. Reconnecting…');
+      useStore.getState().setStatus('disconnected');
+    });
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Authentication temporarily unavailable. Reconnecting…')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Could not connect to the relay server. Make sure the head is running.')).not.toBeInTheDocument();
+  });
+});
+
+describe('K-005: a sidebar render error stays inside the sidebar', () => {
+  it('keeps the main area rendered when the sidebar throws', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    useStore.setState({ status: 'connected' });
+    useStore.setState({ sessions: new Map([['s-bad', {
+      id: 's-bad', deviceId: 'dev-1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0,
+      // Bypasses the store's own title check, like an unforeseen bad field.
+      get title(): string { throw new TypeError('boom'); },
+      toJSON: () => ({ id: 's-bad' }),
+    } as never]]) });
+    renderApp();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
   });
 });

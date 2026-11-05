@@ -20,6 +20,7 @@ import type { AgentId } from '@kraki/protocol';
 import { SETUP_AGENTS, checkAgentCli } from './checks.js';
 import { piHasShellOnWindows, GIT_FOR_WINDOWS_URL } from './windows-shell.js';
 import type { AgentAdapter } from './adapters/base.js';
+import { killProcessTree } from './process-tree.js';
 
 export type AgentCheckStatus = 'ready' | 'needs_login' | 'not_installed' | 'error';
 
@@ -53,12 +54,15 @@ export const LOGIN_HINTS: Record<string, string> = {
 const LOGIN_ERROR = /log(ged)? ?in|login|auth|credential|api key|unauthori[sz]ed|401|403/i;
 
 export interface AgentsCheckDeps {
-  checkCli: (bin: string) => { found: boolean; version?: string };
+  checkCli: (bin: string) => { found: boolean; version?: string; error?: string };
   createAdapter: (id: AgentId) => Promise<AgentAdapter | null>;
   timeoutMs: number;
   platform?: NodeJS.Platform;
   piHasShell?: () => boolean;
 }
+
+/** Stopping an agent is local cleanup; it should not take as long as a start. */
+const STOP_TIMEOUT_MS = 5_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -78,6 +82,12 @@ export async function checkAgent(
   const cli = deps.checkCli(agent.bin);
   if (!cli.found) {
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
+  }
+  if (cli.error) {
+    return {
+      ...base, status: 'error', detail: cli.error,
+      hint: `${agent.name} is installed but \`${agent.bin} --version\` fails. Run it in a terminal to see why, or reinstall it.`,
+    };
   }
   const version = cli.version;
   if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
@@ -108,7 +118,9 @@ export async function checkAgent(
     }
     return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
   } finally {
-    try { await adapter?.stop(); } catch { /* best effort */ }
+    // A stop that never returns would keep `kraki agents --json` (and Kraki
+    // for Mac's setup waiting on it) from ever finishing (K-346).
+    try { if (adapter) await withTimeout(adapter.stop(), Math.min(deps.timeoutMs, STOP_TIMEOUT_MS), `${agent.name} stop`); } catch { /* best effort */ }
   }
 }
 
@@ -137,17 +149,24 @@ export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
   // an empty scratch folder so the check never touches the user's folders
   // (which would raise macOS Desktop/Documents/Downloads prompts before Full
   // Disk Access is granted).
-  const { mkdtempSync } = await import('node:fs');
+  const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  process.chdir(mkdtempSync(join(tmpdir(), 'kraki-agents-')));
-  const { createAgentAdapter } = await import('./adapters/multi.js');
-  await runAgentsCheckWith(
-    (event) => process.stdout.write(JSON.stringify(event) + '\n'),
-    { checkCli: checkAgentCli, createAdapter: (id) => createAgentAdapter(id), timeoutMs: 45_000 },
-    // `--only codex,pi`: check a subset (diagnostics).
-    args.includes('--only') ? (args[args.indexOf('--only') + 1] ?? '').split(',') : undefined,
-  );
+  const scratch = mkdtempSync(join(tmpdir(), 'kraki-agents-'));
+  process.chdir(scratch);
+  try {
+    const { createAgentAdapter } = await import('./adapters/multi.js');
+    await runAgentsCheckWith(
+      (event) => process.stdout.write(JSON.stringify(event) + '\n'),
+      { checkCli: checkAgentCli, createAdapter: (id) => createAgentAdapter(id), timeoutMs: 45_000 },
+      // `--only codex,pi`: check a subset (diagnostics).
+      args.includes('--only') ? (args[args.indexOf('--only') + 1] ?? '').split(',') : undefined,
+    );
+  } finally {
+    // Every check (each setup, each Kraki for Mac refresh) left one behind (K-275).
+    process.chdir(tmpdir());
+    try { rmSync(scratch, { recursive: true, force: true }); } catch { /* an agent still holds it (Windows) */ }
+  }
   return 0;
 }
 
@@ -160,14 +179,47 @@ export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
 export async function runAgentsCheckChild(
   onEvent: (event: AgentsCheckEvent) => void = () => {},
   timeoutMs = 90_000,
+  options: {
+    /** After the timeout's SIGTERM, how long before SIGKILL and giving up. */
+    killGraceMs?: number;
+    /** For tests: run this instead of `kraki agents --json`. */
+    command?: { file: string; args: string[] };
+  } = {},
 ): Promise<AgentCheckResult[]> {
   const { spawn } = await import('node:child_process');
   const { isSea } = await import('node:sea');
-  const args = isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'];
+  const command = options.command ?? {
+    file: process.execPath,
+    args: isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'],
+  };
   return new Promise((resolve) => {
     const results: AgentCheckResult[] = [];
-    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
+    // POSIX: its own process group, so the SIGKILL below also ends the agent
+    // CLIs it started (Windows: taskkill /T ends the tree).
+    const posix = process.platform !== 'win32';
+    const child = spawn(command.file, command.args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true, detached: posix });
+    const killGroup = () => {
+      try {
+        if (!child.pid) return;
+        if (posix) process.kill(-child.pid, 'SIGKILL');
+        else killProcessTree(child.pid, 'SIGKILL');
+      } catch { /* gone */ }
+    };
+    // Detached, the group no longer gets the terminal's Ctrl+C: end it if setup exits first.
+    const onParentExit = () => { if (child.exitCode === null && child.signalCode === null) killGroup(); };
+    process.once('exit', onParentExit);
+    // A child that ignores SIGTERM, or a grandchild (an agent CLI it started)
+    // still holding the stdout pipe, never lets 'close' fire: setup hung
+    // forever (K-346). SIGTERM, then SIGKILL the group, then stop waiting regardless.
+    let killTimer: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* gone */ }
+      killTimer = setTimeout(() => {
+        killGroup();
+        child.stdout.destroy();
+        finish();
+      }, options.killGraceMs ?? 5_000);
+    }, timeoutMs);
     let buf = '';
     child.stdout.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
@@ -187,8 +239,13 @@ export async function runAgentsCheckChild(
     });
     // Agents the child never reported (timeout, crash) must not silently
     // vanish from the list or read as "not installed".
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      process.removeListener('exit', onParentExit);
       for (const agent of SETUP_AGENTS) {
         if (results.some((r) => r.id === agent.id)) continue;
         results.push({

@@ -210,7 +210,8 @@ window-event isolation comparable to browser contexts.
 ## Production Mac history diagnostics
 
 The production Mac app writes a bounded, low-frequency Chat presentation trace
-to `~/Documents/chat-entry.log` and mirrors the same records to Unified Log.
+to `~/Library/Logs/<bundle id>/chat-entry.log` (`chat.kraki.mac` for the
+release app) and mirrors the same records to Unified Log.
 The file rotates at 512 KiB. It never records message text, attachment data,
 credentials, tokens, or tool arguments/results.
 
@@ -227,7 +228,7 @@ After a reproduction, preserve the approximate time and Session ID/title, then
 inspect only the relevant metadata lines:
 
 ```bash
-tail -300 ~/Documents/chat-entry.log \
+tail -300 ~/Library/Logs/chat.kraki.mac/chat-entry.log \
   | grep -E 'mac-(window|fetch|page|watchdog)'
 
 log show --last 30m --style compact \

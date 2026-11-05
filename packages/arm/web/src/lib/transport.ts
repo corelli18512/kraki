@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { desktopCredentials } from './desktop';
 import { diag } from './diag';
 import type { Message } from '@kraki/protocol';
@@ -20,16 +21,19 @@ const RECONNECT_FAST_WINDOW = 120_000;
 const RECONNECT_SLOW = 15_000;
 const RECONNECT_SLOW_WINDOW = 300_000;
 const RECONNECT_MAX = 30_000;
-/** No frame at all for this long on an authenticated socket → dead link
- *  (half-open). Pings every 10 s get a pong, and payload frames are ≤32 KB
- *  from fragment-capable Tentacles, so a live link is never this quiet. */
+/** A ping that has gone this long with no frame at all arriving after it →
+ *  dead link (half-open). Counted from the ping, not from the last frame, so
+ *  a latency spike of up to ~20 s (mobile handover, bufferbloat) does not drop
+ *  a live link (K-311), like the native apps' liveness ping timeout. */
 const LIVENESS_TIMEOUT = 22_000;
 const LIVENESS_CHECK = 2_000;
 /** A WebSocket handshake that has not opened by now is abandoned. */
 const CONNECT_TIMEOUT = 10_000;
 /** Shown while another tab/window with the same stored identity holds the
  *  relay connection. Coming back to this tab takes the connection over. */
-export const REPLACED_ELSEWHERE_MESSAGE = 'Kraki is open in another tab or window. Come back to this tab to use it here.';
+export function replacedElsewhereMessage(): string {
+  return t('app:errors.replacedElsewhere');
+}
 /** Application-level ping interval. 10s keeps the connection warm through
  *  proxies and bounds liveness-detection latency during read-only viewing. */
 const PING_INTERVAL = 10_000;
@@ -60,6 +64,14 @@ export function loadStoredDevice(): StoredDevice | null {
   } catch { return null; }
 }
 
+/** loadStoredDevice without the log line, for the check on every connect. */
+function readStoredDevice(): StoredDevice | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 export function saveStoredDevice(device: StoredDevice): void {
   logger.info('saveStoredDevice:', device);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
@@ -69,6 +81,9 @@ export interface TransportCallbacks {
   onOpen: () => Promise<void>;
   onParsedMessage: (msg: Message) => void;
   onClose?: () => void;
+  /** This tab was about to reconnect, but the stored device is gone or
+   *  another one: this browser was signed out in another tab. */
+  onSignedOutElsewhere?: () => void;
 }
 
 export const OAUTH_STATE_KEY = 'kraki_oauth_state';
@@ -173,6 +188,27 @@ function base64UrlEncode(bytes: Uint8Array): string {
 }
 
 /**
+ * Whether github.com answers at all. Where it is blocked (China), sending the
+ * browser to GitHub's authorize page ended on a browser error page (K-324);
+ * check first and say so on the sign-in page instead. An opaque no-cors
+ * request: any answer means reachable.
+ */
+export async function canReachGitHub(fetcher: typeof fetch = fetch, timeoutMs = 5000): Promise<boolean> {
+  // AbortController, not AbortSignal.timeout: Safari added that only in 16,
+  // and a throw there would block sign-in on older Safari.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetcher('https://github.com/favicon.ico', { mode: 'no-cors', cache: 'no-store', signal: controller.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Start the GitHub OAuth flow.
  *
  * Builds a CSRF state + PKCE verifier/challenge, persists both, and
@@ -226,12 +262,16 @@ export class KrakiTransport {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   intentionalClose = false;
   private replacedElsewhere = false;
+  /** The banner text shown when replaced, in the language of that moment. */
+  private replacedBanner: string | null = null;
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
   private authenticated = false;
   /** When the current outage began (first failed/closed attempt). */
   private outageStartedAt: number | null = null;
   private lastRxAt = 0;
+  /** When the oldest ping with no frame received since was sent. */
+  private unansweredPingAt: number | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeListenersInstalled = false;
@@ -256,7 +296,13 @@ export class KrakiTransport {
 
     // The desktop app connects to the relay its built-in Kraki was set up with.
     const desktopRelay = typeof window !== 'undefined' ? desktopCredentials()?.relay : undefined;
-    this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
+    // A link's ?relay= is followed only together with a pairing token (that
+    // pairing was confirmed by main.tsx), or before this browser is signed
+    // in. Without that, a crafted link would move a signed-in browser to
+    // another server, which gets its device id and challenge signatures.
+    const linkRelay = params.relay && (params.token || !stored?.deviceId) ? params.relay : undefined;
+    if (params.relay && !linkRelay) logger.warn('Ignoring ?relay= without a pairing token: this browser is signed in', { host: relayHost(params.relay) });
+    this._url = url ?? linkRelay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;
@@ -279,7 +325,7 @@ export class KrakiTransport {
         this.codeVerifier = pkce.codeVerifier;
         this.redirectUri = pkce.redirectUri;
       } else {
-        getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
+        getStore().setLastError(t('app:errors.oauthUnverified'));
         logger.warn('OAuth state mismatch — ignoring code');
       }
     }
@@ -296,7 +342,28 @@ export class KrakiTransport {
     }
   }
 
+  /** This tab still holds a device identity that is no longer the stored
+   *  one: another tab signed out (or paired again) meanwhile, maybe while
+   *  this tab missed the `storage` event (frozen, in bfcache). Connecting
+   *  would sign the old identity in again and save it (K-318). */
+  private identitySignedOutElsewhere(): boolean {
+    if (!this.storedDeviceId || this.pairingToken || this.githubCode) return false;
+    return readStoredDevice()?.deviceId !== this.storedDeviceId;
+  }
+
   connect() {
+    if (this.identitySignedOutElsewhere()) {
+      logger.info('Not connecting: signed out in another tab');
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      const lastError = getStore().lastError;
+      if (lastError !== null && (lastError === this.replacedBanner || lastError === replacedElsewhereMessage())) getStore().setLastError(null);
+      this.replacedBanner = null;
+      this.callbacks.onSignedOutElsewhere?.();
+      return;
+    }
     if (this.storedDeviceId || this.pairingToken || this.githubCode) {
       getStore().setStatus('connecting');
     }
@@ -350,12 +417,17 @@ export class KrakiTransport {
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.lastRxAt = Date.now();
+      this.unansweredPingAt = null;
       let msg: Message;
       try {
         msg = JSON.parse(event.data as string) as Message;
       } catch (err) {
         const raw = typeof event.data === 'string' ? event.data : '';
         logger.warn('Malformed WS message:', raw.slice(0, 200), err);
+        return;
+      }
+      if (!msg || typeof msg !== 'object') {
+        logger.warn('Ignoring WS frame that is not an object');
         return;
       }
       const rawLen = typeof event.data === 'string' ? event.data.length : 0;
@@ -424,7 +496,8 @@ export class KrakiTransport {
     this.outageStartedAt = null;
     getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
-    getStore().setLastError(REPLACED_ELSEWHERE_MESSAGE);
+    this.replacedBanner = replacedElsewhereMessage();
+    getStore().setLastError(this.replacedBanner);
   }
 
   /** True while another tab holds this device's connection. */
@@ -435,9 +508,27 @@ export class KrakiTransport {
     if (!this.replacedElsewhere) return;
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
-    if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+    if (this.replacedBanner !== null && getStore().lastError === this.replacedBanner) getStore().setLastError(null);
+    this.replacedBanner = null;
     this.reconnectDelay = RECONNECT_BASE;
     this.connect();
+  }
+
+  /** A passing failure while authenticating (key store unavailable, or the
+   *  relay refused the sign-in for a reason that may pass: auth backend down,
+   *  signing-key refresh): close the current socket as a non-intentional drop
+   *  so it is retried on the reconnect backoff, never at once (K-198). The
+   *  outage clock keeps running, so repeated refusals slow down like any
+   *  other outage. */
+  retryLater(reason = 'auth_retry_later') {
+    this.replacedElsewhere = false;
+    if (this.ws) {
+      this.abandon(this.ws, reason);
+      return;
+    }
+    this.cleanup();
+    getStore().setStatus('disconnected');
+    this.scheduleReconnect();
   }
 
   /** Stop using a socket that is dead but has not closed (half-open, stuck
@@ -537,12 +628,13 @@ export class KrakiTransport {
 
   private startPing() {
     this.pingTimer = setInterval(() => {
+      if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) this.unansweredPingAt ??= Date.now();
       this.send({ type: 'ping' });
     }, PING_INTERVAL);
     const ws = this.ws;
     this.livenessTimer = setInterval(() => {
       if (!ws || this.ws !== ws || !this.authenticated) return;
-      if (this.msSinceLastRx() > LIVENESS_TIMEOUT) {
+      if (this.unansweredPingAt !== null && Date.now() - this.unansweredPingAt > LIVENESS_TIMEOUT) {
         logger.warn('No frames from relay — link is dead, reconnecting');
         traceEvent({ comp: 'arm', evt: 'WS-LIVENESS-TIMEOUT', quietMs: this.msSinceLastRx() });
         this.abandon(ws);
@@ -579,6 +671,7 @@ export class KrakiTransport {
 
   private cleanup() {
     this.authenticated = false;
+    this.unansweredPingAt = null;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;

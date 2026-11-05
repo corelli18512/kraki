@@ -75,6 +75,14 @@ final class TentacleCLIManager {
     /// A command-line install already runs Kraki and the user hasn't chosen
     /// which one should (see TentacleMode.needsOwnerChoice).
     private(set) var ownerChoicePending = false
+    /// Setup has signed in and is still bringing this Mac online, or shows
+    /// the Login Items / couldn't-start card: app activation must not swap
+    /// the setup page for the main window (BuiltInSetupView sets this).
+    var setupHoldsSignIn = false
+
+    #if DEBUG
+    func setDaemonStateForTesting(_ state: DaemonState) { daemonState = state }
+    #endif
     /// Daemon-reported Full Disk Access ("granted" | "denied" | "missing").
     private(set) var fdaStatus: String?
     /// Relay connection state reported by the daemon.
@@ -89,13 +97,23 @@ final class TentacleCLIManager {
     private(set) var runningDaemonVersion: String?
 
     @ObservationIgnored let builtIn = BuiltInTentacle()
-    @ObservationIgnored private var restartedForVersion: String?
     @ObservationIgnored private var restartedForStaleBinary = false
     @ObservationIgnored private var notRunningSince: Date?
     @ObservationIgnored private var lastKickstartAt: Date?
     @ObservationIgnored private var onDemandCheckedAt: Date?
     @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
+    /// When the built-in job was last re-registered: the job gets time to
+    /// come up after that before it counts as failed.
+    @ObservationIgnored private var reRegisteredAt: Date?
+    /// The built-in job is registered but did not come up in time (see
+    /// registeredButNotRunningState): Try Again repairs the registration.
+    @ObservationIgnored private var helperFailedToStart = false
+    /// Set when the user quits Kraki to take this Mac offline. From then on
+    /// nothing in this process registers the built-in job again: a launch
+    /// that was still bringing the Mac online would otherwise register it
+    /// after the quit stopped it, leaving the Mac online with no app.
+    @ObservationIgnored private(set) var quittingOffline = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
     @ObservationIgnored private var registeredHelperThisLaunch = false
 
@@ -193,10 +211,9 @@ final class TentacleCLIManager {
     }
 
     private func detectExternalCLI() async -> (path: String, version: String?)? {
-        // User-set override always wins, if it points at an executable.
+        // User-set override always wins, if it is a kraki CLI.
         let override = binaryPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) {
-            let version = await runCapturing(binary: override, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty, let version = await krakiVersion(at: override) {
             return (override, version)
         }
 
@@ -270,11 +287,14 @@ final class TentacleCLIManager {
         )
         if on {
             await startDaemon()
+            MacPresenceController.shared.syncLoginItem()
         } else {
             daemonState = .stopping
             do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
             try? await Task.sleep(nanoseconds: 300_000_000)
             await refreshDaemonState()
+            // Nothing to keep online: Kraki no longer needs to open at login.
+            await MacPresenceController.shared.dropAddedLoginItem()
         }
     }
 
@@ -303,7 +323,7 @@ final class TentacleCLIManager {
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            daemonState = .error(String(localized: "status query failed"))
+            daemonState = .error(Self.statusQueryFailedMessage)
             return
         }
 
@@ -329,11 +349,11 @@ final class TentacleCLIManager {
             if !checkedLegacyHelperPath, builtIn.ownershipMarkerExists,
                builtIn.service.status == .enabled {
                 checkedLegacyHelperPath = true
-                if !reRegisteredThisLaunch,
-                   let program = await registeredProgramIdentifier(),
+                // Not counted as the self-heal's re-register below: if the job
+                // still doesn't come up after this, that one runs too.
+                if let program = await registeredProgramIdentifier(),
                    Self.isLegacyHelperProgram(program) {
-                    reRegisteredThisLaunch = true
-                    restartedForVersion = builtIn.version
+                    if let shipped = builtIn.version { Self.recordVersionRestart(shipped: shipped) }
                     KLog.diag("[Tentacle] built-in job points at \(program); re-registering")
                     Task { await self.reRegisterBuiltIn() }
                     daemonState = .starting
@@ -348,7 +368,7 @@ final class TentacleCLIManager {
         // re-signed helper: "Requesting repair LWCR update", exit 78 forever).
         // Re-registering records the current binary. Once per app launch, and
         // only after the job had time to come up on its own.
-        var stuck = false
+        var notRunningVerdict: DaemonState = .stopped
         if mode == .builtIn, !running, builtIn.ownershipMarkerExists,
            BuiltInTentacle.thisMacRole != .remoteOnly,
            builtIn.service.status == .enabled {
@@ -375,7 +395,8 @@ final class TentacleCLIManager {
                 Task { await self.reRegisterBuiltIn() }
             }
             // Still down: tell the user why instead of spinning forever.
-            if down > 45 {
+            var stuck = false
+            if down > Self.launchdStuckGrace {
                 if let checked = onDemandCheckedAt, now.timeIntervalSince(checked) < 30 {
                     stuck = launchdDomainStuck
                 } else {
@@ -385,7 +406,15 @@ final class TentacleCLIManager {
                     if stuck { KLog.diag("[Tentacle] launchd domain is in on-demand-only mode; daemon cannot start") }
                 }
             }
-        } else if running {
+            notRunningVerdict = Self.registeredButNotRunningState(
+                down: down,
+                launchdDomainStuck: stuck,
+                sinceReRegister: reRegisteredAt.map { now.timeIntervalSince($0) }
+            )
+        } else {
+            // Running, or not registered to run: the next stretch down starts
+            // a fresh grace period (a job turned off and on again later must
+            // not count the time it was off).
             notRunningSince = nil
             lastKickstartAt = nil
             launchdDomainStuck = false
@@ -404,8 +433,9 @@ final class TentacleCLIManager {
         } else {
             // Avoid flapping .stopping → .stopped → .starting if the
             // user spammed buttons. Trust the JSON here.
-            daemonState = stuck ? .error(Self.launchdStuckMessage) : .stopped
+            daemonState = notRunningVerdict
         }
+        noteHelperStartFailure(daemonState)
 
         if let cfg = json["config"] as? [String: Any] {
             let exists = (cfg["exists"] as? Bool) ?? false
@@ -514,6 +544,7 @@ final class TentacleCLIManager {
     /// exit 78); `launchctl bootout` drops it, and the next register records
     /// the binary now in the app.
     private func reRegisterBuiltIn() async {
+        reRegisteredAt = Date()
         _ = await runCapturing(binary: "/bin/launchctl", args: ["bootout", "gui/\(getuid())/\(builtIn.label)"])
         do {
             try await builtIn.service.unregister()
@@ -521,6 +552,7 @@ final class TentacleCLIManager {
             KLog.diag("[Tentacle] unregister before re-register failed: \(error.localizedDescription)")
         }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+        guard !quittingOffline else { return }
         do {
             _ = try builtIn.enable()
             // Registration alone does not spawn the job in on-demand-only mode.
@@ -531,9 +563,6 @@ final class TentacleCLIManager {
         }
     }
 
-    static let launchdStuckMessage =
-        String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
-
     /// True while the user's launchd domain only spawns jobs on explicit
     /// demand (`on-demand count` > 0 in `launchctl print gui/<uid>`): the
     /// state an interrupted restart/logout leaves behind until the next reboot.
@@ -543,14 +572,6 @@ final class TentacleCLIManager {
         return Self.onDemandCount(fromLaunchctlPrint: result.stdout) > 0
     }
 
-    nonisolated static func onDemandCount(fromLaunchctlPrint text: String) -> Int {
-        for line in text.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("on-demand count = "), let n = Int(t.dropFirst("on-demand count = ".count)) { return n }
-        }
-        return 0
-    }
-
     /// The bundle-relative program launchd recorded for the built-in job
     /// (`program identifier = …` in `launchctl print`), or nil if unknown.
     private func registeredProgramIdentifier() async -> String? {
@@ -558,21 +579,6 @@ final class TentacleCLIManager {
             binary: "/bin/launchctl", args: ["print", "gui/\(getuid())/\(builtIn.label)"]
         ), result.exitCode == 0 else { return nil }
         return Self.programIdentifier(fromLaunchctlPrint: result.stdout)
-    }
-
-    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("program identifier = ") else { continue }
-            var value = String(trimmed.dropFirst("program identifier = ".count))
-            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
-            return value
-        }
-        return nil
-    }
-
-    nonisolated static func isLegacyHelperProgram(_ program: String) -> Bool {
-        program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
     }
 
     /// Register the built-in daemon with SMAppService.
@@ -592,7 +598,13 @@ final class TentacleCLIManager {
         if case .running = daemonState, builtIn.ownershipMarkerExists,
            builtIn.service.status == .enabled { return }
 
+        await repairHelperThatDidNotStart()
+
+        guard !quittingOffline else { return }
         daemonState = .starting
+        // Every explicit start gets the full grace period.
+        notRunningSince = nil
+        lastKickstartAt = nil
         do {
             let status = try builtIn.enable()
             if status == .requiresApproval {
@@ -733,6 +745,109 @@ struct TentacleCLIError: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
+// MARK: - Reading `launchctl print`
+
+extension TentacleCLIManager {
+    nonisolated static func onDemandCount(fromLaunchctlPrint text: String) -> Int {
+        for line in text.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("on-demand count = "), let n = Int(t.dropFirst("on-demand count = ".count)) { return n }
+        }
+        return 0
+    }
+
+    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("program identifier = ") else { continue }
+            var value = String(trimmed.dropFirst("program identifier = ".count))
+            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
+            return value
+        }
+        return nil
+    }
+
+    nonisolated static func isLegacyHelperProgram(_ program: String) -> Bool {
+        program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
+    }
+}
+
+// MARK: - Built-in job that does not start, quitting offline
+
+extension TentacleCLIManager {
+    nonisolated static let launchdStuckMessage =
+        String(localized: "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this.")
+
+    nonisolated static let helperDidNotStartMessage =
+        String(localized: "Kraki didn't start on this Mac. Try again, or open the logs to see why.")
+
+    /// One `kraki status --json` poll failed or timed out; the next poll
+    /// usually succeeds.
+    nonisolated static let statusQueryFailedMessage = String(localized: "status query failed")
+
+    /// The built-in daemon could not be started (the message to show), or nil.
+    /// A single failed status poll is not a start failure.
+    nonisolated static func startFailure(in state: DaemonState) -> String? {
+        guard case .error(let message) = state, message != statusQueryFailedMessage else { return nil }
+        return message
+    }
+
+    /// How long a registered built-in job may stay down before a launchd
+    /// domain stuck in on-demand-only mode is reported.
+    nonisolated static let launchdStuckGrace: TimeInterval = 45
+
+    /// How long a registered built-in job may stay down (while it is
+    /// kickstarted and re-registered) before the user is told it failed. A
+    /// healthy start after a mode switch was measured at 74 s.
+    nonisolated static let builtInStartGrace: TimeInterval = 90
+
+    /// How long the job gets to come up after a re-register before it counts
+    /// as failed.
+    nonisolated static let reRegisterGrace: TimeInterval = 30
+
+    /// State for a built-in job that is registered and should run but does
+    /// not: offline while it may still come up, then a problem with a reason
+    /// (it was shown as a plain "offline" forever, e.g. launchd "spawn
+    /// failed" exit 78 after the app was renamed or moved).
+    nonisolated static func registeredButNotRunningState(
+        down: TimeInterval, launchdDomainStuck: Bool, sinceReRegister: TimeInterval?
+    ) -> DaemonState {
+        if launchdDomainStuck, down > launchdStuckGrace { return .error(launchdStuckMessage) }
+        guard down > builtInStartGrace, (sinceReRegister ?? .infinity) > reRegisterGrace else { return .stopped }
+        return .error(helperDidNotStartMessage)
+    }
+
+    /// Quit Kraki and go offline: stop the daemon and never start it again
+    /// in this process (see quittingOffline).
+    func goOfflineForQuit() async {
+        quittingOffline = true
+        await stopDaemon()
+    }
+
+    /// Try Again after the built-in job failed to come up: repair the
+    /// registration now (what relaunching the app used to do), and give it the
+    /// full grace period again.
+    private func repairHelperThatDidNotStart() async {
+        guard helperFailedToStart else { return }
+        KLog.diag("[Tentacle] retrying a built-in daemon that did not start; re-registering")
+        helperFailedToStart = false
+        notRunningSince = nil
+        lastKickstartAt = nil
+        reRegisteredThisLaunch = true
+        daemonState = .starting
+        await reRegisterBuiltIn()
+    }
+
+    /// Remember that the built-in job failed to come up (Try Again repairs
+    /// it), logging it once.
+    private func noteHelperStartFailure(_ state: DaemonState) {
+        let failed: Bool
+        if case .error = state { failed = true } else { failed = false }
+        if failed, !helperFailedToStart { KLog.diag("[Tentacle] built-in daemon registered but still not running") }
+        helperFailedToStart = failed
+    }
+}
+
 // MARK: - Restart a daemon left behind by an app update
 
 extension TentacleCLIManager {
@@ -745,10 +860,11 @@ extension TentacleCLIManager {
     /// executable ("Failed to create attribution chain").
     func restartDaemonIfOutdated(_ daemon: [String: Any]?, pid: Int?) {
         guard builtIn.ownershipMarkerExists else { return }
-        if let shipped = builtIn.version, let live = runningDaemonVersion,
-           shipped != live, restartedForVersion != shipped {
-            restartedForVersion = shipped
-            KLog.diag("[Tentacle] restarting built-in daemon \(live) → \(shipped)")
+        // A copy on a disk image, translocated or in the Trash must not
+        // restart the daemon the installed app registered.
+        guard AppInstallLocation.isPermanent(bundlePath: Bundle.main.bundlePath) else { return }
+        if Self.claimVersionRestart(shipped: builtIn.version, live: runningDaemonVersion) {
+            KLog.diag("[Tentacle] restarting built-in daemon \(runningDaemonVersion ?? "?") → \(builtIn.version ?? "?")")
             builtIn.kickstart()
             return
         }
@@ -759,6 +875,25 @@ extension TentacleCLIManager {
             KLog.diag("[Tentacle] built-in daemon runs a replaced binary (\(stale)); restarting")
             builtIn.kickstart()
         }
+    }
+
+    nonisolated static let restartedForVersionKey = "tentacle.restartedForVersion"
+
+    /// True once per shipped tentacle version when the running daemon reports
+    /// another version. Remembered across launches: a helper that never
+    /// reports the shipped version must not be restarted (killing its turns)
+    /// on every app launch.
+    nonisolated static func claimVersionRestart(
+        shipped: String?, live: String?, defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard let shipped, let live, shipped != live,
+              defaults.string(forKey: restartedForVersionKey) != shipped else { return false }
+        recordVersionRestart(shipped: shipped, defaults: defaults)
+        return true
+    }
+
+    nonisolated static func recordVersionRestart(shipped: String, defaults: UserDefaults = .standard) {
+        defaults.set(shipped, forKey: restartedForVersionKey)
     }
 
     /// Executable path of a live process, or nil when it can't be resolved.
@@ -832,6 +967,62 @@ extension TentacleCLIManager {
         }
         let reachable = Self.relayReachable(downSince: relayDownSince, now: now)
         if relayReachable != reachable { relayReachable = reachable }
+    }
+}
+
+// MARK: - Locating the kraki CLI (Settings › This Mac)
+
+extension TentacleCLIManager {
+    /// Settings › This Mac: notice a kraki CLI installed since launch (so it
+    /// can be chosen) without re-deciding which tentacle runs.
+    func refreshExternalCLI() async {
+        externalCLI = await detectExternalCLI()
+    }
+
+    /// "Locate kraki manually…": pick the CLI in a file panel. Only a kraki
+    /// CLI is kept; anything else is refused. Returns the message to show,
+    /// nil when the CLI was taken (or the panel was cancelled).
+    func locateCLIManually() async -> String? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.title = String(localized: "Locate kraki executable")
+        panel.message = String(localized: "Pick the kraki binary in your filesystem.")
+        panel.directoryURL = Self.locateStartDirectory()
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        // The helper inside a Kraki for Mac is not an independent CLI either.
+        guard !isEmbeddedHelper(url.path), await krakiVersion(at: url.path) != nil else {
+            return String(localized: "\(url.lastPathComponent) is not the kraki command-line tool.")
+        }
+        setBinaryPathOverride(url.path)
+        await refreshInstallState()
+        return nil
+    }
+
+    /// Where the panel opens: the installer's folder (~/.local/bin), else
+    /// the usual Homebrew/system folders, whichever exists.
+    static func locateStartDirectory(fileManager: FileManager = .default) -> URL? {
+        let candidates = ["\(NSHomeDirectory())/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+        return candidates.first { fileManager.fileExists(atPath: $0) }.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    /// The version a kraki CLI at `path` reports; nil for anything that is
+    /// not one (another program, or a script printing something else).
+    func krakiVersion(at path: String) async -> String? {
+        guard FileManager.default.isExecutableFile(atPath: path),
+              let result = await runCapturing(binary: path, args: ["--version"], timeout: 15),
+              result.exitCode == 0 else { return nil }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.isKrakiVersionOutput(version) ? version : nil
+    }
+
+    /// `kraki --version` prints only its version, such as 0.38.11 or
+    /// 0.39.0-beta.2.
+    nonisolated static func isKrakiVersionOutput(_ output: String) -> Bool {
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.range(of: #"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$"#,
+                          options: .regularExpression) != nil
     }
 }
 

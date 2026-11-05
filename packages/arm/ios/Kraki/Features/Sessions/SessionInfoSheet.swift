@@ -131,8 +131,9 @@ struct SessionInfoSheet: View {
     }
 
     private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        if let title = session.titleEdit(titleDraft) {
+            appState.commandSender?.renameSession(sessionId: session.id, title: title)
+        }
         editingTitle = false
         titleFieldFocused = false
     }
@@ -180,9 +181,10 @@ struct SessionInfoSheet: View {
 
                 Divider()
 
-                infoRow(String(localized: "Total cost"), value: formatCost(usage.totalCost))
+                infoRow(String(localized: "Total cost"), value: formatCost(usage.totalCost), keepsValueOnOneLine: true)
                 if usage.totalDurationMs > 0 {
-                    infoRow(String(localized: "Duration"), value: formatDuration(usage.totalDurationMs))
+                    infoRow(String(localized: "Duration"), value: formatDuration(usage.totalDurationMs),
+                            keepsValueOnOneLine: true)
                 }
             }
         }
@@ -240,10 +242,9 @@ struct SessionInfoSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader(String(localized: "Device"))
 
-                // Tapping the device row exits the chat view entirely
-                // and lands on the device detail panel in the Devices
-                // tab — same UX as picking the device from the
-                // Devices tab itself. Dismisses the sheet AND triggers
+                // Tapping the device row switches to the Devices tab and
+                // opens the device; the chat stays on the Sessions tab
+                // (K-306). Dismisses the sheet AND triggers
                 // cross-tab navigation via `DeviceStore.navigateToDeviceId`
                 // which `MainTabView` watches.
                 Button {
@@ -345,11 +346,15 @@ struct SessionInfoSheet: View {
             .foregroundStyle(.secondary)
     }
 
-    private func infoRow(_ label: String, value: String) -> some View {
+    /// `keepsValueOnOneLine`: numbers (cost, duration, tokens) never break
+    /// mid-number at large text sizes; the label wraps instead.
+    private func infoRow(_ label: String, value: String, keepsValueOnOneLine: Bool = false) -> some View {
         infoRow(label: label) {
             Text(value)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: keepsValueOnOneLine, vertical: false)
+                .layoutPriority(keepsValueOnOneLine ? 1 : 0)
         }
     }
 
@@ -376,7 +381,7 @@ struct SessionInfoSheet: View {
         // other value so token rows match exactly. Tokens drop the
         // monospaced-digit treatment so the visual baseline lines up
         // with non-numeric values like the model name or the date.
-        infoRow(label, value: formatTokenCount(count))
+        infoRow(label, value: formatTokenCount(count), keepsValueOnOneLine: true)
     }
 }
 
@@ -390,8 +395,10 @@ private struct ModelPickerNav: Hashable {}
 /// In-sheet model picker. Reuses the same `ModelPickerCard` component
 /// the New Session sheet uses, so reasoning-effort segmentation, the
 /// glass card look, and selection chevrons all behave identically.
-/// Applies the chosen model + effort live via `setSessionModel`.
-private struct ModelPickerScreen: View {
+/// Applies the chosen model + effort live via `setSessionModel`, and follows
+/// the session's model when the computer restates it (a rejected change
+/// reverts, K-010) so the checkmark and a later effort change use it.
+struct ModelPickerScreen: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let session: SessionInfo
@@ -415,6 +422,9 @@ private struct ModelPickerScreen: View {
     private var modelDetails: [ModelDetail] {
         appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
     }
+
+    private var liveModel: String? { appState.sessionStore.sessions[session.id]?.model }
+    private var liveEffort: ReasoningEffort? { appState.sessionStore.sessions[session.id]?.reasoningEffort }
 
     var body: some View {
         ScrollView {
@@ -448,6 +458,12 @@ private struct ModelPickerScreen: View {
             )
             .padding(.horizontal)
             .padding(.top, 8)
+        }
+        .onChange(of: liveModel) { _, model in
+            if let model, !model.isEmpty { selectedModel = model }
+        }
+        .onChange(of: liveEffort) { _, effort in
+            reasoningEffort = effort ?? liveModel.flatMap { SessionPrefs.lastEffort(model: $0) }
         }
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)

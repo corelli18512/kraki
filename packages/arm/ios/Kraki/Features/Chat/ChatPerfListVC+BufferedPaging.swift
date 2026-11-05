@@ -35,6 +35,15 @@ extension ChatPerfListVC {
             - collectionView.bounds.height - collectionView.contentOffset.y
     }
 
+    /// Distance to the conversation's newest tail, for the shared follow
+    /// latch. While newer history is paged out of the window (bottom spinner
+    /// shown, or a newer page still buffered behind it) the loaded bottom is
+    /// not the tail: resting there must not follow it, or every newer page
+    /// re-pins to its own last row and the reader skips whole pages (K-018).
+    func tailFollowDistance() -> CGFloat {
+        loadingNewer || showsNewerSpinner ? .greatestFiniteMagnitude : distanceToBottom()
+    }
+
     /// Fire one page fetch into the newer buffer (serialized). On return it
     /// refreshes the snapshot, measures the buffered page off-frame, then re-evaluates flush +
     /// prefetch. Mirror of `fetchOlder`.

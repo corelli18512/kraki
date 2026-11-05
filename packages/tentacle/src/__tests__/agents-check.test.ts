@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PiAdapter } from '../adapters/pi.js';
 import type { AgentId } from '@kraki/protocol';
 import { runAgentsCheckWith, type AgentsCheckEvent, type AgentsCheckDeps } from '../agents-check.js';
 import type { AgentAdapter } from '../adapters/base.js';
@@ -56,10 +60,36 @@ describe('kraki agents --json', () => {
     expect(stuck.stopped).toBe(true);
   });
 
+  it('K-346: an agent whose stop never returns still lets `kraki agents --json` finish', async () => {
+    const stuck = fakeAdapter({ start: () => new Promise<void>(() => {}) });
+    (stuck as unknown as { stop: () => Promise<void> }).stop = () => new Promise<void>(() => {});
+    const { results, events } = await run(['copilot'], { copilot: stuck }, 20);
+    expect(results.find((r) => r.id === 'copilot')).toMatchObject({ status: 'error' });
+    expect(events.at(-1)).toMatchObject({ event: 'done' });
+  });
+
   it('reports an agent that cannot even be launched as an error, not as signed out', async () => {
     const pi = fakeAdapter({ models: [], listError: 'spawn EINVAL' });
     const { results } = await run(['pi'], { pi });
     expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'error', detail: 'spawn EINVAL' });
+  });
+
+  it('K-132: a signed-out Pi (empty model list, retried in the background) still reads as needs_login, not "didn\'t start"', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-agents-check-pi-'));
+    vi.stubEnv('PI_CODING_AGENT_DIR', dir);
+    const cli = join(dir, 'pi');
+    writeFileSync(cli, `#!/usr/bin/env node
+      if (process.argv.includes('--list-models')) console.log('No models available. Use /login or set an API key environment variable.');
+    `, 'utf8');
+    chmodSync(cli, 0o755);
+    try {
+      const pi = new PiAdapter({ cliPath: cli, modelListRetryDelaysMs: [60_000] });
+      const { results } = await run(['pi'], { pi: pi as unknown as ReturnType<typeof fakeAdapter> }, 10_000);
+      expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'needs_login', hint: expect.stringContaining('/login') });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -91,4 +121,120 @@ describe('kraki agents on Windows without bash', () => {
     expect(r).toMatchObject({ status: 'error', detail: 'no_bash', hint: expect.stringContaining('Git for Windows') });
     expect(createAdapter).not.toHaveBeenCalled();
   });
+});
+
+import { checkAgentCli, resolveOnPath } from '../checks.js';
+
+describe('a broken agent install (K-128)', () => {
+  it('checkAgentCli tells "installed but --version fails" apart from "not installed"', async () => {
+    if (process.platform === 'win32') return;
+    const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const bin = mkdtempSync(join(tmpdir(), 'kraki-broken-agent-'));
+    const script = join(bin, 'kraki-broken-agent');
+    writeFileSync(script, '#!/bin/sh\necho "Error: Cannot find module \'/usr/lib/node_modules/agent/cli.js\'" >&2\nexit 1\n');
+    chmodSync(script, 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const broken = checkAgentCli('kraki-broken-agent');
+      expect(broken).toMatchObject({ found: true, error: expect.stringContaining('Cannot find module') });
+      expect(checkAgentCli('kraki-no-such-agent-k128')).toEqual({ found: false });
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  it('an agent on PATH whose interpreter is missing (exit 127, e.g. no node for #!/usr/bin/env node) is broken, not missing', async () => {
+    if (process.platform === 'win32') return;
+    const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const bin = mkdtempSync(join(tmpdir(), 'kraki-no-interp-agent-'));
+    const script = join(bin, 'kraki-no-interp-agent');
+    writeFileSync(script, '#!/nonexistent/interp\n');
+    chmodSync(script, 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      expect(resolveOnPath('kraki-no-interp-agent')).toBe(script);
+      expect(checkAgentCli('kraki-no-interp-agent')).toMatchObject({ found: true, error: expect.any(String) });
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  it('a missing agent on non-English Windows (status 1, translated cmd.exe text) is "not installed"', () => {
+    const notFound = Object.assign(new Error('Command failed: claude --version'), {
+      status: 1, stderr: "'claude' 不是内部或外部命令，也不是可运行的程序\r\n或批处理文件。\r\n",
+    });
+    const deps = {
+      runVersion: () => { throw notFound; },
+      resolveOnPath: () => null,
+      findBundled: () => undefined,
+    };
+    expect(checkAgentCli('claude', deps)).toEqual({ found: false });
+    // The same failure for a CLI that is on PATH is a broken install.
+    expect(checkAgentCli('claude', { ...deps, resolveOnPath: () => 'C:\\npm\\claude.cmd' }))
+      .toMatchObject({ found: true, error: expect.stringContaining('claude') });
+  });
+
+  it('resolveOnPath finds Windows shims through PATHEXT and ignores files without one', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pathext-'));
+    writeFileSync(join(dir, 'codex.CMD'), '@echo off\r\n');
+    writeFileSync(join(dir, 'pi'), '');
+    const env = { Path: `C:\\nowhere;${dir}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+    expect(resolveOnPath('codex', env, 'win32')).toBe(join(dir, 'codex.CMD'));
+    expect(resolveOnPath('pi', env, 'win32')).toBeNull();
+    expect(resolveOnPath('claude', env, 'win32')).toBeNull();
+  });
+
+  it('reports an installed agent whose CLI does not run as an error, not as "not installed"', async () => {
+    const claude = SETUP_AGENTS.find((a) => a.id === 'claude')!;
+    const createAdapter = vi.fn();
+    const r = await checkAgent(claude, {
+      checkCli: () => ({ found: true, error: "Error: Cannot find module 'cli.js'" }), createAdapter, timeoutMs: 1000,
+    });
+    expect(r).toMatchObject({ status: 'error', detail: expect.stringContaining('Cannot find module'), hint: expect.stringContaining('installed but') });
+    expect(r.status).not.toBe('not_installed');
+    expect(createAdapter).not.toHaveBeenCalled();
+  });
+});
+
+import { runAgentsCheckChild } from '../agents-check.js';
+
+describe('the agents check child times out for real (K-346)', () => {
+  it('finishes when the child ignores SIGTERM and a grandchild keeps its stdout open', async () => {
+    if (process.platform === 'win32') return;
+    // The child ignores SIGTERM and leaves a grandchild holding the stdout
+    // pipe: 'close' never fires on its own.
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const pidFile = join(mkdtempSync(join(tmpdir(), 'kraki-k346-')), 'grandchild.pid');
+    const script = [
+      "process.on('SIGTERM', () => {});",
+      "const g = require('node:child_process').spawn('sleep', ['30'], { stdio: ['ignore', 'inherit', 'ignore'] }); g.unref();",
+      `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));`,
+      'setInterval(() => {}, 1000);',
+    ].join(' ');
+    const started = Date.now();
+    const results = await runAgentsCheckChild(() => {}, 300, {
+      killGraceMs: 200,
+      command: { file: process.execPath, args: ['-e', script] },
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(results).toHaveLength(SETUP_AGENTS.length);
+    expect(results.every((r) => r.status === 'error')).toBe(true);
+    // The agent CLI the child started is killed with it, not left running.
+    const grandchild = Number(readFileSync(pidFile, 'utf8'));
+    const alive = () => { try { process.kill(grandchild, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 20 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    if (alive()) process.kill(grandchild, 'SIGKILL');
+    expect(alive()).toBe(false);
+  }, 10_000);
 });

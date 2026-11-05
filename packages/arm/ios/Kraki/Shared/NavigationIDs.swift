@@ -21,3 +21,28 @@ extension Notification.Name {
     static let krakiComposerSubmitted = Notification.Name("chat.kraki.composerSubmitted")
     static let krakiVoiceEditRequested = Notification.Name("chat.kraki.voiceEditRequested")
 }
+
+/// The Sessions tab stack after opening a Session (`navigateToSession`).
+enum SessionNavigationRoute {
+    struct Result: Equatable {
+        let path: [SessionNavID]
+        /// Swap without a pop/push transition (a placeholder became its Session).
+        let inPlace: Bool
+    }
+
+    /// - `pushesOnTop`: a fork opened from its source chat is pushed over it.
+    /// - `replacingPlaceholder`: the pending route the target replaces. It is
+    ///   swapped where it sits, so a slow fork ("Copying session…" over its
+    ///   source) keeps the source below it and Back returns there.
+    /// - Otherwise the stack is reset to the target.
+    static func open(_ target: String, in path: [SessionNavID], replacingPlaceholder placeholder: String?,
+                     pushesOnTop: Bool, sessionsTabSelected: Bool) -> Result {
+        if pushesOnTop, sessionsTabSelected, !path.isEmpty {
+            return Result(path: path + [SessionNavID(id: target)], inPlace: false)
+        }
+        if let placeholder, let index = path.lastIndex(of: SessionNavID(id: placeholder)) {
+            return Result(path: Array(path[..<index]) + [SessionNavID(id: target)], inPlace: true)
+        }
+        return Result(path: [SessionNavID(id: target)], inPlace: false)
+    }
+}

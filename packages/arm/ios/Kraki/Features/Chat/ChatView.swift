@@ -23,6 +23,8 @@ struct ChatView: View {
     @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
     /// Height the floating composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
+    /// Measured height of the offline notice while it is shown.
+    @State private var offlineNoticeHeight: CGFloat = 0
 
     // MARK: - View-model passthroughs
 
@@ -47,8 +49,19 @@ struct ChatView: View {
                 bubbleBottomPadding: TKMetrics.outerV
             ),
             composerVisible: true,
-            compacting: viewModel?.isCompacting == true
+            compacting: viewModel?.isCompacting == true,
+            offlineNoticeHeight: offlineNotice == nil ? 0 : offlineNoticeHeight
         )
+    }
+
+    /// "<computer> is offline — …" while the session's computer is offline
+    /// (messages queue until it reconnects).
+    private var offlineNotice: String? {
+        guard let deviceId = session?.deviceId else { return nil }
+        let device = appState.deviceStore.devices[deviceId]
+        return IOSComposerOfflineNotice.text(deviceOnline: device?.online,
+                                             deviceName: device?.name ?? session?.deviceName,
+                                             presenceKnown: appState.hasCompletedInitialConnect)
     }
     // MARK: - Body
 
@@ -135,15 +148,31 @@ struct ChatView: View {
             }
         }
         // A brand-new session: say where it runs, so the empty screen is
-        // not ambiguous ("which computer / agent / model is this?").
+        // not ambiguous ("which computer / agent / model is this?"). A
+        // session whose history is on an offline computer says so instead.
         .overlay {
             if !waitingForLatest, isNewEmptySession, let session {
-                NewSessionIntro(
-                    deviceName: appState.deviceStore.device(for: session.deviceId)?.name,
-                    agent: AgentInfo.from(session.agent).label,
-                    model: session.model
-                )
-                .allowsHitTesting(false)
+                switch ChatEntryLoading.emptyChatNote(
+                    knownLastSeq: max(session.lastSeq, viewModel?.sessionLastSeq ?? 0),
+                    deviceOnline: isDeviceOnline
+                ) {
+                case .newSession:
+                    NewSessionIntro(
+                        deviceName: appState.deviceStore.device(for: session.deviceId)?.name,
+                        agent: AgentInfo.from(session.agent).label,
+                        model: session.model
+                    )
+                    .allowsHitTesting(false)
+                case .historyOnOfflineComputer:
+                    Text("The session device is offline and no cached conversation is available.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .allowsHitTesting(false)
+                case nil:
+                    EmptyView()
+                }
             }
         }
         // Let the chat collection view extend behind BOTH the top navbar
@@ -281,6 +310,11 @@ struct ChatView: View {
                 .background(.thinMaterial, in: Capsule())
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Compacting context")
+            }
+            if let offlineNotice {
+                IOSComposerOfflineNotice(text: offlineNotice)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { offlineNoticeHeight = $0 }
+                    .transition(.opacity)
             }
             // Pure floating liquid-glass capsule. The capsule itself owns
             // its glass background (see `inputBoxGlassBackground` in

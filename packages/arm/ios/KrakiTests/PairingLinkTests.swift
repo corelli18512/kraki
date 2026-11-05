@@ -28,6 +28,44 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertFalse(AuthManager.isAllowedRegionRedirect("wss://kraki.chat.evil.example"))
     }
 
+    /// K-007: a link that cold-launches a signed-in app (before the first
+    /// connection) asks before switching accounts, like a warm one does.
+    @MainActor
+    func testColdLaunchLinkWhileSignedInAsksBeforeSwitchingAccounts() throws {
+        let app = AppState.makeUnitTestHost()
+        app.hasStoredCredentials = true
+        app.hasCompletedInitialConnect = false
+        app.user = UserInfo(id: "u1", login: "octo", provider: "github")
+        let link = try XCTUnwrap(PairingLink(string: "https://app.kraki.chat/?relay=wss%3A%2F%2Frelay.kraki.chat&token=pt_other"))
+        app.openPairingLink(link)
+        XCTAssertEqual(app.pendingPairingPrompt, .alreadyConnected(link, login: "octo"))
+        XCTAssertNotEqual(app.connectionStatus, .authenticating, "no pairing on top of the stored identity")
+    }
+
+    @MainActor
+    func testLinkWhileSignedOutPairsWithoutPrompt() throws {
+        let app = AppState.makeUnitTestHost()
+        app.hasStoredCredentials = false
+        app.hasCompletedInitialConnect = false
+        let link = try XCTUnwrap(PairingLink(string: "https://app.kraki.chat/?token=pt_new"))
+        app.openPairingLink(link)
+        XCTAssertNil(app.pendingPairingPrompt)
+        XCTAssertEqual(app.connectionStatus, .authenticating)
+    }
+
+    /// K-303: only the relay reports the new key, so messages may still reach
+    /// the computer; the warning must not say they won't.
+    @MainActor
+    func testKeyChangeWarningDoesNotClaimMessagesFail() throws {
+        let app = AppState.makeUnitTestHost()
+        app.deviceStore.setDevices([tentacle("pc", key: "K1")])
+        app.deviceStore.keyMismatchDeviceIds = ["pc"]
+        let message = try XCTUnwrap(app.keyWarning?.message)
+        XCTAssertFalse(message.contains("won't go through"), message)
+        let pc = "pc"
+        XCTAssertEqual(message, String(localized: "The relay reported a new encryption key for \(pc). Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before."))
+    }
+
     func testFingerprintMatchesTentacle() {
         XCTAssertEqual(DeviceKeyPins.fingerprint("abc"), "ungWv48Bz-pBQUDeXa4iIw")
     }

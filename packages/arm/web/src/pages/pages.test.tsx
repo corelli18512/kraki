@@ -58,6 +58,60 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Scan QR Code')).toBeInTheDocument();
   });
 
+  it('says github.com is unreachable instead of sending the browser to an error page (K-324)', async () => {
+    useStore.getState().setStatus('awaiting_login');
+    useStore.getState().setGithubClientId('github-client-id');
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const href = window.location.href;
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      await userEvent.click(screen.getByRole('button', { name: 'Sign in with GitHub' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach github.com');
+      expect(fetchMock).toHaveBeenCalledWith('https://github.com/favicon.ico', expect.objectContaining({ mode: 'no-cors' }));
+      expect(window.location.href).toBe(href);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('does not ask GitHub for the Mac download on every load of the sign-in page (K-324)', () => {
+    useStore.getState().setStatus('awaiting_login');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)');
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      expect(screen.getByText("Use this Mac's coding agents? Download Kraki for Mac")).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      agent.mockRestore();
+    }
+  });
+
+  it('leaves Cmd/Ctrl/middle clicks on the Mac download to the browser (K-324)', () => {
+    useStore.getState().setStatus('awaiting_login');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)');
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      const link = screen.getByText("Use this Mac's coding agents? Download Kraki for Mac").closest('a')!;
+      for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
+        // Not prevented: the browser opens the releases-page href itself.
+        expect(fireEvent.click(link, init)).toBe(true);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      agent.mockRestore();
+    }
+  });
+
   it('shows only pairing copy when oauth login is unavailable', () => {
     vi.stubEnv('VITE_GITHUB_CLIENT_ID', '');
     useStore.getState().setStatus('awaiting_login');
@@ -94,6 +148,15 @@ describe('DashboardPage', () => {
     expect(screen.getByText('No computer is online. Open Kraki on a computer to start a session there.')).toBeInTheDocument();
   });
 
+  it('does not ask the first-time question before the online computer sent its session list (K-096)', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.queryByText('What should we work on first?')).not.toBeInTheDocument();
+    act(() => { useStore.getState().markSessionListReceived('d1'); });
+    expect(screen.getByText('What should we work on first?')).toBeInTheDocument();
+  });
+
   it('starts a session with the typed task on the remembered computer, agent and model', () => {
     useStore.getState().setStatus('connected');
     useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);
@@ -127,9 +190,66 @@ describe('SessionPage', () => {
     useStore.getState().setStatus('connected');
   }
 
-  it('shows not found for an unknown session', () => {
-    renderWithRoute('/session/unknown-id', <SessionPage />);
-    expect(screen.getByText('Session not found')).toBeInTheDocument();
+  it('shows not found for an unknown session once the lists had time to arrive', () => {
+    vi.useFakeTimers();
+    try {
+      useStore.getState().setStatus('connected');
+      renderWithRoute('/session/unknown-id', <SessionPage />);
+      expect(screen.getByText('Loading session…')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(10_000); });
+      expect(screen.getByText('Session not found')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('K-089: a link to a session not loaded yet waits for it instead of bouncing to the list', () => {
+    useStore.getState().setStatus('connecting');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText('session list')).not.toBeInTheDocument();
+    expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('connected'); });
+    expect(screen.getByText('Loading session…')).toBeInTheDocument();
+    act(() => { withSession(); });
+    expect(screen.getByText('Fix the cache')).toBeInTheDocument();
+    // Deleted while open: back to the list.
+    act(() => { useStore.getState().setSessions([]); });
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
+  it('K-089: offline, the wait for a session link has a way back to the list', async () => {
+    useStore.getState().setStatus('disconnected');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '← Back to sessions' }));
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
+  it('K-089: signed out, a session link goes to the sign-in on the home page', () => {
+    useStore.getState().setStatus('awaiting_login');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>sign in</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('sign in')).toBeInTheDocument();
   });
 
   it('header: title and the session mode capsule', () => {
@@ -148,11 +268,17 @@ describe('SessionPage', () => {
     expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'safe');
   });
 
-  it('an offline device shows a banner and messages still queue', () => {
-    withSession('idle', false);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText(/offline/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+  it('an offline device shows a banner (after the grace) and messages still queue', () => {
+    vi.useFakeTimers();
+    try {
+      withSession('idle', false);
+      renderWithRoute('/session/s1', <SessionPage />);
+      act(() => { vi.advanceTimersByTime(2_000); });
+      expect(screen.getByText(/offline/)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

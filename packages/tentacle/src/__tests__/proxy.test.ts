@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseScutilProxy, detectProxy, bypassesProxy, proxyFor } from '../proxy.js';
 
 const SCUTIL = `<dictionary> {
@@ -72,5 +72,102 @@ describe('parseWindowsProxy', async () => {
   it('keeps an explicit scheme', () => {
     const out = `${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http://proxy.corp:8080\r\n`;
     expect(parseWindowsProxy(out)?.https).toBe('http://proxy.corp:8080');
+  });
+});
+
+describe('trustSystemCertificates (K-295)', () => {
+  it('adds the OS store roots to the default set without dropping any', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    let installed: string[] | null = null;
+    const api = {
+      getCACertificates: (type?: string) => (type === 'system' ? ['corp-root', 'shared-root', 'corp-root'] : ['bundled-root', 'shared-root']),
+      setDefaultCACertificates: (certs: string[]) => { installed = certs; },
+    };
+    expect(trustSystemCertificates(api)).toBe(1);
+    expect(installed).toEqual(['bundled-root', 'shared-root', 'corp-root']);
+  });
+
+  it('changes nothing on a Node without the API or when the store cannot be read', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    expect(trustSystemCertificates({})).toBeNull();
+    expect(trustSystemCertificates({
+      getCACertificates: () => { throw new Error('keychain locked'); },
+      setDefaultCACertificates: () => { throw new Error('must not be called'); },
+    })).toBeNull();
+  });
+
+  it('works against this Node', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    const tls = await import('node:tls');
+    const { X509Certificate } = await import('node:crypto');
+    // Compare certificates, not PEM text or counts: Node keeps one copy of
+    // each certificate, and on Linux the OpenSSL store lists most roots twice
+    // (the bundle file and the per-certificate files) and shares most of
+    // them with Node's bundled set.
+    const fingerprints = (pems: readonly string[]) => new Set(pems.map((pem) => new X509Certificate(pem).fingerprint256));
+    const before = fingerprints(tls.getCACertificates('default'));
+    const system = fingerprints(tls.getCACertificates('system'));
+    const added = trustSystemCertificates();
+    expect(added).not.toBeNull();
+    const after = fingerprints(tls.getCACertificates('default'));
+    const missing = (set: Set<string>) => [...set].filter((fp) => !after.has(fp)).length;
+    expect({ droppedDefault: missing(before), missingSystem: missing(system) })
+      .toEqual({ droppedDefault: 0, missingSystem: 0 });
+    expect(after.size).toBe(new Set([...before, ...system]).size);
+  });
+});
+
+describe('unsupported proxies are named, not silently ignored (K-328)', async () => {
+  const { parseScutilUnsupported, parseWindowsUnsupported, unsupportedProxy, unsupportedProxyMessage } = await import('../proxy.js');
+
+  it('names a PAC-only or SOCKS-only macOS system proxy', () => {
+    expect(parseScutilUnsupported('<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://wpad/proxy.pac\n}'))
+      .toBe('automatic proxy configuration (PAC)');
+    expect(parseScutilUnsupported('<dictionary> {\n  SOCKSEnable : 1\n  SOCKSPort : 7891\n  SOCKSProxy : 127.0.0.1\n}'))
+      .toBe('SOCKS proxy');
+  });
+
+  it('says nothing when a web proxy is set or no proxy at all', () => {
+    expect(parseScutilUnsupported(`${SCUTIL.slice(0, -1)}  SOCKSEnable : 1\n}`)).toBeNull();
+    expect(parseScutilUnsupported('<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 0\n}')).toBeNull();
+  });
+
+  it('names a PAC or SOCKS-only Windows proxy', () => {
+    const head = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n';
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x0\r\n    AutoConfigURL    REG_SZ    http://corp/proxy.pac\r\n`))
+      .toBe('automatic proxy configuration (PAC)');
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    socks=127.0.0.1:7891\r\n`))
+      .toBe('SOCKS proxy');
+    expect(parseWindowsUnsupported(`${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n`)).toBeNull();
+  });
+
+  it('ignores ALL_PROXY=socks5://… (no raw Node SOCKS warning, no broken WebSocket agent) and names it', () => {
+    expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891' }, 'linux')).toBeNull();
+    expect(unsupportedProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891' }, 'linux')).toBe('SOCKS proxy (ALL_PROXY)');
+    expect(unsupportedProxyMessage('SOCKS proxy (ALL_PROXY)')).toContain('HTTPS_PROXY=http://');
+  });
+
+  it('keeps an HTTP proxy next to a SOCKS ALL_PROXY', () => {
+    expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux'))
+      .toEqual({ https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', noProxy: [], source: 'env' });
+    expect(unsupportedProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux')).toBeNull();
+  });
+});
+
+describe('reads the system proxy once per process (K-328)', () => {
+  it('runs scutil --proxy once for detectProxy and unsupportedProxy', async () => {
+    vi.resetModules();
+    const execFileSync = vi.fn(() => '<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 0\n}');
+    vi.doMock('node:child_process', () => ({ execFileSync }));
+    try {
+      const proxy = await import('../proxy.js');
+      expect(proxy.detectProxy({}, 'darwin')).toBeNull();
+      expect(proxy.unsupportedProxy({}, 'darwin')).toBeNull();
+      expect(proxy.unsupportedProxy({}, 'darwin')).toBeNull();
+      expect(execFileSync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('node:child_process');
+      vi.resetModules();
+    }
   });
 });

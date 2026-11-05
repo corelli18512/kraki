@@ -113,6 +113,8 @@ export interface SessionEntry {
   awaitingSubagents?: boolean;
   /** Fallback settle when subagents finished but no continuation came. */
   subagentSettleTimer?: ReturnType<typeof setTimeout>;
+  /** Settles a held turn whose subagents made no progress for too long. */
+  subagentHoldTimer?: ReturnType<typeof setTimeout>;
   /** The Kraki turn has been held open at least once for subagents; it stays
    *  set across Claude Code's continuation turns until the turn settles. */
   subagentPhase?: boolean;

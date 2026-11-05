@@ -117,6 +117,74 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertEqual(app.trustedDeviceName(gone), "Old iPad", "not on the account: the computer's name")
     }
 
+    /// K-025: rename/remove go to the relay on the raw socket. While that
+    /// socket is not signed in the frame used to vanish with no sign; now
+    /// nothing is sent and the caller is told, so the view can say so.
+    func testRenameAndRemoveReportWhenTheRelayLinkIsDown() throws {
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        defer { app.disconnect() }
+        XCTAssertFalse(app.sendRelayControl(["type": "rename_device", "deviceId": "t", "name": "x"]))
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertFalse(sender.renameDevice(deviceId: "t", name: "Work laptop"))
+        XCTAssertFalse(sender.removeDevice(deviceId: "t"))
+    }
+
+    /// K-317: a removed computer's sessions leave the list (and the unread
+    /// badge) live, and do not come back from the saved session list.
+    func testDeviceRemovedForgetsItsSessions() throws {
+        app.deviceStore.setDevices([
+            DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: false),
+            DeviceSummary(id: "o", name: "other", role: .tentacle, online: true),
+        ])
+        var unread = session("s1", on: "t", named: "corelli-mbp")
+        unread.lastSeq = 3
+        app.sessionStore.sessions = ["s1": unread, "s2": session("s2", on: "o", named: "other")]
+        XCTAssertEqual(app.sessionStore.unreadSessionIDs, ["s1"])
+
+        app.messageRouter?.handleRawMessage(try json(["type": "device_removed", "deviceId": "t"]))
+
+        XCTAssertNil(app.deviceStore.devices["t"])
+        XCTAssertNil(app.sessionStore.sessions["s1"])
+        XCTAssertNotNil(app.sessionStore.sessions["s2"])
+        XCTAssertTrue(app.sessionStore.unreadSessionIDs.isEmpty)
+    }
+
+    /// K-317: removed while this app was away. The relay's device list at
+    /// sign-in no longer has the computer, so its cached sessions go.
+    func testSignInForgetsSessionsOfADeviceNoLongerOnTheAccount() throws {
+        app.deviceStore.setDevices([
+            DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: false),
+            DeviceSummary(id: "o", name: "other", role: .tentacle, online: true),
+        ])
+        app.sessionStore.sessions = ["s1": session("s1", on: "t", named: "corelli-mbp"),
+                                     "s2": session("s2", on: "o", named: "other")]
+        app.sessionStore.setDraft("s1", "half-typed reply")
+        app.onAuthenticated(deviceId: "me", user: nil,
+                            devices: [DeviceSummary(id: "o", name: "other", role: .tentacle, online: true)],
+                            githubClientId: nil, relayVersion: nil)
+        XCTAssertNil(app.sessionStore.sessions["s1"])
+        XCTAssertNotNil(app.sessionStore.sessions["s2"])
+        XCTAssertEqual(app.sessionStore.drafts["s1"], "half-typed reply",
+                       "no user action removed it: the unsent text is kept for when the computer returns")
+    }
+
+    /// K-189: the rename field is cut at the limit on a character boundary,
+    /// so an emoji at the end is dropped whole rather than split, and what
+    /// remains is always a name Save accepts.
+    func testRenameDraftIsCutAtACharacterBoundary() throws {
+        let family = "👨‍👩‍👧‍👦" // 7 scalars, one character
+        let draft = String(repeating: "x", count: 60) + family
+        let clamped = DeviceName.clampDraft(draft)
+        XCTAssertEqual(clamped, String(repeating: "x", count: 60))
+        XCTAssertNotNil(DeviceName.normalize(clamped))
+        let fits = String(repeating: "x", count: 57) + family
+        XCTAssertEqual(DeviceName.clampDraft(fits), fits)
+        XCTAssertEqual(DeviceName.clampDraft("short"), "short")
+        let laptop = DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true)
+        XCTAssertNotNil(DeviceName.renameValue(draft: DeviceName.clampDraft(String(repeating: "é", count: 80)), for: laptop))
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")

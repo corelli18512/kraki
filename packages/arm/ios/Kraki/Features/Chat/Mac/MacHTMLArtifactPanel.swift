@@ -167,11 +167,13 @@ struct MacHTMLArtifactPanel: View {
             Text("Couldn’t load this report")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.textTitle)
-            Text(reason)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
+            if !reason.isEmpty {
+                Text(reason)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

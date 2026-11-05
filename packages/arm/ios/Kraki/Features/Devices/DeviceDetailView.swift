@@ -8,17 +8,31 @@ import SwiftUI
 
 struct DeviceDetailView: View {
     @Environment(AppState.self) private var appState
-    private let initial: DeviceSummary
+    @Environment(\.dismiss) private var dismiss
+    private let deviceId: String
+    /// Shown for the moment between the device leaving the account and this
+    /// page closing; set once, when the page opens.
+    @State private var lastKnown: DeviceSummary
 
-    init(device: DeviceSummary) { initial = device }
+    init(device: DeviceSummary) {
+        deviceId = device.id
+        _lastKnown = State(initialValue: device)
+    }
 
     /// Live from the store, so a rename (from here or any other device) shows.
-    private var device: DeviceSummary { appState.deviceStore.devices[initial.id] ?? initial }
+    private var device: DeviceSummary { appState.deviceStore.devices[deviceId] ?? lastKnown }
+
+    /// Removed (here or from another device): the page closes rather than
+    /// staying open on a device that is gone (K-193).
+    private var isRemoved: Bool { appState.deviceStore.devices[deviceId] == nil }
 
     @State private var showRemoveConfirmation = false
     @State private var showRename = false
     @State private var nameDraft = ""
     @State private var modelsExpanded = false
+    /// Rename/Remove could not be sent (relay link down): said here instead
+    /// of dropping the action silently (K-025).
+    @State private var actionError: String?
 
     private var isCurrentDevice: Bool {
         device.id == appState.deviceId
@@ -59,19 +73,28 @@ struct DeviceDetailView: View {
     }
 
     private var statusLabel: String {
-        if device.online, let m = models, !m.isEmpty { return String(localized: "Online") }
+        if appState.deviceStore.isOnlineAndGreeted(device.id) { return String(localized: "Online") }
         if device.online { return String(localized: "Connecting…") }
         return String(localized: "Offline")
     }
 
     private var statusColor: Color {
-        if device.online, let m = models, !m.isEmpty { return .green }
+        if appState.deviceStore.isOnlineAndGreeted(device.id) { return .green }
         if device.online { return .orange }
         return .gray
     }
 
     var body: some View {
         List {
+            if let actionError {
+                Section {
+                    Label(actionError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("device.actionError")
+                }
+            }
+
             // Info rows
             Section {
                 Button {
@@ -91,6 +114,8 @@ struct DeviceDetailView: View {
                 infoRow(String(localized: "Status"), value: statusLabel, valueColor: statusColor)
                 if !agentNames.isEmpty {
                     infoRow(String(localized: "Coding agents"), value: agentNames)
+                } else if appState.deviceStore.agentAvailability(for: device.id) == .noAgents {
+                    infoRow(String(localized: "Coding agents"), value: String(localized: "None installed"))
                 }
                 if DeviceDates.parse(device.createdAt) != nil {
                     infoRow(String(localized: "Added"), value: formatDate(device.createdAt))
@@ -130,6 +155,8 @@ struct DeviceDetailView: View {
                             ForEach(models, id: \.self) { model in
                                 Text(verbatim: model)
                                     .font(.caption)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
                                     .background(Color(.systemGray6))
@@ -192,6 +219,9 @@ struct DeviceDetailView: View {
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.inline)
         .hidesTabBar()
+        .onChange(of: isRemoved, initial: true) { _, removed in
+            if removed { dismiss() }
+        }
         .navigationDestination(for: SessionNavID.self) { nav in
             SessionDetailView(sessionId: nav.id)
                 .id(nav.id)
@@ -200,14 +230,14 @@ struct DeviceDetailView: View {
         .alert("Rename Device", isPresented: $showRename) {
             TextField(device.ownName, text: $nameDraft)
                 .onChange(of: nameDraft) { _, value in
-                    if value.unicodeScalars.count > DeviceName.maxLength {
-                        nameDraft = String(String.UnicodeScalarView(value.unicodeScalars.prefix(DeviceName.maxLength)))
-                    }
+                    let clamped = DeviceName.clampDraft(value)
+                    if clamped != value { nameDraft = clamped }
                 }
             Button("Cancel", role: .cancel) {}
             Button("Save") {
                 if let name = DeviceName.renameValue(draft: nameDraft, for: device) {
-                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                    let sent = appState.commandSender?.renameDevice(deviceId: device.id, name: name) ?? false
+                    actionError = sent ? nil : String(localized: "Couldn't rename the device while offline. Try again when connected.")
                 }
             }
         } message: {
@@ -216,7 +246,8 @@ struct DeviceDetailView: View {
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                appState.commandSender?.removeDevice(deviceId: device.id)
+                let sent = appState.commandSender?.removeDevice(deviceId: device.id) ?? false
+                actionError = sent ? nil : String(localized: "Couldn't remove the device while offline. Try again when connected.")
             }
         } message: {
             Text("Are you sure you want to remove \(device.name)? The device will need to reconnect and re-authenticate to appear again.")
@@ -241,7 +272,7 @@ struct DeviceDetailView: View {
     /// Mirrors SessionCardView's `timestampView`: prefer the preview's
     /// last-activity timestamp; fall back to converting `createdAt`
     /// (which is a `Date`) into ISO so SessionTimeFormatter can read
-    /// it. Same formatter → same output ("HH:mm" / "yesterday" / "Xd
+    /// it. Same formatter → same output (short time / "yesterday" / "Xd
     /// ago") as the session list, keeping the two views in sync.
     private func sessionListTimestamp(for session: SessionInfo) -> String {
         if let preview = appState.sessionStore.sessionPreviews[session.id],
@@ -265,7 +296,8 @@ struct DeviceDetailView: View {
 
 // MARK: - FlowLayout
 
-/// Simple flow layout for wrapping tags (model badges, etc.).
+/// Simple flow layout for wrapping tags (model badges, etc.). A tag wider
+/// than the row is offered the row's width instead of overflowing it (K-190).
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
@@ -273,39 +305,45 @@ struct FlowLayout: Layout {
         let rows = computeRows(proposal: proposal, subviews: subviews)
         var height: CGFloat = 0
         for (i, row) in rows.enumerated() {
-            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            let rowHeight = row.map(\.size.height).max() ?? 0
             height += rowHeight + (i > 0 ? spacing : 0)
         }
         return CGSize(width: proposal.width ?? 0, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = computeRows(proposal: proposal, subviews: subviews)
+        let rows = computeRows(proposal: ProposedViewSize(width: bounds.width, height: nil), subviews: subviews)
         var y = bounds.minY
         for row in rows {
-            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            let rowHeight = row.map(\.size.height).max() ?? 0
             var x = bounds.minX
-            for subview in row {
-                let size = subview.sizeThatFits(.unspecified)
-                subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+            for item in row {
+                item.subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.size))
+                x += item.size.width + spacing
             }
             y += rowHeight + spacing
         }
     }
 
-    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[LayoutSubview]] {
+    /// Each tag at its ideal size, capped to the available width.
+    private func size(of subview: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard ideal.width > maxWidth else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[(subview: LayoutSubview, size: CGSize)]] {
         let maxWidth = proposal.width ?? .infinity
-        var rows: [[LayoutSubview]] = [[]]
+        var rows: [[(subview: LayoutSubview, size: CGSize)]] = [[]]
         var currentWidth: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, maxWidth: maxWidth)
             if currentWidth + size.width > maxWidth, !rows[rows.count - 1].isEmpty {
                 rows.append([])
                 currentWidth = 0
             }
-            rows[rows.count - 1].append(subview)
+            rows[rows.count - 1].append((subview, size))
             currentWidth += size.width + spacing
         }
         return rows

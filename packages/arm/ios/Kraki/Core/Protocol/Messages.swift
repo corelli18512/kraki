@@ -82,7 +82,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         if seq == 0, let cid = payload["clientId"]?.stringValue {
             return "\(sessionId ?? "none"):pending:\(cid)"
         }
-        return "\(sessionId ?? "none"):\(seq)\(questionPresentation?.identitySuffix ?? "")"
+        let artifacts = foldedArtifactCount > 0 ? "#a\(foldedArtifactCount)" : ""
+        return "\(sessionId ?? "none"):\(seq)\(questionPresentation?.identitySuffix ?? "")\(artifacts)"
     }
 
     /// `agent_message.payload.question`: the agent asked the human.
@@ -168,6 +169,10 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// follows it on the spine (`ChatViewModel.presentingQuestions`). Never
     /// decoded, encoded or persisted.
     var questionPresentation: QuestionPresentation? = nil
+    /// Client-only: turn artifacts folded into this row from its turn's later
+    /// `idle` (`TurnSpineProjection`). The row draws differently once they
+    /// arrive, so they are part of its identity (see `identitySuffix`).
+    var foldedArtifactCount = 0
 
     private enum CodingKeys: String, CodingKey {
         case type, seq, sessionId, deviceId, timestamp, payload

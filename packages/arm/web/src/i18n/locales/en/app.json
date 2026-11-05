@@ -6,9 +6,7 @@
   },
   "connection": {
     "errorTitle": "Connection Error",
-    "disconnected": "Disconnected",
     "failed": "Could not connect to the relay server. Make sure the head is running.",
-    "lost": "Lost connection to the relay server.",
     "connect": "Connect now",
     "connecting": "Connecting…"
   },
@@ -29,7 +27,8 @@
     "downloadMac": "Use this Mac's coding agents? Download Kraki for Mac",
     "connecting": "Connecting to relay…",
     "selectSession": "Select a session from the sidebar to get started",
-    "generateQr": "Run <command>kraki connect</command> to generate a QR code."
+    "generateQr": "Run <command>kraki connect</command> to generate a QR code.",
+    "githubUnreachable": "Could not reach github.com. Check your network connection or proxy, then try again, or scan a QR code instead."
   },
   "errors": {
     "dismiss": "Dismiss error",
@@ -38,13 +37,19 @@
     "tryAgain": "Try again",
     "connectFirst": "Connect to Kraki first. The account is deleted on the server.",
     "noAnswer": "Kraki didn't answer. Check the connection and try again.",
+    "requestTimedOut": "The computer didn’t answer in time. If the session doesn’t appear, try again.",
     "noTarget": "Cannot send: no target device for this session. Try reconnecting.",
     "deleteAccount": "Couldn't delete the account. Try again.",
     "permissionSend": "Couldn’t send. Try again.",
-    "permissionUnconfirmed": "Not confirmed by the agent. Try again."
+    "permissionUnconfirmed": "Not confirmed by the agent. Try again.",
+    "replacedElsewhere": "Kraki is open in another tab or window. Come back to this tab to use it here.",
+    "oauthUnverified": "GitHub sign-in could not be verified. Please try again.",
+    "keysUnavailable": "This browser can’t keep Kraki’s encryption keys, so it can’t sign in. Open Kraki over HTTPS in a regular (not private) window."
   },
   "scanner": {
     "denied": "Camera access denied. Check your browser or device settings.",
+    "noCamera": "No camera found. Connect a camera, or open the pairing link on this device instead.",
+    "unavailable": "Couldn’t start the camera. Close other apps using it and try again.",
     "back": "Go back",
     "pointAt": "Point at the QR code from <command>kraki connect</command>"
   },
@@ -57,5 +62,25 @@
     "unavailable": "Kraki for iPhone is not available yet. You can connect in this browser instead.",
     "getApp": "Get Kraki for iPhone",
     "browser": "Continue in browser"
+  },
+  "boot": {
+    "failedTitle": "Kraki couldn't load",
+    "failed": "Part of the app is missing, usually because Kraki was just updated. Reload to get the latest version.",
+    "reload": "Reload"
+  },
+  "serverErrors": {
+    "generic": "The server couldn't complete that. Try again.",
+    "deviceNotFound": "That device is no longer on this account.",
+    "removeOnline": "This device is online. Disconnect it before removing it.",
+    "nameTooLong": "That name is too long.",
+    "renameFailed": "Couldn't rename the device. Try again later.",
+    "pairingDisabled": "Pairing new devices is turned off on this server.",
+    "pairingUnavailable": "Pairing is temporarily unavailable. Try again later.",
+    "targetUnreachable": "That computer can't be reached right now. Check that it is online.",
+    "createSession": "Couldn't create the session: {{detail}}",
+    "copySession": "Couldn't copy the session: {{detail}}",
+    "importSession": "Couldn't import the session: {{detail}}",
+    "alreadyImported": "This session has already been imported.",
+    "requestGeneric": "The computer couldn't complete that. Try again."
   }
 }

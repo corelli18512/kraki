@@ -116,6 +116,31 @@ describe('kraki setup --json', () => {
     expect(events.find((e) => e.event === 'authenticated')).toMatchObject({ source: 'device_flow' });
   });
 
+  it('reports an unreachable GitHub as github_unreachable, not a bare "fetch failed" (K-324)', async () => {
+    const unreachable = () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }); };
+    const { deps, events } = makeDeps({
+      'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
+      'https://github.com/login/device/code': unreachable,
+    });
+
+    expect(await runSetupJsonWith([], deps)).toBe(1);
+    expect(events.at(-1)).toMatchObject({ event: 'error', code: 'github_unreachable' });
+    expect((events.at(-1) as { message: string }).message).toContain('Could not reach github.com (ECONNREFUSED)');
+  });
+
+  it('reports a GitHub that stops answering after sign-in as github_unreachable (K-324)', async () => {
+    const { deps, events } = makeDeps({
+      'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
+      'https://github.com/login/device/code': () => json({ device_code: 'dc', user_code: 'X', verification_uri: 'u', expires_in: 900 }),
+      'https://github.com/login/oauth/access_token': () => json({ access_token: 'gho_new' }),
+      'https://api.github.com/user': () => { throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }); },
+    });
+
+    expect(await runSetupJsonWith([], deps)).toBe(1);
+    expect(events.at(-1)).toMatchObject({ event: 'error', code: 'github_unreachable' });
+    expect((events.at(-1) as { message: string }).message).toContain('(timed out)');
+  });
+
   it('reports a denied sign-in as an error event and writes nothing', async () => {
     const { deps, events } = makeDeps({
       'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
@@ -183,6 +208,40 @@ describe('kraki setup --json', () => {
     expect(config.device.name).toBe('Old Name');
     expect(config.agents).toEqual(['claude']);
     expect(config.relay).toBe('wss://us.relay.test');
+  });
+
+  it('K-355: a Kraki folder it cannot write to fails with home_not_writable and how to fix it', async () => {
+    if (process.getuid?.() === 0) return; // root can write anyway
+    writeFileSync(join(home, 'device-id'), '', { mode: 0o000 });
+    const { deps, events } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) });
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+
+    expect(await runSetupJsonWith([], deps)).toBe(1);
+    const error = events.find((e) => e.event === 'error');
+    expect(error).toMatchObject({ code: 'home_not_writable' });
+    expect((error as { message: string }).message).toContain('chown');
+  });
+
+  it('K-028: signing in as another account records it and names the previous owner of the data in place', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      relay: 'wss://old', authMethod: 'github_token', device: { name: 'Mac', id: 'dev_accountA' },
+    }));
+    writeFileSync(join(home, 'device-id'), 'dev_accountA');
+    writeFileSync(join(home, 'github-token'), 'gho_alice\n');
+    const { deps } = makeDeps({
+      'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
+      'https://github.com/login/device/code': () => json({ device_code: 'dc', user_code: 'X', verification_uri: 'u', expires_in: 900 }),
+      'https://github.com/login/oauth/access_token': () => json({ access_token: 'gho_bob' }),
+      'https://api.github.com/user': (init) => {
+        const auth = (init?.headers as Record<string, string>).Authorization;
+        return json({ login: auth.endsWith('gho_alice') ? 'alice' : 'bob' });
+      },
+    });
+
+    expect(await runSetupJsonWith(['--force-login'], deps)).toBe(0);
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    expect(config.account).toEqual({ login: 'bob' });
+    expect(JSON.parse(readFileSync(join(home, 'account.json'), 'utf8'))).toEqual({ login: 'alice' });
   });
 });
 

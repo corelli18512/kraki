@@ -16,7 +16,7 @@ import { ArrowDownCircle, Gauge, Laptop, RotateCw } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import {
-  accountKeyForSession, isStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
+  accountKeyForSession, isDataStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
   readStatus, ringState, ringWindows, shortLabel, shortReset, usageUpdateHint, windowName, type MergedAccountUsage,
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
@@ -102,7 +102,9 @@ function AccountRings({ account, size, lineWidth, spacing, now, delay, animateIn
 }) {
   const { t } = useTranslation('usage');
   const windows = ringWindows(account);
-  const stale = isStale(account, now);
+  // Same rule as the tile's Stale badge: a failed refresh right after a fresh
+  // reading has its own status line and does not grey the rings.
+  const stale = isDataStale(account, now);
   const small = size < 70;
   return (
     <div className="ua-rings" style={{ gap: spacing }}>
@@ -145,7 +147,7 @@ function AccountTile({ account, ringSize, lineWidth, showsPlan, shortName, delay
         </div>
         <div className="ua-tile-badges">
           <ProviderChip provider={account.provider} />
-          {isStale(account, now) && account.windows.length > 0 && <span className="ua-stale">{t('status.stale')}</span>}
+          {isDataStale(account, now) && account.windows.length > 0 && <span className="ua-stale">{t('status.stale')}</span>}
         </div>
       </div>
       <AccountRings account={account} size={ringSize} lineWidth={lineWidth} spacing={big ? 18 : 14} now={now} delay={delay} animateIn={animateIn} />
@@ -267,10 +269,23 @@ function useUsageData() {
     return session ? accountKeyForSession(usage, session.deviceId, session.agent, session.model) : null;
   }, [sessionId, sessions, usage]);
   const accounts = useMemo(() => orderedAccounts(mergedUsage(usage, devices), current), [usage, devices, current]);
-  const outdated = useMemo(() => [...devices.values()]
-    .filter((d) => d.role === 'tentacle' && d.online && wsClient.deviceHasFeature(d.id, 'account_usage') === false && !usage.has(d.id))
-    .sort((a, b) => a.name.localeCompare(b.name)), [devices, usage]);
+  const outdated = useMemo(() => devicesNeedingUsageUpdate(devices.values(), usage,
+    (id, feature) => wsClient.deviceHasFeature(id, feature)), [devices, usage]);
   return { accounts, current, outdated };
+}
+
+/** Online computers whose kraki is too old to report account usage. One that
+ *  advertises `account_usage_off` has usage turned off, not an old kraki, so
+ *  it is not told to update (K-084; iOS `devicesNeedingUsageUpdate`). */
+export function devicesNeedingUsageUpdate(
+  devices: Iterable<DeviceSummary>,
+  usage: { has: (deviceId: string) => boolean },
+  hasFeature: (deviceId: string, feature: string) => boolean | undefined,
+): DeviceSummary[] {
+  return [...devices]
+    .filter((d) => d.role === 'tentacle' && d.online && hasFeature(d.id, 'account_usage') === false
+      && hasFeature(d.id, 'account_usage_off') === false && !usage.has(d.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 type Mode = 'closed' | 'compact' | 'detail';

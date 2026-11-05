@@ -12,6 +12,8 @@ struct DevicesPane: View {
     @State private var removing: DeviceSummary?
     @State private var renaming: DeviceSummary?
     @State private var nameDraft = ""
+    /// Rename/Remove could not be sent (relay link down) (K-025).
+    @State private var actionError: String?
 
     private var devices: [DeviceSummary] {
         appState.deviceStore.devices.values
@@ -21,6 +23,11 @@ struct DevicesPane: View {
     var body: some View {
         Form {
             Section("Devices") {
+                if let actionError {
+                    Label(actionError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("prefs.devices.actionError")
+                }
                 if devices.isEmpty {
                     Text("No devices.")
                         .foregroundStyle(.secondary)
@@ -66,10 +73,16 @@ struct DevicesPane: View {
         ) {
             TextField(renaming?.ownName ?? "", text: $nameDraft)
                 .accessibilityIdentifier("prefs.devices.renameField")
+                .onChange(of: nameDraft) { _, value in
+                    // Over the limit Save would do nothing (K-189).
+                    let clamped = DeviceName.clampDraft(value)
+                    if clamped != value { nameDraft = clamped }
+                }
             Button("Cancel", role: .cancel) { renaming = nil }
             Button("Save") {
                 if let device = renaming, let name = DeviceName.renameValue(draft: nameDraft, for: device) {
-                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                    let sent = appState.commandSender?.renameDevice(deviceId: device.id, name: name) ?? false
+                    actionError = sent ? nil : String(localized: "Couldn't rename the device while offline. Try again when connected.")
                 }
                 renaming = nil
             }
@@ -82,7 +95,10 @@ struct DevicesPane: View {
         ) {
             Button("Cancel", role: .cancel) { removing = nil }
             Button("Remove", role: .destructive) {
-                if let id = removing?.id { appState.commandSender?.removeDevice(deviceId: id) }
+                if let id = removing?.id {
+                    let sent = appState.commandSender?.removeDevice(deviceId: id) ?? false
+                    actionError = sent ? nil : String(localized: "Couldn't remove the device while offline. Try again when connected.")
+                }
                 removing = nil
             }
         } message: {

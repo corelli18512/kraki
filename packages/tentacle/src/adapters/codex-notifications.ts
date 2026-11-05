@@ -137,6 +137,7 @@ export function handleItemStarted(adapter: CodexAdapter, s: CodexSession, item: 
       // message and then the final answer with no tool between them.
       break;
     case 'contextCompaction':
+      s.compacting = true;
       adapter.onCompaction?.(s.sessionId, { phase: 'start', ...adapter.turnEvent(s) });
       break;
     case 'subAgentActivity':
@@ -282,6 +283,7 @@ export function handleItemCompleted(adapter: CodexAdapter, s: CodexSession, item
       s.turn.proseSegment(str(item.text));
       break;
     case 'contextCompaction':
+      s.compacting = false;
       adapter.onCompaction?.(s.sessionId, { phase: 'end', ...adapter.turnEvent(s) });
       break;
     default: {

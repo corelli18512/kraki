@@ -5,10 +5,11 @@ import { i18next } from '../../i18n';
 import { NewSessionDialog } from './NewSessionDialog';
 import { NewSessionComposer } from './NewSessionComposer';
 import { useStore } from '../../hooks/useStore';
+import { wsClient } from '../../lib/ws-client';
 
 vi.mock('../chat/Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(),
+  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(), useStopDictationOnLeave: () => {},
 }));
 
 beforeEach(() => { useStore.getState().reset(); localStorage.clear(); });
@@ -82,6 +83,20 @@ describe('NewSessionComposer', () => {
     render(<NewSessionComposer placeholder="User-provided instruction" />);
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'User-provided instruction');
   });
+  it('K-099: the Safari IME Enter that confirms a candidate (keyCode 229) does not start the session', () => {
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    useStore.getState().setDevices([{ id: 'computer', name: 'Office PC', role: 'tentacle', online: true }]);
+    useStore.getState().setDeviceAgents('computer', [{ type: 'code', id: 'copilot', models: ['model'], modelDetails: [{ id: 'model', name: 'Model' }] }]);
+    render(<NewSessionComposer />);
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: '测试' } });
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+    expect(create).not.toHaveBeenCalled();
+    expect(field).toHaveValue('测试');
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 13 });
+    expect(create).toHaveBeenCalledTimes(1);
+    create.mockRestore();
+  });
   it('keeps the new-session draft across visiting a session', () => {
     const first = render(<NewSessionComposer />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unfinished task' } });
@@ -122,5 +137,78 @@ describe('NewSessionComposer', () => {
     expect(screen.getByRole('option', { name: 'Online computer' }).querySelector('svg rect')).toHaveAttribute('fill-opacity', '0.25');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+});
+
+// K-097 (owner decision): when the computer the user picked goes offline, the
+// composer keeps it (and says it is offline) instead of silently switching the
+// typed prompt to another computer.
+describe('NewSessionComposer picked computer goes offline (K-097)', () => {
+  it('keeps the picked computer and shows it offline', () => {
+    const agents = [{ type: 'code' as const, id: 'pi' as const, models: ['m'] }];
+    useStore.getState().setDevices([
+      { id: 'a', name: 'Computer A', role: 'tentacle', online: true },
+      { id: 'b', name: 'Computer B', role: 'tentacle', online: true },
+    ]);
+    useStore.getState().setDeviceAgents('a', agents);
+    useStore.getState().setDeviceAgents('b', agents);
+    render(<NewSessionComposer />);
+    fireEvent.click(screen.getByTestId('new-session-device'));
+    fireEvent.click(screen.getByRole('option', { name: 'Computer B' }));
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Computer B');
+    // device_left: agents cleared, then offline (ws-client).
+    act(() => { useStore.getState().clearDeviceAgents('b'); useStore.getState().setDeviceOnline('b', false); });
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Computer B');
+    expect(screen.getByText('Computer B is offline', { exact: false })).toBeInTheDocument();
+    expect(screen.getByTestId('new-session-create')).toBeDisabled();
+  });
+});
+
+// K-206: after Start the composer shows that the session is starting (and
+// cannot start it twice); a failure or no answer brings the prompt back.
+describe('NewSessionComposer pending start (K-206)', () => {
+  it('shows a starting state until the prompt comes back', async () => {
+    const { wsClient } = await import('../../lib/ws-client');
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    try {
+      useStore.getState().setDevices([{ id: 'a', name: 'Computer A', role: 'tentacle', online: true }]);
+      useStore.getState().setDeviceAgents('a', [{ type: 'code', id: 'pi', models: ['m'] }]);
+      render(<NewSessionComposer />);
+      const text = screen.getByTestId('new-session-text');
+      fireEvent.change(text, { target: { value: 'Fix the flaky test' } });
+      fireEvent.click(screen.getByTestId('new-session-create'));
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Starting the session on Computer A…')).toBeInTheDocument();
+      expect(screen.getByTestId('new-session-create')).toBeDisabled();
+      // No answer / failure: the prompt is returned to the draft.
+      act(() => { useStore.getState().setDraft('kraki.new-session-draft', 'Fix the flaky test'); });
+      expect(screen.queryByText('Starting the session on Computer A…')).not.toBeInTheDocument();
+      expect(screen.getByTestId('new-session-create')).not.toBeDisabled();
+    } finally { create.mockRestore(); }
+  });
+});
+
+// K-209: with many computers the device list scrolls inside the popover
+// instead of running off the bottom of a short window.
+describe('NewSessionComposer device picker in a short window (K-209)', () => {
+  it('limits the computer list to the space below it', () => {
+    const height = window.innerHeight;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: this.classList.contains('ns-device-list') ? 406 : 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 640 });
+    try {
+      useStore.getState().setDevices(Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, name: `Computer ${i}`, role: 'tentacle' as const, online: i < 4 })));
+      render(<NewSessionComposer />);
+      fireEvent.click(screen.getByTestId('new-session-device'));
+      const list = document.querySelector('.ns-device-list') as HTMLElement;
+      expect(list).not.toBeNull();
+      expect(list.style.maxHeight).toBe('210px');
+      expect(list).toHaveTextContent('Computer 0');
+      expect(list).toHaveTextContent('Computer 9');
+    } finally {
+      rect.mockRestore();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    }
   });
 });

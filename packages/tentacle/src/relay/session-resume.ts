@@ -39,8 +39,8 @@ export async function resumeDisconnectedSessions(client: RelayClient): Promise<v
     // with "Session not found" for claude/pi sessions. registerSessionAgent
     // is a no-op on single-agent adapters and idempotent on the multi one.
     client.adapter.registerSessionAgent(meta.id, meta.agent);
+    if (normalise) closeTurnLostInRestart(client, meta.id, meta.state === 'active');
     if (normalise && (meta.state === 'active' || meta.state === 'idle')) {
-      if (meta.state === 'active') closeTurnLostInRestart(client, meta.id);
       client.sessionManager.markDisconnected(meta.id);
       normalised++;
     }
@@ -60,21 +60,38 @@ export async function resumeDisconnectedSessions(client: RelayClient): Promise<v
  * turn as failed so every app shows why. A session waiting on an agent
  * question is left alone — its answer can still resume it.
  *
+ * The same holds in any state for an input the previous process stored and
+ * echoed but never handed to the agent (ledger `persisted`): the app saw
+ * its echo and will not resend it. It is not re-sent here either (it may be
+ * long stale); its ledger row becomes `rejected`, so a resend with the same
+ * clientId runs it once.
+ *
  * The failure must be followed by an `idle`, exactly like a turn settled by
  * the adapter. `idle` is the turn boundary on the spine (`idleSeqs`, client
  * projection): without it the user's next prompt and its reply are joined
  * to this failed turn, and clients fold that reply into the failure row so
  * it disappears from the chat.
  */
-export function closeTurnLostInRestart(client: RelayClient, sessionId: string): void {
+export function closeTurnLostInRestart(client: RelayClient, sessionId: string, wasActive = true): void {
   const lastSeq = client.sessionManager.getMeta(sessionId)?.lastSeq ?? 0;
   if (lastSeq <= 0) return;
+  // Decide from the small cached ledger first: reading the spine builds the
+  // session's seq index (a full scan of messages.jsonl), which startup must
+  // not do for every idle or disconnected session.
+  const undispatched = client.sessionManager.getInputLedger(sessionId)
+    .find((entry) => entry.userSeq === lastSeq && entry.status === 'persisted');
+  if (!wasActive && !undispatched) return;
   const [last] = client.sessionManager.getMessagesAfterSeq(sessionId, lastSeq - 1, 1);
   if (last?.type !== 'user_message') return;
+  if (undispatched) {
+    client.sessionManager.recordInputLedger(sessionId, { ...undispatched, status: 'rejected', updatedAt: new Date().toISOString() });
+  }
   finishTurnWithStatus(client, sessionId, {
     type: 'failed',
     payload: {
-      message: 'Kraki restarted on this computer while this turn was running.',
+      message: undispatched
+        ? 'Kraki restarted on this computer before this message reached the agent. If no reply follows, send it again.'
+        : 'Kraki restarted on this computer while this turn was running.',
       code: 'process_lost',
       failedAt: new Date().toISOString(),
     },
@@ -147,7 +164,9 @@ export async function ensureSessionResumed(client: RelayClient, sessionId: strin
       // intended, not whatever the SDK happened to write last.
       if (restoreModel && meta.model) {
         try {
-          await client.adapter.setSessionModel(sessionId, meta.model);
+          // With the effort: Pi resets its thinking level on a model change,
+          // so the user's effort would silently fall back to the default.
+          await client.adapter.setSessionModel(sessionId, meta.model, meta.reasoningEffort);
         } catch (err) {
           logger.warn(
             { err, sessionId, model: meta.model },

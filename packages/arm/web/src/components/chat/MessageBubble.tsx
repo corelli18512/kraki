@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { copyText } from '../../lib/clipboard';
 
 /** Plain rendered prose, without fence labels or table-window controls. */
 export function renderedMessageText(root: HTMLElement): string {
@@ -26,6 +27,17 @@ export function renderedMessageText(root: HTMLElement): string {
   return text(root).replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/** How long a touch rests before the bubble's menu opens (iOS Safari fires no
+ *  contextmenu for a long press), and how far it may drift (K-107). */
+export const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 10;
+
+/** The code a menu opened over a fenced code block can copy (K-237). */
+function codeAt(target: EventTarget | null): string {
+  const block = target instanceof Element ? target.closest('.kmd-code') : null;
+  return block?.querySelector('pre')?.textContent?.replace(/\n$/, '') ?? '';
+}
+
 /** Native bubble actions are contextual, never a permanent copy icon. */
 export function MessageBubble({ children, className, style, onShowSteps }: {
   children: ReactNode;
@@ -37,24 +49,35 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
   const bubble = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
-  const [context, setContext] = useState<{ x: number; y: number; text: string; selection: boolean } | null>(null);
+  const [context, setContext] = useState<{ x: number; y: number; text: string; selection: boolean; code: string } | null>(null);
+  const press = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** The long press opened the menu; the lift must not close it again. */
+  const pressOpened = useRef(false);
+  const cancelPress = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  };
+  useEffect(() => cancelPress, []);
 
   function close(restoreFocus = false) {
     setContext(null);
     if (restoreFocus) previousFocus.current?.focus({ preventScroll: true });
   }
 
-  function open(x: number, y: number) {
+  /** `touch`: a long press, whose own word selection is not the reader's. */
+  function open(x: number, y: number, target: EventTarget | null = null, touch = false) {
     const root = bubble.current;
     if (!root) return;
     const selection = window.getSelection();
-    const selected = selection && !selection.isCollapsed && root.contains(selection.anchorNode) && root.contains(selection.focusNode)
+    const selected = !touch && selection && !selection.isCollapsed && root.contains(selection.anchorNode) && root.contains(selection.focusNode)
       ? selection.toString() : '';
+    if (touch) selection?.removeAllRanges();
     const body = root.querySelector<HTMLElement>('.kmd');
     const text = selected || (body ? renderedMessageText(body) : '');
+    const code = selected ? '' : codeAt(target);
     if (!text && !onShowSteps) return;
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : root;
-    setContext({ x, y, text, selection: !!selected });
+    setContext({ x, y, text, selection: !!selected, code });
   }
 
   useLayoutEffect(() => {
@@ -88,7 +111,26 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
       className={className}
       style={style}
       tabIndex={0}
-      onContextMenu={(event) => { event.preventDefault(); open(event.clientX, event.clientY); }}
+      onContextMenu={(event) => { event.preventDefault(); cancelPress(); open(event.clientX, event.clientY, event.target); }}
+      onPointerDown={(event) => {
+        if (event.pointerType !== 'touch' || !event.isPrimary) return;
+        cancelPress();
+        const { clientX: x, clientY: y, target } = event;
+        pressOpened.current = false;
+        press.current = { id: event.pointerId, x, y, timer: setTimeout(() => { press.current = null; pressOpened.current = true; open(x, y, target, true); }, LONG_PRESS_MS) };
+      }}
+      onPointerMove={(event) => {
+        const start = press.current;
+        if (start?.id === event.pointerId && Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_SLOP) cancelPress();
+      }}
+      onPointerUp={cancelPress}
+      onPointerCancel={cancelPress}
+      onTouchEnd={(event) => {
+        // Lifting after the long press would send compatibility mousedown and
+        // click events at the bubble, outside the menu that just opened.
+        if (pressOpened.current) event.preventDefault();
+        pressOpened.current = false;
+      }}
       onKeyDown={(event) => {
         if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
           event.preventDefault();
@@ -119,8 +161,13 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
           }}
         >
           {context.text && (
-            <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(context.text); close(true); }}>
+            <button type="button" role="menuitem" onClick={() => { void copyText(context.text).catch(() => {}); close(true); }}>
               {context.selection ? t('message.copySelection') : t('message.copy')}
+            </button>
+          )}
+          {context.code && (
+            <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(context.code); close(true); }}>
+              {t('message.copyCode')}
             </button>
           )}
           {onShowSteps && <button type="button" role="menuitem" onClick={() => { close(true); onShowSteps(); }}>{t('message.showSteps')}</button>}

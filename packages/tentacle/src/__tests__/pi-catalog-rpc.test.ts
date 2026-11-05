@@ -220,6 +220,24 @@ describe('pi --list-models recovery', () => {
     await adapter.stop();
   });
 
+  it('K-132: an empty list (Pi signed out) is not cached; models appear after sign-in without a restart', async () => {
+    const { cli, count } = countingPi(`
+      if (call === 1) console.log('No models available. Use /login or set an API key environment variable.');
+      else { ${header} ${row} }
+    `);
+    const adapter = new PiAdapter({ cliPath: cli, modelListRetryDelaysMs: [50] });
+    let changed = 0;
+    adapter.onCapabilitiesChanged = () => { changed++; };
+
+    expect(await adapter.listModels()).toEqual([]);
+    // Retried, but not reported as a start failure (kraki agents: needs_login).
+    expect(adapter.modelListError()).toBeUndefined();
+    await until(() => changed === 1);
+    expect(count()).toBe(2);
+    expect(await adapter.listModels()).toEqual(['anthropic/opus']);
+    await adapter.stop();
+  });
+
   it('fetches the model list and the thinking-level catalog concurrently (log audit: slow startup)', async () => {
     // --list-models only answers once the catalog query process is running:
     // fetched one after the other, the list would time out.

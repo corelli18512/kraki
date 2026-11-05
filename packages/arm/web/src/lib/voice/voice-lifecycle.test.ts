@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelDictation, configureVoiceTransport, dismissVoiceError, finishDictation, onAuthOk, onLeaseDenied, onLeaseGrant, resetVoice, startDictation, useVoice, voiceSettings } from './voice';
 import { diag } from '../diag';
 import { i18next } from '../../i18n';
+import { outbox } from '../chat/outbox';
+import { stagedVoice } from './staged-input';
 
 class SpeechSocket {
   static OPEN = 1;
@@ -76,6 +78,58 @@ describe('voice staged send callbacks', () => {
   });
 });
 
+describe('K-224 voice lifecycle gaps', () => {
+  it.each(['Delete', 'Send Original'])('after %s on the correcting bubble, no stale "didn\'t finish" error appears later', async (action) => {
+    outbox.reset();
+    outbox.configure({ send: vi.fn(async () => true), isDeliveryPathUp: () => true });
+    let id = '';
+    await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn(), (raw) => { id = outbox.stage('s', raw); return stagedVoice(id, '', false, vi.fn()); });
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'raw' });
+    finishDictation('send');
+    if (action === 'Delete') outbox.discard(id); else outbox.retry(id);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(useVoice.getState().error).toBeNull();
+    expect(useVoice.getState().phase).not.toBe('failed');
+  });
+  it('starting dictation elsewhere keeps what the left session was still finishing into its draft', async () => {
+    const leftFinal = vi.fn(), nextFinal = vi.fn();
+    await startDictation('a', { fields: {}, vocabulary: [] }, leftFinal);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'half a thought ' });
+    finishDictation('edit');
+    await startDictation('b', { fields: {}, vocabulary: [] }, nextFinal);
+    expect(leftFinal).toHaveBeenCalledExactlyOnceWith('half a thought', 'edit');
+    expect(useVoice.getState()).toMatchObject({ owner: 'b' });
+    expect(nextFinal).not.toHaveBeenCalled();
+  });
+  it('starting again after a staged send or a still-recording dictation does not deliver it as a draft', async () => {
+    const stagedFinal = vi.fn(), stage = { update: vi.fn(), complete: vi.fn() };
+    await startDictation('a', { fields: {}, vocabulary: [] }, stagedFinal, () => stage);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'raw' });
+    finishDictation('send');
+    const recordingFinal = vi.fn();
+    await startDictation('b', { fields: {}, vocabulary: [] }, recordingFinal);
+    SpeechSocket.latest.feed({ type: 'ready' });
+    SpeechSocket.latest.feed({ type: 'transcript', text: 'still talking' });
+    await startDictation('c', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(stagedFinal).not.toHaveBeenCalled();
+    expect(recordingFinal).not.toHaveBeenCalled();
+  });
+  it('a gateway that never authorizes fails as unreachable instead of Listening forever', async () => {
+    await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(useVoice.getState().phase).toBe('recording');
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(useVoice.getState()).toMatchObject({ phase: 'failed', error: "Couldn't reach the voice service. Try again." });
+  });
+  it('in a browser, mic denial points at the browser site settings', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => { throw new DOMException('denied', 'NotAllowedError'); } } });
+    await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(useVoice.getState().error).toBe('Microphone access is blocked. Allow it for this site in your browser’s settings, then try again.');
+  });
+});
+
 describe('voice.summary controller hooks', () => {
   function summaries() {
     const summary = vi.fn();
@@ -124,6 +178,43 @@ describe('voice.summary controller hooks', () => {
     await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
     expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'permission', cause: name === 'NotAllowedError' ? 'permission' : 'mic_unavailable' }));
   });
+  it('checks for a microphone before taking a lease and opening the gateway (K-233)', async () => {
+    const summary = summaries();
+    const sendRaw = vi.fn();
+    configureVoiceTransport({ sendRaw, deviceId: () => 'd', userId: () => 'u', relayUrl: () => 'ws://localhost:4430', connected: () => true });
+    resetVoice();
+    onAuthOk({ brokerUrl: 'ws://localhost:4430/voice', resource: 'voice/doubao' }, []);
+    voiceSettings.grantConsent();
+    const opened = vi.fn();
+    vi.stubGlobal('WebSocket', class extends SpeechSocket { constructor() { super(); opened(); } });
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => { throw new DOMException('none', 'NotFoundError'); },
+      enumerateDevices: async () => [{ kind: 'videoinput' }],
+    } });
+    await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(useVoice.getState()).toMatchObject({ phase: 'failed', owner: 's', error: 'No microphone is available. Connect a microphone and try again.' });
+    expect(opened).not.toHaveBeenCalled();
+    expect(sendRaw).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'request_voice_lease' }));
+    expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'permission', cause: 'mic_unavailable' }));
+  });
+  it('an empty device list (privacy policy before permission) still asks for the microphone (K-233)', async () => {
+    const sendRaw = vi.fn();
+    configureVoiceTransport({ sendRaw, deviceId: () => 'd', userId: () => 'u', relayUrl: () => 'ws://localhost:4430', connected: () => true });
+    resetVoice();
+    onAuthOk({ brokerUrl: 'ws://localhost:4430/voice', resource: 'voice/doubao' }, []);
+    voiceSettings.grantConsent();
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => { throw new DOMException('none', 'NotFoundError'); },
+      enumerateDevices: async () => [],
+    } });
+    const starting = startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useVoice.getState().phase).not.toBe('failed');
+    expect(sendRaw).toHaveBeenCalledWith(expect.objectContaining({ type: 'request_voice_lease' }));
+    resetVoice();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await starting;
+  });
   it('broker socket connection failure is network, not the localized error message', async () => {
     const summary = summaries();
     vi.stubGlobal('WebSocket', class extends SpeechSocket {
@@ -158,6 +249,7 @@ describe('voice.summary controller hooks', () => {
     const summary = summaries();
     onLeaseGrant({ payload: { exp: 0, did: 'd' } } as never);
     const starting = startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    await vi.advanceTimersByTimeAsync(0); // the microphone check runs first
     if (mode === 'denied') onLeaseDenied('quota_exhausted', 'private detail');
     else await vi.advanceTimersByTimeAsync(10_000);
     await starting;

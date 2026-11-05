@@ -53,6 +53,17 @@ final class MessageProvider {
     /// never creates a slot, so without this a fast flick would spawn
     /// overlapping background reads.
     private var loadingOlderDB: Set<String> = []
+    /// Window tops whose older DB page was not adjacent (a hole in the
+    /// cache) and were already asked of the Tentacle. If the answer did not
+    /// fill the hole (legacy seq gaps, or the computer lost the rows), the
+    /// next page is taken from the DB as is instead of asking forever.
+    private var olderHoleAsked: [String: Set<Int>] = [:]
+    /// Sessions whose older-hole request was answered with no row this
+    /// device did not already have: their gaps are legacy seq gaps (replayed
+    /// rows need not be integer-adjacent) or rows the Tentacle lost. Older
+    /// pages of these sessions come from the DB for the rest of the run, so a
+    /// legacy session costs at most one round trip, not one per page.
+    private var olderHolesUnfillable: Set<String> = []
 
     /// Per-turn trace pulls already issued or in flight (dedup).
     private var traceRequests = TurnTraceRequestLedger()
@@ -485,12 +496,13 @@ final class MessageProvider {
             limit: Self.ensurePageRowLimit
         )
 
-        if !page.isEmpty {
+        if !page.isEmpty, !askTentacleToFillHole(sessionId, topSeq: topSeq, page: page) {
             appState.messageStore.prependOlderPage(sessionId, page)
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
             KLog.diag("📥 [2/history←DB ensureOlderLoaded] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) source=GRDB count=\(page.count)")
             return true
         }
+        if !page.isEmpty { return false }
 
         // **Second safety** (the UI spinner is the first): when the
         // user scrolls fast and DB is exhausted, ChatView fires
@@ -550,20 +562,7 @@ final class MessageProvider {
         #endif
 
         #if DEBUG
-        // Isolated Chat performance runs can inject a realistic round-trip so
-        // spinner visibility and prepend anchoring are tested over time rather
-        // than against an unrealistically instant local SQLite read. This is
-        // deliberately unavailable to ordinary production-connected launches.
-        let environment = ProcessInfo.processInfo.environment
-        let isIsolatedChatTest = environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
-            || environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
-        if isIsolatedChatTest,
-           let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
-           let delayMs = UInt64(rawDelay), delayMs > 0 {
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-        } else if MessageProviderDebug.olderPageDelayMs > 0 {
-            try? await Task.sleep(nanoseconds: MessageProviderDebug.olderPageDelayMs * 1_000_000)
-        }
+        await Self.debugOlderPageDelay()
         #endif
 
         // Off-main read. Keeps the scroll/runloop free — the core fix
@@ -588,6 +587,10 @@ final class MessageProvider {
                     + "requestedTop=\(topSeq) currentTop=\(appState.messageStore.windowState(sessionId)?.topSeq ?? 0)"
             )
             #endif
+            return false
+        }
+
+        if !page.isEmpty, askTentacleToFillHole(sessionId, topSeq: topSeq, page: page) {
             return false
         }
 
@@ -630,6 +633,7 @@ final class MessageProvider {
         requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderPage")
         return false
     }
+
     /// the user scrolls back toward the tail and the in-memory window
     /// has been trimmed below `tentacleLastSeq`. DB-first; falls
     /// through to a head WS fetch when the gap can't be filled from
@@ -720,11 +724,24 @@ final class MessageProvider {
         // contiguous; otherwise the gap [DB max below B + 1 .. B - 1]
         // needs a bridge fetch.
         let batchMinSeq = messages.map(\.seq).min() ?? 0
-        let dbLastSeq = appState.messageStore.dbLastSeq(sessionId)
+        // Highest cached row below the batch: where a hole under it starts.
+        // (Not the overall DB head: after the first bridge page lands above
+        // the hole, the head is above the batch and the rest of the hole
+        // would be skipped.)
+        let dbLastSeqBelowBatch = batchMinSeq > 1 ? appState.messageStore.dbLastSeq(sessionId, below: batchMinSeq) : 0
         let hasContiguousBelow: Bool = {
             guard batchMinSeq > 1 else { return true }
             return appState.messageStore.hasInDB(sessionId, seq: batchMinSeq - 1)
         }()
+        // Rows this device did not have. A reply made only of cached rows
+        // (a legacy seq gap the Tentacle cannot fill) ends the bridge walk.
+        let bringsNewRows = messages.contains { !appState.messageStore.hasInDB(sessionId, seq: $0.seq) }
+
+        if case .before(let requestedBefore) = removedKind,
+           olderHoleAsked[sessionId]?.contains(requestedBefore) == true, !bringsNewRows {
+            olderHolesUnfillable.insert(sessionId)
+            KLog.diag("🕳️ [2/history older hole] session=\(sessionId.prefix(12)) beforeSeq=\(requestedBefore) — Tentacle had nothing new; DB pages from now on")
+        }
 
         if !messages.isEmpty {
             appState.messageStore.ingestBatch(sessionId, messages)
@@ -776,15 +793,15 @@ final class MessageProvider {
         // batches will re-enter this guard and keep walking the
         // hole closed.
         //
-        // Detection: DB has *something* (dbLastSeq > 0) AND its
-        // tail is strictly below batchMinSeq - 1 (i.e. not
+        // Detection: DB has *something* below the batch AND the highest
+        // such row is strictly below batchMinSeq - 1 (i.e. not
         // contiguous). The earlier `hasInDB(batchMinSeq - 2)` probe
         // only caught single-message gaps and missed every larger
-        // hole — `dbLastSeq` gives us the size-independent answer.
+        // hole. Each bridge page re-enters here until the hole is closed.
         let needsGapBridge: Bool = {
-            guard batchMinSeq > 1 else { return false }
+            guard batchMinSeq > 1, bringsNewRows else { return false }
             if hasContiguousBelow { return false }
-            return dbLastSeq > 0 && dbLastSeq < batchMinSeq - 1
+            return dbLastSeqBelowBatch > 0 && dbLastSeqBelowBatch < batchMinSeq - 1
         }()
 
         // Only flip the session-wide loading flag off when *no* other
@@ -1115,6 +1132,12 @@ final class MessageProvider {
     /// `sessionListSelfHeal` request and strands Chat behind a loading spinner.
     /// Persisted messages and the current in-memory window remain untouched, so
     /// the UI can keep presenting local history while the new connection forms.
+    /// The last known head (`tentacleLastSeq`) is kept as well: it is history
+    /// metadata, not a request. Forgetting it made every open chat leave "at
+    /// head" for the whole outage (open questions turned undetermined, the
+    /// composer flipped to Steer, Jump to latest appeared at the tail). The
+    /// next `session_list` replaces it, including a lower head after a
+    /// Tentacle restore (`setTentacleInfo`).
     func onDisconnected() {
         let slotCount = outstanding.values.reduce(0) { $0 + $1.count }
         for (_, slots) in outstanding {
@@ -1123,7 +1146,6 @@ final class MessageProvider {
         outstanding.removeAll()
         headRequestedAt.removeAll()
         headDropped.removeAll()
-        tentacleLastSeq.removeAll()
         pendingTail.removeAll()
         traceRequests.clear()
         cardRequested.removeAll()
@@ -1133,6 +1155,8 @@ final class MessageProvider {
 
     func clear() {
         headDropped.removeAll()
+        olderHoleAsked.removeAll()
+        olderHolesUnfillable.removeAll()
         for (_, slots) in outstanding {
             for s in slots { s.timeout.cancel() }
         }
@@ -1160,6 +1184,8 @@ extension MessageProvider {
     func resetSession(_ sessionId: String) {
         sessionGeneration[sessionId, default: 0] += 1
         headDropped.remove(sessionId)
+        olderHoleAsked.removeValue(forKey: sessionId)
+        olderHolesUnfillable.remove(sessionId)
         if let slots = outstanding[sessionId] {
             for s in slots { s.timeout.cancel() }
         }
@@ -1170,6 +1196,57 @@ extension MessageProvider {
         appState?.sessionStore.setLoading(sessionId, false)
     }
 }
+
+// MARK: - Older-page holes and entry anchor (same file: shares the class's private state)
+
+extension MessageProvider {
+    /// After `SessionStore.captureEntryUnreadBoundary`: when the unread part
+    /// starts before the tail window, open the window at its first row.
+    func anchorEntryWindowAtFirstUnread(_ sessionId: String) {
+        guard let appState, let boundary = appState.sessionStore.entryUnreadBoundaries[sessionId] else { return }
+        appState.messageStore.anchorWindowAtFirstUnread(sessionId, after: boundary)
+    }
+
+    /// A DB page that does not reach the window top (`page.last.seq <
+    /// topSeq - 1`) skips a hole in the cache — e.g. a long run the phone
+    /// missed. Ask the Tentacle for the rows right below the top instead of
+    /// stitching the old page onto the new one. Returns true when the request
+    /// is (or already was) on its way; false when the DB page should be used:
+    /// adjacent, Tentacle unreachable, or this hole was already asked.
+    private func askTentacleToFillHole(_ sessionId: String, topSeq: Int, page: [ChatMessage]) -> Bool {
+        guard let appState, let pageTop = page.last?.seq, pageTop < topSeq - 1 else { return false }
+        if olderHolesUnfillable.contains(sessionId) { return false }
+        if olderHoleAsked[sessionId]?.contains(topSeq) == true { return false }
+        if hasSlot(sessionId, where: { if case .before = $0 { return true }; return false }) { return true }
+        guard let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId, !deviceId.isEmpty,
+              canReachTentacle(deviceId, sessionId: sessionId, reason: "olderHole") else { return false }
+        olderHoleAsked[sessionId, default: []].insert(topSeq)
+        KLog.diag("🕳️ [2/history older hole] session=\(sessionId.prefix(12)) topSeq=\(topSeq) dbPageTop=\(pageTop) → ask Tentacle")
+        requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderHole")
+        return true
+    }
+}
+
+#if DEBUG
+extension MessageProvider {
+    /// Isolated Chat performance runs can inject a realistic round-trip so
+    /// spinner visibility and prepend anchoring are tested over time rather
+    /// than against an unrealistically instant local SQLite read. This is
+    /// deliberately unavailable to ordinary production-connected launches.
+    static func debugOlderPageDelay() async {
+        let environment = ProcessInfo.processInfo.environment
+        let isIsolatedChatTest = environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+            || environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+        if isIsolatedChatTest,
+           let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
+           let delayMs = UInt64(rawDelay), delayMs > 0 {
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        } else if MessageProviderDebug.olderPageDelayMs > 0 {
+            try? await Task.sleep(nanoseconds: MessageProviderDebug.olderPageDelayMs * 1_000_000)
+        }
+    }
+}
+#endif
 
 // MARK: - Reconnect catch-up (same file: shares the class's private state)
 

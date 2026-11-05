@@ -18,7 +18,7 @@ export function handleControlMessage(server: HeadServer, ws: WebSocket, state: C
   switch (msg.type) {
     case 'update_preferences':    handleUpdatePreferences(server, ws, state, msg); return true;
     case 'update_voice_vocabulary': handleUpdateVoiceVocabulary(server, state, msg); return true;
-    case 'remove_device':         handleRemoveDevice(server, ws, state, msg.deviceId as string); return true;
+    case 'remove_device':         void handleRemoveDevice(server, ws, state, msg.deviceId as string); return true;
     case 'rename_device':         void handleRenameDevice(server, ws, state, msg); return true;
     case 'delete_account':        void handleDeleteAccount(server, ws, state); return true;
     case 'register_push_token':   handleRegisterPushToken(server, ws, state, msg); return true;
@@ -187,12 +187,14 @@ export async function handleRenameDevice(server: HeadServer, ws: WebSocket, stat
   broadcastDeviceRenamed(server, userId, renamed);
 }
 
-export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: ClientState, targetDeviceId: string): void {
+export async function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: ClientState, targetDeviceId: string): Promise<void> {
   const logger = getLogger();
   if (!state.userId || !state.deviceId) {
     server.sendError(ws, 'Not authenticated');
     return;
   }
+  const userId = state.userId;
+  const byDevice = state.deviceId;
 
   if (!targetDeviceId || typeof targetDeviceId !== 'string') {
     server.sendError(ws, 'Missing deviceId');
@@ -200,7 +202,7 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
   }
 
   const targetDevice = server.storage.getDevice(targetDeviceId);
-  if (!targetDevice || targetDevice.userId !== state.userId) {
+  if (!targetDevice || targetDevice.userId !== userId) {
     server.sendError(ws, 'Device not found');
     return;
   }
@@ -211,8 +213,31 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
     return;
   }
 
+  // Edge mode: the account service owns the device list and every sign-in
+  // mirrors it back here, and it is what lets the device sign in. Remove it
+  // there first (like a rename); a removal made only here would be undone by
+  // the next sign-in of any device of the account.
+  const remote = server.authBackend;
+  if (remote instanceof RemoteAuthBackend) {
+    // Already gone there (e.g. removed through another edge): only this
+    // edge's copy is left to remove.
+    let outcome: 'removed' | 'not_found' | 'unavailable' = 'unavailable';
+    try {
+      outcome = await remote.removeDeviceOutcome(userId, targetDeviceId);
+    } catch (err) {
+      logger.warn('Failed to remove device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
+    }
+    if (outcome === 'unavailable') {
+      logger.warn('Account service did not remove device', { deviceId: targetDeviceId });
+      server.sendError(ws, 'Could not remove the device. Try again later.');
+      return;
+    }
+    // Removed meanwhile by another request: nothing left to do here.
+    if (server.storage.getDevice(targetDeviceId)?.userId !== userId) return;
+  }
+
   server.storage.deleteDevice(targetDeviceId);
-  if (server.authBackend instanceof RemoteAuthBackend) server.authBackend.forgetLocalTrust(targetDeviceId);
+  if (remote instanceof RemoteAuthBackend) remote.forgetLocalTrust(targetDeviceId);
   server.deviceRenamedAt.delete(targetDeviceId);
   server.storage.deletePushTokensForDevice(targetDeviceId);
   // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
@@ -220,23 +245,10 @@ export function handleRemoveDevice(server: HeadServer, ws: WebSocket, state: Cli
   // recoverOnBoot faithfully rebuilds an endpoint for a device that can
   // never authenticate again.
   server.pulseHub.forgetDevice(targetDeviceId);
-  logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
-
-  // Edge mode: the account service owns the device list and every auth
-  // mirrors it back here, so the removal must reach it too (otherwise the
-  // device reappears after the next reconnect).
-  const remote = server.authBackend;
-  if (remote instanceof RemoteAuthBackend) {
-    const userId = state.userId;
-    remote.removeDevice(userId, targetDeviceId).then((ok) => {
-      if (!ok) logger.warn('Account service did not remove device', { deviceId: targetDeviceId });
-    }).catch((err) => {
-      logger.warn('Failed to remove device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
-    });
-  }
+  logger.info('Device removed', { deviceId: targetDeviceId, byDevice });
 
   // Broadcast removal to all remaining user devices
-  broadcastDeviceRemoved(server, state.userId, targetDeviceId);
+  broadcastDeviceRemoved(server, userId, targetDeviceId);
 }
 
 /**

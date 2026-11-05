@@ -38,9 +38,18 @@ final class TentacleSetupRunner {
     @ObservationIgnored private var stdin: FileHandle?
     @ObservationIgnored private var buffer = Data()
     @ObservationIgnored private var stderrTail = Data()
-    @ObservationIgnored private var webAuth: ASWebAuthenticationSession?
-    @ObservationIgnored private let webAuthAnchor = WebAuthAnchor()
+    @ObservationIgnored private var webAuth: SetupWebAuthSession?
+    /// Bumped whenever a sign-in window is opened or abandoned, so a window's
+    /// late completion (a cancelled one reports back asynchronously) can never
+    /// end the sign-in that replaced it.
+    @ObservationIgnored private var webAuthGeneration = 0
+    @ObservationIgnored private let makeWebAuthSession: SetupWebAuth.Factory
     @ObservationIgnored private var lastStart: (binaryPath: String, deviceName: String?, forceLogin: Bool)?
+
+    /// - Parameter makeWebAuthSession: the system sign-in window; tests pass a fake.
+    init(makeWebAuthSession: @escaping SetupWebAuth.Factory = SetupWebAuth.system) {
+        self.makeWebAuthSession = makeWebAuthSession
+    }
 
     var isRunning: Bool {
         switch phase {
@@ -89,6 +98,8 @@ final class TentacleSetupRunner {
         switch code {
         case "network", "relay_unreachable", "client_id_unavailable":
             String(localized: "Could not reach Kraki. Check your network connection, then try again.")
+        case "github_unreachable":
+            String(localized: "Could not reach GitHub. Check your network connection or proxy, then try again.")
         case "expired":
             String(localized: "The GitHub code expired. Try again.")
         case "denied", "cancelled":
@@ -97,6 +108,9 @@ final class TentacleSetupRunner {
             String(localized: "GitHub sign-in could not be verified. Try again.")
         case "oauth_unavailable":
             String(localized: "Browser sign-in is not available yet.")
+        case "home_not_writable":
+            // Usually a ~/.kraki folder created by `sudo kraki`.
+            String(localized: "Kraki can't save its settings in the .kraki folder in your home folder. If you ran kraki with sudo, run this in Terminal, then try again: sudo chown -R \"$USER\" ~/.kraki")
         default:
             String(localized: "Sign-in did not finish. Try again.")
         }
@@ -164,6 +178,7 @@ final class TentacleSetupRunner {
     }
 
     func cancel() {
+        webAuthGeneration += 1
         webAuth?.cancel()
         webAuth = nil
         try? stdin?.close()
@@ -184,13 +199,14 @@ final class TentacleSetupRunner {
 
     private func openWebAuth(url: URL, scheme: String) {
         pendingAuthURL = (url, scheme)
-        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme) { [weak self] callback, error in
-            Task { @MainActor [weak self] in self?.webAuthFinished(callback: callback, error: error) }
+        webAuthGeneration += 1
+        let generation = webAuthGeneration
+        let session = makeWebAuthSession(url, scheme) { [weak self] callback, error in
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.webAuthGeneration else { return }
+                self.webAuthFinished(callback: callback, error: error)
+            }
         }
-        session.presentationContextProvider = webAuthAnchor
-        // Use the browser's existing session: a user already signed in to
-        // GitHub only has to approve (or nothing, if Kraki was approved before).
-        session.prefersEphemeralWebBrowserSession = false
         webAuth = session
         if !session.start() {
             webAuth = nil
@@ -291,6 +307,32 @@ final class TentacleSetupRunner {
             phase = status == 0 ? phase : .failed(message:
                 lastError.map { String(localized: "Setup stopped unexpectedly (exit \(status)). \($0)") }
                     ?? String(localized: "Setup stopped unexpectedly (exit \(status))."))
+        }
+    }
+}
+
+/// The system sign-in window `TentacleSetupRunner` opens on GitHub.
+protocol SetupWebAuthSession: AnyObject {
+    func start() -> Bool
+    func cancel()
+}
+
+extension ASWebAuthenticationSession: SetupWebAuthSession {}
+
+enum SetupWebAuth {
+    typealias Completion = (URL?, Error?) -> Void
+    typealias Factory = @MainActor (_ url: URL, _ callbackScheme: String, _ completion: @escaping Completion) -> SetupWebAuthSession
+
+    /// ASWebAuthenticationSession over Kraki's key window.
+    static var system: Factory {
+        let anchor = WebAuthAnchor()
+        return { url, scheme, completion in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme, completionHandler: completion)
+            session.presentationContextProvider = anchor
+            // Use the browser's existing session: a user already signed in to
+            // GitHub only has to approve (or nothing, if Kraki was approved before).
+            session.prefersEphemeralWebBrowserSession = false
+            return session
         }
     }
 }

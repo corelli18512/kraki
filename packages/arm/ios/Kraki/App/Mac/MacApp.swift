@@ -51,6 +51,15 @@ final class MacLaunchCoordinator {
     @ObservationIgnored private var hasCommittedLaunchActivity = false
     @ObservationIgnored private var isFinishingAuthenticatedSurface = false
     @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
+    /// Debug `KRAKI_MAC_FORCE_SIGNED_OUT=1`: stay on the signed-out page until
+    /// the user signs in, also across app activations.
+    @ObservationIgnored var forceSignedOut: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KRAKI_MAC_FORCE_SIGNED_OUT"] == "1"
+        #else
+        false
+        #endif
+    }()
 
     /// Startup ran (or is running) for this process.
     var bootstrapStarted: Bool { hasStarted }
@@ -58,6 +67,16 @@ final class MacLaunchCoordinator {
     /// A launch with no window after the window had its chance to start up.
     nonisolated static func needsWindowlessStart(bootstrapStarted: Bool, visibleWindows: Int) -> Bool {
         !bootstrapStarted && visibleWindows == 0
+    }
+
+    /// What a launch without the login-item event still has to do once the
+    /// window had its chance: with no visible window the Dock icon goes
+    /// (also when the window's startup already ran), and startup runs from
+    /// the menu bar if nothing started it.
+    nonisolated static func afterLaunchSettled(
+        bootstrapStarted: Bool, visibleWindows: Int
+    ) -> (dropDockIcon: Bool, startWithoutWindow: Bool) {
+        (visibleWindows == 0, needsWindowlessStart(bootstrapStarted: bootstrapStarted, visibleWindows: visibleWindows))
     }
 
     func bootstrap(
@@ -114,12 +133,6 @@ final class MacLaunchCoordinator {
                 MacPresenceController.shared.syncLoginItem()
             }
         }
-
-        #if DEBUG
-        let forceSignedOut = ProcessInfo.processInfo.environment["KRAKI_MAC_FORCE_SIGNED_OUT"] == "1"
-        #else
-        let forceSignedOut = false
-        #endif
 
         let canEnterAuthenticatedRoot: Bool
         if forceSignedOut {
@@ -195,11 +208,19 @@ final class MacLaunchCoordinator {
         await finishAuthenticatedSurface(source: "probe")
     }
 
+    /// The launch gate stays at most about 2 s from when it appeared: the
+    /// credential lookup before preparation counts too. The authenticated
+    /// shell still gets a short floor to lay out before the watchdog fires.
+    nonisolated static func presentationWatchdogDelay(gateVisibleFor elapsed: TimeInterval) -> TimeInterval {
+        max(0.5, 2 - elapsed)
+    }
+
     private func beginPreparingAuthenticatedSurface() {
         phase = .preparingAuthenticated
         presentationWatchdogTask?.cancel()
+        let delay = Self.presentationWatchdogDelay(gateVisibleFor: Date().timeIntervalSince(launchStartedAt ?? Date()))
         presentationWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self,
                   self.phase == .preparingAuthenticated else { return }
             self.presentationWatchdogTask = nil
@@ -262,11 +283,16 @@ final class MacLaunchCoordinator {
     /// activation) never sign back in after Sign Out.
     func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil, userInitiated: Bool = false) async {
         guard !isCheckingCredentials else { return }
-        if userInitiated { appState.signedOutByUser = false }
+        if userInitiated {
+            appState.signedOutByUser = false
+            forceSignedOut = false
+        }
+        // App activation must not undo the forced signed-out launch.
+        if forceSignedOut { return }
         // While setup asks which install should run Kraki, don't slip in with
         // the command-line login (e.g. on app activation): setup finishes the
         // choice and then calls back here.
-        if let tentacleCLI, tentacleCLI.ownerChoicePending { return }
+        if let tentacleCLI, tentacleCLI.ownerChoicePending || tentacleCLI.setupHoldsSignIn { return }
         isCheckingCredentials = true
         loginCheckFailed = false
         defer { isCheckingCredentials = false }
@@ -312,6 +338,69 @@ final class MacLaunchCoordinator {
     }
 }
 
+/// One Kraki per Mac account. A second copy (another app bundle, `open -n`)
+/// handed the built-in tentacle back and forth with the first and added a
+/// second menu bar item. A later launch shows the running one instead.
+enum MacSingleInstance {
+    struct Candidate: Equatable {
+        let pid: pid_t
+        let isTerminated: Bool
+    }
+
+    /// Passed by "Relaunch Now" (`AppLanguage.relaunch`) with its own pid:
+    /// the copy it starts replaces it instead of handing back to it.
+    static let relaunchedFromArgument = "--kraki-relaunched-from"
+
+    static func relaunchedFromPID(arguments: [String]) -> pid_t? {
+        guard let flag = arguments.firstIndex(of: relaunchedFromArgument),
+              arguments.indices.contains(flag + 1) else { return nil }
+        return pid_t(arguments[flag + 1])
+    }
+
+    /// The instance already running, if any: never this process, one that
+    /// has exited, or the one this launch replaces (`ignoring`).
+    static func runningInstance(among candidates: [Candidate], currentPID: pid_t, ignoring: pid_t? = nil) -> Candidate? {
+        candidates.first { $0.pid != currentPID && $0.pid != ignoring && !$0.isTerminated }
+    }
+
+    /// Posted by a second launch; the running instance shows its window.
+    static func showWindowNotification(bundleId: String) -> Notification.Name {
+        Notification.Name("\(bundleId).showMainWindow")
+    }
+
+    /// Called first thing at launch. Debug harnesses (KRAKI_* environment)
+    /// and tests run beside a developer's own Kraki Dev on purpose.
+    @MainActor
+    static func handOffToRunningInstanceIfNeeded() {
+        #if DEBUG
+        if NativeTestRuntime.isRunningTests { return }
+        if ProcessInfo.processInfo.environment.keys.contains(where: { $0.hasPrefix("KRAKI_") }) { return }
+        #endif
+        guard let bundleId = Bundle.main.bundleIdentifier else { return }
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+        let candidates = apps.map { Candidate(pid: $0.processIdentifier, isTerminated: $0.isTerminated) }
+        guard let running = runningInstance(among: candidates, currentPID: getpid(),
+                                            ignoring: relaunchedFromPID(arguments: CommandLine.arguments)),
+              let app = apps.first(where: { $0.processIdentifier == running.pid }) else { return }
+        KLog.d("second launch: showing the running instance (pid \(running.pid)) and exiting")
+        // Brings an open window forward.
+        DistributedNotificationCenter.default().postNotificationName(
+            showWindowNotification(bundleId: bundleId), object: nil, userInfo: nil, deliverImmediately: true)
+        // Opening it again, as Finder does, sends the reopen event: a copy
+        // that only lives in the menu bar creates its window
+        // (applicationShouldHandleReopen), older builds included.
+        if let url = app.bundleURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = false
+            let reopened = DispatchSemaphore(value: 0)
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in reopened.signal() }
+            _ = reopened.wait(timeout: .now() + 5)
+        }
+        app.activate()
+        exit(0)
+    }
+}
+
 @main
 struct MacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
@@ -322,6 +411,7 @@ struct MacApp: App {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
     init() {
+        MacSingleInstance.handOffToRunningInstanceIfNeeded()
         // Two launch modes (selected via the `KRAKI_DEV_LOCAL` scheme
         // env var):
         //
@@ -643,11 +733,15 @@ struct MacApp: App {
                         // on "Checking this Mac…" until a window was opened.
                         // Start here once the window had its chance.
                         try? await Task.sleep(for: .seconds(2))
-                        guard MacLaunchCoordinator.needsWindowlessStart(
+                        // macOS reopening Kraki at login can also create the
+                        // window and never show it: then the window's startup
+                        // ran, but no close notification ever drops the Dock icon.
+                        let settled = MacLaunchCoordinator.afterLaunchSettled(
                             bootstrapStarted: launchCoordinator.bootstrapStarted,
                             visibleWindows: MacPresenceController.appWindows().count
-                        ) else { return }
-                        MacPresenceController.shared.updateActivationPolicy()
+                        )
+                        if settled.dropDockIcon { MacPresenceController.shared.updateActivationPolicy() }
+                        guard settled.startWithoutWindow else { return }
                     }
                     KLog.diag("[Presence] starting without a window")
                     await launchCoordinator.bootstrap(

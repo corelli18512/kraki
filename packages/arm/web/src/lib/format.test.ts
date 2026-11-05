@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { timeAgo, formatTime, capitalize, agentInfo, truncate } from '../lib/format';
+import { formatClockTime } from '../i18n/format';
 
 describe('format utilities', () => {
   describe('timeAgo', () => {
@@ -35,10 +36,12 @@ describe('format utilities', () => {
   });
 
   describe('formatTime', () => {
-    it('formats time as 24-hour HH:MM without AM/PM', () => {
-      const result = formatTime('2026-03-18T14:30:00.000Z');
-      expect(result).toMatch(/^\d{2}:\d{2}$/);
-      expect(result).not.toMatch(/[AP]M/i);
+    it("formats hours and minutes in the user's 12/24-hour cycle (K-305)", () => {
+      // Local 14:30, so half-hour time zones keep ":30".
+      const iso = new Date(2026, 2, 18, 14, 30).toISOString();
+      expect(formatTime(iso)).toBe(formatClockTime(iso));
+      expect(formatClockTime(iso, 'en-US')).toMatch(/^2:30\s?PM$/);
+      expect(formatClockTime(iso, 'en-GB')).toBe('14:30');
     });
   });
 

@@ -3,7 +3,7 @@
     "tool": "tool",
     "turnFailed": "Turn failed",
     "stopped": "Stopped",
-    "approvalCaption": "Needs your approval · Safe mode",
+    "approvalCaption": "Needs your approval",
     "proposedChange": "Proposed change",
     "alwaysAllowed": "Always allowed",
     "denied": "Denied",
@@ -52,7 +52,8 @@
       "empty": "empty",
       "invalidHash": "Attachment id is not a valid content hash",
       "checksumMismatch": "Attachment checksum mismatch",
-      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}"
+      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}",
+      "chunkTimeout": "Timed out receiving the attachment (part {{index}}, {{attempts}} attempts)."
     }
   },
   "bubble": {
@@ -69,7 +70,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "working": "Agent is working",
-    "processLost": "Agent process was lost"
+    "processLost": "Agent process was lost",
+    "attachmentsNotKept": "Attachments were too large to keep when the page reloaded. Attach them again, or retry to send the text only."
   },
   "header": {
     "modePicker": "Session mode picker",
@@ -121,6 +123,8 @@
   },
   "composer": {
     "imageTooLarge": "Image is too large (max 3 MB after compression).",
+    "imageUnreadable": "This image can't be read here. Try a JPEG, PNG, GIF or WebP image.",
+    "targetChanged": "The agent's request changed. Check your message, then send again.",
     "sendDictation": "Send dictation",
     "stop": "Stop agent",
     "submitAnswer": "Submit answer",
@@ -181,6 +185,7 @@
     "actions": "Message actions",
     "copySelection": "Copy Selection",
     "copy": "Copy",
+    "copyCode": "Copy Code",
     "showSteps": "Show Steps"
   },
   "steps": {
@@ -232,6 +237,7 @@
   },
   "session": {
     "starting": "Starting session…",
+    "loading": "Loading session…",
     "notFound": "Session not found",
     "back": "← Back to sessions",
     "connecting": "Connecting…",

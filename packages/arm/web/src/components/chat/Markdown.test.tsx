@@ -16,6 +16,12 @@ function resolvedColor(element: Element): string {
 }
 
 describe('Markdown — native transcript rendering', () => {
+  it('gives every text block its own direction so Arabic punctuation stays at the end (K-165)', () => {
+    const { container } = render(<Markdown text={'مرحبا بالعالم.\n\n- عنصر أول.\n\n> اقتباس.\n\n## عنوان'} />);
+    for (const selector of ['p', 'li', 'blockquote', 'h2']) {
+      expect(container.querySelector(selector), selector).toHaveAttribute('dir', 'auto');
+    }
+  });
   it.each([Markdown, StreamingMarkdown])('preserves prose and quote soft newlines in final and streamed text', (Component) => {
     const { container } = render(<Component text={'First **bold** line\nSecond `code` line\n\n> Quote one\n> Quote two'} />);
     const paragraphs = container.querySelectorAll('p');
@@ -67,5 +73,33 @@ describe('Markdown — native transcript rendering', () => {
     expect(getComputedStyle(code.querySelector('.hljs-built_in')!).color).toBe('rgb(255, 166, 87)');
     expect(getComputedStyle(code.querySelector('.hljs-string')!).color).toBe('rgb(165, 214, 255)');
     expect(getComputedStyle(container.querySelector('pre')!).whiteSpace).toBe('pre');
+  });
+});
+
+describe('Markdown — remote images (K-219)', () => {
+  it('does not fetch a remote image; it shows a link with the alt text instead', () => {
+    const { container } = render(<Markdown text={'See ![build status](https://tracker.example/pixel.png?u=1) now'} />);
+    expect(container.querySelector('img')).toBeNull();
+    const link = screen.getByRole('link', { name: 'build status' });
+    expect(link).toHaveAttribute('href', 'https://tracker.example/pixel.png?u=1');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('does not fetch a remote image inside a table cell', () => {
+    const { container } = render(<Markdown text={'| a |\n|---|\n| ![x](https://tracker.example/t.gif) |'} />);
+    expect(container.querySelector('img[src^="https:"]')).toBeNull();
+  });
+
+  it('a linked image (a badge) is the label of its one link, not a nested link', () => {
+    const { container } = render(<Markdown text={'[![ci](https://a.example/b.png)](https://c.example)'} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'ci' })).toHaveAttribute('href', 'https://c.example');
+  });
+
+  it('an image without a web address shows its alt text only', () => {
+    const { container } = render(<Markdown text={'![diagram](./local.png)'} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container).toHaveTextContent('diagram');
   });
 });

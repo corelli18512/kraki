@@ -463,14 +463,27 @@ public final class Endpoint {
         }
     }
 
-    /// Resend from `fromSeq`, first announcing (via RESET) any gap at the head:
-    /// if our oldest retained seq is beyond `fromSeq`, those seqs were discarded
-    /// (e.g. non-durable lost in a restart) and can never be filled — without the
-    /// RESET the peer treats the resend as a hole, re-ACKs, and we livelock.
+    /// Resend outbox entries from `fromSeq`, announcing (via RESET) any gap the
+    /// resend itself cannot close.
+    ///
+    /// `resendFrom` injects a RESET before every entry that isn't contiguous
+    /// with the previous one, which covers gaps at the head and in the middle.
+    /// It cannot cover a gap at the TAIL: those RESETs are driven by a
+    /// following entry, so when the dropped seqs are the highest ones we hold
+    /// (the outbox ends up empty, or its max seq is below `sendSeq`) the peer
+    /// is never told. It then holds the gap open, keeps re-ACKing its old
+    /// cursor, and only a later unrelated send drags it forward — one full
+    /// repair round trip late. A host GC (`purgeNonDurable` of an offline
+    /// peer's queued tail) produces exactly this. Mirrors the TS endpoint.
     private func resendWithGapAnnounce(_ fromSeq: UInt64, _ effects: inout [Effect], _ now: Int) {
-        // resendFrom already injects RESET exactly where the sparse outbox first
-        // skips sequence space. A second head RESET duplicates the same control.
         resendFrom(fromSeq, &effects, now)
+        // Highest seq we can still deliver from `fromSeq` onward; everything
+        // above it, up to sendSeq, is gone for good.
+        let highestRetained = outbox.lazy.map(\.seq).filter { $0 >= fromSeq }.max()
+        let tailGapFrom = highestRetained.map { $0 + 1 } ?? fromSeq
+        if tailGapFrom <= sendSeq {
+            effects.append(transmit(.reset(epoch: epoch, oldest: sendSeq &+ 1), now: now))
+        }
     }
 
     private func pruneOutbox(_ ackSeq: UInt64, _ effects: inout [Effect]) {

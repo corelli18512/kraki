@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { unreadLanding } from '../../lib/chat/unread-entry';
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode,
@@ -90,6 +91,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onUserInteraction, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
   ref: React.Ref<ChatScrollerHandle>,
 ) {
+  const { t } = useTranslation('chat');
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -99,6 +101,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const callbacks = useRef({ onAtBottomChange, onNearTop, onUserInteraction, onScroll, onUnreadEntryEnd });
   callbacks.current = { onAtBottomChange, onNearTop, onUserInteraction, onScroll, onUnreadEntryEnd };
   const olderAllowance = useRef(false);
+  /** Until when a released touch may still be coasting (iOS momentum). */
+  const touchMomentumUntil = useRef(0);
   /** none | armed (following while it fits) | anchored (held at the top). */
   const unread = useRef<'none' | 'armed' | 'anchored'>(unreadTarget !== undefined ? 'armed' : 'none');
   const unreadTargetRef = useRef(unreadTarget ?? null);
@@ -233,7 +237,18 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       if (node) {
         const top = el.getBoundingClientRect().top + topInset;
         const drift = node.getBoundingClientRect().top - top - anchor.current.offset;
-        if (Math.abs(drift) >= 0.5) el.scrollTop += drift;
+        if (Math.abs(drift) >= 0.5) {
+          if (performance.now() <= touchMomentumUntil.current) {
+            // WebKit drops scrollTop writes while touch momentum runs, so a
+            // page prepended mid-fling lost its anchor and the next pages
+            // cascaded (K-105). Stop the momentum for a frame so the
+            // correction sticks; the fling ends on the same content.
+            touchMomentumUntil.current = 0;
+            el.style.overflowY = 'hidden';
+            el.scrollTop += drift;
+            requestAnimationFrame(() => { el.style.overflowY = ''; });
+          } else el.scrollTop += drift;
+        }
       }
     }
     reportBottom();
@@ -306,6 +321,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       const movedOlder = el.scrollTop < previousTop;
       const now = performance.now();
       const coasting = flingOlder && movedOlder && now - flingEventAt <= FLING_GAP_MS;
+      if (now <= touchMomentumUntil.current) touchMomentumUntil.current = now + FLING_GAP_MS;
       flingOlder = coasting;
       flingEventAt = now;
       const userOwned = (olderAllowance.current || coasting) && !programmatic.current && !following.current;
@@ -364,19 +380,26 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     };
     const onPointerMove = () => { if (pointerDown) armOlderMovement(); };
     const onPointerUp = () => { pointerDown = false; olderAllowance.current = false; };
-    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? null; lastTouchOlder = false; onUser(); };
+    let touchMoved = false;
+    const onTouchStart = (e: TouchEvent) => {
+      touchY = e.touches[0]?.clientY ?? null; lastTouchOlder = false; touchMoved = false;
+      touchMomentumUntil.current = 0;
+      onUser();
+    };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? null;
       if (y !== null && touchY !== null) {
         onUser(y > touchY, y < touchY);
         olderGesture(y > touchY);
-        if (y !== touchY) lastTouchOlder = y > touchY;
+        if (y !== touchY) { lastTouchOlder = y > touchY; touchMoved = true; }
       }
       touchY = y;
     };
     const onTouchEnd = () => {
       flingOlder = lastTouchOlder;
       flingEventAt = performance.now();
+      touchMomentumUntil.current = touchMoved ? flingEventAt + FLING_GAP_MS : 0;
+      touchMoved = false;
       lastTouchOlder = false;
       touchY = null;
     };
@@ -485,7 +508,9 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   }));
 
   return (
-    <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}>
+    // Focusable so the keyboard can scroll it (WebKit cannot focus a plain scroller).
+    <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}
+      tabIndex={0} role="region" aria-label={t('history.conversation')}>
       <div className="kchat-scroll-content" style={{ paddingTop: topInset, paddingBottom: bottomInset }}>
         {header}
         <div ref={content} className="kchat-scroll-rows">

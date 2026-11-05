@@ -41,6 +41,10 @@ struct NotificationsPane: View {
         }
         .formStyle(.grouped)
         .task { await refreshStatus() }
+        // Coming back from System Settings › Notifications.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshStatus() }
+        }
     }
 
     private var statusText: String {
@@ -62,8 +66,9 @@ struct NotificationsPane: View {
     }
 
     private func requestPermission() async {
-        _ = try? await UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .badge, .sound])
+        let granted = (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        if granted { MacDockBadge.reapply() }
         await refreshStatus()
     }
 

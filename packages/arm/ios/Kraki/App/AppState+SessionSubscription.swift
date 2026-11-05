@@ -37,6 +37,7 @@ extension AppState: SessionSubscriptionHost {
     /// (the Tentacle re-sends session_list on the new route, which is the new
     /// barrier), re-declare features and re-send inputs still waiting.
     func localLinkDidChange(tentacleId: String, linked: Bool) {
+        routeSwitchedTentacles.insert(tentacleId)
         sessionSubscriptionController.onTentacleUnavailable(tentacleId)
         for (sessionId, stopTentacle) in stopsOverLocalLink where stopTentacle == tentacleId {
             stopsOverLocalLink.removeValue(forKey: sessionId)
@@ -111,21 +112,46 @@ extension AppState: SessionSubscriptionHost {
             }
         }
 
+        // A re-subscribe because the route switched between the local link
+        // and the Head, during a reply this device already shows, must not
+        // take that reply off screen while the catch-up runs. Any other
+        // re-subscribe (page entry, an iOS or Head reconnect) may follow a
+        // different turn than the card on screen, so it still holds.
+        #if os(macOS)
+        let routeSwitched = routeSwitchedTentacles.remove(ack.tentacleId) != nil
+        #else
+        let routeSwitched = false
+        #endif
+        let shownText = messageStore.visibleCard(sessionId)?.text ?? ""
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]
         let draft = cardJSON["draft"] as? String ?? ""
+        let sameTurn = routeSwitched && !shownText.isEmpty && draft.hasPrefix(shownText)
         let actionPayload = cardJSON["action"].map { ["action": $0] }
         let action = MessageRouter.decodeCardAction(actionPayload)
-        messageStore.replaceCardFromSubscription(
-            sessionId,
-            draft: draft,
-            action: action,
-            state: digest.state
-        )
-
         let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
-        // The card belongs to the turn after `spineHeadSeq`: show it only once
-        // this device has the messages up to there (catch-up comes next).
-        messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+        if digest.state == .idle {
+            // The turn is over. A draft this device is behind on stays until
+            // its concluding bubble lands by catch-up (K-013).
+            messageStore.endCardTurn(sessionId, afterCatchUpTo: spineHeadSeq)
+            messageStore.holdCard(sessionId, untilSeq: 0)
+        } else {
+            messageStore.replaceCardFromSubscription(
+                sessionId,
+                draft: draft,
+                action: action,
+                state: digest.state
+            )
+            // The card belongs to the turn after `spineHeadSeq`: show it only
+            // once this device has the messages up to there (catch-up next).
+            // Not when the route switch kept the same reply going: the missing
+            // rows are usually tool events never stored here, and holding made
+            // the whole reply vanish until the catch-up answered.
+            if sameTurn {
+                messageStore.releaseCardHold(sessionId)
+            } else {
+                messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+            }
+        }
         messageProvider?.setTentacleInfo(
             sessionId: sessionId,
             lastSeq: spineHeadSeq,

@@ -2,21 +2,22 @@ import { t } from '../i18n';
 import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
+import { sliceGraphemes } from './format';
 import { desktop, desktopCredentials, setDesktopCredentialsRefused, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
-import { createAppKeyStore } from './e2e';
-import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, QUESTION_WITHDRAWN_FEATURE, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
+import { clearDeviceKeys, createAppKeyStore } from './e2e';
+import { KrakiTransport, loadStoredDevice, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
-import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
+import { browserCanKeepKeys, ensureDeviceKeys, sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
-import { allowAutoRead, isAutoReadSuppressed, suppressAutoRead } from './read-visibility';
+import { allowAutoRead, forgetSentRead, isAutoReadSuppressed, noteSentRead, suppressAutoRead, takeUnappliedRead } from './read-visibility';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { OrderedCrypto } from './ordered-crypto';
@@ -24,12 +25,19 @@ import { ArmPulse } from './arm-pulse';
 import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
 import { diag } from './diag';
 import { traceEvent } from './trace';
+import { serverErrorText } from './server-errors';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
 import { AttachmentPullQueue } from './attachment-pull-queue';
 import { ForegroundActivity } from './foreground-activity';
 
 const logger = createLogger('ws-client');
+/** How long Settings waits for the relay to confirm a push token. */
+export const PUSH_REGISTRATION_TIMEOUT_MS = 30_000;
+/** `registered`: the relay stored the token. `refused`: it rejected it.
+ *  `unconfirmed`: not connected, no answer in time, or a newer registration
+ *  took over; a queued registration may still land later. */
+export type PushRegistrationResult = 'registered' | 'refused' | 'unconfirmed';
 
 
 /** No frame for longer than a ping round (10 s + slack) → the link is not
@@ -63,6 +71,11 @@ function localHighestSeq(sessionId: string): number {
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
+  private windowListenersInstalled = false;
+  /** The Head of this connection takes `app_visibility` (K-032). */
+  private headTakesAppVisibility = false;
+  /** What this connection last told the Head; the Head starts at visible. */
+  private reportedVisible = true;
   private inboundCrypto = new OrderedCrypto();
   private outboundCrypto = new OrderedCrypto();
   private identityEpoch = 0;
@@ -80,6 +93,8 @@ export class KrakiWSClient {
   private pulse: ArmPulse;
   /** Bumped on every Head socket close; scopes CONNECTION_SCOPED sends. */
   private connectionEpoch = 0;
+  /** A push token sent to the relay, waiting for its answer. */
+  private pushRegistration: { provider: string; resolve: (result: PushRegistrationResult) => void; timer: ReturnType<typeof setTimeout> } | null = null;
   private subscription: SessionSubscriptionController;
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
@@ -168,6 +183,49 @@ export class KrakiWSClient {
     useAccountDeletion.getState().set({ kind: 'idle' });
     useAccountDeletion.getState().setNotice(true);
     window.history.replaceState({}, '', '/');
+  }
+
+  /** Sign-out: drop this browser's keys, on disk and in memory. Nothing for
+   *  the signed-out device can be decrypted any more (a late push preview,
+   *  K-006), and the next sign-in pairs with new keys. `onDisk: false` when
+   *  another tab signed out: it already deleted them, and may have paired
+   *  again with new ones since. */
+  forgetDeviceKeys(onDisk = true): void {
+    if (onDisk) void clearDeviceKeys().catch((err) => logger.warn('Could not delete device keys', err));
+    this.encryption = new EncryptionHandler(createAppKeyStore());
+  }
+
+  /** Another tab of this browser signed out (K-318): follow it, instead of
+   *  reconnecting later with the signed-out identity and saving it again. */
+  private signedOutElsewhere(): void {
+    if (!this.transport.storedDeviceId) return;
+    if (loadStoredDevice()?.deviceId) {
+      // The other tab already paired again: start over with that identity.
+      logger.info('Paired again in another tab');
+      window.location.reload();
+      return;
+    }
+    logger.info('Signed out in another tab');
+    diag.phase('logout');
+    const savedClientId = getStore().githubClientId;
+    this.transport.storedDeviceId = undefined;
+    this.disconnect();
+    this.forgetDeviceKeys(false);
+    voice.resetVoice();
+    getStore().reset();
+    setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
+  }
+
+  /** Tell the Head whether the user is looking at this tab (visible and
+   *  focused), like iOS `sendAppVisibility`. A hidden or unfocused tab gets
+   *  Web Push; the one on screen does not, so every push it gets is shown
+   *  (Safari revokes a subscription that receives silent pushes). */
+  private reportAppVisibility(force = false): void {
+    if (!this.headTakesAppVisibility) return;
+    const visible = document.visibilityState === 'visible' && document.hasFocus();
+    if (!force && visible === this.reportedVisible) return;
+    this.reportedVisible = visible;
+    this.transport.sendRaw({ type: 'app_visibility', visible });
   }
 
   /** Connect with the account of the Kraki built into the desktop app. */
@@ -263,7 +321,9 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
+        onSignedOutElsewhere: () => this.signedOutElsewhere(),
         onClose: () => {
+          this.headTakesAppVisibility = false;
           this.connectionEpoch++;
           this.headEpoch++;
           this.encryptedQueue = [];
@@ -280,16 +340,34 @@ export class KrakiWSClient {
   }
 
   connect() {
+    if (!this.windowListenersInstalled && typeof window !== 'undefined') {
+      this.windowListenersInstalled = true;
+      // `storage` fires in the other tabs of this browser: removing the
+      // stored device (or clearing storage) is a sign-out there.
+      window.addEventListener('storage', (event) => {
+        if ((event.key === STORAGE_KEY || event.key === null) && !localStorage.getItem(STORAGE_KEY)) this.signedOutElsewhere();
+      });
+      const report = () => this.reportAppVisibility();
+      document.addEventListener('visibilitychange', report);
+      window.addEventListener('focus', report);
+      window.addEventListener('blur', report);
+    }
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
-        // Key init failed — E2E will not work
+        // authenticate() retries and tells the user if keys are unavailable.
       });
     }
     this.transport.connect();
   }
 
   disconnect() {
+    this.endConnection();
+    this.transport.disconnect();
+  }
+
+  /** Everything `disconnect` ends on this side, leaving the transport alone. */
+  private endConnection(): void {
     this.identityEpoch++;
     this.encryptedQueue = [];
     this.inboundCrypto.clear();
@@ -304,7 +382,6 @@ export class KrakiWSClient {
     this.routeChanges = 0;
     this.clearReplayTracking();
     this.endConnectionScope();
-    this.transport.disconnect();
   }
 
   onMessage(handler: MessageHandler) {
@@ -394,9 +471,11 @@ export class KrakiWSClient {
     const store = getStore();
     const device = store.devices.get(msg.deviceId);
     const previousReadSeq = store.sessions.get(digest.id)?.readSeq;
-    if (previousReadSeq !== undefined && digest.readSeq < previousReadSeq && digest.readSeq < digest.lastSeq) {
+    const unappliedRead = takeUnappliedRead(digest.id, digest.readSeq);
+    const readSeq = unappliedRead === undefined ? digest.readSeq : Math.min(unappliedRead, digest.lastSeq);
+    if (previousReadSeq !== undefined && readSeq < previousReadSeq && readSeq < digest.lastSeq) {
       suppressAutoRead(digest.id);
-    } else if (digest.readSeq >= digest.lastSeq) {
+    } else if (readSeq >= digest.lastSeq) {
       allowAutoRead(digest.id);
     }
     store.upsertSession({
@@ -412,8 +491,9 @@ export class KrakiWSClient {
       state: digest.state,
       messageCount: digest.messageCount,
       lastSeq: digest.lastSeq,
-      readSeq: digest.readSeq,
+      readSeq,
     });
+    if (unappliedRead !== undefined) this.resendRead(digest.id, unappliedRead);
     store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
     if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
@@ -655,7 +735,7 @@ export class KrakiWSClient {
     opts: { attachments?: import('@kraki/protocol').Attachment[]; delivery?: 'prompt' | 'steer'; answerTo?: string } = {},
   ): string {
     const clientId = outbox.send(sessionId, text, opts);
-    getStore().setSessionPreview(sessionId, { text: text.slice(0, 80), type: 'user', timestamp: new Date().toISOString() });
+    getStore().setSessionPreview(sessionId, { text: sliceGraphemes(text, 80), type: 'user', timestamp: new Date().toISOString() });
     return clientId;
   }
 
@@ -701,15 +781,16 @@ export class KrakiWSClient {
     outbox.resendUnconfirmed((sessionId) => getStore().sessions.get(sessionId)?.deviceId === greeting.deviceId);
   }
 
-  /** Tell a Tentacle this app reassembles fragments. Needed again after the
-   *  Tentacle reconnects: it forgets apps' features on every auth. */
+  /** Tell a Tentacle this app reassembles fragments and understands
+   *  `question_withdrawn`. Needed again after the Tentacle reconnects: it
+   *  forgets apps' features on every auth. */
   private declareClientFeatures(tentacleId: string) {
     this.sendEncrypted({
       type: 'client_features',
       deviceId: getStore().deviceId ?? '',
       seq: 0,
       timestamp: new Date().toISOString(),
-      payload: { features: [PAYLOAD_FRAGMENT_FEATURE], targetDeviceId: tentacleId },
+      payload: { features: [PAYLOAD_FRAGMENT_FEATURE, QUESTION_WITHDRAWN_FEATURE], targetDeviceId: tentacleId },
     });
   }
 
@@ -951,11 +1032,19 @@ export class KrakiWSClient {
         sessionId,
         payload: { seq: resolvedSeq },
       });
+      noteSentRead(sessionId, resolvedSeq);
     }
+  }
+
+  /** A read the Tentacle's list did not include yet: send it once more (not
+   *  tracked again, so a later list is authoritative). */
+  private resendRead(sessionId: string, seq: number): void {
+    this.sendEncrypted({ type: 'mark_read', sessionId, payload: { seq } });
   }
 
   markUnread(sessionId: string): void {
     suppressAutoRead(sessionId);
+    forgetSentRead(sessionId);
     const store = getStore();
     const session = store.sessions.get(sessionId);
     const lastSeq = session?.lastSeq ?? 0;
@@ -983,11 +1072,32 @@ export class KrakiWSClient {
   renameDevice(deviceId: string, name: string): void {
     this.sendToHead({ type: 'rename_device', deviceId, name });
   }
-  registerPushToken(payload: { provider: string; token: string }): void {
-    this.sendToHead({ type: 'register_push_token', payload });
+  /** Answered by `push_token_registered`, by the relay's refusal
+   *  (`server_error`), or `unconfirmed` (see `PushRegistrationResult`). */
+  registerPushToken(payload: { provider: string; token: string }): Promise<PushRegistrationResult> {
+    this.settlePushRegistration('unconfirmed');
+    // Offline, the send would queue and land after Settings gave up on it.
+    if (getStore().status !== 'connected') return Promise.resolve('unconfirmed');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settlePushRegistration('unconfirmed'), PUSH_REGISTRATION_TIMEOUT_MS);
+      this.pushRegistration = { provider: payload.provider, resolve, timer };
+      this.sendToHead({ type: 'register_push_token', payload });
+    });
   }
-  unregisterPushToken(payload: { provider: string }): void {
-    this.sendToHead({ type: 'unregister_push_token', payload });
+  private settlePushRegistration(result: PushRegistrationResult): boolean {
+    const pending = this.pushRegistration;
+    if (!pending) return false;
+    this.pushRegistration = null;
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+    return true;
+  }
+  /** `connectionScoped`: only on the current connection, never resent on a
+   *  later one (sign-out: the next connection may be another account). */
+  unregisterPushToken(payload: { provider: string }, opts?: { connectionScoped?: boolean }): void {
+    const msg = { type: 'unregister_push_token', payload };
+    if (opts?.connectionScoped) this.pulse.send(JSON.stringify(msg), HEAD_PULSE_TARGET, false, { connectionScoped: true });
+    else this.sendToHead(msg);
   }
 
   /**
@@ -1001,7 +1111,18 @@ export class KrakiWSClient {
 
   private applySessionList(msg: SessionListMessage): void {
     const store = getStore();
-    const tentacleSessions = msg.payload?.sessions ?? [];
+    const listed: unknown = msg.payload?.sessions;
+    // A malformed list must not empty the sidebar (K-093): without an array
+    // there is nothing authoritative to apply, and an entry without an id
+    // cannot prove that a session is gone.
+    if (!Array.isArray(listed) || typeof msg.deviceId !== 'string') {
+      logger.warn('Ignoring malformed session_list', { deviceId: msg.deviceId });
+      return;
+    }
+    const tentacleSessions = listed.filter((s): s is SessionListMessage['payload']['sessions'][number] =>
+      !!s && typeof s === 'object' && typeof (s as { id?: unknown }).id === 'string' && (s as { id: string }).id !== '');
+    const complete = tentacleSessions.length === listed.length;
+    if (!complete) logger.warn('session_list has malformed entries', { dropped: listed.length - tentacleSessions.length });
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
@@ -1015,7 +1136,7 @@ export class KrakiWSClient {
     }
 
     // Remove local sessions from this tentacle that are no longer in the list
-    for (const [sid, session] of store.sessions) {
+    for (const [sid, session] of complete ? store.sessions : []) {
       if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
         diag.replies.missedEnd(sid);
         store.removeSession(sid);
@@ -1029,13 +1150,19 @@ export class KrakiWSClient {
 
     // Update session metadata and trigger initial loads
     const pinnedFromTentacle = new Set<string>();
+    const unappliedReads: Array<[string, number]> = [];
     for (const ts of tentacleSessions) {
+      // The closing digest is here: the row can show the reply now (K-098).
+      store.setTurnClosing(ts.id, false);
       const currentStore = getStore();
       const previousSession = currentStore.sessions.get(ts.id);
       const device = currentStore.devices.get(tentacleDeviceId);
-      if (previousSession && ts.readSeq < (previousSession.readSeq ?? 0)) {
+      const unappliedRead = takeUnappliedRead(ts.id, ts.readSeq);
+      const readSeq = unappliedRead === undefined ? ts.readSeq : Math.min(unappliedRead, ts.lastSeq);
+      if (unappliedRead !== undefined) unappliedReads.push([ts.id, unappliedRead]);
+      if (previousSession && readSeq < (previousSession.readSeq ?? 0)) {
         suppressAutoRead(ts.id);
-      } else if (previousSession && ts.readSeq > (previousSession.readSeq ?? 0)) {
+      } else if (previousSession && readSeq > (previousSession.readSeq ?? 0)) {
         allowAutoRead(ts.id);
       }
       store.upsertSession({
@@ -1051,7 +1178,7 @@ export class KrakiWSClient {
         state: ts.state as SessionState,
         messageCount: ts.messageCount,
         lastSeq: ts.lastSeq,
-        readSeq: ts.readSeq,
+        readSeq,
       });
 
       if (ts.mode) {
@@ -1078,8 +1205,9 @@ export class KrakiWSClient {
         store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
 
-      // Sync pin state from tentacle
-      if (ts.pinned) {
+      // Sync pin state from tentacle; a list sent before this app's latest pin
+      // request was applied must not undo it (K-207).
+      if (commands.pendingPin(ts.id) ?? ts.pinned) {
         pinnedFromTentacle.add(ts.id);
       }
 
@@ -1117,6 +1245,9 @@ export class KrakiWSClient {
       currentPinned.add(sid);
     }
     store.setPinnedSessions(currentPinned);
+    store.markSessionListReceived(tentacleDeviceId);
+
+    for (const [sessionId, seq] of unappliedReads) this.resendRead(sessionId, seq);
 
     this.subscription.onSessionList(tentacleDeviceId);
 
@@ -1268,8 +1399,26 @@ export class KrakiWSClient {
       return;
     }
 
+    const epoch = this.connectionEpoch;
+    const keysReady = await ensureDeviceKeys(this.encryption.keyStore);
+    // The socket this was for closed while the keys were being created. The
+    // next socket authenticates on its own open; sending here as well put a
+    // second auth on it ("Unknown message type: auth") and spent the token twice.
+    if (epoch !== this.connectionEpoch) return;
+    if (!keysReady) {
+      // A signed-in device keeps its identity through a passing key-store
+      // failure: drop this socket and let the transport back off and retry.
+      if (this.transport.storedDeviceId && browserCanKeepKeys()) {
+        getStore().setLastError(t('settings:auth.reconnecting'));
+        this.transport.retryLater('keys_unavailable');
+        return;
+      }
+      this.refuseWithoutDeviceKeys();
+      return;
+    }
+
     const usedToken = await sendAuth(
-      (msg) => this.transport.sendRaw(msg),
+      (msg) => { if (epoch === this.connectionEpoch) this.transport.sendRaw(msg); },
       this.encryption.keyStore,
       this.transport.pairingToken,
       this.transport.storedDeviceId,
@@ -1279,6 +1428,9 @@ export class KrakiWSClient {
         redirectUri: this.transport.redirectUri,
       },
     );
+    // A socket that closed while sendAuth awaited the keys dropped the frame:
+    // keep the token and code for the next socket's auth.
+    if (epoch !== this.connectionEpoch) return;
     if (usedToken) {
       this.transport.pairingToken = undefined;
     }
@@ -1287,6 +1439,19 @@ export class KrakiWSClient {
       this.transport.codeVerifier = undefined;
       this.transport.redirectUri = undefined;
     }
+  }
+
+  /** The browser cannot keep encryption keys (plain-http self-host, blocked
+   *  IndexedDB). Pairing anyway half-paired silently and signed out on every
+   *  reload: stop, keep the pairing code unspent, and say why. */
+  private refuseWithoutDeviceKeys(): void {
+    this.transport.githubCode = undefined;
+    this.transport.codeVerifier = undefined;
+    this.transport.redirectUri = undefined;
+    this.disconnect();
+    const store = getStore();
+    store.setLastError(t('app:errors.keysUnavailable'));
+    store.setStatus('awaiting_login');
   }
 
   /** Legacy non-Pulse envelopes have only the live domain. Keep their pre-auth
@@ -1378,6 +1543,12 @@ export class KrakiWSClient {
         this.startPulseTick();
         this.foregroundActivity.start();
         if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
+        // A browser tab notifies only through Web Push. While the user is not
+        // looking at the tab, the Head must push to it although it is
+        // connected (K-032).
+        this.headTakesAppVisibility = !desktop && msg.features?.includes('app_visibility') === true;
+        this.reportedVisible = true;
+        this.reportAppVisibility(true);
         this.attachmentPulls.resume();
         this.localLink?.start();
         this.localLink?.poke();
@@ -1405,6 +1576,7 @@ export class KrakiWSClient {
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
+          reconnectLater: () => { this.endConnection(); this.transport.retryLater(); },
           redirectToRelay: (url: string) => { this.endConnectionScope(); this.transport.redirectToRelay(url); },
           currentRelay: this.transport.url,
         });
@@ -1445,13 +1617,21 @@ export class KrakiWSClient {
         const serverErr = msg as ServerErrorMessage;
         // A server error while a deletion is pending is its answer.
         const del = useAccountDeletion.getState();
-        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || t('app:errors.deleteAccount') });
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message ? serverErrorText(serverErr.message) : t('app:errors.deleteAccount') });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
           this.cmdState.clearRequest(ref);
         }
-        getStore().setLastError(serverErr.message);
+        // A refused push token is answered in Settings, in the user's language.
+        if (!ref && /^Invalid push token/.test(serverErr.message ?? '') && this.settlePushRegistration('refused')) break;
+        getStore().setLastError(serverErrorText(serverErr.message));
+        break;
+      }
+
+      case 'push_token_registered': {
+        const registered = msg as { payload?: { provider?: string } };
+        if (this.pushRegistration?.provider === registered.payload?.provider) this.settlePushRegistration('registered');
         break;
       }
 

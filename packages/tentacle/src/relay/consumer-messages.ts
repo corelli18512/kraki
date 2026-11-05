@@ -8,13 +8,22 @@ import { isSafeId } from '../session-manager.js';
 import { getKrakiHome } from '../config.js';
 import { RelayClient } from '../relay-client.js';
 import { handleRefreshAccountUsage, handleRequestUsageHistory } from './account-usage.js';
-import { handleRequestAttachment } from './attachments.js';
+import { handleRequestAttachment, unicastAttachmentError } from './attachments.js';
 import { handleRequestCard, handleSessionMessages, handleSessionMessagesRange, handleSessionReplay, handleSetSessionSubscription, handleTurnTrace } from './history.js';
 import { clearOpenQuestions, deliverQuestionAnswer, resolvePermission, soleOpenQuestion } from './questions.js';
 import { deleteSessionEverywhere, handleCreateSession, handleDeleteArchivedSessions, handleForkSession, handleImportSession, handleRequestArchivedSessions, handleRequestLocalSessions, handleSetAutoArchiveDays, unarchiveOnUse } from './session-commands.js';
 import { ensureSessionResumed, sendToAdapter } from './session-resume.js';
 import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, settleAdapterIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
 import { logger, traceLog, describeFailure } from './shared.js';
+
+/** How long the agent may leave a Stop unanswered before a repeated Stop
+ *  closes the turn without it. A quick double tap still waits. */
+const ABORT_UNANSWERED_MS = 5_000;
+/** How long a Stop may stay unanswered before the turn is closed without
+ *  it. The apps keep Stop disabled until the session goes idle, so a hung
+ *  abort must end here. Above the slowest adapter abort (Codex
+ *  turn/interrupt, 15 s). */
+export const ABORT_HUNG_MS = 20_000;
 
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   // Field types first (see @kraki/protocol/schemas): handlers below trust them,
@@ -26,6 +35,19 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   }
   const msg = checked.message;
   noteAppAlive(client, msg.deviceId);
+  // set_session_subscription — atomically replace this Arm's one current
+  // session and return the bounded live-ready snapshot in the ACK. Handled
+  // before the unsafe-id drop below: an id no session has (unsafe ones
+  // included) must still be answered (session_not_found), or the app waits
+  // for an ACK forever. Its id is only compared, never used as a path.
+  if (msg.type === 'set_session_subscription') {
+    if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) unarchiveOnUse(client, msg.payload.sessionId);
+    const rid = (msg.payload as { requestId?: unknown }).requestId;
+    const requestId = typeof rid === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(rid) ? rid : undefined;
+    handleSetSessionSubscription(client, msg.deviceId, msg.payload.sessionId, requestId);
+    return;
+  }
+
   // Session/attachment ids become filesystem paths. Reject anything that is
   // not one of our id shapes before it reaches a handler.
   const p = (msg as { payload?: Record<string, unknown> }).payload ?? {};
@@ -33,6 +55,12 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     msg.type === 'request_attachment' ? p.id : undefined];
   if (ids.some((id) => id !== undefined && id !== null && id !== '' && !isSafeId(id))) {
     logger.warn({ type: msg.type, deviceId: msg.deviceId }, 'Dropped consumer message with an unsafe id');
+    // An attachment fetch waits for its answer: say there is no such
+    // attachment (the ids are only echoed back, never used as a path).
+    const requesterKey = msg.type === 'request_attachment' ? client.consumerKeys.get(msg.deviceId) : undefined;
+    if (msg.type === 'request_attachment' && requesterKey) {
+      unicastAttachmentError(client, msg.deviceId, requesterKey, msg.payload.sessionId, msg.payload.id, 'not_found');
+    }
     return;
   }
   if (msg.type === 'client_features') {
@@ -70,16 +98,6 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   // the concluding bubble's spine seq.
   if (msg.type === 'request_turn_trace') {
     handleTurnTrace(client, msg.deviceId, msg.payload.sessionId, msg.payload.bubbleSeq);
-    return;
-  }
-
-  // set_session_subscription — atomically replace this Arm's one current
-  // session and return the bounded live-ready snapshot in the ACK.
-  if (msg.type === 'set_session_subscription') {
-    if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) unarchiveOnUse(client, msg.payload.sessionId);
-    const rid = (msg.payload as { requestId?: unknown }).requestId;
-    const requestId = typeof rid === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(rid) ? rid : undefined;
-    handleSetSessionSubscription(client, msg.deviceId, msg.payload.sessionId, requestId);
     return;
   }
 
@@ -338,6 +356,10 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         const deliver = async () => {
           if (persistAtDispatch) persistInput();
           const idle = waitForTurnIdle(client, sessionId);
+          client.openingPromptTurns.set(sessionId, reservation.turnId);
+          const opened = () => {
+            if (client.openingPromptTurns.get(sessionId) === reservation.turnId) client.openingPromptTurns.delete(sessionId);
+          };
           try {
             const dispatch = dispatchInput(client, sessionId, async () => {
               await ensureSessionResumed(client, sessionId);
@@ -382,6 +404,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // idle. Explicit abort is the inverse: idle is authoritative even
             // if a preflight prompt RPC never ACKs, so release the input chain
             // without waiting for that stale transport Promise.
+            dispatch.then(opened, opened);
             const firstBoundary = await Promise.race([
               dispatch.then(() => 'accepted' as const),
               idle.then(() => 'idle' as const),
@@ -399,11 +422,27 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'send input failed');
             const message = describeFailure('Failed to deliver message', err);
+            const turnId = reservation.turnId;
+            // The prompt never reached the agent (it could not be started or
+            // reopened) but its user_message already opened a turn on the
+            // spine. Nothing else will close that turn: without a failed
+            // outcome and idle the apps showed the prompt hanging forever.
+            const neverReachedAgent = persistedSeq !== undefined
+              && client.activeInputTurnIds.get(sessionId) !== turnId
+              && client.sessionManager.getMeta(sessionId)?.lastSeq === persistedSeq;
             client.send({ type: 'error', sessionId, payload: { message } });
+            if (neverReachedAgent) {
+              finishTurnWithStatus(client, sessionId, {
+                type: 'failed',
+                payload: { message, failedAt: new Date().toISOString() },
+              });
+              sendTurnIdle(client, sessionId, { reason: 'failed' }, { failure: message });
+              client.broadcastSessionList();
+              return;
+            }
             // The adapter refused the prompt after this turn was announced
             // active (e.g. Codex turn/start rejected a retired model). No
             // provider idle will follow: close the turn as failed here.
-            const turnId = reservation.turnId;
             if (client.activeInputTurnIds.get(sessionId) === turnId
               && client.settledAdapterTurnIds.get(sessionId) !== turnId
               && client.sessionManager.getMeta(sessionId)?.state === 'active') {
@@ -445,40 +484,64 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         // must never settle the successor.
         const turnId = client.activeInputTurnIds.get(sessionId);
         const abortKey = turnId ?? '';
-        if (client.abortsInFlight.get(sessionId) === abortKey) break;
-        client.abortsInFlight.set(sessionId, abortKey);
+        const pendingAbort = client.abortsInFlight.get(sessionId);
+        if (pendingAbort?.turnKey === abortKey) {
+          // A second Stop joins the first. When the agent has left the first
+          // unanswered for a while, the user asking again closes the turn
+          // here; late agent events for it are fenced as settled.
+          if (Date.now() - pendingAbort.startedAt >= ABORT_UNANSWERED_MS) pendingAbort.settle();
+          break;
+        }
         const snapshot = client.card.state(sessionId);
+        // A turn still running without any output yet is stopped too: without
+        // a row the chat would show only the prompt.
+        const turnRunning = !!turnId
+          && client.settledAdapterTurnIds.get(sessionId) !== turnId
+          && client.sessionManager.getMeta(sessionId)?.state === 'active'
+          && !client.turnHasOutcome.has(sessionId);
+        let abortSettled = false;
+        const settleAbort = () => {
+          if (abortSettled) return;
+          abortSettled = true;
+          if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
+          // An open question is visible state too: record the abort so
+          // the conversation shows "User aborted" after it.
+          const stillRunning = turnRunning && client.settledAdapterTurnIds.get(sessionId) !== turnId;
+          if (snapshot.draft || snapshot.action || stillRunning || client.openQuestions.has(sessionId)) {
+            finishTurnWithStatus(client, sessionId, {
+              type: 'user_abort',
+              payload: { abortedAt: new Date().toISOString() },
+            });
+          } else {
+            clearOpenQuestions(client, sessionId);
+            client.card.clear(sessionId);
+          }
+          client.pendingTerminalErrors.delete(sessionId);
+          client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
+          if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
+          resolveTurnIdle(client, sessionId);
+          client.sessionManager.markIdle(sessionId);
+          clearCompacting(client, sessionId);
+          // The user stopped this turn themselves: no turn-end push.
+          sendTurnIdle(client, sessionId, { reason: 'aborted' }, null);
+          // Turn boundary changed (aborted outcome). See settleAdapterIdle.
+          client.broadcastSessionList();
+        };
+        client.abortsInFlight.set(sessionId, { turnKey: abortKey, startedAt: Date.now(), settle: settleAbort });
+        const hungAbortTimer = setTimeout(() => {
+          logger.warn({ sessionId, turnId }, 'abortSession unanswered; closing the turn without it');
+          settleAbort();
+        }, ABORT_HUNG_MS);
+        hungAbortTimer.unref?.();
         client.adapter.abortSession(sessionId)
-          .then(() => {
-            if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
-            // An open question is visible state too: record the abort so
-            // the conversation shows "User aborted" after it.
-            if (snapshot.draft || snapshot.action || client.openQuestions.has(sessionId)) {
-              finishTurnWithStatus(client, sessionId, {
-                type: 'user_abort',
-                payload: { abortedAt: new Date().toISOString() },
-              });
-            } else {
-              clearOpenQuestions(client, sessionId);
-              client.card.clear(sessionId);
-            }
-            client.pendingTerminalErrors.delete(sessionId);
-            client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
-            if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
-            resolveTurnIdle(client, sessionId);
-            client.sessionManager.markIdle(sessionId);
-            clearCompacting(client, sessionId);
-            // The user stopped this turn themselves: no turn-end push.
-            sendTurnIdle(client, sessionId, { reason: 'aborted' }, null);
-            // Turn boundary changed (aborted outcome). See settleAdapterIdle.
-            client.broadcastSessionList();
-          })
+          .then(settleAbort)
           .catch((err) => {
             logger.error({ err, sessionId }, 'abortSession failed');
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
           })
           .finally(() => {
-            if (client.abortsInFlight.get(sessionId) === abortKey) client.abortsInFlight.delete(sessionId);
+            clearTimeout(hungAbortTimer);
+            if (client.abortsInFlight.get(sessionId)?.settle === settleAbort) client.abortsInFlight.delete(sessionId);
           });
         break;
       }
@@ -563,6 +626,13 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => {
             if (previousModel) {
               client.sessionManager.setModel(sessionId, previousModel, previousReasoningEffort);
+              // Apps switch their picker optimistically (K-010): restate the
+              // model the agent is still running so every app reverts.
+              client.send({
+                type: 'session_model_set',
+                sessionId,
+                payload: { model: previousModel, reasoningEffort: previousReasoningEffort },
+              });
             }
             logger.error({ err, sessionId }, 'setSessionModel failed');
             client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to change model', err) } });
@@ -584,6 +654,39 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     }
   } catch (err) {
     logger.error({ err, sessionId, type: msg.type }, 'handleConsumerMessage failed');
+    if (msg.type === 'send_input') {
+      releaseUnstoredInput(client, sessionId, msg.payload.clientId as string | undefined);
+      reportInputNotAccepted(client, sessionId, err);
+    }
+  }
+}
+
+/** An input whose user_message was never stored stays `pending` in the
+ *  ledger: forget that this process admitted it, so the app's resend with the
+ *  same clientId is a fresh attempt, not a duplicate that is only re-echoed
+ *  (K-122). A stored one keeps its admission (at-most-once). */
+function releaseUnstoredInput(client: RelayClient, sessionId: string, clientId: string | undefined): void {
+  if (!clientId) return;
+  const entry = client.sessionManager.getInputLedgerEntry(sessionId, clientId);
+  if (entry && entry.status !== 'pending') return;
+  client.admittedInputs.delete(`${sessionId}\u0000${clientId}`);
+}
+
+/** The app's message could not be taken (a write failed, e.g. the disk is
+ *  full): say so in the chat rather than letting it vanish (K-122). When the
+ *  disk is full the error row cannot be stored either; send it live then. */
+function reportInputNotAccepted(client: RelayClient, sessionId: string, err: unknown): void {
+  const message = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOSPC'
+    ? 'Kraki on this computer could not save your message because its disk is full. Free some space, then send it again.'
+    : 'Kraki on this computer could not take your message. Send it again; if it keeps failing, check `kraki logs` on that computer.';
+  try {
+    client.send({ type: 'error', sessionId, payload: { message } });
+  } catch {
+    try {
+      client.send({ type: 'error', sessionId, payload: { message } }, false, { persist: false });
+    } catch (sendErr) {
+      logger.warn({ err: sendErr, sessionId }, 'could not report the failed input to the app');
+    }
   }
 }
 
