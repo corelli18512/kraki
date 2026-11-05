@@ -108,3 +108,35 @@ it('Enter or Escape that confirms an IME candidate in the title neither saves no
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(commands.renameSession).toHaveBeenCalledWith(session.id, '新标题');
 });
+
+// K-101: Safari's default Tab order skips buttons, so focus can sit on a
+// control that is not the last one when Tab should wrap. The sheet moves focus
+// itself on every Tab instead of only at the ends.
+it('keeps Tab inside the sheet from any control, as Safari skips buttons (K-101)', () => {
+  open();
+  const model = screen.getByRole('combobox', { name: 'Model' });
+  model.focus();
+  const panel = model.closest('.ksi-panel') as HTMLElement;
+  const notPrevented = fireEvent.keyDown(model, { key: 'Tab' });
+  expect(notPrevented).toBe(false);
+  expect(panel.contains(document.activeElement)).toBe(true);
+  expect(document.activeElement).not.toBe(model);
+  const done = screen.getByRole('button', { name: 'Done' });
+  done.focus();
+  expect(fireEvent.keyDown(done, { key: 'Tab', shiftKey: true })).toBe(false);
+  expect(panel.contains(document.activeElement)).toBe(true);
+  expect(document.activeElement).not.toBe(done);
+  // Focus that escaped to the page comes back on the next Tab.
+  document.body.focus();
+  expect(fireEvent.keyDown(panel, { key: 'Tab' })).toBe(false);
+  expect(document.activeElement).toBe(done);
+});
+
+// K-208: Rename… opens Session Info with the title already in edit mode.
+it('opens straight into title editing for Rename… (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, title: 'Old title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement;
+  expect(input).toHaveFocus();
+  expect(input.value).toBe('Old title');
+  expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+});

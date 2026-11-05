@@ -59,7 +59,7 @@ describe('SessionRow Mac sidebar', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual(['Pin', 'Mark Unread', 'Rename…', 'Fork', 'Archive', 'Delete…']);
     expect(within(menu).getByRole('separator')).toBeInTheDocument();
     fireEvent.click(within(menu).getByText('Rename…'));
-    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=1');
+    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=rename');
   });
   it('archives and deselects the selected session', () => {
     const archive = vi.spyOn(wsClient, 'archiveSession').mockImplementation(() => {});

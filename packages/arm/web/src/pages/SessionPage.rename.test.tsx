@@ -143,3 +143,18 @@ it.each(['notification', 'link'])('notification-only/from=%s preserves unrelated
   expect(window.location.hash).toBe('#anchor');
   expect(screen.getByTestId('router-location')).toHaveTextContent(window.location.pathname + window.location.search + window.location.hash);
 });
+
+// K-208: Rename… opens Session Info with the title field focused for editing;
+// tapping the title opens it without editing.
+it('Rename opens the title in edit mode; the header title opens Session Info without editing (K-208)', () => {
+  mount();
+  rename('A');
+  const dialog = screen.getByRole('dialog', { name: 'Session Info' });
+  const input = within(dialog).getByRole('textbox', { name: 'Session title' }) as HTMLInputElement;
+  expect(input).toHaveFocus();
+  expect(input.value).toBe('Session A');
+  close();
+  fireEvent.click(screen.getByRole('button', { name: 'Session A' }));
+  expect(within(screen.getByRole('dialog', { name: 'Session Info' })).queryByRole('textbox', { name: 'Session title' })).not.toBeInTheDocument();
+  close();
+});

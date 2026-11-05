@@ -31,20 +31,25 @@ interface Props {
   models?: string[];
   modelDetails?: ModelDetail[];
   onClose: () => void;
+  /** Rename…: open with the title already being edited. */
+  startEditingTitle?: boolean;
 }
-export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
+/** Every control Tab can reach inside the sheet, in document order. */
+const TABBABLE = 'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])';
+export function SessionInfoPanel({ session, usage, models, modelDetails, onClose, startEditingTitle = false }: Props) {
   const { t } = useTranslation('devices');
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    rootRef.current?.querySelector('button')?.focus();
+    // Rename… focuses the title field (autoFocus) instead of Done.
+    if (!startEditingTitle) rootRef.current?.querySelector('button')?.focus();
     return () => previous?.focus();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const device = useStore((s) => s.devices.get(session.deviceId));
   const version = useStore((s) => s.deviceVersions.get(session.deviceId));
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
+  const [editing, setEditing] = useState(startEditingTitle);
+  const [titleDraft, setTitleDraft] = useState(() => (startEditingTitle ? session.title ?? session.autoTitle ?? '' : ''));
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -73,19 +78,18 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       className="ksi-panel"
       ref={rootRef}
       onKeyDown={(e) => {
+        // Move focus on every Tab, not only at the ends: Safari's default Tab
+        // order skips buttons, so the last control is never focused there and
+        // focus would leave the sheet (and Esc with it).
         if (e.key !== 'Tab') return;
-        const controls = [
-          ...e.currentTarget.querySelectorAll<HTMLElement>(
-            'button:not(:disabled),input:not(:disabled),select:not(:disabled)',
-          ),
-        ];
-        if (e.shiftKey && document.activeElement === controls[0]) {
-          e.preventDefault();
-          controls.at(-1)?.focus();
-        } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
-          e.preventDefault();
-          controls[0]?.focus();
-        }
+        const controls = [...e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el.tabIndex >= 0);
+        if (controls.length === 0) return;
+        e.preventDefault();
+        const index = controls.indexOf(document.activeElement as HTMLElement);
+        const next = e.shiftKey
+          ? (index <= 0 ? controls.length - 1 : index - 1)
+          : (index === -1 || index === controls.length - 1 ? 0 : index + 1);
+        controls[next].focus();
       }}
     >
       <div className="ksi-header">
