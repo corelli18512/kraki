@@ -121,6 +121,7 @@
       "leaseTimeout": "语音授权请求超时。",
       "noMicrophone": "没有可用的麦克风。请连接麦克风后重试。",
       "permission": "需要麦克风访问权限。请在系统隐私设置中允许 Kraki 访问。",
+      "permissionBrowser": "麦克风访问被阻止。请在浏览器的网站设置中允许此网站使用麦克风，然后重试。",
       "unavailable": "此地区暂不支持语音输入。",
       "offline": "无法连接 Kraki。请检查网络连接后重试。",
       "invalidAddress": "语音服务地址无效。",

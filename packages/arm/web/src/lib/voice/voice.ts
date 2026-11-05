@@ -20,6 +20,7 @@ import { TARGET_RATE, loudness, toPcm16 } from './pcm';
 import { applyOps, cleanWord, wordLine } from './words';
 import type { VoiceContext } from './context';
 import { diag } from '../diag';
+import { desktop } from '../desktop';
 import { VoiceTracker } from '../diag/experience';
 
 class VoiceFailure extends Error {
@@ -50,6 +51,8 @@ export type VoiceFinish = 'send' | 'edit';
 export interface StagedVoice {
   update: (text: string, rawText: string) => void;
   complete: (text: string, rawText: string, completed: boolean) => void;
+  /** False once the user resolved the bubble (Send Original, Edit, Delete). */
+  open?: () => boolean;
 }
 export type StageVoice = (rawText: string) => StagedVoice | null;
 
@@ -163,7 +166,7 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
     const name = (e as DOMException).name;
     const denied = name === 'NotAllowedError' || name === 'SecurityError';
     throw new VoiceFailure(denied
-      ? t('settings:voice.errors.permission')
+      ? t(desktop ? 'settings:voice.errors.permission' : 'settings:voice.errors.permissionBrowser')
       : t('settings:voice.errors.noMicrophone'), denied ? 'permission' : 'mic_unavailable');
   }
   const ctx = new AudioContext();
@@ -195,6 +198,15 @@ interface Recording {
 let rec: Recording | null = null;
 
 function fail(message: string, cause = VoiceTracker.classify(message)) {
+  if (rec?.staged?.open && !rec.staged.open()) {
+    // The user already resolved the staged bubble: the late recognition
+    // failure concerns nothing on screen any more.
+    diag.voices.outcome('cancelled', false);
+    diag.voices.stateChanged('idle');
+    cleanup();
+    useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], error: null, owner: null, startedAt: null });
+    return;
+  }
   diag.voices.cause(cause);
   diag.voices.stateChanged('failed');
   rec?.staged?.complete(rec.rawText, rec.rawText, false);
@@ -248,7 +260,9 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   const send = (m: Record<string, unknown>) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
   const flush = () => { if (!r.ready) return; for (const p of r.pending) ws.send(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); r.pending = []; if (r.finishMode && !r.finishSent) sendFinish(); };
   const sendFinish = () => { r.finishSent = true; send({ type: 'finish', recordingId }); };
-  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail(t('settings:voice.errors.unreachable'), 'timeout'); }, 12_000);
+  // The microphone opens (and shows Listening…) before the gateway is ready;
+  // a gateway that never gets there must not leave it listening forever.
+  r.timer = setTimeout(() => { if (rec === r && !r.ready) fail(t('settings:voice.errors.unreachable'), 'timeout'); }, 12_000);
 
   ws.onmessage = (ev) => {
     if (rec !== r || typeof ev.data !== 'string') return;
