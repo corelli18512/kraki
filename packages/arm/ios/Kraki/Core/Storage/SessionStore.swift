@@ -247,7 +247,11 @@ final class SessionStore {
     var sessionModes: [String: SessionMode] = [:]
     var sessionUsage: [String: SessionUsage] = [:]
     var sessionPreviews: [String: SessionPreview] = [:]
-    var drafts: [String: String] = [:]
+    /// Unsent composer text per Session. Saved to disk (`drafts.json`) so it
+    /// survives the app being killed or quit.
+    var drafts: [String: String] = [:] {
+        didSet { if drafts != oldValue { scheduleDraftsSave() } }
+    }
     /// Fences async voice updates, including edit-then-restore-to-the-same-text.
     private(set) var draftRevisions: [String: UInt64] = [:]
     /// The image staged in a Session's composer, kept beside its draft so it
@@ -331,10 +335,22 @@ final class SessionStore {
         KrakiDataPaths.persistentDirectory()
             .appendingPathComponent("sessions.json", isDirectory: false)
     }()
+    private static let draftsURL: URL = {
+        KrakiDataPaths.persistentDirectory()
+            .appendingPathComponent("drafts.json", isDirectory: false)
+    }()
+    /// Drafts change on every keystroke: written at most this often, and on
+    /// every `flushCache` (background, terminate).
+    private static let draftsSaveDebounce: TimeInterval = 1.0
+    private var draftsSaveTask: DispatchWorkItem?
 
     init(persistenceEnabled: Bool = true) {
         self.persistenceEnabled = persistenceEnabled
         guard persistenceEnabled else { return }
+        if let data = try? Data(contentsOf: Self.draftsURL),
+           let saved = try? JSONDecoder().decode([String: String].self, from: data) {
+            drafts = saved
+        }
         let path = Self.snapshotURL.path
         guard FileManager.default.fileExists(atPath: path) else {
             KLog.d("📂 [snapshot] init: no file at \(path) — starting empty")
@@ -399,6 +415,7 @@ final class SessionStore {
     /// fires.
     func flushCache() {
         guard persistenceEnabled else { return }
+        if draftsSaveTask != nil { flushDrafts() }
         saveTask?.cancel()
         saveTask = nil
         guard let snapshot = pendingSnapshot else { return }
@@ -421,6 +438,24 @@ final class SessionStore {
         }
     }
 
+    private func scheduleDraftsSave() {
+        guard persistenceEnabled else { return }
+        draftsSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.flushDrafts() }
+        draftsSaveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.draftsSaveDebounce, execute: task)
+    }
+
+    private func flushDrafts() {
+        draftsSaveTask?.cancel()
+        draftsSaveTask = nil
+        if drafts.isEmpty {
+            try? FileManager.default.removeItem(at: Self.draftsURL)
+        } else if let data = try? JSONEncoder().encode(drafts) {
+            try? data.write(to: Self.draftsURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
     /// Wipe the persisted snapshot file (called by logout / reset).
     /// In-memory state is untouched; callers usually clear it
     /// separately.
@@ -431,6 +466,9 @@ final class SessionStore {
         pendingSnapshot = nil
         lastFlushedHash = nil
         try? FileManager.default.removeItem(at: Self.snapshotURL)
+        draftsSaveTask?.cancel()
+        draftsSaveTask = nil
+        try? FileManager.default.removeItem(at: Self.draftsURL)
         KLog.d("📂 [snapshot] clearPersistentSnapshot: file removed")
     }
 
