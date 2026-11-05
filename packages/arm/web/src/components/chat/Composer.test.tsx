@@ -447,6 +447,8 @@ describe('Composer — the staged image survives a reload (K-202)', () => {
 });
 
 describe('Composer — dropping an image (K-120)', () => {
+  // A dropped image is staged per Session in sessionStorage (web-chat-composer-a).
+  beforeEach(() => { sessionStorage.clear(); });
   function stubImageDecoding() {
     const OriginalImage = window.Image;
     class FakeImage { width = 10; height = 10; onload: (() => void) | null = null; set src(_v: string) { setTimeout(() => this.onload?.(), 0); } }
