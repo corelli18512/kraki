@@ -179,6 +179,26 @@ describe('useStore', () => {
       expect(useStore.getState().devices.has('dev-2')).toBe(true);
     });
 
+    it('removeDevice forgets the removed computer\'s sessions and unread count (K-317)', () => {
+      useStore.getState().setDevices([mockDevice, mockDevice2]);
+      useStore.getState().upsertSession({ ...mockSession, lastSeq: 3, readSeq: 1 });
+      useStore.getState().upsertSession(mockSession2);
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      useStore.getState().removeDevice('dev-1');
+      expect(useStore.getState().sessions.has('sess-1')).toBe(false);
+      expect(useStore.getState().unreadCount.has('sess-1')).toBe(false);
+      expect(useStore.getState().sessions.has('sess-2')).toBe(true);
+    });
+
+    it('setDevices forgets sessions of a known computer missing from the list (K-317)', () => {
+      useStore.getState().setDevices([mockDevice, mockDevice2]);
+      useStore.getState().upsertSession(mockSession);
+      useStore.getState().upsertSession(mockSession2);
+      useStore.getState().setDevices([mockDevice2]);
+      expect(useStore.getState().sessions.has('sess-1')).toBe(false);
+      expect(useStore.getState().sessions.has('sess-2')).toBe(true);
+    });
+
     it('renameDevice renames the device and relabels its sessions', () => {
       useStore.getState().setDevices([mockDevice, mockDevice2]);
       useStore.getState().upsertSession({ id: 's1', deviceId: 'dev-1', deviceName: mockDevice.name, agent: 'copilot', state: 'idle', messageCount: 0 });

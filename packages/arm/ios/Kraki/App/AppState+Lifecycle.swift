@@ -375,7 +375,11 @@ extension AppState {
         // challenge reconnect and leaves session_list/history requests stuck.
         pulseManager?.onConnected()
 
+        // A computer removed from the account while this app was away: the
+        // relay's list no longer has it, so its cached sessions go too (K-317).
+        let removedDeviceIds = Set(deviceStore.devices.keys).subtracting(devices.map(\.id))
         deviceStore.setDevices(devices)
+        for id in removedDeviceIds { forgetSessions(onDevice: id) }
         // A device renamed while this app was away: its sessions follow.
         for device in devices { sessionStore.relabelSessions(deviceId: device.id, deviceName: device.name) }
         // Pair with computers pinned from a QR code or from this Mac.
@@ -399,6 +403,17 @@ extension AppState {
         #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
         Task { @MainActor in PerformanceNotice.shared.authenticated() }
         #endif
+    }
+
+    /// A device removed from the account takes its sessions with it: list,
+    /// unread badge and this app's cached history (K-317). The sessions stay
+    /// on the computer itself and come back if it signs in again.
+    func forgetSessions(onDevice deviceId: String) {
+        let ids = sessionStore.sessions.values.filter { $0.deviceId == deviceId }.map(\.id)
+        for id in ids {
+            sessionStore.removeSession(id)
+            messageStore.deleteSessionMessages(id)
+        }
     }
 
     func onAuthFailed(error: String) {

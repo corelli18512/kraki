@@ -130,6 +130,42 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertFalse(sender.removeDevice(deviceId: "t"))
     }
 
+    /// K-317: a removed computer's sessions leave the list (and the unread
+    /// badge) live, and do not come back from the saved session list.
+    func testDeviceRemovedForgetsItsSessions() throws {
+        app.deviceStore.setDevices([
+            DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: false),
+            DeviceSummary(id: "o", name: "other", role: .tentacle, online: true),
+        ])
+        var unread = session("s1", on: "t", named: "corelli-mbp")
+        unread.lastSeq = 3
+        app.sessionStore.sessions = ["s1": unread, "s2": session("s2", on: "o", named: "other")]
+        XCTAssertEqual(app.sessionStore.unreadSessionIDs, ["s1"])
+
+        app.messageRouter?.handleRawMessage(try json(["type": "device_removed", "deviceId": "t"]))
+
+        XCTAssertNil(app.deviceStore.devices["t"])
+        XCTAssertNil(app.sessionStore.sessions["s1"])
+        XCTAssertNotNil(app.sessionStore.sessions["s2"])
+        XCTAssertTrue(app.sessionStore.unreadSessionIDs.isEmpty)
+    }
+
+    /// K-317: removed while this app was away. The relay's device list at
+    /// sign-in no longer has the computer, so its cached sessions go.
+    func testSignInForgetsSessionsOfADeviceNoLongerOnTheAccount() throws {
+        app.deviceStore.setDevices([
+            DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: false),
+            DeviceSummary(id: "o", name: "other", role: .tentacle, online: true),
+        ])
+        app.sessionStore.sessions = ["s1": session("s1", on: "t", named: "corelli-mbp"),
+                                     "s2": session("s2", on: "o", named: "other")]
+        app.onAuthenticated(deviceId: "me", user: nil,
+                            devices: [DeviceSummary(id: "o", name: "other", role: .tentacle, online: true)],
+                            githubClientId: nil, relayVersion: nil)
+        XCTAssertNil(app.sessionStore.sessions["s1"])
+        XCTAssertNotNil(app.sessionStore.sessions["s2"])
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")
