@@ -17,7 +17,7 @@ import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
-import { allowAutoRead, isAutoReadSuppressed, suppressAutoRead } from './read-visibility';
+import { allowAutoRead, forgetSentRead, isAutoReadSuppressed, noteSentRead, suppressAutoRead, takeUnappliedRead } from './read-visibility';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { OrderedCrypto } from './ordered-crypto';
@@ -471,9 +471,11 @@ export class KrakiWSClient {
     const store = getStore();
     const device = store.devices.get(msg.deviceId);
     const previousReadSeq = store.sessions.get(digest.id)?.readSeq;
-    if (previousReadSeq !== undefined && digest.readSeq < previousReadSeq && digest.readSeq < digest.lastSeq) {
+    const unappliedRead = takeUnappliedRead(digest.id, digest.readSeq);
+    const readSeq = unappliedRead === undefined ? digest.readSeq : Math.min(unappliedRead, digest.lastSeq);
+    if (previousReadSeq !== undefined && readSeq < previousReadSeq && readSeq < digest.lastSeq) {
       suppressAutoRead(digest.id);
-    } else if (digest.readSeq >= digest.lastSeq) {
+    } else if (readSeq >= digest.lastSeq) {
       allowAutoRead(digest.id);
     }
     store.upsertSession({
@@ -489,8 +491,9 @@ export class KrakiWSClient {
       state: digest.state,
       messageCount: digest.messageCount,
       lastSeq: digest.lastSeq,
-      readSeq: digest.readSeq,
+      readSeq,
     });
+    if (unappliedRead !== undefined) this.resendRead(digest.id, unappliedRead);
     store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
     if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
@@ -1028,11 +1031,19 @@ export class KrakiWSClient {
         sessionId,
         payload: { seq: resolvedSeq },
       });
+      noteSentRead(sessionId, resolvedSeq);
     }
+  }
+
+  /** A read the Tentacle's list did not include yet: send it once more (not
+   *  tracked again, so a later list is authoritative). */
+  private resendRead(sessionId: string, seq: number): void {
+    this.sendEncrypted({ type: 'mark_read', sessionId, payload: { seq } });
   }
 
   markUnread(sessionId: string): void {
     suppressAutoRead(sessionId);
+    forgetSentRead(sessionId);
     const store = getStore();
     const session = store.sessions.get(sessionId);
     const lastSeq = session?.lastSeq ?? 0;
@@ -1138,13 +1149,17 @@ export class KrakiWSClient {
 
     // Update session metadata and trigger initial loads
     const pinnedFromTentacle = new Set<string>();
+    const unappliedReads: Array<[string, number]> = [];
     for (const ts of tentacleSessions) {
       const currentStore = getStore();
       const previousSession = currentStore.sessions.get(ts.id);
       const device = currentStore.devices.get(tentacleDeviceId);
-      if (previousSession && ts.readSeq < (previousSession.readSeq ?? 0)) {
+      const unappliedRead = takeUnappliedRead(ts.id, ts.readSeq);
+      const readSeq = unappliedRead === undefined ? ts.readSeq : Math.min(unappliedRead, ts.lastSeq);
+      if (unappliedRead !== undefined) unappliedReads.push([ts.id, unappliedRead]);
+      if (previousSession && readSeq < (previousSession.readSeq ?? 0)) {
         suppressAutoRead(ts.id);
-      } else if (previousSession && ts.readSeq > (previousSession.readSeq ?? 0)) {
+      } else if (previousSession && readSeq > (previousSession.readSeq ?? 0)) {
         allowAutoRead(ts.id);
       }
       store.upsertSession({
@@ -1160,7 +1175,7 @@ export class KrakiWSClient {
         state: ts.state as SessionState,
         messageCount: ts.messageCount,
         lastSeq: ts.lastSeq,
-        readSeq: ts.readSeq,
+        readSeq,
       });
 
       if (ts.mode) {
@@ -1226,6 +1241,8 @@ export class KrakiWSClient {
       currentPinned.add(sid);
     }
     store.setPinnedSessions(currentPinned);
+
+    for (const [sessionId, seq] of unappliedReads) this.resendRead(sessionId, seq);
 
     this.subscription.onSessionList(tentacleDeviceId);
 

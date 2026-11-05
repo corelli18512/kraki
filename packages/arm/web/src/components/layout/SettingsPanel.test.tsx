@@ -289,3 +289,59 @@ describe('K-199: the Dogfood section is localized', () => {
     }
   });
 });
+
+// K-104: phones have no app menu and no F6, so the narrow Settings (inline)
+// is the way to Account Usage, and its footer does not point at the sidebar.
+describe('Account Usage on narrow layouts (K-104)', () => {
+  it('inline Settings opens Account Usage and does not point at the sidebar', async () => {
+    const { OPEN_USAGE_EVENT } = await import('../usage/UsagePanel');
+    const opened = vi.fn();
+    window.addEventListener(OPEN_USAGE_EVENT, opened);
+    try {
+      render(<SettingsPanel open inline onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Show Account Usage' }));
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('“Account Usage” in the sidebar', { exact: false })).not.toBeInTheDocument();
+    } finally { window.removeEventListener(OPEN_USAGE_EVENT, opened); }
+  });
+  it('the wide Settings window keeps the sidebar entry wording and no extra button', () => {
+    open();
+    expect(screen.queryByRole('button', { name: 'Show Account Usage' })).not.toBeInTheDocument();
+    expect(screen.getByText('“Account Usage” in the sidebar', { exact: false })).toBeInTheDocument();
+  });
+});
+
+// K-212: the web Settings window is a modal dialog for assistive technology
+// and the keyboard: aria-modal, focus moves in on open and back on close.
+describe('Settings window modality on the web (K-212)', () => {
+  it('is aria-modal, focuses the selected tab and returns focus on close', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    try {
+      const view = render(<SettingsPanel open onClose={vi.fn()} />);
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveAttribute('aria-modal', 'true');
+      expect(screen.getByRole('tab', { name: 'General' })).toHaveFocus();
+      view.rerender(<SettingsPanel open={false} onClose={vi.fn()} />);
+      expect(opener).toHaveFocus();
+    } finally { opener.remove(); }
+  });
+  // Safari's default Tab order skips buttons, so focus can be on a control
+  // that is not the last one when Tab should wrap (same as K-101).
+  it('moves focus itself on every Tab, so Safari cannot leave the window', () => {
+    render(<SettingsPanel open onClose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    const tab = screen.getByRole('tab', { name: 'General' });
+    expect(fireEvent.keyDown(tab, { key: 'Tab' })).toBe(false);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(tab);
+    const next = document.activeElement as HTMLElement;
+    expect(fireEvent.keyDown(next, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(tab);
+  });
+  it('inline (narrow) Settings is not modal and does not take focus', () => {
+    render(<SettingsPanel open inline onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog')).not.toHaveAttribute('aria-modal');
+    expect(screen.getByRole('tab', { name: 'General' })).not.toHaveFocus();
+  });
+});

@@ -1,12 +1,19 @@
-import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { i18next } from '../../i18n';
 import { MemoryRouter } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { Sidebar } from './Sidebar';
 
+const viewport = vi.hoisted(() => ({ narrow: false }));
+vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
+const connection = vi.hoisted(() => ({ reconnecting: false }));
+vi.mock('../../hooks/useShowsReconnecting', () => ({ useShowsReconnecting: () => connection.reconnecting }));
+
 beforeEach(() => {
   useStore.getState().reset();
+  viewport.narrow = false;
+  connection.reconnecting = false;
 });
 
 afterEach(async () => { await act(async () => { await i18next.changeLanguage('en'); }); });
@@ -110,6 +117,41 @@ describe('Sidebar native search and ordering', () => {
     expect(screen.queryByText('Other model')).toBeNull();
     expect(screen.queryByTestId('sidebar-no-results')).toBeNull();
   });
+  // K-210: diacritics are ignored (as iOS/Mac localizedStandardContains) and
+  // an open IME composition does not filter on its raw pinyin.
+  it('ignores accents and case both ways (K-210)', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'cafe', title: 'Café menu' },
+      { ...base, id: 'resume', title: 'Resume parser' },
+      { ...base, id: 'other', title: 'Other' },
+    ]);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const search = screen.getByLabelText('Search sessions');
+    fireEvent.change(search, { target: { value: 'cafe' } });
+    expect(screen.getByText('Café menu')).toBeInTheDocument();
+    expect(screen.queryByText('Other')).toBeNull();
+    fireEvent.change(search, { target: { value: 'RÉSUMÉ' } });
+    expect(screen.getByText('Resume parser')).toBeInTheDocument();
+    expect(screen.queryByText('Café menu')).toBeNull();
+  });
+  it('does not filter while an IME composition is open; the committed text filters (K-210)', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'zh', title: '测试会话' },
+      { ...base, id: 'other', title: 'Other' },
+    ]);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const search = screen.getByLabelText('Search sessions') as HTMLInputElement;
+    fireEvent.compositionStart(search);
+    fireEvent.change(search, { target: { value: 'ceshi' } });
+    expect(search.value).toBe('ceshi');
+    expect(screen.getByText('测试会话')).toBeInTheDocument();
+    expect(screen.getByText('Other')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-no-results')).toBeNull();
+    fireEvent.change(search, { target: { value: '测试' } });
+    fireEvent.compositionEnd(search);
+    expect(screen.getByText('测试会话')).toBeInTheDocument();
+    expect(screen.queryByText('Other')).toBeNull();
+  });
   it('sorts new/restored empty rows using creation when preview is absent, empty or invalid', () => {
     useStore.getState().setSessions([
       { ...base, id: 'old', title: 'Old conversation', createdAt: '2026-06-01T00:00:00Z' },
@@ -140,5 +182,55 @@ describe('Sidebar native search and ordering', () => {
     useStore.getState().setPinnedSessions(new Set(['pinned']));
     const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
+  });
+});
+
+// K-212: the "+" and app menus work from the keyboard.
+describe('Sidebar menus from the keyboard (K-212)', () => {
+  it('opens the + menu with Shift+F10, focuses its first item and returns focus on Escape', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const plus = screen.getByTestId('sidebar-new-session');
+    plus.focus();
+    fireEvent.keyDown(plus, { key: 'F10', shiftKey: true });
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Import Session…' })).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(plus).toHaveFocus();
+  });
+  it('moves focus into the app menu when it opens', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    fireEvent.click(screen.getByLabelText('App menu'));
+    expect(screen.getByRole('menuitem', { name: 'Devices' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Devices' }), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Account Usage' })).toHaveFocus();
+  });
+  it('announces the connecting status in a live region that stays mounted', () => {
+    useStore.getState().setStatus('connected');
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('');
+    act(() => { useStore.getState().setStatus('connecting'); });
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status).toHaveTextContent('Connecting…');
+  });
+  it('narrow: the reconnecting spinner is announced through a live region that stays mounted', () => {
+    viewport.narrow = true;
+    const view = render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('');
+    connection.reconnecting = true;
+    view.rerender(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status).toHaveTextContent('Connecting');
+    expect(document.querySelector('.ksb-hero .kspinner')).toHaveAttribute('aria-hidden');
+  });
+  it('the + button starts a session, so it does not claim to open a menu', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const plus = screen.getByTestId('sidebar-new-session');
+    expect(plus).not.toHaveAttribute('aria-haspopup');
+    expect(plus).toHaveAttribute('aria-keyshortcuts', 'Shift+F10');
   });
 });

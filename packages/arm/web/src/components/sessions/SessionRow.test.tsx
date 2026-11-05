@@ -59,7 +59,7 @@ describe('SessionRow Mac sidebar', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual(['Pin', 'Mark Unread', 'Rename…', 'Fork', 'Archive', 'Delete…']);
     expect(within(menu).getByRole('separator')).toBeInTheDocument();
     fireEvent.click(within(menu).getByText('Rename…'));
-    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=1');
+    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=rename');
   });
   it('archives and deselects the selected session', () => {
     const archive = vi.spyOn(wsClient, 'archiveSession').mockImplementation(() => {});
@@ -94,5 +94,39 @@ describe('SessionRow Mac sidebar', () => {
     const { container } = row();
     expect(container.querySelector('.ksr-line3.is-draft')).toHaveTextContent('unsent draft');
     expect(container.querySelector('.ksr-status-slot')).toBeInTheDocument();
+  });
+});
+
+// K-212: the row menu opens from the keyboard (Menu key / Shift+F10), focus
+// moves into it, arrows move between items and Escape returns to the row; the
+// row has one spoken name with its unread state.
+describe('SessionRow keyboard and screen reader (K-212)', () => {
+  it('opens its menu from the keyboard and returns focus on Escape', () => {
+    row();
+    const button = screen.getByRole('button', { name: /Sidebar test/ });
+    button.focus();
+    fireEvent.keyDown(button, { key: 'F10', shiftKey: true });
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(items[1], { key: 'ArrowUp' });
+    fireEvent.keyDown(items[0], { key: 'ArrowUp' });
+    expect(items.at(-1)).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+    fireEvent.keyDown(button, { key: 'ContextMenu' });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+  it('names the row with its parts separated and says it is unread', () => {
+    useStore.setState({ unreadCount: new Map([['s', 2]]) });
+    useStore.getState().setSessionPreview('s', { text: 'Done, tests pass', type: 'agent', timestamp: session.createdAt! });
+    row();
+    const button = screen.getByRole('button', { name: /^Sidebar test, Unread, Last message from agent, Local Mac, Done, tests pass/ });
+    // The row opens the session, not a menu; the menu is Shift+F10.
+    expect(button).not.toHaveAttribute('aria-haspopup');
+    expect(button).toHaveAttribute('aria-keyshortcuts', 'Shift+F10');
+    expect(screen.getByRole('img', { name: 'Unread' })).toBeInTheDocument();
   });
 });

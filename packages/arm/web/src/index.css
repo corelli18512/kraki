@@ -275,6 +275,18 @@ body {
   animation: fade-up 1s ease-out 1.6s forwards;
 }
 
+/* Reduced motion: the welcome logo and its text appear at once. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-logo-reveal, .animate-fade-up, .animate-fade-up-d2, .animate-fade-up-d3 { animation: none; opacity: 1; }
+}
+
+/* Forced colours (Windows high contrast) replace backgrounds, which erased the
+ * status dots (unread, online/offline): keep their own colours. */
+@media (forced-colors: active) {
+  .ksr-unread, .ksr-devdot, .ns-dot, .ksi-online-dot, .kp-offline-dot,
+  span.rounded-full.h-2.w-2, span.rounded-full.h-1\.5.w-1\.5, i.rounded-full.h-1\.5.w-1\.5 { forced-color-adjust: none; }
+}
+
 @keyframes slide-in-right {
   from { opacity: 0; transform: translateX(1rem); }
   to   { opacity: 1; transform: translateX(0); }

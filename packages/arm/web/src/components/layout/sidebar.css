@@ -111,7 +111,8 @@
   text-align: left;
   cursor: pointer;
 }
-.ksb-plus-menu button:hover, .ksr-menu button:hover { background: var(--s-fill, rgba(0,0,0,.06)); }
+.ksb-plus-menu button:hover, .ksr-menu button:hover,
+.ksb-plus-menu button:focus-visible, .ksr-menu button:focus-visible { background: var(--s-fill, rgba(0,0,0,.06)); outline: none; }
 .ksb-plus-menu svg, .ksr-menu svg { width: 14px; height: 14px; }
 .ksr-menu .is-destructive { color: #ef4444; }
 

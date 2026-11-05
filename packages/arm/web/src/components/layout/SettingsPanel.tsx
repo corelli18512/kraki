@@ -24,6 +24,7 @@ import { version } from '../../../package.json';
 import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
+import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { DeviceNameEditor } from '../devices/DeviceNameEditor';
 import { signOut } from './ProfileBar';
@@ -33,6 +34,7 @@ import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
 import { deviceLastOnline } from '../../lib/device-last-online';
 import { copyText } from '../../lib/clipboard';
+import { cycleTabFocus } from '../../lib/focus-trap';
 import {
   notificationsEnabled as readNotificationsEnabled,
   setNotificationsEnabled as saveNotificationsEnabled,
@@ -109,8 +111,10 @@ export function SettingsPanel({
   const isWindows = desktop?.platform === 'win32';
   const windowRef = useRef<HTMLDivElement>(null);
 
+  // The Settings window is modal (web and Windows): focus moves in, Tab stays
+  // in, and focus goes back to where it was on close.
   useEffect(() => {
-    if (!open || inline || !isWindows) return;
+    if (!open || inline) return;
     const previous = document.activeElement as HTMLElement | null;
     const panel = windowRef.current;
     panel?.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')?.focus();
@@ -118,24 +122,14 @@ export function SettingsPanel({
       // Foreground confirmation/agent sheets own their keyboard handling.
       if (event.key !== 'Tab' || event.defaultPrevented ||
         (event.target instanceof Element && event.target.closest('[role=dialog], [role=alertdialog]') !== panel)) return;
-      const controls = [...(panel?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? [])]
-        .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], fieldset:disabled'));
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
+      if (panel) cycleTabFocus(panel, event);
     };
     window.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('keydown', key);
       previous?.focus();
     };
-  }, [open, inline, isWindows]);
+  }, [open, inline]);
 
   useEffect(() => {
     if (!open) return;
@@ -303,6 +297,14 @@ export function SettingsPanel({
       </SettingsSection>
       <LanguageSettingsRow />
       <SettingsSection title={t('general.accountUsage')}>
+        {/* Narrow layouts (phones) have no app menu and no F6: open it here. */}
+        {inline && (
+          <SettingsRow label={t('general.accountUsage')}>
+            <button type="button" className="kp-button" onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))}>
+              {t('general.showUsage')}
+            </button>
+          </SettingsRow>
+        )}
         <SettingsRow label={t('general.holdUsage', { shortcut: shortcut.shortcut })}>
           <SettingsSwitch
             label={t('general.peekUsage')}
@@ -338,7 +340,7 @@ export function SettingsPanel({
           </button>
         </SettingsRow>
         <p className="kp-foot">
-          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : 'general.shortcutFooterSidebar')}
+          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : inline ? 'general.shortcutFooterInline' : 'general.shortcutFooterSidebar')}
         </p>
       </SettingsSection>
       {state.archiveInfo.size > 0 && <section className="kp-section">
@@ -588,7 +590,7 @@ export function SettingsPanel({
         ref={windowRef}
         className={`${inline ? 'kp-inline' : 'kp-window'}${isWindows ? ' kp-windows' : ''}`}
         role="dialog"
-        aria-modal={isWindows && !inline ? true : undefined}
+        aria-modal={inline ? undefined : true}
         aria-label={t('title')}
         data-testid="settings-window"
       >

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { unreadLanding } from '../../lib/chat/unread-entry';
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode,
@@ -90,6 +91,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   { rows, renderRow, topInset, bottomInset, overlayReach = 0, header, onAtBottomChange, onNearTop, onUserInteraction, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
   ref: React.Ref<ChatScrollerHandle>,
 ) {
+  const { t } = useTranslation('chat');
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -506,7 +508,9 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   }));
 
   return (
-    <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}>
+    // Focusable so the keyboard can scroll it (WebKit cannot focus a plain scroller).
+    <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}
+      tabIndex={0} role="region" aria-label={t('history.conversation')}>
       <div className="kchat-scroll-content" style={{ paddingTop: topInset, paddingBottom: bottomInset }}>
         {header}
         <div ref={content} className="kchat-scroll-rows">

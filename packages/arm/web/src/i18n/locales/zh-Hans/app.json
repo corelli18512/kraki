@@ -37,6 +37,7 @@
     "tryAgain": "重试",
     "connectFirst": "请先连接 Kraki。账户需要在服务器上删除。",
     "noAnswer": "Kraki 没有响应。请检查连接后重试。",
+    "requestTimedOut": "电脑没有及时响应。如果会话没有出现，请重试。",
     "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
     "deleteAccount": "无法删除账户。请重试。",
     "permissionSend": "无法发送。请重试。",

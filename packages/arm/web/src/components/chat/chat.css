@@ -952,6 +952,9 @@
   display: flex;
   min-height: 48px;
   flex: 1;
+  /* Shrink below the textarea's intrinsic width: at 320 px the Send button
+   * otherwise ends up off-screen. */
+  min-width: 0;
   align-items: flex-end;
   border: 0.5px solid var(--k-border);
   border-radius: 24px;

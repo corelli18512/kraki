@@ -59,13 +59,13 @@ struct DeviceDetailView: View {
     }
 
     private var statusLabel: String {
-        if device.online, let m = models, !m.isEmpty { return String(localized: "Online") }
+        if appState.deviceStore.isOnlineAndGreeted(device.id) { return String(localized: "Online") }
         if device.online { return String(localized: "Connecting…") }
         return String(localized: "Offline")
     }
 
     private var statusColor: Color {
-        if device.online, let m = models, !m.isEmpty { return .green }
+        if appState.deviceStore.isOnlineAndGreeted(device.id) { return .green }
         if device.online { return .orange }
         return .gray
     }
@@ -91,6 +91,8 @@ struct DeviceDetailView: View {
                 infoRow(String(localized: "Status"), value: statusLabel, valueColor: statusColor)
                 if !agentNames.isEmpty {
                     infoRow(String(localized: "Coding agents"), value: agentNames)
+                } else if appState.deviceStore.agentAvailability(for: device.id) == .noAgents {
+                    infoRow(String(localized: "Coding agents"), value: String(localized: "None installed"))
                 }
                 if DeviceDates.parse(device.createdAt) != nil {
                     infoRow(String(localized: "Added"), value: formatDate(device.createdAt))
