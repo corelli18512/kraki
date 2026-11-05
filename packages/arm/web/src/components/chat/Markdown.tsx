@@ -103,6 +103,13 @@ export function useThrottledValue<T>(value: T, ms: number): T {
   return shown;
 }
 
+/** A fence still arriving (one or two backticks or tildes alone on the last
+ *  line) is not shown: remend leaves it as text, so "``" flashed in the draft
+ *  until the third backtick opened the block (K-223). */
+export function withoutPartialFence(text: string): string {
+  return text.replace(/(^|\n) {0,3}(`{1,2}|~{1,2})$/, '$1');
+}
+
 /**
  * A streaming draft: `remend` closes unterminated markers so partial text
  * never flashes raw syntax, and the re-parse is throttled so a fast token
@@ -110,7 +117,7 @@ export function useThrottledValue<T>(value: T, ms: number): T {
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }) {
   const shown = useThrottledValue(text, STREAMING_RENDER_MS);
-  const repaired = useMemo(() => remend(shown), [shown]);
+  const repaired = useMemo(() => remend(withoutPartialFence(shown)), [shown]);
   return <Markdown text={repaired} />;
 });
 

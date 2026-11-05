@@ -101,6 +101,9 @@ const initialState = {
 
 // --- Persistence ---
 
+/** The localStorage key of the persisted store. */
+const STORE_KEY = 'kraki-store';
+
 type PersistedStore = Pick<Store, 'sessions' | 'devices' | 'unreadCount' | 'pinnedSessions' | 'sessionModes' | 'sessionPreviews' | 'drafts'>;
 
 let persistedSessionsSource: Store['sessions'] | undefined;
@@ -132,6 +135,33 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
   return next;
 }
 
+/** Set while drafts from another tab's write are applied (adoptStoredDrafts). */
+let adoptingDrafts = false;
+/** Drafts this tab changed since its last write (text, or null when cleared).
+ *  A write lays only these over the stored drafts, so it never carries a stale
+ *  copy of another tab's draft (K-323). */
+const draftEdits = new Map<string, string | null>();
+/** Sign-out replaced every draft: the next write stores this tab's map as is. */
+let draftsReplaced = false;
+
+/** `value` with its drafts merged into the ones already stored under `name`. */
+function withStoredDrafts(storage: PersistStorage<PersistedStore>, name: string, value: StorageValue<PersistedStore>): StorageValue<PersistedStore> {
+  const edits = new Map(draftEdits);
+  const replaced = draftsReplaced;
+  draftEdits.clear();
+  draftsReplaced = false;
+  if (replaced || !value.state.drafts) return value;
+  const stored = storage.getItem(name);
+  const storedDrafts = stored && !(stored instanceof Promise) ? stored.state.drafts : undefined;
+  if (!(storedDrafts instanceof Map)) return value;
+  const drafts = new Map(storedDrafts);
+  for (const [id, text] of edits) {
+    if (text) drafts.set(id, text);
+    else drafts.delete(id);
+  }
+  return { ...value, state: { ...value.state, drafts } };
+}
+
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
@@ -147,7 +177,9 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
     getItem: (name) => storage.getItem(name),
     setItem: (name, value) => {
       if (unchanged(value)) return;
-      storage.setItem(name, value);
+      // Drafts adopted from another tab's write are already stored; echoing
+      // them would put this tab's other slices over that tab's.
+      if (!adoptingDrafts) storage.setItem(name, withStoredDrafts(storage, name, value));
       written = value;
     },
     removeItem: (name) => {
@@ -214,6 +246,7 @@ export const useStore = create<Store>()(persist((set) => ({
     // provider listeners can enqueue more work. No store access occurs during
     // message-provider module initialization (its store adapter is lazy).
     const deletion = beginSessionDeletion(sessionId);
+    draftEdits.set(sessionId, null);
     messageProvider.invalidateSession(sessionId);
     import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId, deletion)).catch((e) => {
       deletion.reject(e);
@@ -521,7 +554,8 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionPreviews: previews };
     }),
 
-  setDraft: (sessionId, text) =>
+  setDraft: (sessionId, text) => {
+    draftEdits.set(sessionId, text || null);
     set((state) => {
       const next = new Map(state.drafts);
       if (text) {
@@ -530,7 +564,8 @@ export const useStore = create<Store>()(persist((set) => ({
         next.delete(sessionId);
       }
       return { drafts: next };
-    }),
+    });
+  },
 
   setLastError: (message) => set({ lastError: message }),
 
@@ -832,7 +867,7 @@ export const useStore = create<Store>()(persist((set) => ({
   }),
 
   // Sign-out / credential wipe: unsent messages belong to the old account.
-  reset: () => (outbox.reset(), set({
+  reset: () => (outbox.reset(), draftsReplaced = true, set({
     ...initialState,
     sessions: new Map(),
     devices: new Map(),
@@ -862,7 +897,7 @@ export const useStore = create<Store>()(persist((set) => ({
     nextReconnectDelayMs: null,
   })),
 }), {
-  name: 'kraki-store',
+  name: STORE_KEY,
   storage: unchangedSkippingStorage(createJSONStorage<PersistedStore>(() => localStorage, {
     replacer,
     reviver,
@@ -883,4 +918,40 @@ export const useStore = create<Store>()(persist((set) => ({
 // browser console or a Playwright probe.
 if (typeof window !== 'undefined' && (import.meta.env.DEV || window.location.hostname === 'localhost')) {
   (window as unknown as { __krakiStore: typeof useStore }).__krakiStore = useStore;
+}
+
+/** Another tab persisted the store: adopt its drafts, so this tab shows (and
+ *  sends) what was typed elsewhere (K-323). The draft of the Session this tab
+ *  is editing (focused) stays as typed: a write that crossed a keystroke must
+ *  not take characters out of the live field. */
+export function adoptStoredDrafts(stored: string | null): void {
+  if (!stored) return;
+  let drafts: unknown;
+  try {
+    drafts = (JSON.parse(stored, reviver) as { state?: { drafts?: unknown } }).state?.drafts;
+  } catch {
+    return;
+  }
+  if (!(drafts instanceof Map)) return;
+  const { drafts: current, activeSessionId } = useStore.getState();
+  const next = new Map(drafts as Map<string, string>);
+  const editing = document.hasFocus() ? activeSessionId : null;
+  if (editing) {
+    const mine = current.get(editing);
+    if (mine === undefined) next.delete(editing);
+    else next.set(editing, mine);
+  }
+  if (current.size === next.size && [...next].every(([id, text]) => current.get(id) === text)) return;
+  adoptingDrafts = true;
+  try {
+    useStore.setState({ drafts: next });
+  } finally {
+    adoptingDrafts = false;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORE_KEY && event.storageArea === localStorage) adoptStoredDrafts(event.newValue);
+  });
 }
