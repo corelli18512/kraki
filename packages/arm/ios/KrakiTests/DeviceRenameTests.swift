@@ -166,6 +166,22 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertNotNil(app.sessionStore.sessions["s2"])
     }
 
+    /// K-189: the rename field is cut at the limit on a character boundary,
+    /// so an emoji at the end is dropped whole rather than split, and what
+    /// remains is always a name Save accepts.
+    func testRenameDraftIsCutAtACharacterBoundary() throws {
+        let family = "👨‍👩‍👧‍👦" // 7 scalars, one character
+        let draft = String(repeating: "x", count: 60) + family
+        let clamped = DeviceName.clampDraft(draft)
+        XCTAssertEqual(clamped, String(repeating: "x", count: 60))
+        XCTAssertNotNil(DeviceName.normalize(clamped))
+        let fits = String(repeating: "x", count: 57) + family
+        XCTAssertEqual(DeviceName.clampDraft(fits), fits)
+        XCTAssertEqual(DeviceName.clampDraft("short"), "short")
+        let laptop = DeviceSummary(id: "t", name: "corelli-mbp", role: .tentacle, online: true)
+        XCTAssertNotNil(DeviceName.renameValue(draft: DeviceName.clampDraft(String(repeating: "é", count: 80)), for: laptop))
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")

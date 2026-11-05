@@ -212,9 +212,8 @@ struct DeviceDetailView: View {
         .alert("Rename Device", isPresented: $showRename) {
             TextField(device.ownName, text: $nameDraft)
                 .onChange(of: nameDraft) { _, value in
-                    if value.unicodeScalars.count > DeviceName.maxLength {
-                        nameDraft = String(String.UnicodeScalarView(value.unicodeScalars.prefix(DeviceName.maxLength)))
-                    }
+                    let clamped = DeviceName.clampDraft(value)
+                    if clamped != value { nameDraft = clamped }
                 }
             Button("Cancel", role: .cancel) {}
             Button("Save") {

@@ -73,6 +73,11 @@ struct DevicesPane: View {
         ) {
             TextField(renaming?.ownName ?? "", text: $nameDraft)
                 .accessibilityIdentifier("prefs.devices.renameField")
+                .onChange(of: nameDraft) { _, value in
+                    // Over the limit Save would do nothing (K-189).
+                    let clamped = DeviceName.clampDraft(value)
+                    if clamped != value { nameDraft = clamped }
+                }
             Button("Cancel", role: .cancel) { renaming = nil }
             Button("Save") {
                 if let device = renaming, let name = DeviceName.renameValue(draft: nameDraft, for: device) {
