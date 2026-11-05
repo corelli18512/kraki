@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // Suppress the unhandled rejection from cli.ts's main().catch() handler.
 // When we mock process.exit as a no-op, Vitest's own interceptor still fires
@@ -66,6 +68,10 @@ vi.mock('../daemon.js', () => ({
   runDaemonReleaseSmoke: (...args: unknown[]) => mockRunDaemonReleaseSmoke(...args),
   stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
   getCliLaunchdJobState: () => mockGetCliLaunchdJobState(),
+  daemonStartRefusal: (status: { detail?: string; pid: number | null }) =>
+    status.detail === 'unverified-pid' ? `Refusing to start: the recorded daemon PID ${status.pid} is alive but could not be verified as Kraki.`
+      : status.detail === 'untracked-launchd-job' ? 'Refusing to start: the launchd job is still loaded but no verified daemon PID is available.'
+        : null,
 }));
 
 const mockGetCliLaunchdJobState = vi.fn();
@@ -307,6 +313,78 @@ describe('CLI stop', () => {
   });
 });
 
+describe('CLI start when something already runs (K-266, K-030)', () => {
+  const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+
+  it('K-266: refuses with the reason instead of "already running (PID 1)" for an unverifiable PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 1, detail: 'unverified-pid' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('could not be verified');
+    expect(out).not.toContain('already running');
+    // On stderr: Kraki for Mac shows stderr when the command fails.
+    expect(vi.mocked(console.error).mock.calls.flat().join('\n')).toContain('could not be verified');
+    expect(process.exitCode).toBe(1);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    process.exitCode = 0;
+  });
+
+  it('K-266: refuses with the reason instead of "(PID null)" for a loaded launchd job without a PID', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('launchd job is still loaded');
+    expect(out).not.toContain('PID null');
+    process.exitCode = 0;
+  });
+
+  it('K-030: says the worker is (re)starting when only its supervisor runs', async () => {
+    mockLoadConfig.mockReturnValue(config);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    await runCli(['start']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('(re)starting');
+    expect(out).toContain('4242');
+    expect(out).not.toContain('PID null');
+  });
+
+  it('K-266: `kraki stop` explains a refusal to stop', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockStopDaemon.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['stop']);
+    const out = consoleOutput.join('\n');
+    expect(out).toContain('Failed to stop.');
+    expect(out).toContain('launchd job is still loaded');
+  });
+});
+
+describe('CLI start after the account was deleted (K-277)', () => {
+  it('shows no connect code when the new daemon signed this computer out', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+    // config.json is there for `kraki start`, then the daemon learns the
+    // account was deleted, removes it and exits.
+    let signedOut = false;
+    mockLoadConfig.mockImplementation(() => (signedOut ? null : config));
+    mockIsDaemonRunning.mockImplementation(() => !signedOut && mockStartDaemon.mock.calls.length === 0 ? false : !signedOut);
+    mockStartDaemon.mockImplementation(async () => { setTimeout(() => { signedOut = true; }, 20); return 1234; });
+
+    await runCli(['start']);
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+    expect(mockShowPairingQr).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('account was deleted');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+});
+
 describe('CLI install mode', () => {
   it('finishes setup without starting a worker or issuing a pairing token', async () => {
     process.env.KRAKI_INSTALL = '1';
@@ -396,6 +474,34 @@ describe('CLI status', () => {
     expect(output).toContain('42');
     expect(output).toContain('relay.test');
     expect(output).toContain('normal');
+  });
+
+  it('K-030: shows a supervisor restarting its worker as restarting, not stopped', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    const output = consoleOutput.join('\n');
+    expect(output).toContain('restarting');
+    expect(output).not.toContain('stopped');
+    await runCli(['status', '--json']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.daemon).toMatchObject({ running: true, detail: 'restarting', supervisorPid: 4242 });
+  });
+
+  it('K-123: says why a running daemon stays offline when another copy took its connection', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fs = await import('node:fs');
+    vi.mocked(fs.existsSync).mockImplementation((p) => String(p).endsWith('status.json'));
+    mkdirSync(process.env.KRAKI_HOME ?? tmpdir(), { recursive: true });
+    const home = mkdtempSync(join(process.env.KRAKI_HOME ?? tmpdir(), 'status-'));
+    mockGetKrakiHome.mockReturnValue(home);
+    writeFileSync(join(home, 'status.json'), JSON.stringify({ relayState: 'disconnected', relayIssue: 'device_replaced' }));
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 42 });
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['status']);
+    expect(consoleOutput.join('\n')).toContain("another Kraki connected with this computer's identity");
+    await runCli(['status', '--json']);
+    expect(JSON.parse(stdoutOutput.join('').trim()).daemon.relayIssue).toBe('device_replaced');
   });
 
   it('shows stopped status when no daemon', async () => {
@@ -632,6 +738,36 @@ describe('CLI config reset', () => {
     mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github', device: { name: 'n' } });
     await runCli(['config', 'reset']);
     expect(mockRunSetup).toHaveBeenCalled();
+  });
+
+  it('K-270: keeps the computer name chosen before instead of renaming it to the hostname', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://old', authMethod: 'github_token', device: { name: "Ada's studio Mac", id: 'dev_1' } });
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: "Ada's studio Mac" } });
+    await runCli(['config', 'reset']);
+    expect(mockRunSetup).toHaveBeenCalledWith({ deviceName: "Ada's studio Mac" });
+  });
+
+  it('K-124: restarts a running `kraki start` daemon so it uses the new config', async () => {
+    const fresh = { relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } };
+    mockLoadConfig.mockReturnValue(fresh);
+    mockRunSetup.mockResolvedValue(fresh);
+    // Running until restarted, then gone: start's wait for the relay
+    // connection (K-277) ends at once instead of polling into later tests.
+    mockIsDaemonRunning.mockImplementation(() => mockStartDaemon.mock.calls.length === 0);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 999_999_999 });
+    mockStopDaemon.mockReturnValue(true);
+    mockStartDaemon.mockResolvedValue(1234);
+    await runCli(['config', 'reset']);
+    expect(mockStopDaemon).toHaveBeenCalled();
+    expect(mockStartDaemon).toHaveBeenCalledWith(fresh);
+  });
+
+  it('leaves a stopped daemon stopped', async () => {
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
+    mockIsDaemonRunning.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    await runCli(['config', 'reset']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
   });
 });
 

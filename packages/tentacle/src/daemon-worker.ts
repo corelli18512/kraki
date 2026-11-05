@@ -50,7 +50,7 @@ import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
-import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
+import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity, updateRelayIssue } from './status-file.js';
 import { appManagedWorkerOwner, isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
 import { beginRun, endRun, noteRunFda, RUN_HEARTBEAT_MS, touchRun } from './run-record.js';
@@ -437,7 +437,11 @@ export async function startWorker(): Promise<WorkerResult> {
     adapter,
     sessionManager,
     {
-      relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
+      // The relay setup saved, always. KRAKI_RELAY_URL is only setup's default
+      // (the user can pick another there); letting it override the saved
+      // relay here connected the daemon to a relay `kraki status` did not
+      // show (K-125).
+      relayUrl: config.relay,
       device: {
         name: config.device.name,
         role: 'tentacle',
@@ -502,8 +506,13 @@ export async function startWorker(): Promise<WorkerResult> {
     if (info.user?.region) {
       updateRegion(info.user.region);
     }
+    updateRelayIssue(null);
     announceUpdateResult();
   };
+
+  // Another daemon with this device id took the connection; this one stays
+  // offline (see RelayClient.deviceReplaced) and `kraki status` says why.
+  relay.onDeviceReplaced = () => updateRelayIssue('device_replaced');
 
   relay.onAccountDeleted = () => {
     logger.warn('The Kraki account was deleted — signing this computer out and stopping');
@@ -598,7 +607,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
-  initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
+  initStatusFile(config.relay, config.device.name);
   const supervisorPid = Number(process.env.KRAKI_SUPERVISED) || undefined;
   updateDaemonIdentity({ managedBy: appManagedWorkerOwner() ?? 'cli', version: getVersion(), pid: process.pid, supervisorPid });
   if (pendingFda) updateFdaStatus(pendingFda);

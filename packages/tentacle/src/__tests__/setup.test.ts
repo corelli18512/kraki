@@ -208,6 +208,13 @@ describe("runSetup — official service (same steps as Kraki for Mac)", () => {
     expect(result.logging).toEqual({ verbosity: 'verbose' });
   });
 
+  it("K-270: names the computer as before after `kraki config reset` deleted the config", async () => {
+    mockOfficialApi();
+    mockExistingConfig = null;
+    const result = await runSetup({ deviceName: "Ada's studio Mac" });
+    expect(result.device.name).toBe("Ada's studio Mac");
+  });
+
   it("falls back to the default relay if the API is unreachable", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error")) as typeof fetch;
     const result = await runSetup();

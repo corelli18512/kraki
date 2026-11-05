@@ -7,8 +7,9 @@ import { homedir } from 'node:os';
 import { existsSync, readdirSync, statSync, renameSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 import { loadConfig, getKrakiHome, getVersion, type KrakiConfig } from '../config.js';
-import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '../daemon.js';
+import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon, daemonStartRefusal, type DaemonStatus } from '../daemon.js';
 import { runSetup } from '../setup.js';
+import { isSafeId } from '../session/text.js';
 import { disableWindowsAutostart } from '../windows-autostart.js';
 import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, ownerName, WINDOWS_APP_OWNER, type ManagedByMarker } from '../managed.js';
 
@@ -144,8 +145,7 @@ export async function cmdDefault(): Promise<void> {
 
   if (config) {
     if (isDaemonRunning()) {
-      const status = getDaemonStatus();
-      console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+      printAlreadyRunning(getDaemonStatus());
       console.log();
 
       const action = await select({
@@ -241,8 +241,14 @@ export async function reconfigure(): Promise<KrakiConfig> {
 /** What deleting the Kraki folder would remove, for the confirmation. */
 export function describeKrakiData(): { sessions: number; bytes: number } {
   const home = getKrakiHome();
+  // Only session folders (a session id with its meta.json); not .DS_Store,
+  // copies or other entries a user or tool left there (K-271).
+  const sessionsDir = join(home, 'sessions');
   let sessions = 0;
-  try { sessions = readdirSync(join(home, 'sessions')).length; } catch { /* none */ }
+  try {
+    sessions = readdirSync(sessionsDir)
+      .filter((name) => isSafeId(name) && existsSync(join(sessionsDir, name, 'meta.json'))).length;
+  } catch { /* none */ }
   let bytes = 0;
   const walk = (dir: string, depth: number) => {
     if (depth > 6) return;
@@ -340,11 +346,30 @@ export async function cmdStart(atLogin = false): Promise<void> {
   // is already running.
   if (isDaemonRunning() && !loadManagedBy()) {
     const status = getDaemonStatus();
-    console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+    printAlreadyRunning(status);
+    if (daemonStartRefusal(status)) process.exitCode = 1;
     return;
   }
 
   await silentStart(config);
+}
+
+/**
+ * Instead of starting: what is already there. Only a verified daemon has a
+ * PID to show; a crash-looping launchd job or an unverifiable PID printed
+ * "(PID null)" / "(PID 1)" where the refusal to start was meant (K-266), and
+ * a supervisor restarting its worker is not a running daemon either (K-030).
+ */
+export function printAlreadyRunning(status: DaemonStatus | undefined): void {
+  const refusal = status ? daemonStartRefusal(status) : null;
+  if (refusal) {
+    console.error(chalk.red(`  ${refusal}`));
+  } else if (status?.detail === 'restarting') {
+    console.log(chalk.yellow(`  🦑 Kraki is running, but its background worker is (re)starting (supervisor PID ${status.supervisorPid}).`));
+    console.log(chalk.dim('  If this lasts, see `kraki logs` for why; `kraki stop` stops it.'));
+  } else {
+    console.log(chalk.green(`  🦑 Kraki is already running (PID ${status?.pid})`));
+  }
 }
 
 // ── Shared start logic ──────────────────────────────────
@@ -369,6 +394,13 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
   }
 
   const pid = await startDaemon(config);
+  if (await waitForDaemonConnection() === 'signed-out') {
+    console.log('');
+    console.log(chalk.yellow('  This computer was signed out: its Kraki account was deleted.'));
+    console.log(chalk.dim('  Run `kraki` to set Kraki up again.'));
+    process.exitCode = 1;
+    return;
+  }
   console.log('');
   console.log(`  ${chalk.green('✔')} ${chalk.bold('Kraki is running')} ${chalk.dim(`in the background (PID ${pid})${process.platform === 'darwin' ? ' and starts again when you log in' : ''}.`)}`);
   console.log('');
@@ -380,6 +412,25 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
 
   console.log(chalk.dim(`  ${chalk.bold('kraki status')} to check on it, ${chalk.bold('kraki agents')} to recheck agents, ${chalk.bold('kraki --help')} for more.`));
   console.log('');
+}
+
+/**
+ * After a start, wait (briefly) for the daemon's first relay connection
+ * before asking the relay for a connect code. A daemon whose account was
+ * deleted signs this computer out on that connection (removes config.json
+ * and its identity) and exits; asking for a code then signed the GitHub user
+ * up again and re-created the identity files the daemon had just removed
+ * (K-277). 'stopped' and 'timeout' keep the old behaviour (show the code).
+ */
+export async function waitForDaemonConnection(timeoutMs = 15_000): Promise<'connected' | 'signed-out' | 'stopped' | 'timeout'> {
+  const { readStatusFile } = await import('../status-file.js');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (readStatusFile()?.relayState === 'connected') return 'connected';
+    if (!isDaemonRunning()) return loadConfig() ? 'stopped' : 'signed-out';
+    if (Date.now() >= deadline) return 'timeout';
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 export function cmdStop(): void {
@@ -400,6 +451,10 @@ export function cmdStop(): void {
     console.log(`  ${chalk.green('✔')} Kraki stopped.`);
   } else {
     console.log(chalk.red('Failed to stop.'));
+    // Say why: Kraki refuses to signal what it cannot identify (K-266).
+    const status = getDaemonStatus();
+    const reason = status ? daemonStartRefusal(status) : null;
+    if (reason) console.log(chalk.dim(`  ${reason.replace(/^Refusing to start: /, '')}`));
   }
 }
 

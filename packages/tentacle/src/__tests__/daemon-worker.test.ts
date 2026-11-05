@@ -397,6 +397,32 @@ describe('daemon-worker: startWorker()', () => {
     );
   });
 
+  it('K-125: connects to the relay saved by setup even when KRAKI_RELAY_URL is set', async () => {
+    const { RelayClient } = await import('../relay-client.js');
+    const prev = process.env.KRAKI_RELAY_URL;
+    process.env.KRAKI_RELAY_URL = 'ws://setup-default.example:4000';
+    try {
+      const { shutdown } = await startWorker();
+      const options = vi.mocked(RelayClient).mock.calls.at(-1)?.[2] as { relayUrl: string };
+      expect(options.relayUrl).toBe('wss://relay.kraki.chat');
+      await shutdown();
+    } finally {
+      if (prev === undefined) delete process.env.KRAKI_RELAY_URL; else process.env.KRAKI_RELAY_URL = prev;
+    }
+  });
+
+  it('K-123: records in status.json why it stays offline after another copy replaced it, until it connects again', async () => {
+    const { readStatusFile } = await import('../status-file.js');
+    const { shutdown } = await startWorker();
+    const relay = mockRelay as unknown as { onDeviceReplaced: (() => void) | null };
+    expect(relay.onDeviceReplaced).toBeTypeOf('function');
+    relay.onDeviceReplaced!();
+    expect(readStatusFile()?.relayIssue).toBe('device_replaced');
+    mockRelay.onAuthenticated!({ deviceId: 'dev_1', devices: [] });
+    expect(readStatusFile()?.relayIssue).toBeUndefined();
+    await shutdown();
+  });
+
   it('reports an unclean previous run at startup', async () => {
     mockRunStart = {
       previous: { pid: 32140, version: '0.38.10', startedAt: '2026-10-16T15:21:50.000Z', lastSeenAt: '2026-10-19T17:22:00.000Z' },
