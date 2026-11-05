@@ -62,6 +62,10 @@ export interface ClientState {
   lastInboundAt?: number;
   /** ws.bufferedAmount when the last ping was queued. */
   bufferedAtPing?: number;
+  /** The send buffer is over MAX_WS_BUFFERED_BYTES: frames are being held
+   *  back (Pulse resends them). `at` is the last time it drained, `bytes` its
+   *  size then. */
+  sendBackpressure?: { at: number; bytes: number };
   /** Declared at auth: this client's Pulse accepts progress heartbeats. */
   pulseProgressAck?: boolean;
   /** An app reported it left the screen but kept its socket for a short
@@ -126,8 +130,12 @@ export const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
 export const CHALLENGE_TTL_MS = 5 * 60_000;
 export const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 export const MAX_MULTICAST_TARGETS = 64;
-/** Send-buffer ceiling per socket before a stalled client is disconnected. */
+/** Send-buffer ceiling per socket. Above it, frames are held back (Pulse
+ *  resends them once the client catches up). */
 export const MAX_WS_BUFFERED_BYTES = 32 * 1024 * 1024;
+/** A client whose full send buffer has not drained at all for this long is
+ *  stalled and is disconnected. */
+export const STALLED_SEND_TIMEOUT_MS = 60_000;
 
 /** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
  *  device_pending detection latency tracks the recipient's ping cadence
