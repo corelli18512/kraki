@@ -150,6 +150,40 @@ describe('a daemon restart while a prompt is queued (2-30)', () => {
   });
 });
 
+describe('a daemon crash after echoing an input, before dispatching it (K-138)', () => {
+  it('closes the input as failed at startup instead of leaving it unanswered', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.sm.markIdle(sessionId);
+    first.input(sessionId, 'A', 'cid-a');
+    // The process dies here: A is on the spine and echoed, the agent never got it.
+    const next = build(new SessionManager(dir));
+    void resumeDisconnectedSessions(next.client);
+
+    const spine = rows(next.sm, sessionId);
+    expect(spine.map((r) => r.type)).toEqual(['user_message', 'turn_status', 'idle']);
+    expect(spine[1].payload.action).toMatchObject({
+      type: 'failed',
+      payload: { code: 'process_lost', message: expect.stringContaining('before this message reached the agent') },
+    });
+    expect(next.sm.getInputLedgerEntry(sessionId, 'cid-a')?.status).toBe('rejected');
+    expect(next.adapter.sendMessage as Fn).not.toHaveBeenCalled();
+  });
+
+  it('leaves an idle session whose last input was answered alone', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.input(sessionId, 'A', 'cid-a');
+    await vi.waitFor(() => expect(first.adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    first.cb('onMessage')(sessionId, { content: 'done' });
+    first.cb('onIdle')(sessionId);
+
+    const next = build(new SessionManager(dir));
+    await resumeDisconnectedSessions(next.client);
+    expect(rows(next.sm, sessionId).map((r) => r.type)).toEqual(['user_message', 'agent_message', 'idle']);
+  });
+});
+
 describe('an answer typed in the composer (2-36)', () => {
   it('stays in the turn that asked: its Steps are not split', async () => {
     const { adapter, sm, cb, input } = build();
