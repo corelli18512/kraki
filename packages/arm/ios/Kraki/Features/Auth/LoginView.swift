@@ -136,14 +136,25 @@ struct LoginView: View {
 
     // MARK: - Action Area & Inline Status
 
-    /// True while the auth/connect handshake is in flight. Drives the
+    /// True while a sign-in the user started is in flight. Drives the
     /// in-place swap of the action area for a status panel.
     private var isConnecting: Bool {
-        if appState.isOAuthInFlight { return true }
-        switch appState.connectionStatus {
-        case .connecting, .authenticating: return true
-        default: return false
-        }
+        Self.showsStatusPanel(oauthInFlight: appState.isOAuthInFlight,
+                              pairingInFlight: appState.pairingInFlightSince != nil,
+                              status: appState.connectionStatus)
+    }
+
+    /// The background connection that only fetches the sign-in options
+    /// (`.connecting` with nothing started) keeps the actions: while the
+    /// relay is unreachable "Scan QR Code" must stay available (K-035).
+    static func showsStatusPanel(oauthInFlight: Bool, pairingInFlight: Bool, status: ConnectionStatus) -> Bool {
+        if oauthInFlight || pairingInFlight { return true }
+        return status == .authenticating
+    }
+
+    /// Still reaching the relay, nothing started: a quiet line above the actions.
+    private var isReachingRelay: Bool {
+        !isConnecting && appState.connectionStatus == .connecting
     }
 
     /// User-facing wording for each in-flight status. Tries to describe
@@ -154,7 +165,7 @@ struct LoginView: View {
         switch appState.connectionStatus {
         case .connecting:     return String(localized: "Connecting to relay…")
         case .authenticating: return String(localized: "Signing you in…")
-        default:              return ""
+        default:              return appState.pairingInFlightSince != nil ? String(localized: "Connecting to relay…") : ""
         }
     }
 
@@ -168,7 +179,7 @@ struct LoginView: View {
         case .authenticating:
             return String(localized: "Verifying your account and pairing this device.")
         default:
-            return ""
+            return appState.pairingInFlightSince != nil ? String(localized: "Establishing a secure channel to your relay.") : ""
         }
     }
 
@@ -176,6 +187,16 @@ struct LoginView: View {
     /// pairing instructions, and Scan QR button.
     @ViewBuilder
     private var actionArea: some View {
+        if isReachingRelay {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Connecting to relay…")
+            }
+            .font(.footnote)
+            .foregroundStyle(Color.secondary.opacity(0.7))
+            .padding(.bottom, 12)
+            .accessibilityIdentifier("login.reaching-relay")
+        }
         if let error = appState.lastError, !error.isEmpty {
             Label(error, systemImage: "exclamationmark.circle")
                 .font(.footnote)
@@ -297,6 +318,12 @@ struct LoginView: View {
                     .foregroundStyle(Color.secondary.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
+            }
+            if appState.pairingInFlightSince != nil {
+                Button("Cancel") { appState.cancelPairing() }
+                    .font(.system(size: 14))
+                    .tint(Color.kraki300)
+                    .accessibilityIdentifier("login.cancel-pairing")
             }
         }
         .transition(.opacity.combined(with: .offset(y: 6)))

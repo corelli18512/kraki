@@ -144,6 +144,7 @@ extension AppState {
         lastError = nil
         reconnectAttempt = 0
         hasCompletedInitialConnect = false
+        pairingInFlightSince = nil
         connectionStatus = .awaitingLogin
         sessionStore.reset()
         deviceStore.reset()
@@ -362,6 +363,7 @@ extension AppState {
         self.connectionStatus = .connected
         self.reconnectAttempt = 0
         self.lastError = nil
+        self.pairingInFlightSince = nil
         // First-time login crosses the line into MainTabView. Mid-
         // session reconnects re-enter this method too, which is fine
         // — setting it to true again is a no-op.
@@ -402,6 +404,7 @@ extension AppState {
     }
 
     func onAuthFailed(error: String) {
+        self.pairingInFlightSince = nil
         self.lastError = error
         self.connectionStatus = .awaitingLogin
     }

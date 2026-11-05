@@ -444,6 +444,12 @@ final class AppState {
     /// A scanned/opened pairing link waiting for the user's decision
     /// (untrusted relay, or this phone is already connected).
     var pendingPairingPrompt: PairingLinkPrompt?
+    /// A pairing code is being signed in with (scanned, pasted or opened as a
+    /// link) and has not been answered yet. Drives the login screen's
+    /// "Connecting…" panel, its Cancel and the pairing timeout (K-035).
+    var pairingInFlightSince: Date?
+    /// Without an answer from the relay for this long, pairing gives up.
+    @ObservationIgnored static var pairingTimeout: TimeInterval = 30
     /// Key-mismatch warnings the user has already dismissed.
     var acknowledgedKeyWarnings: Set<String> = []
 
