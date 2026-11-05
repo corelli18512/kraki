@@ -18,6 +18,7 @@ struct WelcomeView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openURL) private var openURL
     @Environment(\.openWindow) private var openWindow
+    @State private var locateError: String?
 
     var body: some View {
         if let firstTime = startSession {
@@ -155,7 +156,9 @@ struct WelcomeView: View {
             icon: "exclamationmark.triangle.fill",
             iconColor: Color(hex: 0xFBBF24),
             title: String(localized: "Kraki CLI not found"),
-            subtitle: String(localized: "This build of Kraki can't run agents by itself. Install the kraki command-line tool in Terminal, then come back here.")
+            subtitle: tentacleCLI.isBuiltInAvailable
+                ? String(localized: "Kraki is set to run agents with the kraki command-line tool, which is not installed. Install it in Terminal, or choose Kraki (built in) in Settings › This Mac.")
+                : String(localized: "This build of Kraki can't run agents by itself. Install the kraki command-line tool in Terminal, then come back here.")
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -175,7 +178,7 @@ struct WelcomeView: View {
 
                 HStack(spacing: 10) {
                     Button("Locate kraki manually…") {
-                        Task { await locateManually() }
+                        Task { locateError = await tentacleCLI.locateCLIManually() }
                     }
                     Button("Open Documentation") {
                         openURL(URL(string: "https://kraki.chat/docs/install")!)
@@ -190,6 +193,11 @@ struct WelcomeView: View {
                     .font(.caption)
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.textMuted)
+                }
+                if let locateError {
+                    Text(locateError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
         }
@@ -401,20 +409,6 @@ struct WelcomeView: View {
     }
 
     // MARK: - Actions
-
-    private func locateManually() async {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.title = String(localized: "Locate kraki executable")
-        panel.message = String(localized: "Pick the kraki binary in your filesystem.")
-        panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
-        if panel.runModal() == .OK, let url = panel.url {
-            tentacleCLI.setBinaryPathOverride(url.path)
-            await tentacleCLI.refreshInstallState()
-        }
-    }
 
     private func requestPairing() async {
         NotificationCenter.default.post(name: .macOpenPairing, object: nil)

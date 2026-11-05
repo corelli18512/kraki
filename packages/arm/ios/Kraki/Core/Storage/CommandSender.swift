@@ -1169,6 +1169,11 @@ final class CommandSender {
         guard let appState else { return }
         // Optimistic
         appState.sessionStore.setPinned(sessionId, pinned)
+        #if os(macOS)
+        // Pinning moves the row (to the top, or back down among the others):
+        // the sidebar follows it so it stays in view.
+        appState.sessionStore.sessionListRevealId = sessionId
+        #endif
         send(["type": "pin_session", "payload": ["pinned": pinned]], sessionId: sessionId)
     }
 

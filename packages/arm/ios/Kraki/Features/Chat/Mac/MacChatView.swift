@@ -576,7 +576,17 @@ private struct MacSessionInfoSheet: View {
             HStack {
                 Text("Session Info").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") {
+                    // Done and Esc close the sheet without the title field
+                    // losing focus first: save what was typed.
+                    if let title = MacSessionInfoRules.titleToSaveOnClose(
+                        editing: editingTitle, draft: titleDraft, original: titleEditOriginal
+                    ) {
+                        appState.commandSender?.renameSession(sessionId: session.id, title: title)
+                    }
+                    editingTitle = false
+                    dismiss()
+                }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 20)
@@ -636,7 +646,7 @@ private struct MacSessionInfoSheet: View {
                         }
                 } else {
                     Button {
-                        titleDraft = session.title ?? session.autoTitle ?? ""
+                        titleDraft = titleEditOriginal
                         editingTitle = true
                         DispatchQueue.main.async { titleFocused = true }
                     } label: {
@@ -696,21 +706,14 @@ private struct MacSessionInfoSheet: View {
         for model: String,
         preferred: ReasoningEffort?
     ) -> ReasoningEffort? {
-        guard let detail = modelDetails.first(where: { $0.id == model }),
-              detail.supportsReasoningEffort,
-              let efforts = detail.supportedReasoningEfforts,
-              !efforts.isEmpty else { return nil }
-        if let preferred, efforts.contains(preferred) { return preferred }
-        if let defaultEffort = detail.defaultReasoningEffort,
-           efforts.contains(defaultEffort) {
-            return defaultEffort
-        }
-        return efforts.first
+        MacSessionInfoRules.effort(for: model, in: modelDetails, preferred: preferred)
     }
 
     private func applyModel(_ model: String) {
         selectedModel = model
-        let effort = normalizedEffort(for: model, preferred: nil)
+        let effort = MacSessionInfoRules.effortAfterModelChange(
+            to: model, in: modelDetails, current: reasoningEffort
+        )
         reasoningEffort = effort
         appState.commandSender?.setSessionModel(
             sessionId: session.id,
@@ -850,13 +853,17 @@ private struct MacSessionInfoSheet: View {
         }
     }
 
+    /// What the title field starts from.
+    private var titleEditOriginal: String {
+        session.title ?? session.autoTitle ?? ""
+    }
+
     private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let current = (session.title ?? session.autoTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        // Closing Rename… without a change must not turn the automatic title
-        // into a manual one (the Tentacle would stop updating it).
-        if trimmed != current {
-            appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        // Unchanged: no rename, so an auto title does not become a fixed one.
+        if let title = MacSessionInfoRules.titleToSaveOnClose(
+            editing: editingTitle, draft: titleDraft, original: titleEditOriginal
+        ) {
+            appState.commandSender?.renameSession(sessionId: session.id, title: title)
         }
         editingTitle = false
         titleFocused = false

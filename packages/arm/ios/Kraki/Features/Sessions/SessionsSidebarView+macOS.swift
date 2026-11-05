@@ -1,24 +1,8 @@
-/// SessionsSidebarView (macOS) — Mirrors iOS SessionListView 1:1.
+/// SessionsSidebarView (macOS) — the Session list in the main window.
 ///
-/// Layout (top-to-bottom):
-///
-///   ┌──────────────────────────┐
-///   │ ◯ ◯ ◯       ⏳    ◯  +   │  ← window toolbar (real .toolbar
-///   ├──────────────────────────┤    items; filter+plus sit on the
-///   │ [All] device-A device-B  │    same row as the traffic lights)
-///   ├──────────────────────────┤
-///   │ ▸ Session row            │
-///   │ …                        │
-///   ├──────────────────────────┤
-///   │ 👤 corelli   🟢 v0.24  ⚙ │  ← footer
-///   └──────────────────────────┘
-///
-/// Filter contract (mirrors iOS SessionListView):
-///   • Device filter only (no Active/Pinned/Q chips — those were a
-///     mac-specific invention and have been removed).
-///   • Filter button only renders when tentacleDevices.count > 1.
-///   • Filter row toggles open/closed and shows "All" + one pill per
-///     tentacle device, capsule glass background.
+/// The window rail above it (MainWindowView) holds Search and New Session.
+/// There is no device filter row on the Mac: Search matches the computer's
+/// name (SessionStore.filteredSessions), which covers "sessions on device X".
 
 #if os(macOS)
 import AppKit
@@ -28,16 +12,73 @@ import SwiftUI
 /// measuring the list. The hidden probe has no layout cost; its local event
 /// monitor only consumes imprecise mouse-wheel ticks for this list.
 private struct MacSessionSmoothScrollProbe: NSViewRepresentable {
+    let scrollAnchor: MacSidebarScrollAnchor
+
     func makeNSView(context: Context) -> MacSessionSmoothScrollProbeView {
-        MacSessionSmoothScrollProbeView()
+        let view = MacSessionSmoothScrollProbeView()
+        view.scrollAnchor = scrollAnchor
+        return view
     }
 
     func updateNSView(_ nsView: MacSessionSmoothScrollProbeView, context: Context) {
+        nsView.scrollAnchor = scrollAnchor
         nsView.attachToEnclosingScrollView()
     }
 }
 
+/// Keeps the rows being read in place when activity reorders the list: a
+/// row moving above the viewport (another device's reply) would otherwise
+/// shift every visible row by one. At the top of the list nothing is held,
+/// so the row that moved up comes into view.
+@MainActor
+final class MacSidebarScrollAnchor {
+    weak var scrollView: NSScrollView?
+    /// Each laid-out row's top in the list's content coordinates.
+    private var rowTops: [String: CGFloat] = [:]
+    private var pending: (id: String, distance: CGFloat, until: Date)?
+
+    /// Before the reordered list is laid out: remember the top visible row
+    /// and its distance from the viewport's top.
+    func listWillReorder(from old: [String], to new: [String]) {
+        pending = nil
+        guard let scrollView else { return }
+        let viewport = scrollView.contentView.bounds
+        let offset = viewport.minY
+        // Rows off screen do not report: the old tops of rows that move are
+        // dropped below and recorded again when they are laid out.
+        let anchor = offset > 1
+            ? old.first(where: { rowTops[$0].map { offset <= $0 && $0 < viewport.maxY } ?? false })
+            : nil
+        if let anchor, let top = rowTops[anchor],
+           let oldIndex = old.firstIndex(of: anchor),
+           let newIndex = new.firstIndex(of: anchor),
+           oldIndex != newIndex {
+            pending = (anchor, top - offset, Date().addingTimeInterval(1))
+        }
+        let newIndexes = Dictionary(new.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        for (oldIndex, id) in old.enumerated() where newIndexes[id] != oldIndex {
+            rowTops[id] = nil
+        }
+    }
+
+    /// A row's new position: when it is the remembered row, scroll by the
+    /// distance it moved.
+    func rowLaidOut(_ id: String, top: CGFloat) {
+        rowTops[id] = top
+        guard let pending, pending.id == id else { return }
+        self.pending = nil
+        guard Date() < pending.until, let scrollView else { return }
+        let clip = scrollView.contentView
+        let maxOffset = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+        let target = min(max(top - pending.distance, 0), maxOffset)
+        guard abs(target - clip.bounds.minY) > 0.5 else { return }
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
+        scrollView.reflectScrolledClipView(clip)
+    }
+}
+
 final class MacSessionSmoothScrollProbeView: NSView {
+    weak var scrollAnchor: MacSidebarScrollAnchor?
     private let controller = MacSmoothWheelController()
     private let transientScrollerController = MacTransientOverlayScrollerController()
     private weak var observedScrollView: NSScrollView?
@@ -85,6 +126,7 @@ final class MacSessionSmoothScrollProbeView: NSView {
                 return
             }
             self.attachRetryCount = 0
+            self.scrollAnchor?.scrollView = scrollView
             self.transientScrollerController.attach(to: scrollView)
             guard scrollView !== self.observedScrollView else { return }
             self.observedScrollView = scrollView
@@ -210,35 +252,24 @@ struct SessionsSidebarView: View {
     /// Triggered from the rail's "+" button.
     var onNewSession: () -> Void = {}
 
-    /// Device filter — `nil` means "All devices". Matches iOS
-    /// SessionListView's `selectedDeviceFilter` exactly.
-    @State private var selectedDeviceFilter: String? = nil
-    @State private var showFilterRow: Bool = false
+    @State private var scrollAnchor = MacSidebarScrollAnchor()
+    private static let listCoordinateSpace = "sessions-sidebar-list"
 
     // MARK: - Derived
-
-    private var tentacleDevices: [DeviceSummary] {
-        appState.deviceStore.tentacleDevices
-    }
 
     private var sortedSessions: [SessionInfo] {
         appState.sessionStore.navigationOrderedSessions
     }
 
     private var filteredSessions: [SessionInfo] {
-        appState.sessionStore.filteredSessions(sortedSessions, deviceId: selectedDeviceFilter, matching: searchText)
+        appState.sessionStore.filteredSessions(sortedSessions, deviceId: nil, matching: searchText)
     }
 
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
-            if showFilterRow && tentacleDevices.count > 1 {
-                deviceFilterRow
-                Divider().foregroundStyle(Color.borderPrimary)
-            }
-
-            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount(deviceId: selectedDeviceFilter) > 0) {
+            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount(deviceId: nil) > 0) {
                 emptyState
             } else {
                 sessionList
@@ -257,52 +288,9 @@ struct SessionsSidebarView: View {
         .background(Color.surfacePrimary)
     }
 
-    // MARK: - Device filter row (iOS parity)
-
-    private var deviceFilterRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                filterPill(label: String(localized: "All"), isAll: true, isSelected: selectedDeviceFilter == nil) {
-                    selectedDeviceFilter = nil
-                }
-                ForEach(tentacleDevices) { device in
-                    filterPill(label: device.name, isAll: false,
-                               isSelected: selectedDeviceFilter == device.id) {
-                        selectedDeviceFilter = device.id
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-        .background(Color.surfacePrimary)
-    }
-
-    @ViewBuilder
-    private func filterPill(label: String, isAll: Bool, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isSelected ? Color.white : Color.textSecondary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-        }
-        .background {
-            if isSelected {
-                Capsule().fill(Color.krakiPrimary)
-            } else {
-                Capsule().fill(Color.surfaceSecondary)
-                    .overlay(Capsule().stroke(Color.borderPrimary.opacity(0.6), lineWidth: 1))
-            }
-        }
-        .clipShape(Capsule())
-        .buttonStyle(.plain)
-        .help(isAll ? String(localized: "Show sessions on all devices") : String(localized: "Show sessions on \(label)"))
-    }
-
     // MARK: - Session list
 
-    /// The archived group follows the device filter; hidden while searching.
+    /// The archived group is hidden while searching.
     private var showsArchived: Bool {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -318,28 +306,47 @@ struct SessionsSidebarView: View {
                     ForEach(filteredSessions) { session in
                         sidebarRow(for: session)
                             .id(session.id)
+                            .onGeometryChange(for: CGFloat.self, of: {
+                                $0.frame(in: .named(Self.listCoordinateSpace)).minY
+                            }) { top in
+                                scrollAnchor.rowLaidOut(session.id, top: top)
+                            }
                     }
                     if showsArchived {
-                        ArchivedSessionsSection(selectedSessionId: $selectedSessionId, deviceFilter: selectedDeviceFilter)
+                        ArchivedSessionsSection(selectedSessionId: $selectedSessionId, deviceFilter: nil)
                     }
                 }
                 .padding(.vertical, 4)
+                .coordinateSpace(.named(Self.listCoordinateSpace))
             }
             .onChange(of: appState.sessionStore.sessionListRevealId) { _, _ in
                 revealRequestedSession(using: proxy)
             }
-            .onChange(of: filteredSessionIDs) { _, _ in
+            .onChange(of: selectedSessionId) { _, id in
+                // ⌘1–9, Previous/Next, Needs You and notifications select
+                // rows that can be anywhere: follow them (minimal scroll).
+                // Archived rows and rows hidden by Search are not in this
+                // list: a request for them would linger and move it later.
+                guard let id, filteredSessionIDs.contains(id) else { return }
+                appState.sessionStore.sessionListRevealId = id
+            }
+            .onChange(of: filteredSessionIDs) { old, new in
+                scrollAnchor.listWillReorder(from: old, to: new)
                 // The create acknowledgement can arrive before SwiftUI has
                 // materialised the new row. Retry from the row-id change so
                 // the reveal is not lost during that transaction.
                 revealRequestedSession(using: proxy)
             }
             .overlay(alignment: .topLeading) {
-                MacSessionSmoothScrollProbe()
+                MacSessionSmoothScrollProbe(scrollAnchor: scrollAnchor)
                     .frame(width: 1, height: 1)
             }
         }
     }
+
+    /// Tests that lay the sidebar out in a window kept off screen set this to
+    /// nil: SwiftUI animations do not advance there.
+    static var revealAnimation: Animation? = .easeOut(duration: 0.22)
 
     private func revealRequestedSession(using proxy: ScrollViewProxy) {
         guard let target = appState.sessionStore.sessionListRevealId,
@@ -349,7 +356,7 @@ struct SessionsSidebarView: View {
             // nil anchor = the minimum scroll that makes the row fully
             // visible: no movement when it already is, and pinned Sessions
             // above it stay in view instead of the list jumping to the top.
-            withAnimation(.easeOut(duration: 0.22)) {
+            withAnimation(Self.revealAnimation) {
                 proxy.scrollTo(target, anchor: nil)
             }
             appState.sessionStore.sessionListRevealId = nil
@@ -454,20 +461,6 @@ struct SessionsSidebarView: View {
                 Text("Try another search")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)
-            } else if selectedDeviceFilter != nil {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.system(size: 32, weight: .light))
-                    .foregroundStyle(Color.textMuted)
-                Text("No sessions for this device")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.textSecondary)
-                Button {
-                    withAnimation { selectedDeviceFilter = nil }
-                } label: {
-                    Text("Show all devices")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .buttonStyle(.link)
             } else {
                 Image("KrakiLogo")
                     .resizable().interpolation(.high)

@@ -11,7 +11,9 @@ struct GeneralPane: View {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
     @State private var loginItem = LoginItemSetting()
-    @ObservedObject private var usagePeek = UsagePeekController.shared
+    /// Observed directly: changes inside UsagePeekController.hotkey (a nested
+    /// ObservableObject) do not refresh views that observe the controller.
+    @ObservedObject private var usageHotKey = UsagePeekController.shared.hotkey
 
     var body: some View {
         Form {
@@ -30,16 +32,16 @@ struct GeneralPane: View {
             MacLanguageSection()
 
             Section("Account Usage") {
-                Toggle("Hold \(usagePeek.hotkey.shortcut.display) to peek at account usage", isOn: Binding(
-                    get: { usagePeek.hotkey.enabled },
-                    set: { usagePeek.hotkey.setEnabled($0) }))
+                Toggle("Hold \(usageHotKey.shortcut.display) to peek at account usage", isOn: Binding(
+                    get: { usageHotKey.enabled },
+                    set: { usageHotKey.setEnabled($0) }))
                 LabeledContent("Shortcut") {
-                    UsageShortcutRecorder(manager: usagePeek.hotkey)
+                    UsageShortcutRecorder(manager: usageHotKey)
                         .frame(width: 230, height: 26)
                 }
                 Text("Click the shortcut to choose another key: F1–F20, or a combination with ⌘, ⌃ or ⌥. With Kraki in front the panel opens inside its window; over other apps it floats. \"Account Usage\" in the menu bar opens it any time.")
                     .font(.system(size: 11)).foregroundStyle(Color.textMuted)
-                if let error = usagePeek.hotkey.error {
+                if let error = usageHotKey.error {
                     Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                 }
             }
