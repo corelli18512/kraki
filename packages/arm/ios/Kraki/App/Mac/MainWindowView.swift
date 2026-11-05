@@ -531,7 +531,7 @@ struct MainWindowView: View {
         // Initial too: unread restored from the saved session list before the
         // window opened never changed afterwards, so the Dock had no badge.
         .onChange(of: appState.sessionStore.totalUnread, initial: true) { _, total in
-            NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : ""
+            MacDockBadge.show(unread: total)
         }
     }
 

@@ -1,4 +1,5 @@
 #if os(macOS) && DEBUG
+import AppKit
 import XCTest
 @testable import Kraki_Dev
 
@@ -38,6 +39,19 @@ final class MacSessionPreviewPlaceholderTests: XCTestCase {
         store.setPreview("s2", text: "Newer", type: "agent", timestamp: "2026-10-01T00:00:10.000Z")
         store.setPreview("s2", text: "Older", type: "user", timestamp: "2026-10-01T00:00:05.000Z")
         XCTAssertEqual(store.sessionPreviews["s2"]?.text, "Newer")
+    }
+
+    /// K-314(b): the Dock count is set again once notifications are allowed,
+    /// without waiting for the unread count to change.
+    func testDockBadgeIsSetAgainAfterPermission() {
+        defer { MacDockBadge.show(unread: 0) }
+        MacDockBadge.show(unread: 3)
+        XCTAssertEqual(NSApp.dockTile.badgeLabel, "3")
+        NSApp.dockTile.badgeLabel = nil
+        MacDockBadge.reapply()
+        XCTAssertEqual(NSApp.dockTile.badgeLabel, "3")
+        MacDockBadge.show(unread: 0)
+        XCTAssertEqual(NSApp.dockTile.badgeLabel ?? "", "")
     }
 }
 #endif
