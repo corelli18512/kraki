@@ -237,6 +237,19 @@ describe('Settings window modality on the web (K-212)', () => {
       expect(opener).toHaveFocus();
     } finally { opener.remove(); }
   });
+  // Safari's default Tab order skips buttons, so focus can be on a control
+  // that is not the last one when Tab should wrap (same as K-101).
+  it('moves focus itself on every Tab, so Safari cannot leave the window', () => {
+    render(<SettingsPanel open onClose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    const tab = screen.getByRole('tab', { name: 'General' });
+    expect(fireEvent.keyDown(tab, { key: 'Tab' })).toBe(false);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(tab);
+    const next = document.activeElement as HTMLElement;
+    expect(fireEvent.keyDown(next, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(tab);
+  });
   it('inline (narrow) Settings is not modal and does not take focus', () => {
     render(<SettingsPanel open inline onClose={vi.fn()} />);
     expect(screen.getByRole('dialog')).not.toHaveAttribute('aria-modal');

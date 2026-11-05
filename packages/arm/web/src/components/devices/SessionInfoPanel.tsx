@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
 import { isImeComposing } from '../../lib/ime';
+import { cycleTabFocus } from '../../lib/focus-trap';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
 import { Check, Copy, GitFork, Pencil, Trash2 } from 'lucide-react';
@@ -34,8 +35,6 @@ interface Props {
   /** Rename…: open with the title already being edited. */
   startEditingTitle?: boolean;
 }
-/** Every control Tab can reach inside the sheet, in document order. */
-const TABBABLE = 'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])';
 export function SessionInfoPanel({ session, usage, models, modelDetails, onClose, startEditingTitle = false }: Props) {
   const { t } = useTranslation('devices');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -63,7 +62,11 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
   }, [session.model, session.reasoningEffort]);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const saveTitle = () => {
-    wsClient.renameSession(session.id, titleDraft.trim());
+    // Closing Rename without changing anything must not turn the automatic
+    // title into a manual one (the Tentacle would stop updating it).
+    if (titleDraft.trim() !== (session.title ?? session.autoTitle ?? '').trim()) {
+      wsClient.renameSession(session.id, titleDraft.trim());
+    }
     setEditing(false);
   };
   const contextRatio =
@@ -78,18 +81,13 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       className="ksi-panel"
       ref={rootRef}
       onKeyDown={(e) => {
-        // Move focus on every Tab, not only at the ends: Safari's default Tab
-        // order skips buttons, so the last control is never focused there and
-        // focus would leave the sheet (and Esc with it).
-        if (e.key !== 'Tab') return;
-        const controls = [...e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el.tabIndex >= 0);
-        if (controls.length === 0) return;
-        e.preventDefault();
-        const index = controls.indexOf(document.activeElement as HTMLElement);
-        const next = e.shiftKey
-          ? (index <= 0 ? controls.length - 1 : index - 1)
-          : (index === -1 || index === controls.length - 1 ? 0 : index + 1);
-        controls[next].focus();
+        // Every Tab moves focus here (Safari skips buttons, so focus and Esc
+        // would leave the sheet). The Delete confirmation is rendered inside
+        // the sheet: while it is open, Tab cycles its buttons only, and a Tab
+        // its own trap already handled is left alone.
+        if (e.key !== 'Tab' || e.defaultPrevented) return;
+        const scope = e.currentTarget.querySelector<HTMLElement>('[role=alertdialog]') ?? e.currentTarget;
+        cycleTabFocus(scope, e);
       }}
     >
       <div className="ksi-header">

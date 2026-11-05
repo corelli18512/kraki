@@ -852,7 +852,12 @@ private struct MacSessionInfoSheet: View {
 
     private func commitTitleEdit() {
         let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        let current = (session.title ?? session.autoTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Closing Rename… without a change must not turn the automatic title
+        // into a manual one (the Tentacle would stop updating it).
+        if trimmed != current {
+            appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        }
         editingTitle = false
         titleFocused = false
     }

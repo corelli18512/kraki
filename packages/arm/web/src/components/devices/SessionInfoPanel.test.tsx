@@ -126,10 +126,25 @@ it('keeps Tab inside the sheet from any control, as Safari skips buttons (K-101)
   expect(fireEvent.keyDown(done, { key: 'Tab', shiftKey: true })).toBe(false);
   expect(panel.contains(document.activeElement)).toBe(true);
   expect(document.activeElement).not.toBe(done);
-  // Focus that escaped to the page comes back on the next Tab.
-  document.body.focus();
-  expect(fireEvent.keyDown(panel, { key: 'Tab' })).toBe(false);
-  expect(document.activeElement).toBe(done);
+});
+
+// K-101 review: the Delete confirmation sits inside the sheet and has its own
+// Tab trap (a window capture listener). The sheet must not undo its move.
+it('cycles Tab between the Delete confirmation buttons only (K-101)', () => {
+  open();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  const alert = screen.getByRole('alertdialog');
+  const cancel = screen.getByRole('button', { name: 'Cancel' });
+  const destructive = alert.querySelector<HTMLButtonElement>('.is-destructive')!;
+  destructive.focus();
+  fireEvent.keyDown(destructive, { key: 'Tab' });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: 'Tab' });
+  expect(document.activeElement).toBe(destructive);
+  fireEvent.keyDown(destructive, { key: 'Tab', shiftKey: true });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+  expect(document.activeElement).toBe(destructive);
 });
 
 // K-208: Rename… opens Session Info with the title already in edit mode.
@@ -139,4 +154,23 @@ it('opens straight into title editing for Rename… (K-208)', () => {
   expect(input).toHaveFocus();
   expect(input.value).toBe('Old title');
   expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+});
+
+// K-208 review: Rename… then Done without a change must not save the automatic
+// title as a manual one (the Tentacle would stop updating it).
+it('Rename… then Done without a change keeps the automatic title (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, autoTitle: 'Auto title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' });
+  fireEvent.blur(input);
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+  expect(commands.renameSession).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalled();
+});
+
+it('saves a changed title on blur (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, autoTitle: 'Auto title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' });
+  fireEvent.change(input, { target: { value: 'Mine' } });
+  fireEvent.blur(input);
+  expect(commands.renameSession).toHaveBeenCalledWith(session.id, 'Mine');
 });

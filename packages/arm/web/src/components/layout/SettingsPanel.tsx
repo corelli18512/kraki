@@ -33,6 +33,7 @@ import './settings.css';
 import { LanguageSettingsRow } from './LanguageSettings';
 import { SettingsTabIcon } from './SettingsTabIcon';
 import { deviceLastOnline } from '../../lib/device-last-online';
+import { cycleTabFocus } from '../../lib/focus-trap';
 import {
   notificationsEnabled as readNotificationsEnabled,
   setNotificationsEnabled as saveNotificationsEnabled,
@@ -120,17 +121,7 @@ export function SettingsPanel({
       // Foreground confirmation/agent sheets own their keyboard handling.
       if (event.key !== 'Tab' || event.defaultPrevented ||
         (event.target instanceof Element && event.target.closest('[role=dialog], [role=alertdialog]') !== panel)) return;
-      const controls = [...(panel?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? [])]
-        .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], fieldset:disabled'));
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
+      if (panel) cycleTabFocus(panel, event);
     };
     window.addEventListener('keydown', key);
     return () => {
