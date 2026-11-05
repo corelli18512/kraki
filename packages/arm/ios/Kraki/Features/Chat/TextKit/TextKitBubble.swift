@@ -117,6 +117,17 @@ final class TKBodyTextView: UITextView {
             && super.canPerformAction(action, withSender: sender)
     }
 
+    /// Selected text without the zero-width break opportunities the
+    /// renderer adds to long tokens (`TKMarkdown.breakingLongTokens`).
+    override func copy(_ sender: Any?) {
+        let range = selectedRange
+        guard let attributedText, range.length > 0, NSMaxRange(range) <= attributedText.length else {
+            return super.copy(sender)
+        }
+        UIPasteboard.general.string = (attributedText.string as NSString).substring(with: range)
+            .replacingOccurrences(of: "\u{200B}", with: "")
+    }
+
     private struct RichBlock {
         let kind: TKBlockKind
         let label: String?
@@ -184,12 +195,29 @@ final class TKBodyTextView: UITextView {
             return true
         }
 
+        // A long code block is split across chunk views. Where this view's
+        // text starts or ends inside a block, the surface continues past the
+        // edge (no rounded corner, no repeated language label at the seam).
+        // (A whole code block starts and ends with a decorative spacer.)
+        func continuedBlock(at index: Int) -> String? {
+            guard attributedText.attribute(.tkDecorativeSpacer, at: index, effectiveRange: nil) == nil,
+                  attributedText.attribute(.tkBlockKind, at: index, effectiveRange: nil) as? String
+                    == TKBlockKind.code.rawValue
+            else { return nil }
+            return attributedText.attribute(.tkBlockID, at: index, effectiveRange: nil) as? String
+        }
+        let continuesFromAbove = continuedBlock(at: 0)
+        let continuesBelow = continuedBlock(at: attributedText.length - 1)
+
         context.saveGState()
         defer { context.restoreGState() }
-        for block in blocks.values.sorted(by: { $0.rect.minY < $1.rect.minY }) {
+        for (id, block) in blocks.sorted(by: { $0.value.rect.minY < $1.value.rect.minY }) {
             var frame = block.rect.insetBy(dx: 0, dy: -2)
             frame = frame.intersection(bounds.insetBy(dx: 0, dy: -1))
             guard !frame.isNull, frame.height > 0 else { continue }
+            // Push the rounded edge of a continued side out of view.
+            if id == continuesFromAbove { frame.origin.y -= 20; frame.size.height += 20 }
+            if id == continuesBelow { frame.size.height += 20 }
             switch block.kind {
             case .quote:
                 UIColor.secondarySystemFill.setFill()
@@ -207,7 +235,7 @@ final class TKBodyTextView: UITextView {
                 let outline = UIBezierPath(roundedRect: frame.insetBy(dx: 0.25, dy: 0.25), cornerRadius: 9)
                 outline.lineWidth = 0.5
                 outline.stroke()
-                if let label = block.label {
+                if let label = block.label, id != continuesFromAbove {
                     let attributes: [NSAttributedString.Key: Any] = [
                         .font: UIFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
                         .foregroundColor: UIColor(red: 0xA1/255, green: 0xA1/255, blue: 0xAA/255, alpha: 1),

@@ -11,7 +11,7 @@ import { useStore } from '../hooks/useStore';
 
 vi.mock('../components/chat/Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: () => () => {},
+  useDictation: () => ({ active: false }), useStartDictation: () => () => {}, useStopDictationOnLeave: () => {},
 }));
 afterEach(() => {
   if (vi.isMockFunction(unreadEntry.captureEntryBoundary)) unreadEntry.captureEntryBoundary.mockRestore();

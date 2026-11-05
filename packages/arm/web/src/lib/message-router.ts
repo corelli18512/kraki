@@ -14,6 +14,7 @@ import { allowAutoRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
 import { diag } from './diag';
 import { requestErrorText } from './server-errors';
+import { sliceGraphemes } from './format';
 
 const logger = createLogger('msg-router');
 
@@ -48,7 +49,7 @@ function noteReplyProgress(msg: InnerMessage): void {
 
 const PREVIEW_MAX = 80;
 function truncPreview(s: string): string {
-  return s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX) + '…' : s;
+  return s.length > PREVIEW_MAX ? sliceGraphemes(s, PREVIEW_MAX) + '…' : s;
 }
 
 const RETIRED_LIVE_TYPES = new Set([

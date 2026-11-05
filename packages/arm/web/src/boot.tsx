@@ -6,7 +6,8 @@
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { Routes, Route, Navigate } from 'react-router';
+import { AppRouter } from './AppRouter';
 import { App } from './App';
 import { DashboardPage } from './pages/DashboardPage';
 import { SessionPage } from './pages/SessionPage';
@@ -30,7 +31,7 @@ diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktop
 function Root() {
   useTheme();
   return (
-    <BrowserRouter>
+    <AppRouter>
       <Routes>
         <Route element={<App />}>
           <Route index element={<DashboardPage />} />
@@ -40,7 +41,7 @@ function Root() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </AppRouter>
   );
 }
 

@@ -50,10 +50,15 @@ export function stagedVoice(clientId: string, base: string, hasAttachment: boole
     update(text, raw) {
       if (text === raw) { outbox.updateStaged(clientId, mergeVoiceDraft(base, raw), mergeVoiceDraft(base, raw)); return; }
       covered = Math.max(covered, alignedRawPrefixLength(text, raw));
-      const rest = Array.from(raw).slice(covered).join('');
-      const spoken = mergeVoiceDraft(text, rest);
+      const rawCharacters = Array.from(raw);
+      const rest = rawCharacters.slice(covered).join('');
+      // A correction that stops inside a raw word continues that word: no
+      // separator ("D" + "eploy", never "D eploy").
+      const midWord = covered > 0 && !!rest && /\S/.test(rawCharacters[covered - 1]) && /\S/.test(rawCharacters[covered]);
+      const spoken = midWord ? text + rest : mergeVoiceDraft(text, rest);
       outbox.updateStaged(clientId, mergeVoiceDraft(base, spoken), mergeVoiceDraft(base, raw));
     },
+    open: () => outbox.isStaged(clientId),
     complete(text, raw, completed) {
       if (!outbox.isStaged(clientId)) return;
       if (raw.trim() && completed) {

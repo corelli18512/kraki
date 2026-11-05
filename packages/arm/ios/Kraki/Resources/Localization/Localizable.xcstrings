@@ -5957,16 +5957,6 @@
         }
       }
     },
-    "Needs your approval · Safe mode" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要你批准 · 安全模式"
-          }
-        }
-      }
-    },
     "Never" : {
       "localizations" : {
         "zh-Hans" : {

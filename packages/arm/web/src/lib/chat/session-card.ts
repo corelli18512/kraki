@@ -45,6 +45,30 @@ export function sessionTimestamp(previewTimestamp?: string, createdAt?: string):
   return createdAt && Number.isFinite(Date.parse(createdAt)) ? createdAt : '';
 }
 
+/** Sidebar order: pinned first, then newest activity (preview, else creation)
+ *  first, then newest creation, then id. Keyboard session switching walks the
+ *  same order. */
+export function sortSessionsForList<T extends { id: string; createdAt?: string }>(
+  sessions: Iterable<T>,
+  pinned: ReadonlySet<string>,
+  previews: ReadonlyMap<string, { timestamp?: string }>,
+): T[] {
+  return [...sessions]
+    .map((session) => ({
+      session,
+      pinned: pinned.has(session.id) ? 0 : 1,
+      timestamp: Date.parse(sessionTimestamp(previews.get(session.id)?.timestamp, session.createdAt)) || 0,
+      createdAt: Date.parse(session.createdAt ?? '') || 0,
+    }))
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned - b.pinned;
+      if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
+      if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+      return a.session.id.localeCompare(b.session.id);
+    })
+    .map(({ session }) => session);
+}
+
 /** Local HH:mm today, lowercase yesterday, then elapsed calendar days (Mac). */
 export function sessionTimeLabel(iso: string, now = new Date()): string {
   if (!iso) return '';

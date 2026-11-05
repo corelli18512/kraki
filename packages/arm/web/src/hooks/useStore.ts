@@ -195,37 +195,49 @@ function withStoredDrafts(storage: PersistStorage<PersistedStore>, name: string,
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
- *  stored JSON is already current. */
+ *  stored JSON is already current. A synchronous burst of sets (the first
+ *  session_list of 500 sessions made ~1000) is coalesced into one write at the
+ *  end of the current task (microtask), so nothing is lost on unload. */
 let storageFullReported = false;
 function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
   if (!storage) return storage;
   let written: StorageValue<PersistedStore> | null = null;
+  let pending: { name: string; value: StorageValue<PersistedStore> } | null = null;
   const unchanged = (value: StorageValue<PersistedStore>) => written !== null
     && written.version === value.version
     && (Object.keys(value.state) as Array<keyof PersistedStore>).every((key) => written!.state[key] === value.state[key])
     && Object.keys(written.state).length === Object.keys(value.state).length;
+  const flush = () => {
+    if (!pending) return;
+    const { name, value } = pending;
+    pending = null;
+    if (unchanged(value)) return;
+    // Full storage (quota) must not make every store update throw (K-201):
+    // the in-memory state stays authoritative for this page.
+    try {
+      storage.setItem(name, withStoredDrafts(storage, name, value));
+    } catch (err) {
+      if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
+      storageFullReported = true;
+    }
+    // Also after a failure: don't serialize and fail again for the same state.
+    written = value;
+  };
   return {
-    getItem: (name) => storage.getItem(name),
+    getItem: (name) => { flush(); return storage.getItem(name); },
     setItem: (name, value) => {
-      if (unchanged(value)) return;
       // Drafts adopted from another tab's write are already stored; echoing
-      // them would put this tab's other slices over that tab's.
-      if (!adoptingDrafts) {
-        // Full storage (quota) must not make every store update throw (K-201):
-        // the in-memory state stays authoritative for this page.
-        try {
-          storage.setItem(name, withStoredDrafts(storage, name, value));
-        } catch (err) {
-          if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
-          storageFullReported = true;
-          // Don't serialize and fail again for the same state on every update.
-          written = value;
-          return;
-        }
+      // them would put this tab's other slices over that tab's. A change of
+      // this tab's own already queued in this task is still written.
+      if (adoptingDrafts && !pending) {
+        written = value;
+        return;
       }
-      written = value;
+      if (!pending) queueMicrotask(flush);
+      pending = { name, value };
     },
     removeItem: (name) => {
+      pending = null;
       written = null;
       return storage.removeItem(name);
     },
