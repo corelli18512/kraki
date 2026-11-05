@@ -121,6 +121,12 @@ describe('repeated session_list (Tentacle re-broadcast after each reply)', () =>
     commands.resetPendingPins();
   });
 
+  it('the closing list ends the row\'s turn-closing state (K-098)', () => {
+    useStore.getState().setTurnClosing(sid(2), true);
+    apply(sessionList([digest(2)]));
+    expect(useStore.getState().closingTurns.has(sid(2))).toBe(false);
+  });
+
   it('an unchanged list reads no IndexedDB rows and notifies no store subscriber', async () => {
     const list = sessionList(Array.from({ length: SESSIONS }, (_, i) => digest(i)));
     apply(list);

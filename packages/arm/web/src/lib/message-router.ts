@@ -46,6 +46,8 @@ function noteReplyProgress(msg: InnerMessage): void {
 }
 
 const PREVIEW_MAX = 80;
+/** Longest the sidebar row waits for the closing session_list after idle. */
+export const TURN_CLOSING_MAX_MS = 5_000;
 function truncPreview(s: string): string {
   return s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX) + '…' : s;
 }
@@ -371,6 +373,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'idle': {
       const idled = store.sessions.get(sid);
+      // The row's preview is still the user's prompt until the closing
+      // session_list brings the reply; keep the row "working" until then.
+      if (idled?.state === 'active') {
+        store.setTurnClosing(sid, true);
+        setTimeout(() => getStore().setTurnClosing(sid, false), TURN_CLOSING_MAX_MS);
+      }
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.appendMessage(sid, msg);
       // A closing idle can arrive even if the immediately preceding agent
@@ -399,6 +407,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (activated && activated.state !== 'compacting') {
         store.upsertSession({ ...activated, state: 'active' });
       }
+      store.setTurnClosing(sid, false);
       store.appendMessage(sid, msg);
       break;
     }

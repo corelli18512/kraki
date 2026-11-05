@@ -58,6 +58,7 @@ export const SessionRow = memo(function SessionRow({
   const draft = useStore((s) => s.drafts.get(session.id));
   const unread = useStore((s) => !selected && (s.unreadCount.get(session.id) ?? 0) > 0);
   const compacting = useStore((s) => s.runtimeStatuses.get(session.id)?.status === 'compacting');
+  const turnClosing = useStore((s) => s.closingTurns.has(session.id));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -67,7 +68,7 @@ export const SessionRow = memo(function SessionRow({
   const draftText = collapseWhitespace(draft);
   const hasDraft = !pending && !!draftText;
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
-  const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
+  const status = pending ? 'delivery' : resolveCardStatus(turnClosing ? 'active' : session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
   // The live device name first: it follows renames.
   const machine = device?.name || session.deviceName;
