@@ -268,7 +268,8 @@ function useUsageData() {
   }, [sessionId, sessions, usage]);
   const accounts = useMemo(() => orderedAccounts(mergedUsage(usage, devices), current), [usage, devices, current]);
   const outdated = useMemo(() => [...devices.values()]
-    .filter((d) => d.role === 'tentacle' && d.online && wsClient.deviceHasFeature(d.id, 'account_usage') === false && !usage.has(d.id))
+    .filter((d) => d.role === 'tentacle' && d.online && wsClient.deviceHasFeature(d.id, 'account_usage') === false
+      && wsClient.deviceHasFeature(d.id, 'account_usage_off') === false && !usage.has(d.id))
     .sort((a, b) => a.name.localeCompare(b.name)), [devices, usage]);
   return { accounts, current, outdated };
 }
