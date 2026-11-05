@@ -157,6 +157,7 @@ import {
   installCopilotSdkImportCompatibility,
   resolveCopilotCliPath,
 } from '../copilot.js';
+import { getKrakiHome } from '../../config.js';
 
 // ── Tests ───────────────────────────────────────────────
 
@@ -492,6 +493,18 @@ describe('CopilotAdapter', () => {
           attachments: [expect.objectContaining({ type: 'file' })],
         }),
       );
+    });
+
+    it('keeps image files in the Kraki session directory, which deleting the session removes (K-286)', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'check this', [{ type: 'image', mimeType: 'image/png', data: 'iVBOR' }]);
+      const sent = (mockSessions[0].send as Mock).mock.calls.at(-1)![0] as { attachments: Array<{ path: string }> };
+      const path = sent.attachments[0]!.path;
+      // SessionManager.deleteSession removes join(KRAKI_HOME, 'sessions', id).
+      expect(path.startsWith(join(getKrakiHome(), 'sessions', sessionId, 'copilot-images'))).toBe(true);
+      expect(mockWriteFileSync).toHaveBeenCalledWith(path, expect.any(Buffer));
+      expect(path).not.toContain('.copilot');
     });
 
     it('resumes and retries when the SDK says the session is not found', async () => {
