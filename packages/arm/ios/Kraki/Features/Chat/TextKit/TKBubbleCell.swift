@@ -318,8 +318,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         configuration.baseForegroundColor = .secondaryLabel
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 7, bottom: 2, trailing: 7)
         configuration.background.cornerRadius = 10
+        // A fixed-size glyph chip (its label is "Show steps"). The configuration
+        // title otherwise follows Dynamic Type; at the largest sizes the chip,
+        // centred on the bubble's top edge, covered the message above it.
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var attributes = attributes
+            attributes.font = .systemFont(ofSize: 14, weight: .bold)
+            return attributes
+        }
         moreButton.configuration = configuration
-        moreButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
         moreButton.addTarget(self, action: #selector(openSteps), for: .touchUpInside)
         moreButton.accessibilityLabel = String(localized: "Show steps")
         contentView.addSubview(moreButton)

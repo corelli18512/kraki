@@ -3173,6 +3173,26 @@
         }
       }
     },
+    "Couldn't stop: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止：%@"
+          }
+        }
+      }
+    },
+    "Couldn't stop the agent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止 Agent。"
+          }
+        }
+      }
+    },
     "Couldn't send. Try again." : {
       "localizations" : {
         "zh-Hans" : {

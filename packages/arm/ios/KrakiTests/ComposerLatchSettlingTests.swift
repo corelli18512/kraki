@@ -7,7 +7,7 @@ import SwiftUI
 /// composer's Stop spinner or "busy" latch on.
 @MainActor
 final class ComposerLatchSettlingTests: XCTestCase {
-    final class Latches { var awaitingActive = true; var abortPending = true }
+    final class Latches { var awaitingActive = true; var abortPending = true; var stopRejection: String? }
 
     private struct Probe: View {
         let sessionId: String
@@ -17,7 +17,8 @@ final class ComposerLatchSettlingTests: XCTestCase {
         var body: some View {
             Color.clear
                 .settlesComposerLatches(sessionId: sessionId, state: .active,
-                                        awaitingActive: $awaitingActive, abortPending: $abortPending)
+                                        awaitingActive: $awaitingActive, abortPending: $abortPending,
+                                        onStopRejected: { latches.stopRejection = $0 })
                 .onChange(of: awaitingActive) { _, value in latches.awaitingActive = value }
                 .onChange(of: abortPending) { _, value in latches.abortPending = value }
         }
@@ -50,5 +51,16 @@ final class ComposerLatchSettlingTests: XCTestCase {
         drain(300)
         XCTAssertFalse(latches.awaitingActive, "the composer is no longer waiting for the turn")
         XCTAssertFalse(latches.abortPending, "Stop can be pressed again")
+        // K-312: the agent refused to stop; the composer says so, with its reason.
+        XCTAssertEqual(latches.stopRejection, String(localized: "Couldn't stop: \("busy")"))
+    }
+
+    func testStopRejectionNoticeKeepsTheReason() {
+        XCTAssertEqual(StopRejectionNotice.text(errorMessage: "Failed to abort session: adapter is busy"),
+                       String(localized: "Couldn't stop: \("adapter is busy")"))
+        XCTAssertEqual(StopRejectionNotice.text(errorMessage: "Session not found"),
+                       String(localized: "Couldn't stop: \("Session not found")"))
+        XCTAssertEqual(StopRejectionNotice.text(errorMessage: "Failed to abort session: "),
+                       String(localized: "Couldn't stop the agent."))
     }
 }
