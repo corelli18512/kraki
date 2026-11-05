@@ -132,6 +132,32 @@ final class DeviceUpdateRenderTests: XCTestCase {
                        "Kraki 0.38.10 wasn’t installed on Mac mini.")
     }
 
+    /// K-322: two apps ask at once; the computer refuses the second with
+    /// "already in progress", sent to every app. The app whose update runs
+    /// keeps showing it; the refused app still sees its refusal.
+    func testAnotherAppsRefusedRequestDoesNotReplaceTheRunningUpdate() throws {
+        let app = try app()
+        func status(_ payload: [String: Any]) throws {
+            app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+                "type": "device_update_status", "deviceId": id, "payload": payload]))
+        }
+        try status(["phase": "downloading", "requestId": "winner", "from": "0.38.9", "to": "0.38.10", "progress": 0.4])
+        try status(["phase": "failed", "requestId": "loser", "error": "An update is already in progress."])
+        XCTAssertEqual(app.deviceStore.updateProgress[id]?.phase, .downloading)
+        XCTAssertEqual(app.deviceStore.updateProgress[id]?.requestId, "winner")
+
+        let loser = try self.app()
+        loser.deviceStore.setUpdateProgress(id, DeviceUpdateProgress(phase: .requested, requestId: "loser"))
+        loser.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+            "type": "device_update_status", "deviceId": id,
+            "payload": ["phase": "failed", "requestId": "loser", "error": "An update is already in progress."]]))
+        XCTAssertEqual(loser.deviceStore.updateProgress[id]?.phase, .failed)
+
+        // The running update's own failure still shows.
+        try status(["phase": "failed", "requestId": "winner", "error": "Download failed"])
+        XCTAssertEqual(app.deviceStore.updateProgress[id]?.phase, .failed)
+    }
+
     /// K-190: a model id longer than the card is one chip no wider than the
     /// card, not one that runs off its edge.
     func testFlowLayoutKeepsALongChipInsideTheRow() throws {
