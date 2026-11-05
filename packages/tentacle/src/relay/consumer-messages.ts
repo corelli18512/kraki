@@ -8,7 +8,7 @@ import { isSafeId } from '../session-manager.js';
 import { getKrakiHome } from '../config.js';
 import { RelayClient } from '../relay-client.js';
 import { handleRefreshAccountUsage, handleRequestUsageHistory } from './account-usage.js';
-import { handleRequestAttachment } from './attachments.js';
+import { handleRequestAttachment, unicastAttachmentError } from './attachments.js';
 import { handleRequestCard, handleSessionMessages, handleSessionMessagesRange, handleSessionReplay, handleSetSessionSubscription, handleTurnTrace } from './history.js';
 import { clearOpenQuestions, deliverQuestionAnswer, resolvePermission, soleOpenQuestion } from './questions.js';
 import { deleteSessionEverywhere, handleCreateSession, handleDeleteArchivedSessions, handleForkSession, handleImportSession, handleRequestArchivedSessions, handleRequestLocalSessions, handleSetAutoArchiveDays, unarchiveOnUse } from './session-commands.js';
@@ -33,6 +33,12 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     msg.type === 'request_attachment' ? p.id : undefined];
   if (ids.some((id) => id !== undefined && id !== null && id !== '' && !isSafeId(id))) {
     logger.warn({ type: msg.type, deviceId: msg.deviceId }, 'Dropped consumer message with an unsafe id');
+    // An attachment fetch waits for its answer: say there is no such
+    // attachment (the ids are only echoed back, never used as a path).
+    const requesterKey = msg.type === 'request_attachment' ? client.consumerKeys.get(msg.deviceId) : undefined;
+    if (msg.type === 'request_attachment' && requesterKey) {
+      unicastAttachmentError(client, msg.deviceId, requesterKey, msg.payload.sessionId, msg.payload.id, 'not_found');
+    }
     return;
   }
   if (msg.type === 'client_features') {

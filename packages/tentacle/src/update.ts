@@ -18,7 +18,7 @@ import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { isSea } from 'node:sea';
 import chalk from 'chalk';
-import ora from 'ora';
+import { ora } from './spinner.js';
 import { getConfigDir, getKrakiHome } from './config.js';
 import { probeFda, registerKrakiAppBundle, unregisterAppBundlePath, cleanupStaleBundleEntries } from './checks.js';
 

@@ -8,7 +8,7 @@
 import { wsProxyOptions } from './proxy.js';
 import { select, input, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
-import ora from 'ora';
+import { ora } from './spinner.js';
 import { homedir, hostname, platform, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
