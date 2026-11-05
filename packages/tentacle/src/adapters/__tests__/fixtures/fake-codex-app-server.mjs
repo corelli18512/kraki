@@ -84,6 +84,8 @@ async function handle({ id, method, params }) {
     }
     case 'turn/interrupt': {
       const t = threads.get(params.threadId);
+      // A wedged app-server that never answers the interrupt.
+      if (process.env.FAKE_CODEX_IGNORE_INTERRUPT === '1') return;
       send({ id, result: {} });
       t?.interrupt?.();
       return;
@@ -147,6 +149,14 @@ async function runTurn(threadId, t, turnId, input) {
     }
     await say('Fix flaky stats tests.');
     return finish();
+  }
+
+  if (text.includes('MIDCOMPACT')) {
+    // Compaction starts and never completes: the turn fails or the server dies.
+    started(item('contextCompaction', {}));
+    await sleep(20);
+    if (text.includes('DIE')) process.exit(3);
+    return finish('failed', { message: 'compaction failed', codexErrorInfo: 'other' });
   }
 
   if (text.includes('CRASH')) { await sleep(20); process.exit(3); }

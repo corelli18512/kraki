@@ -492,14 +492,22 @@ export class CodexAdapter extends AgentAdapter {
     if (s.abortPending) void this.interruptActive(s);
   }
 
+  /** How long Stop waits for the app-server to confirm turn/interrupt. */
+  static INTERRUPT_TIMEOUT_MS = 5_000;
+
   async interruptActive(s: CodexSession): Promise<void> {
     if (!s.activeTurnId) return;
     s.abortPending = false;
     if (!this.rpc?.alive) return;
+    const turnId = s.activeTurnId;
     try {
-      await this.rpc.request('turn/interrupt', { threadId: s.threadId, turnId: s.activeTurnId }, 15_000);
+      await this.rpc.request('turn/interrupt', { threadId: s.threadId, turnId }, CodexAdapter.INTERRUPT_TIMEOUT_MS);
     } catch (err) {
-      logger.debug({ sessionId: s.sessionId, err: errMessage(err) }, 'codex turn/interrupt failed');
+      logger.warn({ sessionId: s.sessionId, turnId, err: errMessage(err) }, 'codex turn/interrupt failed; ending the turn here');
+      // No turn/completed is coming for an interrupt the app-server never
+      // confirmed. Settle the turn here (its late events are then dropped);
+      // otherwise every later prompt queued behind it and was never answered.
+      if (s.activeTurnId === turnId) this.finalizeTurn(s);
     }
   }
 
@@ -521,6 +529,12 @@ export class CodexAdapter extends AgentAdapter {
     }
     s.activeTurnId = undefined;
     const ev = this.turnEvent(s);
+    if (s.compacting) {
+      // The turn failed or the app-server died mid-compaction: the item never
+      // completes, and the compaction indicator would stay on for good.
+      s.compacting = false;
+      this.onCompaction?.(s.sessionId, { phase: 'end', ...ev });
+    }
     const next = s.queue.shift();
     // A queued steer belongs to the relay turn that is ending here: Codex runs
     // it as a new turn, but for the relay it is the same logical turn. Settling
