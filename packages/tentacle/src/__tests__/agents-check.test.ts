@@ -92,3 +92,38 @@ describe('kraki agents on Windows without bash', () => {
     expect(createAdapter).not.toHaveBeenCalled();
   });
 });
+
+import { checkAgentCli } from '../checks.js';
+
+describe('a broken agent install (K-128)', () => {
+  it('checkAgentCli tells "installed but --version fails" apart from "not installed"', async () => {
+    if (process.platform === 'win32') return;
+    const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const bin = mkdtempSync(join(tmpdir(), 'kraki-broken-agent-'));
+    const script = join(bin, 'kraki-broken-agent');
+    writeFileSync(script, '#!/bin/sh\necho "Error: Cannot find module \'/usr/lib/node_modules/agent/cli.js\'" >&2\nexit 1\n');
+    chmodSync(script, 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const broken = checkAgentCli('kraki-broken-agent');
+      expect(broken).toMatchObject({ found: true, error: expect.stringContaining('Cannot find module') });
+      expect(checkAgentCli('kraki-no-such-agent-k128')).toEqual({ found: false });
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  it('reports an installed agent whose CLI does not run as an error, not as "not installed"', async () => {
+    const claude = SETUP_AGENTS.find((a) => a.id === 'claude')!;
+    const createAdapter = vi.fn();
+    const r = await checkAgent(claude, {
+      checkCli: () => ({ found: true, error: "Error: Cannot find module 'cli.js'" }), createAdapter, timeoutMs: 1000,
+    });
+    expect(r).toMatchObject({ status: 'error', detail: expect.stringContaining('Cannot find module'), hint: expect.stringContaining('installed but') });
+    expect(r.status).not.toBe('not_installed');
+    expect(createAdapter).not.toHaveBeenCalled();
+  });
+});

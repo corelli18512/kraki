@@ -195,25 +195,49 @@ export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 
   { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
 ];
 
+/** The shell could not find the command at all (POSIX 127, cmd.exe's "is
+ *  not recognized"), as opposed to a command that exists and failed. */
+export function isCommandNotFound(err: unknown): boolean {
+  const e = err as { status?: number | null; code?: string; stderr?: unknown };
+  if (e?.code === 'ENOENT' || e?.status === 127) return true;
+  return /is not recognized as an internal or external command|command not found/i.test(String(e?.stderr ?? ''));
+}
+
+/** First line of a failed `--version` (stderr, else the error message). */
+function versionFailure(err: unknown): string {
+  const e = err as { stderr?: unknown; message?: string; signal?: string | null; code?: string };
+  if (e?.code === 'ETIMEDOUT' || e?.signal === 'SIGTERM') return '--version did not finish';
+  const stderr = String(e?.stderr ?? '').trim().split('\n').find((l) => l.trim()) ?? '';
+  return (stderr || e?.message || 'failed').slice(0, 300);
+}
+
 /** Is `bin` runnable, and which version (leading semver when present)? Looks on
- *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts). */
-export function checkAgentCli(bin: string): CliCheckResult & { path?: string } {
+ *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts).
+ *  A CLI that is there but fails `--version` is `found` with `error`: it is
+ *  installed and broken, not missing (K-128). */
+export function checkAgentCli(bin: string): CliCheckResult & { path?: string; error?: string } {
   const parse = (output: string, path?: string) => {
     const first = output.trim().split('\n')[0] ?? '';
     const match = first.match(/(\d+\.\d+\.\d+)/);
     return { found: true, version: match?.[1] ?? (first || undefined), ...(path && { path }) };
   };
+  let failure: string | undefined;
   try {
     // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
     return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }));
-  } catch { /* not on PATH */ }
+  } catch (err) {
+    if (!isCommandNotFound(err)) failure = versionFailure(err);
+  }
   const bundled = findAppBundledCli(bin);
   if (bundled) {
     try {
       return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }), bundled);
-    } catch { /* broken app install */ }
+    } catch (err) {
+      // Broken app install.
+      failure ??= versionFailure(err);
+    }
   }
-  return { found: false };
+  return failure ? { found: true, error: failure } : { found: false };
 }
 
 export function checkClaudeCli(): CliCheckResult {

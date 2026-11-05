@@ -53,7 +53,7 @@ export const LOGIN_HINTS: Record<string, string> = {
 const LOGIN_ERROR = /log(ged)? ?in|login|auth|credential|api key|unauthori[sz]ed|401|403/i;
 
 export interface AgentsCheckDeps {
-  checkCli: (bin: string) => { found: boolean; version?: string };
+  checkCli: (bin: string) => { found: boolean; version?: string; error?: string };
   createAdapter: (id: AgentId) => Promise<AgentAdapter | null>;
   timeoutMs: number;
   platform?: NodeJS.Platform;
@@ -78,6 +78,12 @@ export async function checkAgent(
   const cli = deps.checkCli(agent.bin);
   if (!cli.found) {
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
+  }
+  if (cli.error) {
+    return {
+      ...base, status: 'error', detail: cli.error,
+      hint: `${agent.name} is installed but \`${agent.bin} --version\` fails. Run it in a terminal to see why, or reinstall it.`,
+    };
   }
   const version = cli.version;
   if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
