@@ -249,6 +249,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var actionFrameForRegression: CGRect { actionHost.frame }
     var bubbleFrameForRegression: CGRect { bubbleBG.frame }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
+    /// How far the drawn bubble reaches below the drawn clip: > 0 means its
+    /// rounded bottom is cut off flat on screen.
+    var bubbleClippedDepthForRegression: CGFloat {
+        let clip = renderClipView.layer.presentation()?.bounds.height ?? renderClipView.bounds.height
+        let frame = bubbleBG.layer.presentation()?.frame ?? bubbleBG.frame
+        let shape = bubbleBG.layer.sublayers?.first as? CAShapeLayer
+        let bottom = (shape?.presentation()?.path ?? shape?.path)?.boundingBox.maxY ?? frame.height
+        return frame.minY + bottom - clip
+    }
     /// Pending CA animations on the bubble background (must be none after a
     /// configure outside a UIView animation — no color/shape morph).
     var bubbleBackgroundAnimationKeysForRegression: [String] {
@@ -1016,7 +1025,11 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         cursorY += TKMetrics.msgPadV
         let bubbleHeight: CGFloat
         if content.hasBubbleContent {
-            bubbleHeight = max(cursorY - y, 1)
+            // Never taller than the cell drawing it: when content grows first
+            // (a permission card arrives) and the cell follows in an animated
+            // resize, the clip would cut the bubble's bottom off flat. Held to
+            // the cell, the bubble grows with it, rounded (K-070).
+            bubbleHeight = min(max(cursorY - y, 1), max(1, bounds.height - y - TKMetrics.outerV))
             bubbleBG.isHidden = false
             bubbleBG.frame = CGRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
         } else {
