@@ -142,6 +142,15 @@ final class ReconnectRound2Tests: XCTestCase {
         auth.handleAuthError(message: ["code": "auth_rejected", "message": "No auth provider accepted the token"])
         XCTAssertEqual(app.lastError, "Authentication temporarily unavailable. Reconnecting…")
 
+        // No paired device: a relay outage asks for a retry, not a QR scan,
+        // and a failed GitHub sign-in gets neutral copy.
+        auth.debugSetStoredDeviceId(nil)
+        auth.handleAuthError(message: ["code": "service_unavailable", "message": "Auth service unavailable"])
+        XCTAssertEqual(app.lastError, "Sign-in is temporarily unavailable. Try again in a moment.")
+        auth.debugSetStoredDeviceId(nil)
+        auth.handleAuthError(message: ["code": "auth_rejected", "message": "No auth provider accepted the token"])
+        XCTAssertEqual(app.lastError, "Sign-in failed. Try again, or scan a pairing QR code.")
+
         XCTAssertEqual(RelayAuthErrorText.describe(code: "pairing_disabled", fallback: "x"),
                        "This server doesn't accept new pairings.")
         XCTAssertEqual(RelayAuthErrorText.describe(code: "something_new", fallback: "fallback"), "fallback")
@@ -173,5 +182,26 @@ final class ReconnectRound2Tests: XCTestCase {
         app.onAuthInfoReceived(githubClientId: "gh")
         XCTAssertFalse(app.isAwaitingAuthInfo)
         XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+    }
+
+    /// K-185: Scan QR is usable while `auth_info` is pending. A late
+    /// `auth_info_response` must not drop the pairing in flight back to the
+    /// sign-in screen.
+    func testLateAuthInfoKeepsAPairingInFlight() throws {
+        let (app, root) = try makeApp()
+        defer { app.disconnect(); try? FileManager.default.removeItem(at: root) }
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        let auth = try XCTUnwrap(app.authManager)
+        auth.debugIsolatedIdentity = true
+        auth.debugSetStoredDeviceId(nil)
+        app.connectionStatus = .authenticating
+        auth.requestAuthInfo()
+        XCTAssertTrue(app.isAwaitingAuthInfo)
+        auth.authenticateWithPairingToken("t")
+        app.onAuthInfoReceived(githubClientId: "gh")
+        XCTAssertEqual(app.connectionStatus, .authenticating)
+        XCTAssertTrue(LoginView.showsStatusPanel(isOAuthInFlight: false, connectionStatus: app.connectionStatus,
+                                                 isAwaitingAuthInfo: app.isAwaitingAuthInfo))
     }
 }

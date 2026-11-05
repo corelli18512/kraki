@@ -1759,16 +1759,6 @@
         }
       }
     },
-    "Authentication failed. Scan a pairing QR code to get started." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "认证失败。请扫描配对二维码以开始使用。"
-          }
-        }
-      }
-    },
     "Authentication service temporarily unavailable. Reconnecting…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8974,6 +8964,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "登录未完成。请重试。"
+          }
+        }
+      }
+    },
+    "Sign-in failed. Try again, or scan a pairing QR code." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录失败。请重试，或扫描配对二维码。"
+          }
+        }
+      }
+    },
+    "Sign-in is temporarily unavailable. Try again in a moment." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录暂时不可用。请稍后再试。"
           }
         }
       }

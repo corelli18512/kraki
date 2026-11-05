@@ -111,6 +111,18 @@ enum RelayAuthErrorText {
             return fallback
         }
     }
+
+    /// Text for a failed sign-in with no paired device: a relay outage asks
+    /// for a retry, anything else stays neutral (it may be a GitHub sign-in,
+    /// not a pairing).
+    static func describeSignInFailure(code: String?) -> String {
+        switch code {
+        case "service_unavailable", "auth_unavailable":
+            return String(localized: "Sign-in is temporarily unavailable. Try again in a moment.")
+        default:
+            return describe(code: code, fallback: String(localized: "Sign-in failed. Try again, or scan a pairing QR code."))
+        }
+    }
 }
 
 enum PairingFeedback: Equatable, Identifiable {

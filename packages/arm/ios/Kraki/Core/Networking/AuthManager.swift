@@ -655,7 +655,7 @@ final class AuthManager {
             }
         } else {
             appState.onAuthFailed(
-                error: RelayAuthErrorText.describe(code: code, fallback: String(localized: "Authentication failed. Scan a pairing QR code to get started."))
+                error: RelayAuthErrorText.describeSignInFailure(code: code)
             )
             if appState.connectionStatus == .awaitingLogin {
                 requestAuthInfo()

@@ -186,6 +186,7 @@ struct SessionDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: title)
         }
         .padding(.horizontal, 16)
         .frame(height: ChatHeaderMetrics.height))
@@ -207,6 +208,7 @@ struct SessionDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: title)
                 .transition(.opacity)
             }
             HeaderModePicker(sessionId: sessionId, expanded: $modePickerExpanded)
