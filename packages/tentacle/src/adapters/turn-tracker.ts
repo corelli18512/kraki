@@ -10,6 +10,7 @@
  *   proseSegment(text) a finished piece of prose (Pi delivers whole segments)
  *   toolStarted()      a tool runs → the prose before it was narration (a step)
  *   holdOpen()         turn stays open (background subagents) → prose is a step
+ *   steerReceived()    a steer entered the turn → the answer before it is a reply
  *   abort()            the user pressed Stop → end silently
  *   finish({ error })  the agent's run ended → reply or error, then idle, once
  *
@@ -18,6 +19,7 @@
  *    (onNarration) and becomes an `agent_narration` step (onNarrationTrace).
  *  - The last prose with no tool after it is the REPLY (onMessage). Its step is
  *    never recorded, so the reply doesn't show twice (last step + bubble).
+ *    So is an answer a steer interrupted: the steer's answer follows it.
  *  - A turn that ends on a tool has no reply: it is just its steps.
  *  - An error ends the turn as failed: the unfinished prose is dropped.
  *  - A user stop ends the turn silently: RelayClient owns that boundary
@@ -116,6 +118,18 @@ export class TurnTracker {
     this.takeBuffer();
     this.recordUnrecordedStep();
     this.toolSinceLastSegment = true;
+  }
+
+  /** A user message (a steer) entered the open turn. A finished answer with
+   *  no tool after it answered the earlier input: it stays a reply instead
+   *  of becoming narration when the steer's answer follows. */
+  steerReceived(): void {
+    this.takeBuffer();
+    if (this.toolSinceLastSegment || !this.unrecordedStep) return;
+    const reply = this.unrecordedStep;
+    this.unrecordedStep = '';
+    this.lastSegment = '';
+    this.sink.onMessage?.(this.sessionId, { content: reply, ...this.event() });
   }
 
   /** The agent's run ended but the turn stays open (background subagents will

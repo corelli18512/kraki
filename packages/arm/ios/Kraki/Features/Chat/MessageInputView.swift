@@ -71,6 +71,8 @@ struct MessageInputView: View {
     @State private var submitFailureTask: Task<Void, Never>?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    /// What the draft was started for (see ComposerDraftTarget).
+    @State private var draftTarget: ComposerDraftTarget?
     @State private var showVoiceConsent = false
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
@@ -121,6 +123,10 @@ struct MessageInputView: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { stagedImage != nil }
+    private var liveTarget: ComposerDraftTarget {
+        ComposerDraftTarget(permissionID: pendingPermission?.id, questionID: pendingQuestion?.id)
+    }
+    private var drafting: Bool { hasText || hasImage || isRecordingHere }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
     private var voice: IOSVoiceComposer { appState.iosVoiceComposer }
     private var isRecordingHere: Bool { voice.isRecording(in: sessionId) }
@@ -236,6 +242,10 @@ struct MessageInputView: View {
                 if focused && !programmaticVoiceFocus { voice.takeOver(sessionID: sessionId) }
                 programmaticVoiceFocus = false
             }
+            .onChange(of: drafting, initial: true) { _, now in
+                draftTarget = now ? (draftTarget ?? liveTarget) : nil
+            }
+            .onChange(of: sessionId) { _, _ in draftTarget = drafting ? liveTarget : nil }
             .settlesComposerLatches(sessionId: sessionId, state: session?.state,
                                     awaitingActive: $awaitingActive, abortPending: $abortPending)
             .onChange(of: selectedPhoto) { _, newItem in
@@ -511,6 +521,10 @@ struct MessageInputView: View {
     /// structured reply (answer / deny reason) is reviewed in the field first.
     private func sendVoice() {
         guard isRecordingHere else { return }
+        guard confirmDraftTarget() else {
+            withAnimation(Self.expandAnimation) { voice.finishToDraft() }
+            return
+        }
         switch submissionIntent {
         case .denyPermission:
             // A deny reason resolves a permission, not a message: review it.
@@ -829,6 +843,7 @@ struct MessageInputView: View {
         guard !isRecordingHere, !voiceSendPending else { return }
         // A correction still flowing into this draft stops at what is visible.
         if voice.sessionID == sessionId, voice.operation?.phase == .toDraft { voice.retireKeepingDraft() }
+        guard confirmDraftTarget() else { return }
         switch submissionIntent {
         case .denyPermission:
             handlePermissionDenyWithReason()
@@ -878,10 +893,20 @@ struct MessageInputView: View {
                                         userInfo: ["sessionId": sessionId])
     }
 
-    private func showSubmitFailure() {
+    /// False when the draft was started for another permission / question
+    /// than the one open now: the send is held once, the draft rebinds to the
+    /// open one and the user is told (a second press sends it).
+    private func confirmDraftTarget() -> Bool {
+        guard ComposerDraftTarget.changed(boundTo: draftTarget, live: liveTarget) else { return true }
+        draftTarget = liveTarget
+        showSubmitFailure(ComposerDraftTarget.changedNotice)
+        return false
+    }
+
+    private func showSubmitFailure(_ message: String = String(localized: "Couldn't send — your text is kept. Try again.")) {
         submitFailureTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) {
-            submitFailure = String(localized: "Couldn't send — your text is kept. Try again.")
+            submitFailure = message
         }
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         submitFailureTask = Task { @MainActor in

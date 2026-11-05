@@ -113,6 +113,24 @@ describe('pi idle eviction lifecycle', () => {
   });
 });
 
+describe('pi steer injected after a streamed answer (K-024)', () => {
+  it('keeps the streamed answer as a reply; the steer answer is the next one', () => {
+    const { adapter, sid, emit, narrate } = makeAdapter();
+    const onMessage = vi.fn();
+    const onNarrationTrace = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onNarrationTrace = onNarrationTrace;
+    adapter.onNarration = vi.fn();
+    adapter.onIdle = vi.fn();
+    narrate('A 14k-char essay.');
+    emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'shorter please' }] } });
+    narrate('Short version.');
+    emit({ type: 'agent_settled' });
+    expect(onMessage.mock.calls.map((c) => [c[0], c[1].content])).toEqual([[sid, 'A 14k-char essay.'], [sid, 'Short version.']]);
+    expect(onNarrationTrace).not.toHaveBeenCalled();
+  });
+});
+
 describe('pi narration → draft + TRACE', () => {
   it('message_end prose → onNarration RECONCILE now, TRACE deferred (may still graduate)', () => {
     const { adapter, session, narrate } = makeAdapter();

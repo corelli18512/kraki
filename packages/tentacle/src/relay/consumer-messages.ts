@@ -16,6 +16,15 @@ import { ensureSessionResumed, sendToAdapter } from './session-resume.js';
 import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, settleAdapterIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
 import { logger, traceLog, describeFailure } from './shared.js';
 
+/** How long the agent may leave a Stop unanswered before a repeated Stop
+ *  closes the turn without it. A quick double tap still waits. */
+const ABORT_UNANSWERED_MS = 5_000;
+/** How long a Stop may stay unanswered before the turn is closed without
+ *  it. The apps keep Stop disabled until the session goes idle, so a hung
+ *  abort must end here. Above the slowest adapter abort (Codex
+ *  turn/interrupt, 15 s). */
+export const ABORT_HUNG_MS = 20_000;
+
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   // Field types first (see @kraki/protocol/schemas): handlers below trust them,
   // and a malformed field must never reach a session's history.
@@ -347,6 +356,10 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         const deliver = async () => {
           if (persistAtDispatch) persistInput();
           const idle = waitForTurnIdle(client, sessionId);
+          client.openingPromptTurns.set(sessionId, reservation.turnId);
+          const opened = () => {
+            if (client.openingPromptTurns.get(sessionId) === reservation.turnId) client.openingPromptTurns.delete(sessionId);
+          };
           try {
             const dispatch = dispatchInput(client, sessionId, async () => {
               await ensureSessionResumed(client, sessionId);
@@ -391,6 +404,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // idle. Explicit abort is the inverse: idle is authoritative even
             // if a preflight prompt RPC never ACKs, so release the input chain
             // without waiting for that stale transport Promise.
+            dispatch.then(opened, opened);
             const firstBoundary = await Promise.race([
               dispatch.then(() => 'accepted' as const),
               idle.then(() => 'idle' as const),
@@ -470,40 +484,64 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         // must never settle the successor.
         const turnId = client.activeInputTurnIds.get(sessionId);
         const abortKey = turnId ?? '';
-        if (client.abortsInFlight.get(sessionId) === abortKey) break;
-        client.abortsInFlight.set(sessionId, abortKey);
+        const pendingAbort = client.abortsInFlight.get(sessionId);
+        if (pendingAbort?.turnKey === abortKey) {
+          // A second Stop joins the first. When the agent has left the first
+          // unanswered for a while, the user asking again closes the turn
+          // here; late agent events for it are fenced as settled.
+          if (Date.now() - pendingAbort.startedAt >= ABORT_UNANSWERED_MS) pendingAbort.settle();
+          break;
+        }
         const snapshot = client.card.state(sessionId);
+        // A turn still running without any output yet is stopped too: without
+        // a row the chat would show only the prompt.
+        const turnRunning = !!turnId
+          && client.settledAdapterTurnIds.get(sessionId) !== turnId
+          && client.sessionManager.getMeta(sessionId)?.state === 'active'
+          && !client.turnHasOutcome.has(sessionId);
+        let abortSettled = false;
+        const settleAbort = () => {
+          if (abortSettled) return;
+          abortSettled = true;
+          if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
+          // An open question is visible state too: record the abort so
+          // the conversation shows "User aborted" after it.
+          const stillRunning = turnRunning && client.settledAdapterTurnIds.get(sessionId) !== turnId;
+          if (snapshot.draft || snapshot.action || stillRunning || client.openQuestions.has(sessionId)) {
+            finishTurnWithStatus(client, sessionId, {
+              type: 'user_abort',
+              payload: { abortedAt: new Date().toISOString() },
+            });
+          } else {
+            clearOpenQuestions(client, sessionId);
+            client.card.clear(sessionId);
+          }
+          client.pendingTerminalErrors.delete(sessionId);
+          client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
+          if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
+          resolveTurnIdle(client, sessionId);
+          client.sessionManager.markIdle(sessionId);
+          clearCompacting(client, sessionId);
+          // The user stopped this turn themselves: no turn-end push.
+          sendTurnIdle(client, sessionId, { reason: 'aborted' }, null);
+          // Turn boundary changed (aborted outcome). See settleAdapterIdle.
+          client.broadcastSessionList();
+        };
+        client.abortsInFlight.set(sessionId, { turnKey: abortKey, startedAt: Date.now(), settle: settleAbort });
+        const hungAbortTimer = setTimeout(() => {
+          logger.warn({ sessionId, turnId }, 'abortSession unanswered; closing the turn without it');
+          settleAbort();
+        }, ABORT_HUNG_MS);
+        hungAbortTimer.unref?.();
         client.adapter.abortSession(sessionId)
-          .then(() => {
-            if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
-            // An open question is visible state too: record the abort so
-            // the conversation shows "User aborted" after it.
-            if (snapshot.draft || snapshot.action || client.openQuestions.has(sessionId)) {
-              finishTurnWithStatus(client, sessionId, {
-                type: 'user_abort',
-                payload: { abortedAt: new Date().toISOString() },
-              });
-            } else {
-              clearOpenQuestions(client, sessionId);
-              client.card.clear(sessionId);
-            }
-            client.pendingTerminalErrors.delete(sessionId);
-            client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
-            if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
-            resolveTurnIdle(client, sessionId);
-            client.sessionManager.markIdle(sessionId);
-            clearCompacting(client, sessionId);
-            // The user stopped this turn themselves: no turn-end push.
-            sendTurnIdle(client, sessionId, { reason: 'aborted' }, null);
-            // Turn boundary changed (aborted outcome). See settleAdapterIdle.
-            client.broadcastSessionList();
-          })
+          .then(settleAbort)
           .catch((err) => {
             logger.error({ err, sessionId }, 'abortSession failed');
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
           })
           .finally(() => {
-            if (client.abortsInFlight.get(sessionId) === abortKey) client.abortsInFlight.delete(sessionId);
+            clearTimeout(hungAbortTimer);
+            if (client.abortsInFlight.get(sessionId)?.settle === settleAbort) client.abortsInFlight.delete(sessionId);
           });
         break;
       }

@@ -150,6 +150,56 @@ describe('a daemon restart while a prompt is queued (2-30)', () => {
   });
 });
 
+describe('a daemon crash after echoing an input, before dispatching it (K-138)', () => {
+  it('closes the input as failed at startup instead of leaving it unanswered', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.sm.markIdle(sessionId);
+    first.input(sessionId, 'A', 'cid-a');
+    // The process dies here: A is on the spine and echoed, the agent never got it.
+    const next = build(new SessionManager(dir));
+    void resumeDisconnectedSessions(next.client);
+
+    const spine = rows(next.sm, sessionId);
+    expect(spine.map((r) => r.type)).toEqual(['user_message', 'turn_status', 'idle']);
+    expect(spine[1].payload.action).toMatchObject({
+      type: 'failed',
+      payload: { code: 'process_lost', message: expect.stringContaining('before this message reached the agent') },
+    });
+    expect(next.sm.getInputLedgerEntry(sessionId, 'cid-a')?.status).toBe('rejected');
+    expect(next.adapter.sendMessage as Fn).not.toHaveBeenCalled();
+  });
+
+  it('leaves an idle session whose last input was answered alone', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.input(sessionId, 'A', 'cid-a');
+    await vi.waitFor(() => expect(first.adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    first.cb('onMessage')(sessionId, { content: 'done' });
+    first.cb('onIdle')(sessionId);
+
+    const next = build(new SessionManager(dir));
+    await resumeDisconnectedSessions(next.client);
+    expect(rows(next.sm, sessionId).map((r) => r.type)).toEqual(['user_message', 'agent_message', 'idle']);
+  });
+
+  it('does not read the log of a disconnected session with nothing undispatched', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.input(sessionId, 'A', 'cid-a');
+    await vi.waitFor(() => expect(first.adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    first.cb('onMessage')(sessionId, { content: 'done' });
+    first.cb('onIdle')(sessionId);
+    first.sm.markDisconnected(sessionId);
+
+    const sm = new SessionManager(dir);
+    const read = vi.spyOn(sm, 'getMessagesAfterSeq');
+    const next = build(sm);
+    await resumeDisconnectedSessions(next.client);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
 describe('an answer typed in the composer (2-36)', () => {
   it('stays in the turn that asked: its Steps are not split', async () => {
     const { adapter, sm, cb, input } = build();
@@ -177,5 +227,40 @@ describe('an answer typed in the composer (2-36)', () => {
     const trace = sm.readTurnTrace(sessionId, reply.seq);
     expect(trace.turnStartSeq).toBe(aSeq);
     expect(trace.entries.filter((e) => (e as { type: string }).type === 'tool_start')).toHaveLength(2);
+  });
+});
+
+describe('steers sent while the first prompt is still opening its turn (K-014)', () => {
+  it('keep their send order on the spine and at the agent: 1, 2, 3', async () => {
+    const { adapter, sm, input } = build();
+    const { sessionId } = sm.createSession('claude');
+    sm.markIdle(sessionId);
+    // Like a real adapter, no turn is open until it accepts prompt #1
+    // (e.g. Pi respawning an idle-reaped process first).
+    let settled = true;
+    let acceptFirst!: () => void;
+    (adapter.isTurnSettled as Fn).mockImplementation(() => settled);
+    (adapter.sendMessage as Fn).mockImplementation((_sid: string, text: string) => text === 'one'
+      ? new Promise<void>((done) => { acceptFirst = () => { settled = false; done(); }; })
+      : Promise.resolve());
+
+    input(sessionId, 'one', 'cid-1');
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    // The app believes the session busy after #1 and sends #2 as a steer.
+    input(sessionId, 'two', 'cid-2', { delivery: 'steer' });
+    await flush();
+    acceptFirst();
+    await flush();
+    input(sessionId, 'three', 'cid-3', { delivery: 'steer' });
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(3));
+
+    const sent = (adapter.sendMessage as Fn).mock.calls.map((call) => [call[1], call[3]?.delivery ?? 'prompt']);
+    expect(sent).toEqual([['one', 'prompt'], ['two', 'steer'], ['three', 'steer']]);
+    const spine = rows(sm, sessionId);
+    // Prompt #1's turn was never closed by the steer that joined it.
+    expect(spine.map((r) => r.type)).toEqual(['user_message', 'user_message', 'user_message']);
+    expect(spine.map((r) => r.payload.content)).toEqual(['one', 'two', 'three']);
+    expect(spine.slice(1).map((r) => r.payload.delivery)).toEqual(['steer', 'steer']);
+    expect(sm.getMeta(sessionId)?.state).toBe('active');
   });
 });

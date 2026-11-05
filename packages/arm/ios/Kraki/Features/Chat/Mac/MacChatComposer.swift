@@ -85,6 +85,10 @@ struct MacChatComposer: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    /// What the draft was started for (see ComposerDraftTarget).
+    @State private var draftTarget: ComposerDraftTarget?
+    @State private var submitNotice: String?
+    @State private var submitNoticeTask: Task<Void, Never>?
     @State private var showVoiceConsent = false
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
@@ -161,6 +165,10 @@ struct MacChatComposer: View {
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+    private var liveTarget: ComposerDraftTarget {
+        ComposerDraftTarget(permissionID: pendingPermission?.id, questionID: pendingQuestion?.id)
+    }
+    private var drafting: Bool { hasText || stagedImage != nil || voiceOwnsComposer }
     /// Kept per Session in the store (like the draft): this view is rebuilt
     /// whenever another Session is shown.
     private var stagedImage: StagedComposerImage? { sessionStore.stagedImages[sessionId] }
@@ -218,6 +226,7 @@ struct MacChatComposer: View {
         // Connection state belongs to the title area, never above the input:
         // reconnecting is silent and messages queue until it is back. Only a
         // computer that really can't receive right now is worth a note here.
+        if let submitNotice { return submitNotice }
         guard appState.hasCompletedInitialConnect, let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
@@ -285,6 +294,10 @@ struct MacChatComposer: View {
             .onChange(of: voiceComposer.dispatchSignal) { _, _ in
                 if voiceComposer.dispatchedSessionID == sessionId { awaitingActive = true }
             }
+            .onChange(of: drafting, initial: true) { _, now in
+                draftTarget = now ? (draftTarget ?? liveTarget) : nil
+            }
+            .onChange(of: sessionId) { _, _ in draftTarget = drafting ? liveTarget : nil }
             .onChange(of: voiceComposer.editorRequest) { _, _ in
                 if voiceComposer.editorSessionID == sessionId { requestComposerFocus() }
             }
@@ -722,7 +735,28 @@ struct MacChatComposer: View {
         requestComposerFocus()
     }
 
+    /// False when the draft was started for another permission / question
+    /// than the one open now: the send is held once, the draft rebinds to the
+    /// open one and the user is told (a second press sends it).
+    private func confirmDraftTarget() -> Bool {
+        guard ComposerDraftTarget.changed(boundTo: draftTarget, live: liveTarget) else { return true }
+        draftTarget = liveTarget
+        submitNoticeTask?.cancel()
+        submitNotice = ComposerDraftTarget.changedNotice
+        NSSound.beep()
+        submitNoticeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            submitNotice = nil
+        }
+        return false
+    }
+
     private func handleModeSubmit() {
+        guard confirmDraftTarget() else {
+            if voiceOwnsComposer { voiceComposer.finishToDraft() }
+            return
+        }
         if voiceOwnsComposer {
             // Free-form answers use main's answerTo-aware staged outbox;
             // only permission denial still requires review in the editor.

@@ -82,13 +82,20 @@ export function reserveInput(
 ): { duplicate: boolean; conflict: boolean; recovery: boolean; effectiveDelivery: 'prompt' | 'steer'; turnId: string; entry?: InputLedgerEntry } {
   const meta = client.sessionManager.getMeta(sessionId);
   const adapterSettled = client.adapter.isTurnSettled?.(sessionId) === true;
+  // A prompt still being handed to the agent owns the next turn. A steer sent
+  // right behind it (the app already shows the session busy) joins that turn
+  // instead of becoming a later prompt that a following steer would overtake.
+  const openingTurnId = client.compactingSessions.has(sessionId)
+    ? undefined
+    : client.openingPromptTurns.get(sessionId);
   const staleSteer = requestedDelivery === 'steer'
+    && !openingTurnId
     && (
       meta?.state === 'idle'
       || meta?.state === 'disconnected'
       || adapterSettled
     );
-  if (requestedDelivery === 'steer' && adapterSettled && meta?.state === 'active') {
+  if (requestedDelivery === 'steer' && !openingTurnId && adapterSettled && meta?.state === 'active') {
     // Reconcile a terminal callback that Relay missed before opening the new
     // prompt. Otherwise the prior normal-input chain remains blocked forever
     // waiting for an idle the adapter has already crossed.
@@ -111,7 +118,7 @@ export function reserveInput(
   // already in flight. Reuse its identity so provider callbacks captured at
   // that run boundary remain admissible; only a stale steer opens a new turn.
   const turnId = effectiveDelivery === 'steer' && !staleSteer
-    ? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
+    ? openingTurnId ?? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
     : `${sessionId}:${turnAnchor}`;
   if (!clientId) {
     claimAnchor();
@@ -245,6 +252,7 @@ export function resolveTurnIdle(client: RelayClient, sessionId: string): void {
   // The underlying task remains observed and is fenced by its turn identity
   // if it ever completes, while a new dispatch may start immediately.
   client.inputDispatches.delete(sessionId);
+  client.openingPromptTurns.delete(sessionId);
   const waiter = client.turnIdleWaiters.get(sessionId);
   if (!waiter) return;
   client.turnIdleWaiters.delete(sessionId);
@@ -340,10 +348,22 @@ export function settleAdapterIdle(client: RelayClient, sessionId: string, event?
 /** A turn that ended on tool calls with no closing prose is relayed as-is:
  *  it has Steps but no reply. Give those Steps a spine anchor (protocol
  *  SystemMessage kind `no_reply`, which clients render as a steps-only
- *  section) — for every agent alike, instead of each adapter improvising. */
+ *  section) — for every agent alike, instead of each adapter improvising.
+ *  A turn whose only words were streamed (no reply event, no step) keeps
+ *  them as its reply. Either way the live draft ends with the turn: a stale
+ *  one would surface in the next turn's Stopped/Turn failed row. */
 export function anchorStepsOnlyTurn(client: RelayClient, sessionId: string): void {
-  if (client.turnHasOutcome.has(sessionId)) return;
-  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) return;
+  const draft = client.card.state(sessionId).draft;
+  if (client.turnHasOutcome.has(sessionId)) {
+    if (draft) client.card.onBubble(sessionId);
+    return;
+  }
+  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) {
+    if (!draft.trim()) return;
+    client.card.onBubble(sessionId);
+    client.send({ type: 'agent_message', sessionId, payload: { content: draft } });
+    return;
+  }
   client.card.onBubble(sessionId);
   client.send({ type: 'system_message', sessionId, payload: { kind: 'no_reply' } });
 }

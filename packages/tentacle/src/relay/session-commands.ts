@@ -1,7 +1,8 @@
 /** Session commands: create, fork, import local sessions, delete, archive, auto-titles. */
 
 import { toWireSessionMode } from '@kraki/protocol';
-import { join } from 'node:path';
+import { accessSync, constants as fsConstants, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ProducerMessage, ConsumerMessage } from '@kraki/protocol';
 import { scanLocalSessions, filterSessions } from '../session-scanner.js';
@@ -10,6 +11,32 @@ import { EventsWatcher } from '../events-watcher.js';
 import { RelayClient } from '../relay-client.js';
 import { beginAdapterTurn, finishTurnWithStatus, purgeSessionToolState, sendTurnIdle } from './turns.js';
 import { logger, AUTO_ARCHIVE_SWEEP_MS } from './shared.js';
+
+/** The folder a new session works in. Without one the agent works in the
+ *  user's home, never the filesystem root; `~` means home too. A folder the
+ *  agent could not start in is refused here, naming the folder, instead of
+ *  failing the first send with the agent's own spawn error. */
+export function resolveSessionFolder(cwd: string | undefined): string {
+  const requested = cwd?.trim() ?? '';
+  if (!requested) return homedir();
+  const folder = requested === '~' ? homedir()
+    : /^~[\\/]/.test(requested) ? join(homedir(), requested.slice(2))
+    : requested;
+  if (!isAbsolute(folder)) throw new Error(`Use the folder's full path (got "${requested}").`);
+  let isFolder: boolean;
+  try {
+    isFolder = statSync(folder).isDirectory();
+  } catch {
+    throw new Error(`The folder ${folder} doesn't exist on this computer.`);
+  }
+  if (!isFolder) throw new Error(`${folder} is not a folder.`);
+  try {
+    accessSync(folder, fsConstants.R_OK | fsConstants.X_OK);
+  } catch {
+    throw new Error(`The folder ${folder} can't be opened (permission denied).`);
+  }
+  return folder;
+}
 
 export async function handleCreateSession(client: RelayClient, msg: ConsumerMessage): Promise<void> {
   if (msg.type !== 'create_session') return;
@@ -23,9 +50,8 @@ export async function handleCreateSession(client: RelayClient, msg: ConsumerMess
   }
 
   try {
-    // Without an explicit folder the agent works in the user's home, never
-    // the filesystem root.
-    const result = await client.adapter.createSession({ model, reasoningEffort, contextTier, cwd: cwd || homedir(), sessionId: preSessionId, agentId });
+    const folder = resolveSessionFolder(cwd);
+    const result = await client.adapter.createSession({ model, reasoningEffort, contextTier, cwd: folder, sessionId: preSessionId, agentId });
 
     // If an initial prompt was provided, send it to the new session.
     // Otherwise mark idle — the SDK only fires session.idle after a turn

@@ -121,6 +121,7 @@
   },
   "composer": {
     "imageTooLarge": "Image is too large (max 3 MB after compression).",
+    "targetChanged": "The agent's request changed. Check your message, then send again.",
     "sendDictation": "Send dictation",
     "stop": "Stop agent",
     "submitAnswer": "Submit answer",

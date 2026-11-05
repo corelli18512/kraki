@@ -89,6 +89,19 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(content("user_message", seq: 4, body: "body", steps: 2).canShowSteps)
     }
 
+    /// K-021: a draft stays bound to the permission / question it was typed for.
+    func testComposerDraftTargetHoldsASendWhoseTargetChanged() {
+        let p1 = ComposerDraftTarget(permissionID: "p1", questionID: "q1")
+        XCTAssertEqual(p1, .permission("p1"))
+        XCTAssertEqual(ComposerDraftTarget(permissionID: nil, questionID: "q1"), .question("q1"))
+        XCTAssertEqual(ComposerDraftTarget(permissionID: nil, questionID: nil), .conversation)
+        XCTAssertFalse(ComposerDraftTarget.changed(boundTo: nil, live: p1))
+        XCTAssertFalse(ComposerDraftTarget.changed(boundTo: p1, live: .permission("p1")))
+        XCTAssertTrue(ComposerDraftTarget.changed(boundTo: p1, live: .permission("p2")))
+        XCTAssertTrue(ComposerDraftTarget.changed(boundTo: .question("q1"), live: .conversation))
+        XCTAssertTrue(ComposerDraftTarget.changed(boundTo: .conversation, live: .permission("p1")))
+    }
+
     func testComposerIntentPrioritizesStructuredResponsesThenSteer() {
         XCTAssertEqual(MessageComposerPolicy.intent(isBusy: false, hasPermission: false, hasQuestion: false), .prompt)
         XCTAssertEqual(MessageComposerPolicy.intent(isBusy: true, hasPermission: false, hasQuestion: false), .steer)

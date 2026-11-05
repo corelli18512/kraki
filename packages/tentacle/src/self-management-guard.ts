@@ -7,8 +7,9 @@ export const SELF_MANAGEMENT_DENIAL_REASON =
  *
  * Matches only when `kraki` is the command being run — at the start of the
  * line or after `;`, `&&`, `||`, `|`, `(`, `$(` — optionally behind sudo/env/
- * nohup/VAR=value prefixes and a path, including `kraki.exe` on Windows, and
- * inside backticks or `sh -c "…"`. Text that merely mentions the
+ * nohup/npx/VAR=value prefixes and a path, including `kraki.exe` on Windows
+ * and the `@kraki/tentacle` package, and inside backticks or `sh -c "…"`
+ * (also `bash -lc`). Text that merely mentions the
  * words (commit messages, grep patterns, docs) is not a command and passes.
  * Also blocks killing Kraki by name or by its PID file, and unloading its
  * launchd job. Best effort: an agent determined to stop it can; this only
@@ -18,14 +19,17 @@ export const SELF_MANAGEMENT_MATCHER_SOURCE = String.raw`function krakiIsSelfMan
   if (typeof command !== "string") return false;
   // Also inside backticks and "sh -c '...'": those run it too. Plain
   // quotes don't count (commit messages mention commands).
-  var start = "(?:^|[;&|\\n(\\x60]|\\$\\(|-c\\s+[\"'])\\s*";
-  var prefix = "(?:(?:sudo|env|nohup|time|exec|command)\\s+(?:-\\S+\\s+)*|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
-  var kraki = "(?:\\S*[\\\\/])?kraki(?:\\.exe)?\\s+(?:stop|restart|update)\\b";
+  var start = "(?:^|[;&|\\n(\\x60]|\\$\\(|-[A-Za-z]*c\\s+[\"'])\\s*";
+  var prefix = "(?:(?:sudo|env|nohup|time|exec|command|npx|bunx|pnpm\\s+(?:exec|dlx)|yarn\\s+(?:exec|dlx))\\s+(?:-\\S+\\s+)*|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
+  var kraki = "(?:(?:\\S*[\\\\/])?kraki(?:\\.exe)?|@kraki\\/tentacle(?:@\\S*)?)\\s+(?:stop|restart|update)\\b";
   if (new RegExp(start + prefix + kraki, "i").test(command)) return true;
-  if (/(?:^|[;&|\n(]|\$\()\s*(?:sudo\s+)?(?:pkill|killall)\b[^;&|\n]*\bkraki\b/i.test(command)) return true;
-  if (/(?:^|[;&|\n(]|\$\()\s*taskkill\b[^;&|\n]*\bkraki/i.test(command)) return true;
-  // Killing the daemon by its PID file, or unloading its launchd job.
+  if (new RegExp(start + "(?:sudo\\s+)?(?:pkill|killall)\\b[^;&|\\n]*\\bkraki\\b", "i").test(command)) return true;
+  if (new RegExp(start + "taskkill\\b[^;&|\\n]*\\bkraki", "i").test(command)) return true;
+  // Killing the daemon by its PID file or by a pgrep of its name, also
+  // through xargs; or unloading its launchd job.
   if (/\bkill\b[^;&|\n]*(?:daemon\.pid|\.kraki\b)/i.test(command)) return true;
+  if (new RegExp(start + "(?:sudo\\s+)?kill\\b[^;&|\\n]*\\bpgrep\\b[^;&|\\n]*\\bkraki\\b", "i").test(command)) return true;
+  if (/(?:daemon\.pid|\.kraki\b|\bpgrep\b[^;&|\n]*\bkraki\b)[^;&\n]*\|\s*(?:sudo\s+)?xargs\b[^;&|\n]*\bkill\b/i.test(command)) return true;
   if (/\blaunchctl\s+(?:bootout|unload|remove|kill|stop|disable)\b[^;&|\n]*kraki/i.test(command)) return true;
   return false;
 }`;

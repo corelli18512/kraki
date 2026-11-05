@@ -373,6 +373,7 @@ targets:
       - path: Kraki/Features/Chat/ComposerOverlayReporting.swift
       - path: Kraki/Features/Chat/ComposerLatchSettling.swift
       - path: Kraki/Features/Chat/ComposerAnswerImages.swift
+      - path: Kraki/Features/Chat/ComposerDraftTarget.swift
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac
