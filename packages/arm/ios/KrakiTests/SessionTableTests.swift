@@ -12,13 +12,13 @@ final class SessionTableTests: XCTestCase {
     /// swipe actions and vertical drags still scroll.
     func testOnlySidewaysSwipesOnArchivedRowsAreClaimed() {
         let archived = SessionTableController.archivedPrefix + "s1"
-        XCTAssertTrue(SessionTableController.claimsSwipe(onItem: archived, velocity: CGPoint(x: -600, y: 40)))
-        XCTAssertTrue(SessionTableController.claimsSwipe(onItem: archived, velocity: CGPoint(x: 300, y: -20)))
-        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: archived, velocity: CGPoint(x: 30, y: 500)))
-        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: "s1", velocity: CGPoint(x: -600, y: 0)))
+        XCTAssertTrue(SessionTableController.claimsSwipe(onItem: archived, translation: CGPoint(x: -12, y: 3)))
+        XCTAssertTrue(SessionTableController.claimsSwipe(onItem: archived, translation: CGPoint(x: 10, y: -1)))
+        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: archived, translation: CGPoint(x: 2, y: 11)))
+        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: "s1", translation: CGPoint(x: -600, y: 0)))
         XCTAssertFalse(SessionTableController.claimsSwipe(onItem: SessionTableController.archivedHeaderId,
-                                                           velocity: CGPoint(x: -600, y: 0)))
-        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: nil, velocity: CGPoint(x: -600, y: 0)))
+                                                           translation: CGPoint(x: -600, y: 0)))
+        XCTAssertFalse(SessionTableController.claimsSwipe(onItem: nil, translation: CGPoint(x: -600, y: 0)))
     }
 
     /// K-339: at midnight the list rebuilds its rows ("14:05" → "yesterday"),

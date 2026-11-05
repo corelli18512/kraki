@@ -144,6 +144,10 @@ struct NewSessionSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, Self.composerGap)
                 .padding(.bottom, Self.composerBottom)
+                // Sized before the form: a multi-line draft grows the
+                // composer, and with it the sheet, rather than the form
+                // keeping the room and the draft staying one line.
+                .layoutPriority(2)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
         }

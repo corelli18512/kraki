@@ -91,6 +91,26 @@ final class SessionTitleEditTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.sessions["s"]?.title, "Renamed elsewhere")
     }
 
+    /// K-147: an auto title the computer sent before it got the rename (it
+    /// carries the old manual title, or none) keeps the rename pending: the
+    /// title stays, and a list sent before the rename still cannot undo it.
+    func testAutoTitleBeforeTheRenameKeepsIt() throws {
+        let app = makeApp(title: nil, autoTitle: "Auto")
+        app.commandSender?.renameSession(sessionId: "s", title: "New")
+        try route(app, ["type": "session_title_updated", "sessionId": "s", "deviceId": "d",
+                        "payload": ["autoTitle": "X"]])
+        XCTAssertEqual(app.sessionStore.sessions["s"]?.title, "New")
+        XCTAssertEqual(app.sessionStore.sessions["s"]?.autoTitle, "X")
+        try route(app, sessionList(title: nil, autoTitle: "X"))
+        XCTAssertEqual(app.sessionStore.sessions["s"]?.title, "New", "the stale list keeps the rename")
+
+        // The rename's own echo confirms it; lists are authoritative again.
+        try route(app, ["type": "session_title_updated", "sessionId": "s", "deviceId": "d",
+                        "payload": ["title": "New", "autoTitle": "X"]])
+        try route(app, sessionList(title: "Elsewhere", autoTitle: "X"))
+        XCTAssertEqual(app.sessionStore.sessions["s"]?.title, "Elsewhere")
+    }
+
     /// K-147: a cleared title is not brought back by an earlier list either.
     func testClearedTitleSurvivesASessionListSentBeforeIt() throws {
         let app = makeApp(title: "Old", autoTitle: "Auto")

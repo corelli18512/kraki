@@ -1004,8 +1004,15 @@ final class SessionStore {
     }
 
     /// The computer's `session_title_updated`: authoritative for the manual
-    /// title, where absent means none is set (it was cleared).
+    /// title, where absent means none is set (it was cleared). One that does
+    /// not carry this device's pending rename (an auto title the computer
+    /// sent before it got the rename) updates only the auto title; the
+    /// computer echoes renames in order, so ours still arrives and confirms.
     func applyTitleUpdate(_ id: String, title: String?, autoTitle: String?) {
+        if let pending = unconfirmedTitles[id], (title ?? "") != pending {
+            setTitle(id, title: nil, autoTitle: autoTitle)
+            return
+        }
         unconfirmedTitles.removeValue(forKey: id)
         setTitle(id, title: title ?? "", autoTitle: autoTitle)
     }

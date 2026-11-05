@@ -498,9 +498,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// swipe on them and UIKit ends it as a tap — which opens the Session and
     /// unarchives it. A pan that does nothing claims those swipes (cancelling
     /// the tap); live rows keep their swipe actions, vertical drags scroll.
-    static func claimsSwipe(onItem id: String?, velocity: CGPoint) -> Bool {
+    static func claimsSwipe(onItem id: String?, translation: CGPoint) -> Bool {
         guard let id, id.hasPrefix(archivedPrefix) else { return false }
-        return abs(velocity.x) > abs(velocity.y)
+        return abs(translation.x) > abs(translation.y)
     }
 
     func tableView(_ tableView: UITableView, willBeginEditingRowAt indexPath: IndexPath) {
@@ -607,7 +607,8 @@ extension SessionTableController: UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         guard let pan = recognizer as? UIPanGestureRecognizer, let tableView = pan.view as? UITableView,
               let path = tableView.indexPathForRow(at: pan.location(in: tableView)) else { return false }
-        return Self.claimsSwipe(onItem: dataSource.itemIdentifier(for: path), velocity: pan.velocity(in: tableView))
+        return Self.claimsSwipe(onItem: dataSource.itemIdentifier(for: path),
+                                translation: pan.translation(in: tableView))
     }
 
     func gestureRecognizer(_ recognizer: UIGestureRecognizer,

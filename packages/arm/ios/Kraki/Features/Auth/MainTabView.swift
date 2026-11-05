@@ -6,7 +6,11 @@ struct MainTabView: View {
     @Environment(AppState.self) private var appState
     let allowsInitialNavigation: Bool
     /// The pre-iOS 26 tab bar on any system (tests run on iOS 26 only).
+    #if DEBUG
     var forcesLegacyTabs = false
+    #else
+    let forcesLegacyTabs = false
+    #endif
     /// Open Sessions, oldest first. On wide windows the first one is shown
     /// beside the list (the Mac's selection) and later ones (forks) are
     /// pushed over it; on narrow windows all are pushed over the list. The
