@@ -1,7 +1,9 @@
 /**
  * Structured logging for Kraki tentacle.
  *
- * - Development: pretty-prints to stdout
+ * - Development (any process without NODE_ENV=production, e.g. CLI
+ *   commands): JSON lines on stderr, so stdout stays clean for `--json`
+ *   output and other machine-readable results
  * - Production: writes to log files under the current Kraki home
  *
  * Normal verbosity rotates every file — at 10 MB, or once its oldest entry is
@@ -81,7 +83,7 @@ export function createLogger(name: string, options: LoggerOptions = {}): pino.Lo
   const isDev = process.env.NODE_ENV !== 'production';
 
   if (isDev) {
-    return pino({ name, level });
+    return pino({ name, level }, pino.destination({ fd: 2, sync: true }));
   }
 
   const logDir = getLogsDir();

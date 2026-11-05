@@ -15,6 +15,7 @@ export function cmdConfig(): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
   console.log(JSON.stringify(config, null, 2));
@@ -24,6 +25,7 @@ export function cmdConfigRemoteUpdate(value?: string): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
   if (!value) {
@@ -46,6 +48,7 @@ export function cmdConfigLog(verbosity?: string): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
 
@@ -129,6 +132,7 @@ export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<v
       return;
     }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
 
@@ -177,10 +181,25 @@ export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<v
       return;
     }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
+    gracefulExit(1);
   }
 }
 
 // ── kraki setup --headless — non-interactive setup ──────
+
+/** Sign-in methods a computer can be set up with (the wizard offers the same). */
+const HEADLESS_AUTH_METHODS = ['github_token', 'apikey', 'open'] as const;
+type HeadlessAuthMethod = typeof HEADLESS_AUTH_METHODS[number];
+
+function isRelayUrl(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'ws:' || url.protocol === 'wss:') && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
 
 export function getArgValue(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -193,15 +212,32 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     gracefulExit(1);
   };
 
-  const relay = getArgValue(args, '--relay');
-  const auth = getArgValue(args, '--auth') ?? 'github_token';
+  const relayArg = getArgValue(args, '--relay')?.trim();
+  // `--auth github` is the relay's spelling (head README, docs/self-hosting.md).
+  const authArg = getArgValue(args, '--auth') ?? 'github_token';
+  const auth = authArg === 'github' ? 'github_token' : authArg;
+  const apiKey = getArgValue(args, '--api-key')?.trim();
   const deviceName = getArgValue(args, '--device-name');
   const githubToken = getArgValue(args, '--github-token');
-  const agentArg = getArgValue(args, '--agent'); // copilot | claude | both | auto
+  const agentArg = getArgValue(args, '--agent'); // copilot | claude | codex | pi | both | auto
   const anthropicKey = getArgValue(args, '--anthropic-key');
 
-  if (!relay) {
+  if (!relayArg) {
     return fail('missing_relay', '--relay is required');
+  }
+  // Same rule as the setup wizard: a bare host means wss://.
+  const relay = /^[a-z][a-z0-9+.-]*:\/\//i.test(relayArg) ? relayArg : `wss://${relayArg}`;
+  if (!isRelayUrl(relay)) {
+    return fail('bad_relay', `--relay must be a ws:// or wss:// URL (got "${relayArg}")`);
+  }
+  if (!HEADLESS_AUTH_METHODS.includes(auth as HeadlessAuthMethod)) {
+    return fail('bad_auth', `--auth must be one of: ${HEADLESS_AUTH_METHODS.join(', ')} (got "${auth}")`);
+  }
+  // An API-key relay registers this computer with the key (saved as the
+  // channel key, which the daemon and `kraki connect` send).
+  if (auth === 'apikey' && !apiKey) {
+    const { loadChannelKey } = await import('../config.js');
+    if (!loadChannelKey()) return fail('missing_api_key', '--auth apikey needs --api-key <key>');
   }
 
   // Map --agent to an explicit allow-list. Omit for auto-detection.
@@ -220,11 +256,14 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     case 'codex':
       agents = ['codex'];
       break;
+    case 'pi':
+      agents = ['pi'];
+      break;
     case 'both':
       agents = ['copilot', 'claude'];
       break;
     default:
-      return fail('bad_agent', `--agent must be one of: copilot, claude, codex, both, auto (got "${agentArg}")`);
+      return fail('bad_agent', `--agent must be one of: copilot, claude, codex, pi, both, auto (got "${agentArg}")`);
   }
 
   // Persist an Anthropic key into ~/.claude/settings.json so the daemon
@@ -243,6 +282,10 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     const { saveGitHubToken } = await import('../config.js');
     saveGitHubToken(githubToken);
   }
+  if (auth === 'apikey' && apiKey) {
+    const { saveChannelKey } = await import('../config.js');
+    saveChannelKey(apiKey);
+  }
 
   const { hostname } = await import('node:os');
   const { getOrCreateDeviceId, DEFAULT_LOG_VERBOSITY } = await import('../config.js');
@@ -250,7 +293,7 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
 
   const config: KrakiConfig = {
     relay,
-    authMethod: auth as KrakiConfig['authMethod'],
+    authMethod: auth as HeadlessAuthMethod,
     device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
     ...(agents && { agents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
@@ -312,11 +355,20 @@ export async function cmdAuth(args: string[]): Promise<void> {
   }
 
   // Step 1: Request device code
-  const res = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const { githubUnreachableMessage } = await import('../network-errors.js');
+    process.stderr.write(`error: ${githubUnreachableMessage(err)}\n`);
+    gracefulExit(1);
+    return;
+  }
   if (!res.ok) {
     process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
     gracefulExit(1);

@@ -12,6 +12,7 @@
  */
 
 import { wsProxyOptions } from './proxy.js';
+import { relayConnectErrorMessage } from './network-errors.js';
 import { WebSocket } from 'ws';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -96,7 +97,7 @@ export async function requestPairingToken(
 
     ws.on('error', (err) => {
       clearTimeout(timeout);
-      reject(new Error(`Connection failed: ${err.message}`));
+      reject(new Error(`Connection failed: ${relayConnectErrorMessage(err)}`));
     });
   });
 }

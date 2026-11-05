@@ -12,6 +12,12 @@
  *     (HKCU\…\Internet Settings). Most users there never set HTTPS_PROXY.
  *     A PAC script (automatic setup) is not supported.
  *
+ * Not supported: PAC scripts (automatic proxy configuration) and SOCKS
+ * proxies, from the system settings or ALL_PROXY=socks5://…. Kraki connects
+ * directly then; `unsupportedProxy()` names the setting so setup, `kraki
+ * status`, `kraki doctor` and the daemon log can say so instead of failing
+ * silently (K-328).
+ *
  * `applyProcessProxy()` makes fetch()/http(s).request use it (Node's built-in
  * proxy support) and exports the variables to agent child processes.
  * WebSockets (the `ws` package) open their own sockets and ignore that, so
@@ -31,8 +37,18 @@ export interface ProxySettings {
   source: 'env' | 'macos-system' | 'windows-system';
 }
 
-function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+function rawEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return env[name] || env[name.toLowerCase()] || undefined;
+}
+
+const isSocksUrl = (value: string) => /^socks[a-z0-9]*:\/\//i.test(value.trim());
+
+/** A usable (HTTP CONNECT) proxy variable; SOCKS values are ignored. Node's
+ *  fetch would take socks5:// with a raw ExperimentalWarning, while the relay
+ *  WebSocket cannot use it at all. */
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = rawEnvValue(env, name);
+  return value && !isSocksUrl(value) ? value : undefined;
 }
 
 /** Parse `scutil --proxy` output. */
@@ -48,6 +64,16 @@ export function parseScutilProxy(text: string): ProxySettings | null {
   const list = text.match(/ExceptionsList\s*:\s*<array>\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const noProxy = [...list.matchAll(/^\s*\d+\s*:\s*(\S+)/gm)].map((m) => m[1]);
   return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'macos-system' };
+}
+
+/** What a macOS proxy configuration without a web proxy uses instead, if anything. */
+export function parseScutilUnsupported(text: string): string | null {
+  if (parseScutilProxy(text)) return null;
+  const on = (key: string) => new RegExp(`^\\s*${key}\\s*:\\s*1\\s*$`, 'm').test(text);
+  if (on('ProxyAutoConfigEnable')) return 'automatic proxy configuration (PAC)';
+  if (on('SOCKSEnable')) return 'SOCKS proxy';
+  if (on('ProxyAutoDiscoveryEnable')) return 'automatic proxy discovery';
+  return null;
 }
 
 /** One `ProxyOverride` entry → a NO_PROXY rule (`127.*` → `127.0.0.0/8`). */
@@ -89,6 +115,59 @@ export function parseWindowsProxy(text: string): ProxySettings | null {
   return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'windows-system' };
 }
 
+/** What a Windows proxy configuration without a web proxy uses instead, if anything. */
+export function parseWindowsUnsupported(text: string): string | null {
+  if (parseWindowsProxy(text)) return null;
+  const val = (name: string) => text.match(new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.*?)\\s*$`, 'mi'))?.[1];
+  if (val('AutoConfigURL')) return 'automatic proxy configuration (PAC)';
+  const enable = val('ProxyEnable');
+  if (enable && Number(enable) !== 0 && /(^|;)\s*socks=/i.test(val('ProxyServer') ?? '')) return 'SOCKS proxy';
+  return null;
+}
+
+/**
+ * A proxy setting Kraki cannot use (it connects directly instead), as a short
+ * description, or null. Only when no usable proxy was found.
+ */
+export function unsupportedProxy(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string | null {
+  if (detectProxy(env, platform)) return null;
+  for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
+    const value = rawEnvValue(env, name);
+    if (value && isSocksUrl(value)) return `SOCKS proxy (${name})`;
+  }
+  const out = systemProxyText(platform);
+  if (out === null) return null;
+  return platform === 'win32' ? parseWindowsUnsupported(out) : parseScutilUnsupported(out);
+}
+
+// One `scutil --proxy` / `reg query` per process: `kraki status --json` (polled
+// by Kraki for Mac) asks detectProxy and unsupportedProxy, and the CLI's
+// startup applyProcessProxy asked already. Proxy settings are read once per
+// process anyway (proxySettings).
+const systemProxyTexts = new Map<string, string | null>();
+
+function systemProxyText(platform: string): string | null {
+  if (platform !== 'darwin' && platform !== 'win32') return null;
+  if (!systemProxyTexts.has(platform)) {
+    let out: string | null = null;
+    try {
+      out = platform === 'win32'
+        ? execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+          { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+        : execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { /* no system proxy information */ }
+    systemProxyTexts.set(platform, out);
+  }
+  return systemProxyTexts.get(platform) ?? null;
+}
+
+/** The one-line warning for an unsupported proxy setting. */
+export function unsupportedProxyMessage(setting: string): string {
+  return `Your network uses a ${setting}, which Kraki cannot use, so it connects directly. `
+    + 'If that fails, set an HTTP proxy: HTTPS_PROXY=http://host:port (proxy apps usually offer an HTTP port too), '
+    + 'or a web proxy in the system network settings.';
+}
+
 let cached: ProxySettings | null | undefined;
 
 export function detectProxy(env: NodeJS.ProcessEnv = process.env, platform = process.platform): ProxySettings | null {
@@ -98,22 +177,9 @@ export function detectProxy(env: NodeJS.ProcessEnv = process.env, platform = pro
     const noProxy = (envValue(env, 'NO_PROXY') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'env' };
   }
-  if (platform === 'win32') {
-    try {
-      const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
-        { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      return parseWindowsProxy(out);
-    } catch {
-      return null;
-    }
-  }
-  if (platform !== 'darwin') return null;
-  try {
-    const out = execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
-    return parseScutilProxy(out);
-  } catch {
-    return null;
-  }
+  const out = systemProxyText(platform);
+  if (out === null) return null;
+  return platform === 'win32' ? parseWindowsProxy(out) : parseScutilProxy(out);
 }
 
 function proxySettings(): ProxySettings | null {

@@ -89,6 +89,8 @@ final class TentacleSetupRunner {
         switch code {
         case "network", "relay_unreachable", "client_id_unavailable":
             String(localized: "Could not reach Kraki. Check your network connection, then try again.")
+        case "github_unreachable":
+            String(localized: "Could not reach GitHub. Check your network connection or proxy, then try again.")
         case "expired":
             String(localized: "The GitHub code expired. Try again.")
         case "denied", "cancelled":

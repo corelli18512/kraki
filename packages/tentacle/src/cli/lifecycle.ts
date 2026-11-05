@@ -11,6 +11,7 @@ import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon, daemonStartR
 import { runSetup } from '../setup.js';
 import { isSafeId } from '../session/text.js';
 import { disableWindowsAutostart } from '../windows-autostart.js';
+import { gracefulExit } from './exit.js';
 import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, ownerName, WINDOWS_APP_OWNER, type ManagedByMarker } from '../managed.js';
 
 // ── Commands ────────────────────────────────────────────
@@ -305,6 +306,7 @@ export function moveKrakiHomeAside(): void {
     console.log(chalk.dim('  Delete that folder to free the space for good. Run `kraki` to set up again.'));
   } catch (err) {
     console.log(chalk.red(`  Could not move ${home}: ${(err as Error).message}`));
+    process.exitCode = 1;
   }
 }
 
@@ -403,6 +405,11 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
   }
   console.log('');
   console.log(`  ${chalk.green('✔')} ${chalk.bold('Kraki is running')} ${chalk.dim(`in the background (PID ${pid})${process.platform === 'darwin' ? ' and starts again when you log in' : ''}.`)}`);
+  // Linux has no login autostart (K-276); say so instead of leaving users to
+  // find Kraki stopped after a reboot.
+  if (process.platform === 'linux') {
+    console.log(chalk.dim(`  After a restart, run ${chalk.bold('kraki start')} to bring it back.`));
+  }
   console.log('');
   console.log(`  ${chalk.hex('#2384d4').bold('Use it from your phone')}`);
 
@@ -455,6 +462,8 @@ export function cmdStop(): void {
     const status = getDaemonStatus();
     const reason = status ? daemonStartRefusal(status) : null;
     if (reason) console.log(chalk.dim(`  ${reason.replace(/^Refusing to start: /, '')}`));
+    // Not gracefulExit: the interactive menu continues after a stop.
+    process.exitCode = 1;
   }
 }
 
@@ -479,6 +488,7 @@ export async function cmdRestart(): Promise<void> {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.red('Cannot restart Kraki: no config found. Run `kraki` to set up first.'));
+    gracefulExit(1);
     return;
   }
 

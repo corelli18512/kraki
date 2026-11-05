@@ -1,6 +1,6 @@
 /** status, logs, fda, permissions, doctor, relay-info: looking at what Kraki is doing. */
 
-import { wsProxyOptions } from '../proxy.js';
+import { unsupportedProxy, unsupportedProxyMessage, wsProxyOptions } from '../proxy.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -10,6 +10,7 @@ import { getCliLaunchdJobState, isDaemonRunning, getDaemonStatus } from '../daem
 import { readStatusFile } from '../status-file.js';
 import { loadManagedBy, ownerName } from '../managed.js';
 import { gracefulExit } from './exit.js';
+import type { FdaStatus } from '../checks.js';
 
 export function cmdStatus(jsonOutput = false): void {
   const status = getDaemonStatus();
@@ -54,6 +55,8 @@ export function cmdStatus(jsonOutput = false): void {
             remoteUpdate: config.remoteUpdate !== false,
           }
         : { exists: false },
+      // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+      unsupportedProxy: unsupportedProxy(),
     };
     process.stdout.write(JSON.stringify(payload) + '\n');
     return;
@@ -88,6 +91,8 @@ export function cmdStatus(jsonOutput = false): void {
   } else {
     console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) console.log(chalk.yellow(`  Proxy:   ${unsupportedProxyMessage(ignoredProxy)}`));
 
   if (config) {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
@@ -167,9 +172,26 @@ export function cmdLogs(follow: boolean): void {
 
 // ── kraki fda — macOS Full Disk Access status ───────────
 
+/**
+ * Full Disk Access of Kraki itself. Run from a terminal (or over ssh), an
+ * in-process probe reports the terminal's access, so `kraki fda --watch`
+ * never turned "granted" after the user enabled Kraki (K-356). Probe through
+ * the Kraki app bundle like setup does; only the instance Launch Services
+ * started as that bundle (or Kraki for Mac's helper, whose access is the
+ * app's) probes in-process.
+ */
+async function probeKrakiFda(args: string[]): Promise<FdaStatus> {
+  const { probeFda, probeFdaAsApp, KRAKI_BUNDLE_ID, FDA_IN_PROCESS_FLAG } = await import('../checks.js');
+  const { isEmbeddedMacHelper } = await import('./lifecycle.js');
+  if (args.includes(FDA_IN_PROCESS_FLAG) || process.env.__CFBundleIdentifier === KRAKI_BUNDLE_ID || isEmbeddedMacHelper()) {
+    return probeFda();
+  }
+  return probeFdaAsApp();
+}
+
 export async function cmdFda(args: string[]): Promise<void> {
   const watch = args.includes('--watch');
-  const { probeFda } = await import('../checks.js');
+  const probeFda = () => probeKrakiFda(args);
 
   if (process.platform !== 'darwin') {
     process.stdout.write(JSON.stringify({ ok: true, status: 'not_applicable', platform: process.platform }) + '\n');
@@ -282,9 +304,9 @@ export async function cmdDoctor(): Promise<void> {
   } = await import('../checks.js');
   const { loadDaemonPid, loadDaemonIdentity } = await import('../config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
-  // multi-adapter logger (created at module load) defaults to info-level
-  // stdout (dev) which would interleave pino lines into the output, so
-  // force it silent before importing the module.
+  // multi-adapter logger (created at module load) logs at info level (to
+  // stderr outside the daemon, K-129); keep it silent so callers that merge
+  // stderr see only the JSON.
   const prevLogLevel = process.env.LOG_LEVEL;
   process.env.LOG_LEVEL = 'silent';
   const { detectAvailableAgents } = await import('../adapters/multi.js');
@@ -357,6 +379,8 @@ export async function cmdDoctor(): Promise<void> {
     // Agents that can actually be started right now (SDK importable + CLI present).
     available,
     pinnedAgents: config?.agents ?? null,
+    // A PAC/SOCKS proxy Kraki ignores (it connects directly), else null.
+    unsupportedProxy: unsupportedProxy(),
   };
 
   process.stdout.write(JSON.stringify(result) + '\n');
@@ -412,4 +436,5 @@ export async function cmdRelayInfo(args: string[]): Promise<void> {
   });
 
   process.stdout.write(result + '\n');
+  if (!(JSON.parse(result) as { ok: boolean }).ok) gracefulExit(1);
 }

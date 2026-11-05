@@ -20,17 +20,25 @@ export function pickMacDmg(releases: Release[]): string | null {
   return null;
 }
 
-export async function resolveMacDmgUrl(fetcher: typeof fetch = fetch): Promise<string> {
+export async function resolveMacDmgUrl(fetcher: typeof fetch = fetch, timeoutMs = 3000): Promise<string> {
+  // Where api.github.com is blackholed (China, K-324) a click must not hang
+  // until the browser gives up. AbortController, not AbortSignal.timeout:
+  // Safari added that only in 16.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     // A full page: Windows, iOS build records and the dogfood releases
     // (docs/dogfood.md) can sit above the newest mac-v release.
     const res = await fetcher('https://api.github.com/repos/corelli18512/kraki/releases?per_page=100', {
       headers: { Accept: 'application/vnd.github+json' },
+      signal: controller.signal,
     });
     if (!res.ok) return MAC_RELEASES_PAGE;
     return pickMacDmg(await res.json() as Release[]) ?? MAC_RELEASES_PAGE;
   } catch {
     return MAC_RELEASES_PAGE;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

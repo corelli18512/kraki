@@ -5,8 +5,8 @@
  * device naming, and agent verification.
  */
 
-import { wsProxyOptions } from './proxy.js';
-import { select, input, confirm } from '@inquirer/prompts';
+import { unsupportedProxy, unsupportedProxyMessage, wsProxyOptions } from './proxy.js';
+import { select, input, confirm, password } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { ora } from './spinner.js';
 import { homedir, hostname, platform, userInfo } from 'node:os';
@@ -22,10 +22,12 @@ import {
   getConfigPath,
   loadConfig,
   loadChannelKey,
+  saveChannelKey,
 } from './config.js';
 import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
+import { githubUnreachableMessage, relayConnectErrorMessage } from './network-errors.js';
 import { findMacAppWithBuiltIn } from './managed.js';
 import { runAgentsCheckChild, type AgentCheckResult } from './agents-check.js';
 import { isSea } from 'node:sea';
@@ -128,7 +130,7 @@ async function runFullDiskAccess(): Promise<void> {
   console.log('    Agents read and edit files across your projects. Allow it once and macOS');
   console.log("    won't interrupt them with permission prompts.");
   console.log('');
-  console.log(`    ${chalk.bold('Turn on “Kraki CLI” in the list that opens.')} ${chalk.dim('If it is not there, drag it in')}`);
+  console.log(`    ${chalk.bold('Turn on “Kraki” in the list that opens.')} ${chalk.dim('If it is not there, drag it in')}`);
   console.log(chalk.dim('    from the Finder window that opens next to it.'));
   console.log('');
   // macOS never lists an app under Full Disk Access by itself, and Kraki.app
@@ -210,7 +212,7 @@ export function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo
     });
     ws.on('error', (err) => {
       clearTimeout(timer);
-      reject(new Error(err.message || 'Connection failed'));
+      reject(new Error(relayConnectErrorMessage(err)));
     });
   });
 }
@@ -304,11 +306,17 @@ interface DeviceCodeResponse {
  * keypress); the user pastes it and approves. Saves the token for the daemon.
  */
 async function githubDeviceFlow(clientId: string): Promise<{ token: string; username: string }> {
-  const res = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(githubUnreachableMessage(err));
+  }
   if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`);
   const data = await res.json() as DeviceCodeResponse;
 
@@ -419,7 +427,10 @@ function openInBrowser(url: string): boolean {
  * scopes (repo, workflow, read:org, gist) and would be handed to the relay.
  * Kraki only needs to prove who the user is.
  */
-async function signInWithGitHub(clientId: () => Promise<string | undefined>): Promise<{ token: string; username: string }> {
+async function signInWithGitHub(
+  clientId: () => Promise<string | undefined>,
+  noClientIdMessage = 'Could not reach Kraki to start GitHub sign-in. Check your network connection.',
+): Promise<{ token: string; username: string }> {
   // Re-setup: Kraki's own saved token is fine to reuse while GitHub accepts it.
   const { loadGitHubToken } = await import('./config.js');
   const saved = loadGitHubToken();
@@ -441,7 +452,7 @@ async function signInWithGitHub(clientId: () => Promise<string | undefined>): Pr
     }
   }
   const id = await clientId();
-  if (!id) throw new Error('Could not reach Kraki to start GitHub sign-in. Check your network connection.');
+  if (!id) throw new Error(noClientIdMessage);
   return githubDeviceFlow(id);
 }
 
@@ -675,6 +686,11 @@ function printDone(lines: { user?: string; relay: string; region?: string; devic
 export async function runSetup(options: SetupOptions = {}): Promise<KrakiConfig> {
   await printAnimatedBanner();
   await confirmDespiteMacApp();
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) {
+    console.log(chalk.yellow(`  ⚠ ${unsupportedProxyMessage(ignoredProxy)}`));
+    console.log('');
+  }
 
   // Self-hosted relay override — skip login-first routing
   const customRelay = process.env.KRAKI_RELAY_URL;
@@ -776,7 +792,9 @@ async function runSetupDirect(defaultRelay: string, options: SetupOptions): Prom
     // receives the token (scope read:user). Say so before signing in.
     console.log(chalk.yellow('    This relay is not run by Kraki. Signing in with GitHub sends your GitHub sign-in'));
     console.log(chalk.yellow('    (read-only access to your public profile) to whoever runs it.'));
-    user = (await signInWithGitHub(async () => relayInfo.githubClientId)).username;
+    // The relay answered, so a missing id is its configuration, not the network (K-278).
+    user = (await signInWithGitHub(async () => relayInfo.githubClientId,
+      'This relay offers GitHub sign-in but has no GitHub app configured. Ask whoever runs it to set GITHUB_CLIENT_ID.')).username;
   } else if (cliMethods.length === 1) {
     authMethod = cliMethods[0];
     console.log(chalk.dim(`    ${cliAuthLabels[authMethod]?.trim() ?? authMethod}`));
@@ -788,6 +806,18 @@ async function runSetupDirect(defaultRelay: string, options: SetupOptions): Prom
     });
   } else {
     throw new Error('No supported auth method found on this relay');
+  }
+  if (authMethod === 'apikey') {
+    // The relay registers this computer (and `kraki connect` pairs phones)
+    // only with its API key; without it the daemon was refused as "removed
+    // from the account" (K-126). Saved as the channel key the daemon sends.
+    const key = await password({
+      message: 'API key:',
+      mask: '*',
+      theme: promptTheme,
+      validate: (v) => (v.trim() ? true : 'Enter the API key of this relay'),
+    });
+    saveChannelKey(key.trim());
   }
 
   const name = deviceName(options);
@@ -835,6 +865,11 @@ export async function relayAuthToken(config: KrakiConfig, interactive: boolean):
   // A self-hosted open relay with OPEN_SHARED_KEY checks this token; one
   // without a key accepts anything, so 'dev' stays the keyless fallback.
   if (config.authMethod === 'open') return loadChannelKey() || 'dev';
+  if (config.authMethod === 'apikey') {
+    const key = loadChannelKey();
+    if (!key) throw new Error('This relay needs an API key and none is saved. Run `kraki config reset` to enter it.');
+    return key;
+  }
   if (config.authMethod !== 'github_token') return undefined;
   const { loadGitHubToken } = await import('./config.js');
   const saved = loadGitHubToken();

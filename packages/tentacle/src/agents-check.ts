@@ -149,17 +149,24 @@ export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
   // an empty scratch folder so the check never touches the user's folders
   // (which would raise macOS Desktop/Documents/Downloads prompts before Full
   // Disk Access is granted).
-  const { mkdtempSync } = await import('node:fs');
+  const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  process.chdir(mkdtempSync(join(tmpdir(), 'kraki-agents-')));
-  const { createAgentAdapter } = await import('./adapters/multi.js');
-  await runAgentsCheckWith(
-    (event) => process.stdout.write(JSON.stringify(event) + '\n'),
-    { checkCli: checkAgentCli, createAdapter: (id) => createAgentAdapter(id), timeoutMs: 45_000 },
-    // `--only codex,pi`: check a subset (diagnostics).
-    args.includes('--only') ? (args[args.indexOf('--only') + 1] ?? '').split(',') : undefined,
-  );
+  const scratch = mkdtempSync(join(tmpdir(), 'kraki-agents-'));
+  process.chdir(scratch);
+  try {
+    const { createAgentAdapter } = await import('./adapters/multi.js');
+    await runAgentsCheckWith(
+      (event) => process.stdout.write(JSON.stringify(event) + '\n'),
+      { checkCli: checkAgentCli, createAdapter: (id) => createAgentAdapter(id), timeoutMs: 45_000 },
+      // `--only codex,pi`: check a subset (diagnostics).
+      args.includes('--only') ? (args[args.indexOf('--only') + 1] ?? '').split(',') : undefined,
+    );
+  } finally {
+    // Every check (each setup, each Kraki for Mac refresh) left one behind (K-275).
+    process.chdir(tmpdir());
+    try { rmSync(scratch, { recursive: true, force: true }); } catch { /* an agent still holds it (Windows) */ }
+  }
   return 0;
 }
 
