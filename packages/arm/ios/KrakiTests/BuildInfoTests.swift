@@ -108,4 +108,16 @@ final class BuildInfoTests: XCTestCase {
             try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
         }
     }
+
+    /// K-192: About shows the relay's version only while connected to it.
+    @MainActor
+    func testRelayVersionClearsWhenTheConnectionDrops() {
+        let app = AppState.makeUnitTestHost()
+        app.onAuthenticated(deviceId: "me", user: nil, devices: [], githubClientId: nil, relayVersion: "0.20.5")
+        XCTAssertEqual(app.relayVersion, "0.20.5")
+        app.connectionStatus = .connecting
+        XCTAssertNil(app.relayVersion)
+        app.onAuthenticated(deviceId: "me", user: nil, devices: [], githubClientId: nil, relayVersion: "0.20.6")
+        XCTAssertEqual(app.relayVersion, "0.20.6")
+    }
 }
