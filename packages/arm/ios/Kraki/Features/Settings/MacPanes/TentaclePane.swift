@@ -9,6 +9,7 @@ import SwiftUI
 
 struct TentaclePane: View {
     @State private var agentAccessibility: Bool?
+    @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.openWindow) private var openWindow
     @AppStorage(BuiltInTentacle.thisMacRoleKey) private var runsAgentsHere = ""
@@ -71,7 +72,7 @@ struct TentaclePane: View {
                         tentacleCLI.openLogsInFinder()
                     }
                     Button("Open Logs Window") {
-                        NotificationCenter.default.post(name: .macOpenLogs, object: nil)
+                        openWindow(id: "logs")
                     }
                 }
             }
@@ -86,6 +87,11 @@ struct TentaclePane: View {
         Picker("Run agents with", selection: Binding(
             get: { tentacleCLI.mode },
             set: { target in
+                // Switching restarts Kraki here: ask first while turns run.
+                if target != tentacleCLI.mode,
+                   !MacReconnectConfirmation.confirm(appState: appState, tentacleCLI: tentacleCLI, action: .switchMode) {
+                    return
+                }
                 switching = true
                 Task {
                     await tentacleCLI.switchMode(to: target)
@@ -202,7 +208,10 @@ struct TentaclePane: View {
                     .help("Background service pid \(String(pid))")
                 Spacer()
                 Button("Go Offline") { Task { await tentacleCLI.goOffline() } }
-                Button("Reconnect") { Task { await tentacleCLI.restartDaemon() } }
+                Button("Reconnect") {
+                    guard MacReconnectConfirmation.confirm(appState: appState, tentacleCLI: tentacleCLI) else { return }
+                    Task { await tentacleCLI.restartDaemon() }
+                }
             }
         case .error(let msg):
             VStack(alignment: .leading, spacing: 4) {

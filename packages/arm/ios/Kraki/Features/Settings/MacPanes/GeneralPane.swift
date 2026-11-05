@@ -139,7 +139,7 @@ private struct MacUpdateChannelSection: View {
     }
 
     var body: some View {
-        if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier,
+        if MacUpdateController.updatesAvailable(),
            MacUpdateChannel.isSwitchVisible(accountIsInternal: appState.user?.isInternalAccount == true, current: channel) {
             Section("Updates") {
                 // The updater stores the channel and checks the new feed;
