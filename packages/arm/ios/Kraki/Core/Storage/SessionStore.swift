@@ -256,7 +256,7 @@ final class SessionStore {
     private(set) var draftRevisions: [String: UInt64] = [:]
     /// The image staged in a Session's composer, kept beside its draft so it
     /// survives switching Sessions (the Chat view is rebuilt per Session).
-    /// In memory only, like the drafts. Set through `setStagedImage`.
+    /// In memory only, unlike the drafts. Set through `setStagedImage`.
     var stagedImages: [String: StagedComposerImage] = [:]
     var navigateToSession: String?
     /// Set with `navigateToSession` when the target replaces a still-visible
@@ -339,8 +339,9 @@ final class SessionStore {
         KrakiDataPaths.persistentDirectory()
             .appendingPathComponent("drafts.json", isDirectory: false)
     }()
-    /// Drafts change on every keystroke: written at most this often, and on
-    /// every `flushCache` (background, terminate).
+    /// Drafts change on every keystroke: written once typing pauses this
+    /// long (a trailing debounce), and on every `flushCache` (background,
+    /// terminate).
     private static let draftsSaveDebounce: TimeInterval = 1.0
     private var draftsSaveTask: DispatchWorkItem?
 
@@ -350,6 +351,9 @@ final class SessionStore {
         if let data = try? Data(contentsOf: Self.draftsURL),
            let saved = try? JSONDecoder().decode([String: String].self, from: data) {
             drafts = saved
+            // Restoring is not an edit: nothing to write back.
+            draftsSaveTask?.cancel()
+            draftsSaveTask = nil
         }
         let path = Self.snapshotURL.path
         guard FileManager.default.fileExists(atPath: path) else {
