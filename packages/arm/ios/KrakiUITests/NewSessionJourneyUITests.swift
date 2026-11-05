@@ -54,6 +54,83 @@ final class NewSessionJourneyUITests: XCTestCase {
         XCTAssertFalse(tabBarVisible, "\(label): no tab bar in the chat")
     }
 
+    /// K-073: in landscape the New Session sheet opens with the keyboard up;
+    /// its title, task field and Start button stay visible above it.
+    func testLandscapeSheetKeepsFieldAndStartAboveKeyboard() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        launch()
+        settle()
+        app.buttons["New Session"].firstMatch.tap()
+        let text = app.descendants(matching: .any).matching(identifier: "new-session-text").firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 3))
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        text.typeText("Landscape task")
+        settle()
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "new-session-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+        let start = app.buttons["new-session-send"].firstMatch
+        let title = app.staticTexts["New Session"].firstMatch
+        XCTAssertLessThanOrEqual(text.frame.maxY, keyboard.frame.minY + 1, "task field behind the keyboard")
+        XCTAssertLessThanOrEqual(start.frame.maxY, keyboard.frame.minY + 1, "Start behind the keyboard")
+        XCTAssertTrue(start.isHittable)
+        XCTAssertTrue(title.exists)
+        XCTAssertGreaterThanOrEqual(title.frame.minY, app.frame.minY, "sheet title clipped")
+        XCTAssertLessThanOrEqual(title.frame.maxY, keyboard.frame.minY)
+    }
+
+    /// K-073 guard: the form's scroll view must not change the portrait
+    /// sheet. Every row shows in full above the composer, a long draft grows
+    /// the sheet instead of scrolling the form, and the picker crossfade
+    /// returns to the same form.
+    func testPortraitSheetShowsTheWholeForm() {
+        XCUIDevice.shared.orientation = .portrait
+        launch()
+        settle()
+        app.buttons["New Session"].firstMatch.tap()
+        let text = app.descendants(matching: .any).matching(identifier: "new-session-text").firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 3))
+        settle()
+        let sheetTitle = app.staticTexts["New Session"].firstMatch
+        let device = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Device'")).firstMatch
+        let titleRow = app.textFields.matching(NSPredicate(format: "placeholderValue == 'Optional'")).firstMatch
+        XCTAssertTrue(device.exists && titleRow.exists)
+
+        func measure(_ label: String) -> (form: CGFloat, gap: CGFloat) {
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "new-session-portrait-\(label)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            XCTAssertTrue(device.isHittable, "\(label): Device row hidden")
+            XCTAssertTrue(titleRow.isHittable, "\(label): Title row hidden")
+            XCTAssertGreaterThanOrEqual(device.frame.minY, sheetTitle.frame.maxY, "\(label): form under the title")
+            XCTAssertLessThan(titleRow.frame.maxY, text.frame.minY, "\(label): form under the composer")
+            return (titleRow.frame.maxY - device.frame.minY, text.frame.minY - titleRow.frame.maxY)
+        }
+        let oneLine = measure("one-line")
+        let fieldHeight = text.frame.height
+        text.typeText("A long first task that wraps onto several lines of the composer, "
+                      + "so the sheet has to grow to keep the whole form in view")
+        settle()
+        let multiLine = measure("multi-line")
+        XCTAssertGreaterThan(text.frame.height, fieldHeight + 10, "the draft wraps")
+        XCTAssertEqual(multiLine.form, oneLine.form, accuracy: 1, "the form shrank (it scrolls) in portrait")
+        XCTAssertEqual(multiLine.gap, oneLine.gap, accuracy: 1, "the composer moved away from the form")
+
+        device.tap()
+        settle()
+        let back = app.buttons["Back"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 3))
+        XCTAssertFalse(titleRow.isHittable, "the picker replaces the form")
+        back.tap()
+        settle()
+        let returned = measure("after-picker")
+        XCTAssertEqual(returned.form, oneLine.form, accuracy: 1, "the form changed after the picker")
+    }
+
     func testCreateFromPlusKeepsLayoutAndBackRestoresTabBar() {
         launch()
         let reference = openExistingAndMeasure()

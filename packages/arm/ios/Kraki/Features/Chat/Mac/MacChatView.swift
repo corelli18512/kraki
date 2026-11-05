@@ -835,8 +835,9 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
+        if let title = session.titleEdit(titleDraft) {
+            appState.commandSender?.renameSession(sessionId: session.id, title: title)
+        }
         editingTitle = false
         titleFocused = false
     }
