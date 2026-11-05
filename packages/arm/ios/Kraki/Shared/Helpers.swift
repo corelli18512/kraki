@@ -198,27 +198,16 @@ func formatTokenCount(_ count: Int) -> String {
 
 // MARK: - Cost
 
-/// Format a dollar cost: 0.042 → "$0.042".
-func formatCost(_ cost: Double) -> String {
-    if cost < 0.01 {
-        return String(format: "$%.4f", cost)
-    }
-    return String(format: "$%.3f", cost)
+/// Format a dollar cost: 0.042 → "$0.042" (grouping and separators follow the region).
+func formatCost(_ cost: Double, locale: Locale = .autoupdatingCurrent) -> String {
+    UsageNumberFormat.cost(cost, locale: locale)
 }
 
 // MARK: - Duration
 
 /// Format milliseconds into a human-readable duration: "2.3s", "1m 23s".
-func formatDuration(_ ms: Double) -> String {
-    // Peer-reported: Int(_:) traps on NaN, infinity or values beyond Int.
-    guard ms.isFinite, ms >= 0 else { return "—" }
-    let totalSeconds = min(ms / 1_000, 1e12)
-    if totalSeconds < 60 {
-        return String(format: String(localized: "%.1fs"), totalSeconds)
-    }
-    let minutes = Int(totalSeconds) / 60
-    let seconds = Int(totalSeconds) % 60
-    return String(localized: "\(minutes)m \(seconds)s")
+func formatDuration(_ ms: Double, locale: Locale = .autoupdatingCurrent) -> String {
+    UsageNumberFormat.duration(ms, locale: locale)
 }
 
 // MARK: - Truncation

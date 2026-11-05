@@ -73,6 +73,22 @@ final class HelpersTests: XCTestCase {
         XCTAssertEqual(formatCost(1.5), "$1.500")
     }
 
+    /// K-146: cost used POSIX `String(format:)` ("$1234.568" in every
+    /// region). The precision stays; grouping and separators follow the region.
+    func testFormatCostFollowsRegion() {
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_US")), "$1,234.568")
+        let german = formatCost(1234.568, locale: Locale(identifier: "de_DE"))
+        XCTAssertTrue(german.hasPrefix("1.234,568"), german)
+        XCTAssertTrue(german.hasSuffix("$"), german)
+        XCTAssertEqual(formatCost(0.001, locale: Locale(identifier: "de_DE")).filter { $0.isNumber || $0 == "," }, "0,0010")
+    }
+
+    /// K-146: the seconds value used the POSIX decimal point in every region.
+    func testFormatDurationFollowsRegion() {
+        XCTAssertEqual(formatDuration(4_600, locale: Locale(identifier: "en_US")), "4.6s")
+        XCTAssertEqual(formatDuration(4_600, locale: Locale(identifier: "de_DE")), "4,6s")
+    }
+
     // MARK: - formatDuration
 
     func testFormatDurationSeconds() {
