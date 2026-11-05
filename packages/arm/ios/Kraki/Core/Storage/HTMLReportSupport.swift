@@ -77,6 +77,10 @@ enum HTMLReportMermaid {
 
     /// Renders every Mermaid block once the document is parsed. Uses
     /// `strict` security (no HTML labels with script, no click callbacks).
+    /// A dark page gets Mermaid's dark theme: the default one draws dark
+    /// lines and labels that vanish on it. "Dark" is the page's own painted
+    /// background (a report may stay light in dark mode), else its dark
+    /// `color-scheme` under a dark system appearance.
     static let bootSource = """
     (function () {
       var selector = 'pre.mermaid, div.mermaid, code.language-mermaid';
@@ -86,8 +90,19 @@ enum HTMLReportMermaid {
         pre.classList.add('mermaid');
         pre.textContent = code.textContent;
       });
+      function pageIsDark() {
+        var layers = [document.body, document.documentElement];
+        for (var i = 0; i < layers.length; i++) {
+          if (!layers[i]) continue;
+          var c = (getComputedStyle(layers[i]).backgroundColor.match(/[\\d.]+/g) || []).map(Number);
+          if (c.length < 3 || (c.length > 3 && c[3] === 0)) continue;
+          return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] < 128;
+        }
+        var scheme = getComputedStyle(document.documentElement).colorScheme || '';
+        return /dark/.test(scheme) && !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      }
       try {
-        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: pageIsDark() ? 'dark' : 'default' });
         window.mermaid.run({ querySelector: 'pre.mermaid:not([data-processed]), div.mermaid:not([data-processed])' })
           .catch(function () {});
       } catch (e) {}
