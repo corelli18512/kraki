@@ -69,6 +69,9 @@ export interface TransportCallbacks {
   onOpen: () => Promise<void>;
   onParsedMessage: (msg: Message) => void;
   onClose?: () => void;
+  /** This tab was about to reconnect, but the stored device is gone or
+   *  another one: this browser was signed out in another tab. */
+  onSignedOutElsewhere?: () => void;
 }
 
 export const OAUTH_STATE_KEY = 'kraki_oauth_state';
@@ -439,6 +442,14 @@ export class KrakiTransport {
   /** Take the connection back after this tab was replaced elsewhere. */
   private reclaim(reason: string) {
     if (!this.replacedElsewhere) return;
+    if (this.storedDeviceId && loadStoredDevice()?.deviceId !== this.storedDeviceId) {
+      // Reconnecting would sign the old identity in again and save it (K-318).
+      logger.info('Not reclaiming: signed out in another tab');
+      this.replacedElsewhere = false;
+      if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+      this.callbacks.onSignedOutElsewhere?.();
+      return;
+    }
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
     if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);

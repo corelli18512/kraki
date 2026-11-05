@@ -7,7 +7,7 @@ import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
-import { createAppKeyStore } from './e2e';
+import { clearDeviceKeys, createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
@@ -60,6 +60,7 @@ function localHighestSeq(sessionId: string): number {
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
+  private signOutListenerInstalled = false;
   private inboundCrypto = new OrderedCrypto();
   private outboundCrypto = new OrderedCrypto();
   private identityEpoch = 0;
@@ -165,6 +166,31 @@ export class KrakiWSClient {
     window.history.replaceState({}, '', '/');
   }
 
+  /** Sign-out: drop this browser's keys, on disk and in memory. Nothing for
+   *  the signed-out device can be decrypted any more (a late push preview,
+   *  K-006), and the next sign-in pairs with new keys. `onDisk: false` when
+   *  another tab signed out: it already deleted them, and may have paired
+   *  again with new ones since. */
+  forgetDeviceKeys(onDisk = true): void {
+    if (onDisk) void clearDeviceKeys().catch((err) => logger.warn('Could not delete device keys', err));
+    this.encryption = new EncryptionHandler(createAppKeyStore());
+  }
+
+  /** Another tab of this browser signed out (K-318): follow it, instead of
+   *  reconnecting later with the signed-out identity and saving it again. */
+  private signedOutElsewhere(): void {
+    if (!this.transport.storedDeviceId) return;
+    logger.info('Signed out in another tab');
+    diag.phase('logout');
+    const savedClientId = getStore().githubClientId;
+    this.transport.storedDeviceId = undefined;
+    this.disconnect();
+    this.forgetDeviceKeys(false);
+    voice.resetVoice();
+    getStore().reset();
+    setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
+  }
+
   /** Connect with the account of the Kraki built into the desktop app. */
   connectWithDesktopCredentials(): boolean {
     setDesktopSignedOut(false);
@@ -242,6 +268,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
+        onSignedOutElsewhere: () => this.signedOutElsewhere(),
         onClose: () => {
           this.connectionEpoch++;
           this.headEpoch++;
@@ -259,6 +286,14 @@ export class KrakiWSClient {
   }
 
   connect() {
+    if (!this.signOutListenerInstalled && typeof window !== 'undefined') {
+      this.signOutListenerInstalled = true;
+      // `storage` fires in the other tabs of this browser: removing the
+      // stored device (or clearing storage) is a sign-out there.
+      window.addEventListener('storage', (event) => {
+        if ((event.key === STORAGE_KEY || event.key === null) && !localStorage.getItem(STORAGE_KEY)) this.signedOutElsewhere();
+      });
+    }
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
@@ -965,8 +1000,12 @@ export class KrakiWSClient {
   registerPushToken(payload: { provider: string; token: string }): void {
     this.sendToHead({ type: 'register_push_token', payload });
   }
-  unregisterPushToken(payload: { provider: string }): void {
-    this.sendToHead({ type: 'unregister_push_token', payload });
+  /** `connectionScoped`: only on the current connection, never resent on a
+   *  later one (sign-out: the next connection may be another account). */
+  unregisterPushToken(payload: { provider: string }, opts?: { connectionScoped?: boolean }): void {
+    const msg = { type: 'unregister_push_token', payload };
+    if (opts?.connectionScoped) this.pulse.send(JSON.stringify(msg), HEAD_PULSE_TARGET, false, { connectionScoped: true });
+    else this.sendToHead(msg);
   }
 
   /**
