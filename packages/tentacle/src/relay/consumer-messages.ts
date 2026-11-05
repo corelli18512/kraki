@@ -19,6 +19,11 @@ import { logger, traceLog, describeFailure } from './shared.js';
 /** How long the agent may leave a Stop unanswered before a repeated Stop
  *  closes the turn without it. A quick double tap still waits. */
 const ABORT_UNANSWERED_MS = 5_000;
+/** How long a Stop may stay unanswered before the turn is closed without
+ *  it. The apps keep Stop disabled until the session goes idle, so a hung
+ *  abort must end here. Above the slowest adapter abort (Codex
+ *  turn/interrupt, 15 s). */
+export const ABORT_HUNG_MS = 20_000;
 
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   // Field types first (see @kraki/protocol/schemas): handlers below trust them,
@@ -498,6 +503,11 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           client.broadcastSessionList();
         };
         client.abortsInFlight.set(sessionId, { turnKey: abortKey, startedAt: Date.now(), settle: settleAbort });
+        const hungAbortTimer = setTimeout(() => {
+          logger.warn({ sessionId, turnId }, 'abortSession unanswered; closing the turn without it');
+          settleAbort();
+        }, ABORT_HUNG_MS);
+        hungAbortTimer.unref?.();
         client.adapter.abortSession(sessionId)
           .then(settleAbort)
           .catch((err) => {
@@ -505,6 +515,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
           })
           .finally(() => {
+            clearTimeout(hungAbortTimer);
             if (client.abortsInFlight.get(sessionId)?.settle === settleAbort) client.abortsInFlight.delete(sessionId);
           });
         break;

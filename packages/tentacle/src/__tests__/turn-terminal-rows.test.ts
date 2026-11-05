@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionManager } from '../session-manager.js';
 import { RelayClient } from '../relay-client.js';
-import { handleConsumerMessage } from '../relay/consumer-messages.js';
+import { ABORT_HUNG_MS, handleConsumerMessage } from '../relay/consumer-messages.js';
 import type { AgentAdapter } from '../adapters/base.js';
 
 vi.mock('../logger.js', () => ({
@@ -145,6 +145,24 @@ describe('Stop while the agent never acknowledges the first Stop (K-221)', () =>
     expect(spine.map((r) => r.type)).toEqual(['user_message', 'turn_status', 'idle']);
     expect(spine[1].payload).toMatchObject({ draft: 'working', action: { type: 'user_abort' } });
     expect(spine[2].payload.reason).toBe('aborted');
+    expect(sm.getMeta(sessionId)?.state).toBe('idle');
+  });
+
+  it('a single Stop the agent never answers closes the turn after ABORT_HUNG_MS', async () => {
+    const { adapter, sm, cb, input, stop } = build();
+    const { sessionId } = sm.createSession('pi');
+    input(sessionId, 'hi', 'cid-1');
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    cb('onMessageDelta')(sessionId, { content: 'working' });
+    (adapter.abortSession as Fn).mockImplementation(() => new Promise<void>(() => {}));
+    vi.useFakeTimers();
+    stop(sessionId);
+    vi.advanceTimersByTime(ABORT_HUNG_MS - 1);
+    expect(rows(sm, sessionId).some((r) => r.type === 'idle')).toBe(false);
+    vi.advanceTimersByTime(1);
+    const spine = rows(sm, sessionId);
+    expect(spine.map((r) => r.type)).toEqual(['user_message', 'turn_status', 'idle']);
+    expect(spine[1].payload).toMatchObject({ draft: 'working', action: { type: 'user_abort' } });
     expect(sm.getMeta(sessionId)?.state).toBe('idle');
   });
 
