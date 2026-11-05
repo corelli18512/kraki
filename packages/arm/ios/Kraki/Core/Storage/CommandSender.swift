@@ -386,6 +386,20 @@ final class CommandSender {
         bucket[clientId] = message
         outbox[sessionId] = bucket
         persistOutbox()
+        announceDeliveryProblem(state, cause: cause)
+    }
+
+    /// The bubble's status changes away from the VoiceOver cursor: say it.
+    /// Signing out fails every queued input at once; that is not news.
+    private func announceDeliveryProblem(_ state: PendingState, cause: String?) {
+        switch state {
+        case .failed where cause != "signed_out":
+            appState?.announceForAccessibility(SessionDeliveryStatus.failed.accessibilityLabel)
+        case .unconfirmed:
+            appState?.announceForAccessibility(SessionDeliveryStatus.unconfirmed.accessibilityLabel)
+        default:
+            break
+        }
     }
 
     /// Confirmation is the Tentacle echo. Only *stalled* time counts: the
