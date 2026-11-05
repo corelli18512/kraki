@@ -8,6 +8,7 @@ import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
 import { diag } from './diag';
+import { serverErrorText } from './server-errors';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -1527,7 +1528,7 @@ describe('KrakiWSClient', () => {
       await connectAndAuth(client);
       const answer = client.registerPushToken({ provider: 'web_push', token: 'good' });
       lastWsInstance._receive({ type: 'server_error', message: 'unicast target is not reachable' });
-      expect(useStore.getState().lastError).toBe('unicast target is not reachable');
+      expect(useStore.getState().lastError).toBe(serverErrorText('unicast target is not reachable'));
       lastWsInstance._receive({ type: 'push_token_registered', payload: { provider: 'web_push' } });
       await expect(answer).resolves.toBe('registered');
     });

@@ -22,6 +22,7 @@ function worker(windows: Win[], preview: Record<string, unknown> | null) {
   const handlers: Record<string, (event: unknown) => void> = {};
   const self = {
     addEventListener: (type: string, fn: (event: unknown) => void) => { handlers[type] = fn; },
+    location: { href: `${SCOPE}sw.js?lang=en`, origin: new URL(SCOPE).origin },
     registration: { scope: SCOPE, showNotification: vi.fn(async (_title: string, _options: Record<string, unknown>) => {}) },
     clients: { matchAll: vi.fn(async () => windows), openWindow: vi.fn(async (_url: string) => null) },
   };
