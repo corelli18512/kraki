@@ -114,28 +114,63 @@ extension MacChatScrollView {
         scrollPolicy.endUserInteraction()
     }
 
+    /// Keyboard focus for scrolling when the clicked bubble's text goes away
+    /// (its cell is recycled): an invisible view whose keys reach `keyDown`.
+    func takeKeyboardFocus() {
+        if keyboardFocusView.superview !== self { addSubview(keyboardFocusView) }
+        window?.makeFirstResponder(keyboardFocusView)
+    }
+
     override func keyDown(with event: NSEvent) {
-        let scrollsOlder = event.keyCode == 116 || event.keyCode == 115 || event.keyCode == 126
-        if scrollsOlder {
-            geometryAnchorLock = nil
-            sendTailLock = false
-            scrollPolicy.beginUserInteraction(
-                offset: contentView.bounds.minY,
-                distanceToBottom: distanceToBottom
-            )
-            scrollPolicy.recordUserIntent(
-                .older,
-                offset: contentView.bounds.minY,
-                distanceToBottom: distanceToBottom
-            )
+        let page = max(40, contentView.bounds.height - max(verticalPageScroll, 40))
+        let line = max(verticalLineScroll * 3, 36)
+        guard let action = MacChatKeyboardScroll.action(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                                        page: page, line: line) else {
+            super.keyDown(with: event)
+            return
         }
-        super.keyDown(with: event)
-        if scrollsOlder {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isScrollInteractionActive else { return }
-                self.scrollPolicy.endUserInteraction()
-            }
+        keyboardScroll(action)
+    }
+
+    func keyboardScroll(_ action: MacChatKeyboardScroll) {
+        cancelScrollAnimation()
+        switch action {
+        case .bottom:
+            scrollToBottom(animated: true)
+        case .top:
+            discreteScroll(to: -contentInsets.top, direction: .older)
+        case .by(let delta):
+            discreteScroll(to: contentView.bounds.minY + delta, direction: delta < 0 ? .older : .newer)
         }
+    }
+
+    /// One discrete move (a key, or an automation wheel tick), clamped to
+    /// the document.
+    func discreteScroll(to proposedY: CGFloat, direction: ChatScrollPolicy.Direction) {
+        geometryAnchorLock = nil
+        hasUserScrolled = true
+        if direction == .older { sendTailLock = false }
+        scrollPolicy.beginUserInteraction(
+            offset: contentView.bounds.minY,
+            distanceToBottom: distanceToBottom
+        )
+        scrollPolicy.recordUserIntent(
+            direction,
+            offset: contentView.bounds.minY,
+            distanceToBottom: distanceToBottom
+        )
+        resetSmoothWheelAnimation()
+        let minimumY = -contentInsets.top
+        let maximumY = max(
+            minimumY,
+            chatDocumentView.frame.height - contentView.bounds.height
+        )
+        discreteWheelActive = true
+        chatDocumentView.beginScrollInteraction(scrollerKnob: false)
+        contentView.bounds.origin.y = min(maximumY, max(minimumY, proposedY))
+        reflectScrolledClipView(contentView)
+        discreteWheelActive = false
+        settleScrollInteractionIfIdle()
     }
 
     #if DEBUG
@@ -211,42 +246,12 @@ extension MacChatScrollView {
     }
 
     func automationScroll(direction: String, ticks: Int) -> (before: CGFloat, after: CGFloat) {
-        geometryAnchorLock = nil
-        hasUserScrolled = true
-        scrollPolicy.beginUserInteraction(
-            offset: contentView.bounds.minY,
-            distanceToBottom: distanceToBottom
-        )
-        if direction == "up" {
-            scrollPolicy.recordUserIntent(
-                .older,
-                offset: contentView.bounds.minY,
-                distanceToBottom: distanceToBottom
-            )
-        }
-        if direction == "down" {
-            scrollPolicy.recordUserIntent(
-                .newer,
-                offset: contentView.bounds.minY,
-                distanceToBottom: distanceToBottom
-            )
-        }
-        resetSmoothWheelAnimation()
         let before = contentView.bounds.minY
-        let minimumY = -contentInsets.top
-        let maximumY = max(
-            minimumY,
-            chatDocumentView.frame.height - contentView.bounds.height
-        )
         let distance = CGFloat(max(ticks, 1)) * max(verticalLineScroll * 3, 36)
-        let signedDistance = direction == "down" ? distance : -distance
-        let target = min(maximumY, max(minimumY, before + signedDistance))
-        discreteWheelActive = true
-        chatDocumentView.beginScrollInteraction(scrollerKnob: false)
-        contentView.bounds.origin.y = target
-        reflectScrolledClipView(contentView)
-        discreteWheelActive = false
-        settleScrollInteractionIfIdle()
+        if direction == "up" || direction == "down" {
+            discreteScroll(to: before + (direction == "down" ? distance : -distance),
+                           direction: direction == "down" ? .newer : .older)
+        }
         return (before, contentView.bounds.minY)
     }
 
@@ -457,5 +462,30 @@ extension MacChatScrollView {
         sendTailLock || scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
     }
     var isEntryBottomLocked: Bool { entryBottomLocked }
+}
+/// Page Up/Down, Home/End and ↑/↓ in the chat (no modifier).
+enum MacChatKeyboardScroll: Equatable {
+    case by(CGFloat)
+    case top
+    case bottom
+
+    static func action(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, page: CGFloat, line: CGFloat) -> Self? {
+        guard modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return nil }
+        switch keyCode {
+        case 116: return .by(-page)
+        case 121: return .by(page)
+        case 126: return .by(-line)
+        case 125: return .by(line)
+        case 115: return .top
+        case 119: return .bottom
+        default: return nil
+        }
+    }
+}
+/// Takes keyboard focus for the chat without taking clicks or a Tab stop.
+final class MacChatKeyboardFocusView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 #endif

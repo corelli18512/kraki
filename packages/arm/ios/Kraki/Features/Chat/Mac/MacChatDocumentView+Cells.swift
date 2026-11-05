@@ -179,6 +179,13 @@ extension MacChatDocumentView {
     }
 
     func recycle(_ cell: MacChatBubbleCell) {
+        // Hiding the view that has keyboard focus (a clicked bubble's text)
+        // gives focus to the window, and Page Up/Down stopped after one page.
+        // The chat keeps it instead.
+        if let focused = window?.firstResponder as? NSView, focused.isDescendant(of: cell),
+           let chat = enclosingScrollView as? MacChatScrollView {
+            chat.takeKeyboardFocus()
+        }
         cell.isHidden = true
         if reusePool.count < 16 {
             reusePool.append(cell)
