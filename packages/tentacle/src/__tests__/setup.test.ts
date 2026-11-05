@@ -181,6 +181,8 @@ describe("runSetup — official service (same steps as Kraki for Mac)", () => {
     expect(result).toEqual({
       relay: "wss://kraki-us.corelli.cloud",
       authMethod: "github_token",
+      // K-028: the daemon compares it with the owner of the data in place.
+      account: { login: "testuser" },
       device: { name: expect.any(String), id: "dev_test123" },
       logging: { verbosity: "normal" },
     });
