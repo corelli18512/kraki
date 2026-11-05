@@ -86,7 +86,9 @@ final class TKLiveBody {
                 tail.append(TKMarkdown.segmentSeparator)
                 cursor += TKMarkdown.segmentSeparator.length
             }
-            let piece = TKMarkdown.segmentPiece(segments[index], allowHighlighting: false, lineCache: lineCache)
+            let piece = Self.stableBlockIdentity(
+                TKMarkdown.segmentPiece(segments[index], allowHighlighting: false, lineCache: lineCache),
+                start: cursor)
             newPieces.append(piece)
             newStarts.append(cursor)
             tail.append(piece)
@@ -105,6 +107,24 @@ final class TKLiveBody {
         changes.append((revision, from))
         if changes.count > 128 { changes.removeFirst(changes.count - 128) }
         return true
+    }
+
+    /// A rebuilt quote/code piece gets a fresh random block id. While a
+    /// long code block streams it is rebuilt on every update, so its settled
+    /// chunks would never compare equal and every chunk view would be
+    /// re-assigned. Key the id by the piece's position instead.
+    private static func stableBlockIdentity(_ piece: NSAttributedString, start: Int) -> NSAttributedString {
+        let full = NSRange(location: 0, length: piece.length)
+        var hasBlock = false
+        piece.enumerateAttribute(.tkBlockID, in: full) { value, _, stop in
+            if value != nil { hasBlock = true; stop.pointee = true }
+        }
+        guard hasBlock else { return piece }
+        let stamped = NSMutableAttributedString(attributedString: piece)
+        piece.enumerateAttribute(.tkBlockID, in: full) { value, range, _ in
+            if value != nil { stamped.addAttribute(.tkBlockID, value: "live:\(start)", range: range) }
+        }
+        return stamped
     }
 
     private var chunkMemo: (width: CGFloat, revision: Int, placed: [TKBodyChunks.Placed])?
@@ -159,7 +179,9 @@ final class TKLiveBody {
 /// bubble and the landed message use this same rule, so the handoff is exact.
 ///
 /// A boundary depends only on the text before it, so boundaries never move as
-/// an answer grows. Chunks never split a code block, quote or table.
+/// an answer grows. Chunks never split a quote or table. A long code block is
+/// split between its lines (the views continue its surface across the seam),
+/// otherwise a streaming code block would re-lay out as one ever-growing chunk.
 enum TKBodyChunks {
     static let targetLength = 500
     static let singleChunkLimit = 800
@@ -205,10 +227,23 @@ enum TKBodyChunks {
 
     private static func isSafeBoundary(_ body: NSAttributedString, _ newline: Int) -> Bool {
         guard newline > 0 else { return false }
-        if body.attribute(.tkBlockID, at: newline, effectiveRange: nil) != nil { return false }
+        if let block = body.attribute(.tkBlockID, at: newline, effectiveRange: nil) as? String {
+            return isCodeLineBoundary(body, newline, block: block)
+        }
         let before = body.attribute(.tkBlockID, at: newline - 1, effectiveRange: nil) as? String
         let after = body.attribute(.tkBlockID, at: newline + 1, effectiveRange: nil) as? String
         return before == nil || before != after
+    }
+
+    /// Between two real lines of one code block (not its top/bottom spacer).
+    private static func isCodeLineBoundary(_ body: NSAttributedString, _ newline: Int, block: String) -> Bool {
+        guard body.attribute(.tkBlockKind, at: newline, effectiveRange: nil) as? String == TKBlockKind.code.rawValue
+        else { return false }
+        for index in [newline - 1, newline + 1] {
+            guard body.attribute(.tkBlockID, at: index, effectiveRange: nil) as? String == block,
+                  body.attribute(.tkDecorativeSpacer, at: index, effectiveRange: nil) == nil else { return false }
+        }
+        return true
     }
 
     private static func spacing(_ body: NSAttributedString, newline: Int) -> CGFloat {

@@ -5,10 +5,11 @@ import { i18next } from '../../i18n';
 import { NewSessionDialog } from './NewSessionDialog';
 import { NewSessionComposer } from './NewSessionComposer';
 import { useStore } from '../../hooks/useStore';
+import { wsClient } from '../../lib/ws-client';
 
 vi.mock('../chat/Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(),
+  useDictation: () => ({ active: false }), useStartDictation: () => vi.fn(), useStopDictationOnLeave: () => {},
 }));
 
 beforeEach(() => { useStore.getState().reset(); localStorage.clear(); });
@@ -81,6 +82,20 @@ describe('NewSessionComposer', () => {
     await i18next.changeLanguage('zh-Hans');
     render(<NewSessionComposer placeholder="User-provided instruction" />);
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'User-provided instruction');
+  });
+  it('K-099: the Safari IME Enter that confirms a candidate (keyCode 229) does not start the session', () => {
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    useStore.getState().setDevices([{ id: 'computer', name: 'Office PC', role: 'tentacle', online: true }]);
+    useStore.getState().setDeviceAgents('computer', [{ type: 'code', id: 'copilot', models: ['model'], modelDetails: [{ id: 'model', name: 'Model' }] }]);
+    render(<NewSessionComposer />);
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: '测试' } });
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+    expect(create).not.toHaveBeenCalled();
+    expect(field).toHaveValue('测试');
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 13 });
+    expect(create).toHaveBeenCalledTimes(1);
+    create.mockRestore();
   });
   it('keeps the new-session draft across visiting a session', () => {
     const first = render(<NewSessionComposer />);

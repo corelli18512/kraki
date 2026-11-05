@@ -32,4 +32,12 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["en", "zh-Hans"])
         XCTAssertEqual(AppLanguage.simplifiedChinese.nativeName, "简体中文")
     }
+
+    /// K-222: permission prompts also arrive in Auto/Delegate, so the caption
+    /// must not claim Safe mode.
+    func testPermissionCaptionDoesNotClaimSafeMode() throws {
+        XCTAssertEqual(PermissionPromptCopy.caption, "Needs your approval")
+        let zh = try bundle("zh-Hans")
+        XCTAssertEqual(zh.localizedString(forKey: "Needs your approval", value: nil, table: nil), "需要你批准")
+    }
 }

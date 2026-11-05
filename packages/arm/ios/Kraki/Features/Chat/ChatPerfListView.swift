@@ -303,6 +303,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     let overlay = UILabel()
     var codeHighlightObserver: NSObjectProtocol?
     private var composerSubmitObserver: NSObjectProtocol?
+    private var becomeActiveObserver: NSObjectProtocol?
     var textSizeObserver: NSObjectProtocol?
     /// The text size this list's rows were laid out for (see TKTextSize).
     var laidOutTextSize = ""
@@ -342,6 +343,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                   note.userInfo?["sessionId"] as? String == self.sessionId else { return }
             self.returnToNewestAfterLocalSubmit()
         }
+        becomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshBodyInteractionAfterReturn() }
+        }
         if Self.perfOverlayEnabled {
             setupOverlay()
         }
@@ -360,6 +368,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         if let textSizeObserver {
             NotificationCenter.default.removeObserver(textSizeObserver)
+        }
+        if let becomeActiveObserver {
+            NotificationCenter.default.removeObserver(becomeActiveObserver)
         }
         displayLink?.invalidate()
         warmKickWork?.cancel()
@@ -545,6 +556,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// scroll (the UITextInteraction is the only per-cell fling cost), on at rest.
     private func setVisibleBodiesInteractive(_ on: Bool) {
         for c in collectionView.visibleCells { (c as? TKBubbleCell)?.setBodyInteractive(on) }
+    }
+
+    /// Back from another app (a link opened in Safari): links in visible
+    /// bubbles stayed dead until the list was scrolled, which re-arms each
+    /// body's text interaction. Re-arm them here the same way, at rest.
+    func refreshBodyInteractionAfterReturn() {
+        guard collectionView != nil, !collectionView.isDragging, !collectionView.isDecelerating else { return }
+        setVisibleBodiesInteractive(false)
+        setVisibleBodiesInteractive(true)
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
@@ -778,6 +798,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var lastLiveRenderCost: CFTimeInterval = 0
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         scrollIndicator.didScroll()
+        // Very long bodies keep text views only near the screen.
+        for cell in collectionView.visibleCells { (cell as? TKBubbleCell)?.refreshRealizedChunks() }
         // Finger drag AND its momentum are the user's scroll (momentum toward
         // older keeps loading history); our own anchor compensation is not.
         var userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating

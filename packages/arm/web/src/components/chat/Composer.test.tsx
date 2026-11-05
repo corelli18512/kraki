@@ -7,7 +7,7 @@ import { useStore } from '../../hooks/useStore';
 
 vi.mock('./Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: vi.fn(() => vi.fn()),
+  useDictation: () => ({ active: false }), useStartDictation: vi.fn(() => vi.fn()), useStopDictationOnLeave: () => {},
 }));
 
 const props = { sessionId: 'composer-test', intent: 'prompt' as const, canAbort: false, reachable: true, busy: false, onSend: vi.fn(), onAbort: vi.fn() };
@@ -44,6 +44,18 @@ describe('Composer', () => {
     const short = document.createElement('textarea');
     updateComposerScrollFade(short);
     expect(short.style.maskImage).toBe('');
+  });
+
+  it('K-099: the Safari IME Enter that confirms a candidate (keyCode 229, composition already ended) does not send', () => {
+    render(<Composer {...props} />);
+    const field = screen.getByRole('textbox');
+    fireEvent.compositionStart(field);
+    fireEvent.change(field, { target: { value: '测试' } });
+    fireEvent.compositionEnd(field);
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+    expect(props.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 13 });
+    expect(props.onSend).toHaveBeenCalledTimes(1);
   });
 });
 

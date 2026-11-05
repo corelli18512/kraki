@@ -121,6 +121,7 @@
       "leaseTimeout": "The voice authorization request timed out.",
       "noMicrophone": "No microphone is available. Connect a microphone and try again.",
       "permission": "Microphone access is required. Allow it for Kraki in your system privacy settings.",
+      "permissionBrowser": "Microphone access is blocked. Allow it for this site in your browser’s settings, then try again.",
       "unavailable": "Voice input isn't available in this region.",
       "offline": "Couldn't connect to Kraki. Check your connection and try again.",
       "invalidAddress": "The voice service address is invalid.",

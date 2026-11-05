@@ -9,6 +9,9 @@ import { availableUpdate } from '../../lib/device-update';
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Called instead of `onClose` after Start: the owner keeps the sheet up
+   *  (Start disabled) until the new session opens. */
+  onCreated?: () => void;
 }
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
@@ -47,7 +50,7 @@ function saveContextTierPref(modelId: string, tier: ContextTier) {
   localStorage.setItem(CONTEXT_TIER_PREF_KEY, JSON.stringify(prefs));
 }
 
-export function NewSessionDialog({ open, onClose }: Props) {
+export function NewSessionDialog({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation('sessions');
   useEscape(open, onClose);
   const devices = useStore((s) => s.devices);
@@ -62,6 +65,8 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
   const [contextTier, setContextTier] = useState<ContextTier | undefined>();
   const listRef = useRef<HTMLDivElement>(null);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => { if (!open) setCreating(false); }, [open]);
 
   // Default to last selected device, or single tentacle
   useEffect(() => {
@@ -185,7 +190,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
   };
 
   const handleSubmit = () => {
-    if (!canSubmit) return;
+    if (!canSubmit || creating) return;
     wsClient.createSession({
       targetDeviceId: selectedDevice,
       model,
@@ -193,7 +198,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
       contextTier: contextTier === 'long_context' ? contextTier : undefined,
       agentId: selectedAgentId,
     });
-    onClose();
+    if (onCreated) { setCreating(true); onCreated(); } else onClose();
   };
 
   if (!open) return null;
@@ -358,7 +363,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
             {/* Submit */}
             <button
               onClick={handleSubmit}
-              disabled={!canSubmit}
+              disabled={!canSubmit || creating}
               className="w-full rounded-lg bg-kraki-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-kraki-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {t('newDialog.start')}

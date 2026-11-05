@@ -49,3 +49,19 @@ export function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 1) + '…';
 }
+
+const graphemes = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
+
+/** The longest prefix of at most `maxLen` UTF-16 units that ends on a
+ *  grapheme boundary: never a lone surrogate or half a ZWJ/flag emoji. */
+export function sliceGraphemes(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  let end = 0;
+  for (const { segment } of graphemes ? graphemes.segment(text) : Array.from(text, (segment) => ({ segment }))) {
+    if (end + segment.length > maxLen) break;
+    end += segment.length;
+  }
+  return text.slice(0, end);
+}

@@ -82,7 +82,7 @@ enum PermissionPromptCopy {
         guard message.payload["decision"]?.stringValue == nil else { return base }
         return base.hasSuffix("?") || base.hasSuffix("？") ? base : String(localized: "\(base)?")
     }
-    static let caption = String(localized: "Needs your approval · Safe mode")
+    static let caption = String(localized: "Needs your approval")
 }
 
 /// Resolved state: a small capsule, the same shape as the buttons it replaced.

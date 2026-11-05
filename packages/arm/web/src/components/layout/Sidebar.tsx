@@ -17,7 +17,7 @@ import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
 import { desktop } from '../../lib/desktop';
-import { sessionTimestamp } from '../../lib/chat/session-card';
+import { sortSessionsForList } from '../../lib/chat/session-card';
 import './sidebar.css';
 
 function Brand() {
@@ -30,32 +30,21 @@ function Brand() {
   );
 }
 
+/** Longest the New Session sheet waits for the created session to open. */
+const NEW_SESSION_WAIT_MS = 10_000;
+
 function useSortedSessions(query: string) {
   const sessions = useStore((s) => s.sessions);
   const pinned = useStore((s) => s.pinnedSessions);
   const previews = useStore((s) => s.sessionPreviews);
   return useMemo(() => {
     const q = query.trim().toLowerCase();
-    return [...sessions.values()]
-      .filter((s) => {
-        if (!q) return true;
-        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
-        return hay.includes(q);
-      })
-      .map((session) => ({
-        session,
-        timestamp: Date.parse(sessionTimestamp(previews.get(session.id)?.timestamp, session.createdAt)) || 0,
-        createdAt: Date.parse(session.createdAt ?? '') || 0,
-      }))
-      .sort((a, b) => {
-        const pa = pinned.has(a.session.id) ? 0 : 1;
-        const pb = pinned.has(b.session.id) ? 0 : 1;
-        if (pa !== pb) return pa - pb;
-        if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
-        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-        return a.session.id.localeCompare(b.session.id);
-      })
-      .map(({ session }) => session);
+    const matching = [...sessions.values()].filter((s) => {
+      if (!q) return true;
+      const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+    return sortSessionsForList(matching, pinned, previews);
   }, [sessions, pinned, previews, query]);
 }
 
@@ -88,6 +77,21 @@ export function Sidebar() {
   const reconnecting = useShowsReconnecting();
   const [query, setQuery] = useState('');
   const [newOpen, setNewOpen] = useState(false);
+  // After Start the sheet stays up until the new session's route renders
+  // (closing first showed the list for a frame, K-240); a session that never
+  // arrives (offline) still releases it, and a create error releases it at
+  // once so the error banner under the sheet is visible.
+  const [awaitingCreated, setAwaitingCreated] = useState<string | undefined | null>(null);
+  useEffect(() => {
+    if (awaitingCreated === null) return;
+    const done = () => { setAwaitingCreated(null); setNewOpen(false); };
+    if (sessionId && sessionId !== awaitingCreated) { done(); return; }
+    const timer = setTimeout(done, NEW_SESSION_WAIT_MS);
+    const unsubscribe = useStore.subscribe((state, prev) => {
+      if (state.lastError && state.lastError !== prev.lastError) done();
+    });
+    return () => { clearTimeout(timer); unsubscribe(); };
+  }, [awaitingCreated, sessionId]);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
@@ -154,7 +158,7 @@ export function Sidebar() {
 
   const dialogs = (
     <>
-      <NewSessionDialog open={newOpen} onClose={() => setNewOpen(false)} />
+      <NewSessionDialog open={newOpen} onClose={() => { setAwaitingCreated(null); setNewOpen(false); }} onCreated={() => setAwaitingCreated(sessionId)} />
       <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
     </>
   );

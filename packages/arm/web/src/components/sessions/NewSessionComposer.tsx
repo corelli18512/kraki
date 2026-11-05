@@ -16,11 +16,12 @@ import { wsClient } from '../../lib/ws-client';
 import { NEW_SESSION_DRAFT_ID } from '../../lib/commands';
 import { desktop } from '../../lib/desktop';
 import { AgentGlyph, agentLabel } from '../common/AgentAvatar';
-import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from '../chat/Voice';
+import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation, useStopDictationOnLeave } from '../chat/Voice';
 import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { newSessionContext } from '../../lib/voice/context';
 import './new-session.css';
 import { updateComposerScrollFade } from '../chat/Composer';
+import { isImeComposing } from '../../lib/ime';
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
 const AGENT_PREF_KEY = 'kraki:last-agent-by-device';
@@ -249,6 +250,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
   }, [nudge]);
 
   const dictation = useDictation('new');
+  useStopDictationOnLeave('new');
 
   // Same native 1pt editor inset, outside 8pt padding, and ten-line cap.
   useLayoutEffect(() => {
@@ -309,7 +311,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isImeComposing(e)) {
               e.preventDefault();
               submit();
             }

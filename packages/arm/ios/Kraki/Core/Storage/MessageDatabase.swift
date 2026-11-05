@@ -467,6 +467,21 @@ final class MessageDatabase {
         }
     }
 
+    /// Largest seq strictly below `seq`, or 0 if none is cached.
+    func lastSeq(_ sessionId: String, below seq: Int) -> Int {
+        do {
+            return try dbPool.read { db in
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT MAX(seq) FROM messages WHERE session_id = ? AND seq < ?",
+                    arguments: [sessionId, seq]
+                ) ?? 0
+            }
+        } catch {
+            return 0
+        }
+    }
+
     /// Whether any row with this exact seq exists for the session.
     /// Used by `MessageProvider` to short-circuit "do I need to ask
     /// tentacle for this?" without loading anything into memory.

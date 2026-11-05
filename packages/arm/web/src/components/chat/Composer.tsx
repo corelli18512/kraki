@@ -4,11 +4,12 @@ import { ArrowUp, CornerRightUp, ImagePlus, Square, X, CircleX } from 'lucide-re
 import type { Attachment } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { enterSendsMessage, shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from './Voice';
+import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation, useStopDictationOnLeave } from './Voice';
 import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { sessionContext } from '../../lib/voice/context';
 import type { PendingInput } from '../../lib/chat/outbox';
 import { mergeVoiceDraft, stagedVoice } from '../../lib/voice/staged-input';
+import { isImeComposing } from '../../lib/ime';
 
 /** Text worth mining for spelling terms (never sent whole). */
 function messageText(m: unknown): string {
@@ -185,6 +186,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   useEffect(() => { if (!reachable) setAbortPending(false); }, [reachable]);
   useEffect(() => { if (trailingError) setAbortPending(false); }, [trailingError]);
   useEffect(() => { setImage(null); }, [sessionId]);
+  useStopDictationOnLeave(sessionId);
 
   useEffect(() => {
     if (shouldAutoFocusTextInput()) fieldRef.current?.focus({ preventScroll: true });
@@ -310,7 +312,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           onKeyDown={(e) => {
             // Enter sends on a keyboard; Shift+Enter (or a touch keyboard's
             // return) inserts a newline. Never while an IME is composing.
-            if (e.key !== 'Enter' || e.shiftKey || composing.current || e.nativeEvent.isComposing) return;
+            if (e.key !== 'Enter' || e.shiftKey || composing.current || isImeComposing(e)) return;
             if (!enterSendsMessage()) return;
             e.preventDefault();
             submit();

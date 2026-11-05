@@ -46,6 +46,32 @@ enum ChatEntryLoading {
         }
         return !hasMessages && sessionLoading
     }
+
+    /// "Syncing…" in the chat title: this device has not stored the newest
+    /// message yet and can get it now. With the computer offline nothing can
+    /// arrive, so the title does not claim a sync that never ends.
+    static func isCatchingUp(
+        connected: Bool,
+        deviceOnline: Bool,
+        expectedLastSeq: Int,
+        persistedHead: Int
+    ) -> Bool {
+        connected && deviceOnline && expectedLastSeq > persistedHead
+    }
+
+    enum EmptyChatNote: Equatable {
+        /// Nothing was ever said: where the new session runs.
+        case newSession
+        /// History exists only on the computer, which is offline.
+        case historyOnOfflineComputer
+    }
+
+    /// What an empty chat explains. A session with history is never
+    /// presented as brand new just because this device has none of it.
+    static func emptyChatNote(knownLastSeq: Int, deviceOnline: Bool) -> EmptyChatNote? {
+        if knownLastSeq <= 0 { return .newSession }
+        return deviceOnline ? nil : .historyOnOfflineComputer
+    }
 }
 
 enum ChatBottomObstruction {

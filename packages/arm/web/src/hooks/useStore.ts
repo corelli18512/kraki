@@ -135,22 +135,33 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
 /** zustand's persist serializes the whole snapshot to localStorage after every
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
- *  stored JSON is already current. */
+ *  stored JSON is already current. A synchronous burst of sets (the first
+ *  session_list of 500 sessions made ~1000) is coalesced into one write at the
+ *  end of the current task (microtask), so nothing is lost on unload. */
 function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
   if (!storage) return storage;
   let written: StorageValue<PersistedStore> | null = null;
+  let pending: { name: string; value: StorageValue<PersistedStore> } | null = null;
   const unchanged = (value: StorageValue<PersistedStore>) => written !== null
     && written.version === value.version
     && (Object.keys(value.state) as Array<keyof PersistedStore>).every((key) => written!.state[key] === value.state[key])
     && Object.keys(written.state).length === Object.keys(value.state).length;
+  const flush = () => {
+    if (!pending) return;
+    const { name, value } = pending;
+    pending = null;
+    if (unchanged(value)) return;
+    storage.setItem(name, value);
+    written = value;
+  };
   return {
-    getItem: (name) => storage.getItem(name),
+    getItem: (name) => { flush(); return storage.getItem(name); },
     setItem: (name, value) => {
-      if (unchanged(value)) return;
-      storage.setItem(name, value);
-      written = value;
+      if (!pending) queueMicrotask(flush);
+      pending = { name, value };
     },
     removeItem: (name) => {
+      pending = null;
       written = null;
       return storage.removeItem(name);
     },

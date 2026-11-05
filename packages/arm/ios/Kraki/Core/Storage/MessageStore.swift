@@ -753,6 +753,11 @@ final class MessageStore {
         db.lastSeq(sessionId)
     }
 
+    /// Highest persisted seq strictly below `seq` (0 if none).
+    func dbLastSeq(_ sessionId: String, below seq: Int) -> Int {
+        db.lastSeq(sessionId, below: seq)
+    }
+
     /// Tail of the persisted message stream — used by callers that
     /// need the genuine "latest N" regardless of window state
     /// (preview rebuild, sidebar last-message-content).

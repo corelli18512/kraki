@@ -2,6 +2,7 @@ import { t } from '../i18n';
 import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
+import { sliceGraphemes } from './format';
 import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
@@ -634,7 +635,7 @@ export class KrakiWSClient {
     opts: { attachments?: import('@kraki/protocol').Attachment[]; delivery?: 'prompt' | 'steer'; answerTo?: string } = {},
   ): string {
     const clientId = outbox.send(sessionId, text, opts);
-    getStore().setSessionPreview(sessionId, { text: text.slice(0, 80), type: 'user', timestamp: new Date().toISOString() });
+    getStore().setSessionPreview(sessionId, { text: sliceGraphemes(text, 80), type: 'user', timestamp: new Date().toISOString() });
     return clientId;
   }
 

@@ -20,19 +20,18 @@ struct SessionDetailView: View {
     /// "Syncing…" in the title once a catch-up has lasted a moment.
     @State private var showsSyncing = false
 
-    /// Connected, but this device has not stored the newest message yet.
+    /// Connected to an online computer, but this device has not stored the
+    /// newest message yet.
     private var isCatchingUp: Bool {
-        guard appState.connectionStatus == .connected, let session else { return false }
-        let expected = max(session.lastSeq, appState.messageProvider?.tentacleLastKnownSeq(sessionId) ?? 0)
-        return expected > appState.messageStore.persistedHead(sessionId)
+        guard let session else { return false }
+        return ChatEntryLoading.isCatchingUp(
+            connected: appState.connectionStatus == .connected,
+            deviceOnline: appState.deviceStore.devices[session.deviceId]?.online == true,
+            expectedLastSeq: max(session.lastSeq, appState.messageProvider?.tentacleLastKnownSeq(sessionId) ?? 0),
+            persistedHead: appState.messageStore.persistedHead(sessionId)
+        )
     }
     @State private var modePickerExpanded = HeaderModePicker.startsExpanded
-    /// Tracks whether we've ever observed a live `SessionInfo` for
-    /// this id. Used to distinguish the brand-new pending state
-    /// (session never loaded yet) from a delete-after-load (session
-    /// was loaded, then went away). Only the latter pops back to
-    /// the session list.
-    @State private var didLoadSessionOnce = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
 
@@ -124,17 +123,8 @@ struct SessionDetailView: View {
                 markReadIfFocused()
             }
         }
-        // Track whether the session has ever been live for this view.
-        // Combined with the `session == nil && !isPending` check, this
-        // detects deletion (loaded → gone) and pops back to the
-        // session list.
-        .onChange(of: session?.id) { _, newId in
-            if newId != nil {
-                didLoadSessionOnce = true
-            } else if didLoadSessionOnce, !sessionStore.isPending(sessionId) {
-                dismiss()
-            }
-        }
+        // Deleted while open: SessionStore bumps `popToSessionListSignal`
+        // and MainTabView returns to the session list.
     }
 
     // MARK: - Session Content
@@ -305,6 +295,9 @@ struct SessionDetailView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+        // Fill the page like the chat and pending routes, so the header
+        // stays at the top instead of centering with this short content.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Helpers
