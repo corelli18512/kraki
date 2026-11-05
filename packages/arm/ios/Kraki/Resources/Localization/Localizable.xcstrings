@@ -10,7 +10,8 @@
             "value" : "  新增 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  %lld removed — tap to expand" : {
       "localizations" : {
@@ -20,7 +21,8 @@
             "value" : "  删除 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  %lld removed, %lld added — tap to expand" : {
       "localizations" : {
@@ -36,7 +38,8 @@
             "value" : "  删除 %lld 行，新增 %lld 行，轻点展开"
           }
         }
-      }
+      },
+      "extractionState" : "stale"
     },
     "  Collapse" : {
       "localizations" : {
@@ -44,6 +47,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "  收起"
+          }
+        }
+      },
+      "extractionState" : "stale"
+    },
+    "Already answered on another device." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在另一台设备上回答。"
           }
         }
       }
@@ -54,6 +68,42 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "连不上 Kraki 服务器。请检查这台 Mac 的网络连接。"
+          }
+        }
+      }
+    },
+    "Couldn't load steps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载步骤"
+          }
+        }
+      }
+    },
+    "Showing the first %@ of %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Showing the first %1$@ of %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅显示前 %1$@（共 %2$@）。"
+          }
+        }
+      }
+    },
+    "Steps come from your computer. Check that it is online, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "步骤来自你的电脑。请确认它在线后重试。"
           }
         }
       }
