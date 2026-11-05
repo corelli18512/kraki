@@ -147,7 +147,9 @@ export async function ensureSessionResumed(client: RelayClient, sessionId: strin
       // intended, not whatever the SDK happened to write last.
       if (restoreModel && meta.model) {
         try {
-          await client.adapter.setSessionModel(sessionId, meta.model);
+          // With the effort: Pi resets its thinking level on a model change,
+          // so the user's effort would silently fall back to the default.
+          await client.adapter.setSessionModel(sessionId, meta.model, meta.reasoningEffort);
         } catch (err) {
           logger.warn(
             { err, sessionId, model: meta.model },
