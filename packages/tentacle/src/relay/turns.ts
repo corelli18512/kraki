@@ -17,6 +17,50 @@ export function beginAdapterTurn(client: RelayClient, sessionId: string, turnId?
   return resolvedTurnId;
 }
 
+/**
+ * The agent started a run on its own (AgentAdapter.onAgentInitiatedTurn):
+ * open a new turn for it, like a prompt's but with no user_message. Returns
+ * the new turn id, or undefined when a Kraki turn is still in flight — the
+ * relay's current turn has not settled, or input is queued, dispatching,
+ * resuming or being accepted as a steer. That input owns the agent next.
+ *
+ * The turn behaves like a prompted one from here: `active` (sleep guard,
+ * session list), its steps/narration/reply pass the turn fence, and its
+ * closing idle marks unread, pushes the reply preview and may title the
+ * session. Its steps are recorded under the last user_message's turn in
+ * trace.jsonl (there is no user_message to start a new trace turn).
+ */
+export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string): string | undefined {
+  const meta = client.sessionManager.getMeta(sessionId);
+  const activeTurnId = client.activeInputTurnIds.get(sessionId);
+  const busy = !meta || meta.state === 'ended'
+    || (activeTurnId !== undefined && client.settledAdapterTurnIds.get(sessionId) !== activeTurnId)
+    || client.inputChains.has(sessionId)
+    || client.inputDispatches.has(sessionId)
+    || client.resumeInFlight.has(sessionId)
+    || client.steerAcceptanceInFlight.has(sessionId);
+  if (busy) {
+    logger.info({ sessionId, activeTurnId, state: meta?.state }, 'Agent-initiated run not given a turn: a Kraki turn is in flight');
+    return undefined;
+  }
+  // Same id scheme as a prompt (reserveInput), so it never repeats an
+  // earlier turn's id, also after a daemon restart.
+  const anchor = Math.max((meta.lastSeq ?? 0) + 1, (client.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
+  client.nextInputTurnAnchors.set(sessionId, anchor);
+  const turnId = `${sessionId}:${anchor}`;
+  // Per-turn outcome state a user_message would reset (see RelayClient.send).
+  client.turnStepCounts.set(sessionId, 0);
+  client.turnHasOutcome.delete(sessionId);
+  client.lastAgentContent.delete(sessionId);
+  client.pendingTerminalErrors.delete(sessionId);
+  client.errorPersistedForTurn.delete(sessionId);
+  client.send({ type: 'active', sessionId, payload: {} });
+  client.sessionManager.markActive(sessionId);
+  beginAdapterTurn(client, sessionId, turnId);
+  traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'AGENT-INITIATED-TURN', sessionId, turnId, previousTurnId: activeTurnId });
+  return turnId;
+}
+
 /** A terminal adapter event must identify the accepted turn it belongs to.
  *  Legacy adapters/tests may omit the token; those events retain the old
  *  fallback behavior, while tokenized events are strictly fenced. */
