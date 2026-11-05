@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KrakiWSClient } from './ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
+import * as commands from './commands';
 import type { ChatMessage } from '../types/store';
 
 /** The IndexedDB cache: every session holds its last 50 rows. Reads and
@@ -109,6 +110,15 @@ describe('repeated session_list (Tentacle re-broadcast after each reply)', () =>
     expect(useStore.getState().sessionListDevices.has('dev-t1')).toBe(true);
     useStore.getState().clearTransientState();
     expect(useStore.getState().sessionListDevices.size).toBe(0);
+  });
+
+  it('a list sent before this app pinned a session does not unpin it (K-207)', () => {
+    commands.resetPendingPins();
+    apply(sessionList([digest(1)]));
+    client.pinSession(sid(1), true);
+    apply(sessionList([digest(1)])); // digest(1) still says unpinned
+    expect(useStore.getState().pinnedSessions.has(sid(1))).toBe(true);
+    commands.resetPendingPins();
   });
 
   it('an unchanged list reads no IndexedDB rows and notifies no store subscriber', async () => {

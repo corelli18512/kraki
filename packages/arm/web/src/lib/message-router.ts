@@ -4,7 +4,7 @@ import { normalizeSessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
-import type { CommandState } from './commands';
+import { settlePinEcho, type CommandState } from './commands';
 import { messageProvider } from './message-provider';
 import { captureMessageGeneration, isMessageGenerationCurrent } from './message-persistence-generation';
 import { ingestChunk } from './attachments';
@@ -449,6 +449,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_pinned': {
+      if (!settlePinEcho(sid)) break;
       const pinned = (msg as SessionPinnedMessage).payload?.pinned;
       const next = new Set(store.pinnedSessions);
       if (pinned) {

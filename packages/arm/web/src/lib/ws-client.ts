@@ -1057,8 +1057,9 @@ export class KrakiWSClient {
         store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
 
-      // Sync pin state from tentacle
-      if (ts.pinned) {
+      // Sync pin state from tentacle; a list sent before this app's latest pin
+      // request was applied must not undo it (K-207).
+      if (commands.pendingPin(ts.id) ?? ts.pinned) {
         pinnedFromTentacle.add(ts.id);
       }
 
