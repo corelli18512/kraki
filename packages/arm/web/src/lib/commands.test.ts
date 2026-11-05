@@ -124,7 +124,7 @@ describe('rapid pin toggles under latency (K-207)', () => {
     expect(pinnedNow()).toBe(false);
   });
 
-  it('keeps the requested pin while a stale session list is in flight', () => {
+  it('reports the requested pin as pending until its echo arrives', () => {
     commands.pinSession('sess-p', true, vi.fn());
     expect(commands.pendingPin('sess-p')).toBe(true);
     echo('sess-p', true);
