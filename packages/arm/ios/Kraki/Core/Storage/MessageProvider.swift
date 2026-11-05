@@ -1115,6 +1115,12 @@ final class MessageProvider {
     /// `sessionListSelfHeal` request and strands Chat behind a loading spinner.
     /// Persisted messages and the current in-memory window remain untouched, so
     /// the UI can keep presenting local history while the new connection forms.
+    /// The last known head (`tentacleLastSeq`) is kept as well: it is history
+    /// metadata, not a request. Forgetting it made every open chat leave "at
+    /// head" for the whole outage (open questions turned undetermined, the
+    /// composer flipped to Steer, Jump to latest appeared at the tail). The
+    /// next `session_list` replaces it, including a lower head after a
+    /// Tentacle restore (`setTentacleInfo`).
     func onDisconnected() {
         let slotCount = outstanding.values.reduce(0) { $0 + $1.count }
         for (_, slots) in outstanding {
@@ -1123,7 +1129,6 @@ final class MessageProvider {
         outstanding.removeAll()
         headRequestedAt.removeAll()
         headDropped.removeAll()
-        tentacleLastSeq.removeAll()
         pendingTail.removeAll()
         traceRequests.clear()
         cardRequested.removeAll()

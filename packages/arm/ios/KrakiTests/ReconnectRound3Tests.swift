@@ -75,4 +75,34 @@ final class ReconnectRound3Tests: XCTestCase {
         XCTAssertLessThanOrEqual(app.messageStore.dbLastSeq(sid), 8)
         XCTAssertEqual(provider.tentacleLastKnownSeq(sid), 8)
     }
+
+    /// K-012: a relay blip must not take an open chat off "at head". That
+    /// turned an open question undetermined (its choices vanished and the
+    /// answer went out as a steer) and showed Jump to latest at the tail.
+    func testDisconnectKeepsTheKnownHeadSoAnOpenQuestionStaysOpen() throws {
+        let sid = "k012-blip"
+        let app = AppState(testDatabase: MessageDatabase(inMemory: ()))
+        defer { app.disconnect() }
+        let question = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: "d", timestamp: nil,
+                                   payload: ["content": AnyCodable("Two options."),
+                                             "question": AnyCodable(["id": "q1", "text": "Which?", "choices": ["A", "B"]])])
+        app.messageStore.ingestBatch(sid, [row(sid, 1), question])
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 2, deviceId: "d")
+        let window = provider.openSession(sid)
+        XCTAssertTrue(provider.atHead(sid))
+
+        provider.onDisconnected()
+
+        XCTAssertTrue(provider.atHead(sid), "the outage does not move the head")
+        XCTAssertEqual(provider.tentacleLastKnownSeq(sid), 2)
+        let presented = ChatViewModel.presentingQuestions(window, pending: [], atHead: provider.atHead(sid))
+        XCTAssertEqual(presented.last?.questionPresentation?.state, .open)
+
+        // The reconnect's session_list is still the authority, either way.
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 3, deviceId: "d")
+        XCTAssertFalse(provider.atHead(sid))
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 2, deviceId: "d")
+        XCTAssertTrue(provider.atHead(sid))
+    }
 }
