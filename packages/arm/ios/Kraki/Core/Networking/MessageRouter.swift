@@ -722,7 +722,8 @@ final class MessageRouter {
                 // session_list is reconnect authority. An idle digest proves no
                 // live card exists, including for an inactive Session whose
                 // concluding push may have been missed while disconnected.
-                appState.messageStore.endCardTurn(digest.id)
+                // A draft this device is behind on stays until its bubble lands.
+                appState.messageStore.endCardTurn(digest.id, afterCatchUpTo: digest.lastSeq)
             }
 
             // `reconcileSessionList` already applied Tentacle's authoritative

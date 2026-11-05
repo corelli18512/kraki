@@ -335,10 +335,14 @@ final class MessageStore {
     func markCaughtUp(_ sessionId: String, through seq: Int) {
         guard seq > 0 else { return }
         persistedHeads[sessionId] = max(persistedHead(sessionId), seq)
+        retireCardIfCaughtUp(sessionId)
     }
 
+    /// The catch-up is not coming: show the held live card, and drop a
+    /// concluded turn's card that was kept for its concluding bubble.
     func releaseCardHold(_ sessionId: String) {
         cardHoldUntil.removeValue(forKey: sessionId)
+        if cardEndsAtSeq[sessionId] != nil { endCardTurn(sessionId) }
     }
 
     private func notePersisted(_ sessionId: String, upTo seq: Int) {
@@ -346,6 +350,7 @@ final class MessageStore {
         if seq > current || persistedHeads[sessionId] == nil {
             persistedHeads[sessionId] = max(current, seq)
         }
+        retireCardIfCaughtUp(sessionId)
     }
 
     /// Prepend a page selected by persistent-spine row order. Unlike the live
@@ -922,8 +927,12 @@ final class MessageStore {
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its
     /// transient draft cannot reappear below the permanent spine bubble.
-    /// Reopened only by the next persisted user_message.
-    private var closedCardTurns: Set<String> = []
+    /// Reopened only by the next persisted user_message. Written only by the
+    /// card-turn transitions (here and MessageStore+CardTurn).
+    var closedCardTurns: Set<String> = []
+    /// A concluded turn whose concluding bubble is still to arrive by catch-up:
+    /// its last card is kept until the spine reaches this seq (K-013).
+    var cardEndsAtSeq: [String: Int] = [:]
 
     /// Per-turn TRACE steps, lazily pulled via `turn_trace_batch` and keyed by
     /// the concluding bubble's spine seq. In-memory only — the "Steps" popup
@@ -933,38 +942,6 @@ final class MessageStore {
     /// Swift Observation does not reliably invalidate through in-place nested
     /// dictionary writes, so every authoritative trace replacement advances it.
     private(set) var traceRevision: UInt64 = 0
-
-    /// Reopen transient draft/action state for an accepted user input. A normal
-    /// prompt starts a fresh turn and clears stale card state; a steer is a
-    /// visible interjection inside the current lifecycle and must preserve the
-    /// active draft/action while only reopening the late-frame gate.
-    func beginCardTurn(_ sessionId: String, delivery: String? = nil) {
-        closedCardTurns.remove(sessionId)
-        if delivery != "steer" { cards.removeValue(forKey: sessionId) }
-    }
-
-    /// Permanently retire transient state for the concluded turn. Late WS
-    /// coalescing or request_card snapshots are ignored until beginCardTurn.
-    func endCardTurn(_ sessionId: String) {
-        if !closedCardTurns.contains(sessionId) { closedCardTurns.insert(sessionId) }
-        if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
-    }
-
-    /// Restore the gate from persisted conversation truth when opening a DB
-    /// window. `session.state == active` is not sufficient because a reconnect
-    /// snapshot may race after the preceding turn already concluded. A question
-    /// `agent_message` is not a boundary: it does not conclude the turn.
-    func restoreCardTurnGate(_ sessionId: String, from messages: [ChatMessage]) {
-        guard let boundary = messages.last(where: {
-            ["user_message", "agent_message", "turn_status", "interrupted_turn",
-             "system_message", "idle", "session_ended"].contains($0.type) && $0.questionSpec == nil
-        }) else { return }
-        if boundary.type == "user_message" {
-            closedCardTurns.remove(sessionId)
-        } else {
-            endCardTurn(sessionId)
-        }
-    }
 
     /// `agent_message_delta`: append the chunk, or replace the draft when
     /// `reset` (new segment / resummarize / reconnect snapshot). Keep-last.
@@ -1073,6 +1050,7 @@ final class MessageStore {
         state: SessionState
     ) {
         cards.removeValue(forKey: sessionId)
+        cardEndsAtSeq.removeValue(forKey: sessionId)
         guard state == .active || state == .compacting else {
             closedCardTurns.insert(sessionId)
             return
@@ -1102,6 +1080,7 @@ final class MessageStore {
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
     func clearCard(_ sessionId: String) {
         if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
+        cardEndsAtSeq.removeValue(forKey: sessionId)
     }
 
     /// `turn_trace_batch`: replace a turn's pulled steps.
@@ -1134,6 +1113,7 @@ final class MessageStore {
         runtimeStatusBySession.removeAll()
         cards.removeAll()
         closedCardTurns.removeAll()
+        cardEndsAtSeq.removeAll()
         traces.removeAll()
         messages.removeAll()
         windows.removeAll()
