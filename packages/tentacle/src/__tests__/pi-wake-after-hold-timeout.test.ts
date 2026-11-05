@@ -33,6 +33,15 @@ function setup() {
     (adapter as unknown as Record<string, unknown>)[k] = (_sid: string, e: unknown) => calls.push([k, e]);
   }
   (adapter as unknown as { refreshUsage: () => Promise<void> }).refreshUsage = async () => {};
+  // RelayClient's side of the hook (relay/turns.ts beginAgentInitiatedTurn):
+  // allocate a fresh id and assign it before returning it.
+  let wakeTurns = 0;
+  adapter.onAgentInitiatedTurn = (id) => {
+    const turnId = `wake-${++wakeTurns}`;
+    calls.push(['onAgentInitiatedTurn', turnId]);
+    adapter.setTurnIdentity(id, turnId);
+    return turnId;
+  };
   const emit = (event: Record<string, unknown>) => handleEvent(adapter, sid, event);
   const assistant = async (text: string) => {
     await emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
@@ -89,5 +98,14 @@ describe('pi wake runs after the background hold timed out', () => {
     ]);
     // Each wake run is its own settled turn: an idle after each reply.
     expect(t.of('onIdle')).toHaveLength(3);
+    // ... each with its own turn id, on everything it emitted.
+    expect(t.of('onAgentInitiatedTurn')).toEqual(['wake-1', 'wake-2']);
+    expect(t.of('onMessage')).toEqual([
+      { content: 'All 26 lanes are done: PR #636 is the last one.', turnId: 'wake-1' },
+      { content: '355 issues handled; everything is in PR #637.', turnId: 'wake-2' },
+    ]);
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }, { turnId: 'wake-1' }, { turnId: 'wake-2' }]);
+    expect((t.of('onNarration') as Array<{ turnId?: string }>).map(n => n.turnId)).toEqual(['turn-1', 'wake-1', 'wake-2']);
+    expect(t.adapter.isTurnSettled(t.sid)).toBe(true);
   });
 });

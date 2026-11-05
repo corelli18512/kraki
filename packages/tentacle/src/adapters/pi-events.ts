@@ -117,9 +117,13 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
     case 'agent_start': {
       const s = adapter.sessions.get(sessionId);
       // A run while held: pi woke the agent with background results; it
-      // continues the same Kraki turn.
+      // continues the same Kraki turn. A run pi starts on its own after the
+      // turn settled (e.g. the hold timed out, then a background run finished)
+      // gets a new Kraki turn; see beginAgentInitiatedTurn for what is not.
       if (s?.awaitingSubagents) adapter.stopAwaitingSubagents(s, 'wake_run');
+      else if (s) adapter.beginAgentInitiatedTurn(sessionId, s);
       if (s) {
+        s.runInFlight = true;
         s.turn.captureTurnId();
         s.promptPreflight = undefined;
         s.pendingMaintenanceIdle = false;
@@ -337,6 +341,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         break;
       }
       s.pendingMaintenanceIdle = false;
+      s.runInFlight = false;
       // A duplicate settled callback must not crystallize the same logical turn
       // twice. The identity is reset only when a new prompt is accepted.
       if (s.turn.isSettled) break;
