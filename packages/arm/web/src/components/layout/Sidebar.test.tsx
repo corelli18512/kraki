@@ -174,3 +174,25 @@ describe('Sidebar native search and ordering', () => {
     expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
   });
 });
+
+describe('Sidebar narrow tabs', () => {
+  it('keeps the Sessions list scroll position across tab switches (K-242)', () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...original(query), matches: query === '(max-width: 767px)',
+    })) as typeof window.matchMedia;
+    try {
+      useStore.getState().setStatus('connected');
+      render(<MemoryRouter><Sidebar /></MemoryRouter>);
+      const scroll = screen.getByTestId('sidebar-sessions-scroll');
+      scroll.scrollTop = 640;
+      fireEvent.scroll(scroll);
+      fireEvent.click(screen.getByRole('button', { name: 'Devices' }));
+      expect(screen.queryByTestId('sidebar-sessions-scroll')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+      expect(screen.getByTestId('sidebar-sessions-scroll').scrollTop).toBe(640);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+});

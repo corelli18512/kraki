@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
@@ -107,6 +107,12 @@ export function Sidebar() {
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
   const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  // The Sessions tab unmounts while Devices/Settings show; come back to the
+  // same place in the list.
+  const sessionsScrollTop = useRef(0);
+  const restoreSessionsScroll = useCallback((el: HTMLDivElement | null) => {
+    if (el) el.scrollTop = sessionsScrollTop.current;
+  }, []);
   const navigate = useNavigate();
   const sorted = useSortedSessions(query);
   const total = useStore((s) => s.sessions.size);
@@ -216,7 +222,12 @@ export function Sidebar() {
             <Brand />
             {reconnecting && <span className="kspinner ksb-spin" aria-label={t('sidebar.connectingLabel')} />}
           </div>
-          <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
+          <div
+            className="ksb-scroll"
+            ref={restoreSessionsScroll}
+            onScroll={(e) => { sessionsScrollTop.current = e.currentTarget.scrollTop; }}
+            data-testid="sidebar-sessions-scroll"
+          >{list}<div className="ksb-tabbar-space" /></div>
         </>
       )}
       {tab === 'devices' && <div className="ksb-scroll ksb-pane"><DeviceGrid /><div className="ksb-tabbar-space" /></div>}
