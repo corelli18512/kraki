@@ -142,6 +142,8 @@ struct DeviceDetailView: View {
                             ForEach(models, id: \.self) { model in
                                 Text(verbatim: model)
                                     .font(.caption)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
                                     .background(Color(.systemGray6))
@@ -278,7 +280,8 @@ struct DeviceDetailView: View {
 
 // MARK: - FlowLayout
 
-/// Simple flow layout for wrapping tags (model badges, etc.).
+/// Simple flow layout for wrapping tags (model badges, etc.). A tag wider
+/// than the row is offered the row's width instead of overflowing it (K-190).
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
@@ -286,39 +289,45 @@ struct FlowLayout: Layout {
         let rows = computeRows(proposal: proposal, subviews: subviews)
         var height: CGFloat = 0
         for (i, row) in rows.enumerated() {
-            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            let rowHeight = row.map(\.size.height).max() ?? 0
             height += rowHeight + (i > 0 ? spacing : 0)
         }
         return CGSize(width: proposal.width ?? 0, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = computeRows(proposal: proposal, subviews: subviews)
+        let rows = computeRows(proposal: ProposedViewSize(width: bounds.width, height: nil), subviews: subviews)
         var y = bounds.minY
         for row in rows {
-            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            let rowHeight = row.map(\.size.height).max() ?? 0
             var x = bounds.minX
-            for subview in row {
-                let size = subview.sizeThatFits(.unspecified)
-                subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+            for item in row {
+                item.subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.size))
+                x += item.size.width + spacing
             }
             y += rowHeight + spacing
         }
     }
 
-    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[LayoutSubview]] {
+    /// Each tag at its ideal size, capped to the available width.
+    private func size(of subview: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard ideal.width > maxWidth else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[(subview: LayoutSubview, size: CGSize)]] {
         let maxWidth = proposal.width ?? .infinity
-        var rows: [[LayoutSubview]] = [[]]
+        var rows: [[(subview: LayoutSubview, size: CGSize)]] = [[]]
         var currentWidth: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, maxWidth: maxWidth)
             if currentWidth + size.width > maxWidth, !rows[rows.count - 1].isEmpty {
                 rows.append([])
                 currentWidth = 0
             }
-            rows[rows.count - 1].append(subview)
+            rows[rows.count - 1].append((subview, size))
             currentWidth += size.width + spacing
         }
         return rows

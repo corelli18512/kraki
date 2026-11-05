@@ -132,6 +132,37 @@ final class DeviceUpdateRenderTests: XCTestCase {
                        "Kraki 0.38.10 wasn’t installed on Mac mini.")
     }
 
+    /// K-190: a model id longer than the card is one chip no wider than the
+    /// card, not one that runs off its edge.
+    func testFlowLayoutKeepsALongChipInsideTheRow() throws {
+        final class Frames { var all: [CGRect] = [] }
+        let frames = Frames()
+        let long = String(repeating: "anthropic/claude-sonnet-", count: 3)
+        let host = UIHostingController(rootView: FlowLayout(spacing: 6) {
+            ForEach(["gpt-5", long, "o3"], id: \.self) { model in
+                Text(verbatim: model).font(.caption).lineLimit(1).truncationMode(.middle)
+                    .padding(.horizontal, 10)
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { frames.all.append(g.frame(in: .named("flow"))) }
+                    })
+            }
+        }
+        .frame(width: 240)
+        .coordinateSpace(name: "flow"))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 400)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(frames.all.count, 3)
+        for frame in frames.all {
+            XCTAssertGreaterThanOrEqual(frame.minX, -0.5)
+            XCTAssertLessThanOrEqual(frame.maxX, 240.5, "chip \(frame) runs past the row")
+        }
+    }
+
     /// Device names and tentacle error text are shown verbatim; only the
     /// how-to-update help (backticked `kraki update`) is Markdown.
     func testOnlyUpdateHelpDetailIsMarkdown() throws {
