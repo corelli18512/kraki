@@ -115,7 +115,9 @@ export async function checkAgent(
     }
     return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
   } finally {
-    try { await adapter?.stop(); } catch { /* best effort */ }
+    // A stop that never returns would keep `kraki agents --json` (and Kraki
+    // for Mac's setup waiting on it) from ever finishing (K-346).
+    try { if (adapter) await withTimeout(adapter.stop(), deps.timeoutMs, `${agent.name} stop`); } catch { /* best effort */ }
   }
 }
 

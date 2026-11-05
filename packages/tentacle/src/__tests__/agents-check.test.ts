@@ -56,6 +56,14 @@ describe('kraki agents --json', () => {
     expect(stuck.stopped).toBe(true);
   });
 
+  it('K-346: an agent whose stop never returns still lets `kraki agents --json` finish', async () => {
+    const stuck = fakeAdapter({ start: () => new Promise<void>(() => {}) });
+    (stuck as unknown as { stop: () => Promise<void> }).stop = () => new Promise<void>(() => {});
+    const { results, events } = await run(['copilot'], { copilot: stuck }, 20);
+    expect(results.find((r) => r.id === 'copilot')).toMatchObject({ status: 'error' });
+    expect(events.at(-1)).toMatchObject({ event: 'done' });
+  });
+
   it('reports an agent that cannot even be launched as an error, not as signed out', async () => {
     const pi = fakeAdapter({ models: [], listError: 'spawn EINVAL' });
     const { results } = await run(['pi'], { pi });
