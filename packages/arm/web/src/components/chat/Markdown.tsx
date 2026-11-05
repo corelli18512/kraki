@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -16,10 +16,15 @@ function textOf(node: ReactNode): string {
 /** Agent text is not trusted to make this browser fetch anything: a remote
  *  `![](https://…)` would tell a third party who read the message, and when.
  *  An image shows as a link the user may open. */
+/** True inside a markdown link: a linked image (a badge) is that link's
+ *  label, not a second link nested in it. */
+const InsideLink = createContext(false);
+
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+  const insideLink = useContext(InsideLink);
   const url = typeof src === 'string' ? src : '';
   const label = alt || url;
-  if (/^https?:\/\//i.test(url)) {
+  if (!insideLink && /^https?:\/\//i.test(url)) {
     return <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>;
   }
   return label ? <span>{label}</span> : null;
@@ -28,7 +33,7 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
 /** Markdown elements styled like the native bubbles (see chat.css `.kmd`). */
 const components: Components = {
   a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    <a href={href} target="_blank" rel="noopener noreferrer"><InsideLink.Provider value>{children}</InsideLink.Provider></a>
   ),
   img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   // ReactMarkdown emits a newline after each hard-break node. Prose preserves

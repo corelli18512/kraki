@@ -84,6 +84,13 @@ describe('Markdown — remote images (K-219)', () => {
     expect(container.querySelector('img[src^="https:"]')).toBeNull();
   });
 
+  it('a linked image (a badge) is the label of its one link, not a nested link', () => {
+    const { container } = render(<Markdown text={'[![ci](https://a.example/b.png)](https://c.example)'} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'ci' })).toHaveAttribute('href', 'https://c.example');
+  });
+
   it('an image without a web address shows its alt text only', () => {
     const { container } = render(<Markdown text={'![diagram](./local.png)'} />);
     expect(container.querySelector('img')).toBeNull();
