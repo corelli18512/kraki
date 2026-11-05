@@ -50,6 +50,8 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
   const previousFocus = useRef<HTMLElement | null>(null);
   const [context, setContext] = useState<{ x: number; y: number; text: string; selection: boolean; code: string } | null>(null);
   const press = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** The long press opened the menu; the lift must not close it again. */
+  const pressOpened = useRef(false);
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current.timer);
     press.current = null;
@@ -113,7 +115,8 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
         if (event.pointerType !== 'touch' || !event.isPrimary) return;
         cancelPress();
         const { clientX: x, clientY: y, target } = event;
-        press.current = { id: event.pointerId, x, y, timer: setTimeout(() => { press.current = null; open(x, y, target, true); }, LONG_PRESS_MS) };
+        pressOpened.current = false;
+        press.current = { id: event.pointerId, x, y, timer: setTimeout(() => { press.current = null; pressOpened.current = true; open(x, y, target, true); }, LONG_PRESS_MS) };
       }}
       onPointerMove={(event) => {
         const start = press.current;
@@ -121,6 +124,12 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
       }}
       onPointerUp={cancelPress}
       onPointerCancel={cancelPress}
+      onTouchEnd={(event) => {
+        // Lifting after the long press would send compatibility mousedown and
+        // click events at the bubble, outside the menu that just opened.
+        if (pressOpened.current) event.preventDefault();
+        pressOpened.current = false;
+      }}
       onKeyDown={(event) => {
         if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
           event.preventDefault();

@@ -133,6 +133,20 @@ describe('MessageBubble — touch long press (K-107) and code blocks (K-237)', (
     expect(writeText).toHaveBeenCalledWith('Hello world.\nSecond line.');
   });
 
+  it('lifting after the long press does not send the mouse events that would close the menu', () => {
+    const { bubble } = setup();
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
+    fireEvent.pointerUp(bubble, touch);
+    // fireEvent returns false when the default (compatibility mouse events) was prevented.
+    expect(fireEvent.touchEnd(bubble)).toBe(false);
+    expect(screen.getByRole('menu')).toBeTruthy();
+    // A plain tap keeps its click.
+    fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
+    fireEvent.pointerUp(bubble, touch);
+    expect(fireEvent.touchEnd(bubble)).toBe(true);
+  });
+
   it('a scroll, a lift or a mouse press opens nothing', () => {
     const { bubble } = setup();
     fireEvent.pointerDown(bubble, { ...touch, clientX: 50, clientY: 60 });
