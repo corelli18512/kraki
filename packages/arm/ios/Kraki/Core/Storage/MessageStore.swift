@@ -933,6 +933,7 @@ final class MessageStore {
     /// A concluded turn whose concluding bubble is still to arrive by catch-up:
     /// its last card is kept until the spine reaches this seq (K-013).
     var cardEndsAtSeq: [String: Int] = [:]
+    @ObservationIgnored private var lastDeltaSeq: [String: Int] = [:]
 
     /// Per-turn TRACE steps, lazily pulled via `turn_trace_batch` and keyed by
     /// the concluding bubble's spine seq. In-memory only — the "Steps" popup
@@ -945,8 +946,14 @@ final class MessageStore {
 
     /// `agent_message_delta`: append the chunk, or replace the draft when
     /// `reset` (new segment / resummarize / reconnect snapshot). Keep-last.
-    func applyCardMessage(_ sessionId: String, _ content: String, reset: Bool) {
+    /// `envelopeSeq`: the delta's envelope seq (unique per send). An appending
+    /// delta received twice (a re-sent envelope) is applied once (K-148).
+    func applyCardMessage(_ sessionId: String, _ content: String, reset: Bool, envelopeSeq: Int? = nil) {
         guard !closedCardTurns.contains(sessionId) else { return }
+        if let envelopeSeq, envelopeSeq > 0 {
+            guard reset || lastDeltaSeq[sessionId] != envelopeSeq else { return }
+            lastDeltaSeq[sessionId] = envelopeSeq
+        }
         // Non-empty model output proves the runtime advanced beyond compaction.
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()

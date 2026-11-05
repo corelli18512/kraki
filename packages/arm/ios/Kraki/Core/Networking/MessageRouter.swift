@@ -477,7 +477,7 @@ final class MessageRouter {
             // Draft bubble (card). Keep-last: replace on `reset`, else append.
             if let content = payload?["content"] as? String {
                 let reset = payload?["reset"] as? Bool ?? false
-                appState.messageStore.applyCardMessage(sessionId, content, reset: reset)
+                appState.messageStore.applyCardMessage(sessionId, content, reset: reset, envelopeSeq: dict["seq"] as? Int)
                 // No per-delta SessionInfo.activity write: nothing displays the
                 // agent-text activity (ActivityRow has no callers), and copying
                 // the growing answer into `sessions` on every delta notified
