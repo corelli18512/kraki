@@ -20,6 +20,13 @@ final class HelpersTests: XCTestCase {
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "", new: "pasted line\n"))
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "a ", new: "a two\nlines\n"))
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "ab", new: "a\nb"))
+        // K-153: a hardware Shift/Option/Control-Return types a newline.
+        XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "hello", new: "hello\n", literalNewline: true))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey(.shift))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey([.option]))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey([.control, .shift]))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineKey([]))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineKey(.command), "Command-Return sends")
     }
 
     func testAccountUsagePercentIsClampedAtDecode() throws {

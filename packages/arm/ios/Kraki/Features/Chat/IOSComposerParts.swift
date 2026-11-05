@@ -71,13 +71,24 @@ struct IOSVoiceRecordingControls: View {
     let onCancel: () -> Void
     let onEdit: () -> Void
 
+    /// Cancel and Edit are never cut off (iPhone SE, larger text): the level
+    /// bars, then the timer, then the button titles give way first.
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(meter: true, timer: true, titles: true)
+            row(meter: false, timer: true, titles: true)
+            row(meter: false, timer: false, titles: true)
+            row(meter: false, timer: false, titles: false)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .frame(height: IOSComposerMetrics.height)
+    }
+
+    private func row(meter: Bool, timer: Bool, titles: Bool) -> some View {
         HStack(spacing: 6) {
             Button(action: onCancel) {
-                Label("Cancel", systemImage: "xmark")
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
+                controlLabel("Cancel", systemImage: "xmark", titles: titles)
                     .background(Color.secondary.opacity(0.12), in: Capsule())
                     .contentShape(Capsule())
             }
@@ -85,21 +96,21 @@ struct IOSVoiceRecordingControls: View {
             .foregroundStyle(.primary)
             .accessibilityIdentifier("voice-cancel")
             .accessibilityHint("Discards what you just said")
-            VoiceLevelBars(levels: levels)
-                .padding(.leading, 6)
-            if let startedAt {
+            if meter {
+                VoiceLevelBars(levels: levels)
+                    .padding(.leading, 6)
+            }
+            if timer, let startedAt {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(MessageInputView.elapsed(from: startedAt, to: context.date))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
             }
             Spacer(minLength: 4)
             Button(action: onEdit) {
-                Label("Edit", systemImage: "text.cursor")
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
+                controlLabel("Edit", systemImage: "text.cursor", titles: titles)
                     .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
                     .contentShape(Capsule())
             }
@@ -108,9 +119,78 @@ struct IOSVoiceRecordingControls: View {
             .accessibilityIdentifier("voice-to-text")
             .accessibilityHint("Stops listening and puts the text in the field to edit")
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 6)
-        .frame(height: IOSComposerMetrics.height)
+    }
+
+    @ViewBuilder
+    private func controlLabel(_ title: LocalizedStringKey, systemImage: String, titles: Bool) -> some View {
+        Group {
+            if titles {
+                Label(title, systemImage: systemImage)
+            } else {
+                Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+            }
+        }
+        .font(.subheadline.weight(.medium))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 12)
+        .frame(minWidth: 36, minHeight: 36)
+    }
+}
+
+/// A voice failure note above the composer. It wraps to as many lines as it
+/// needs (it used to stop at three, cutting off the end on an iPhone SE).
+struct IOSVoiceFailureRow: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss", action: onDismiss)
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// "<computer> is offline — …" above the composer. It is part of the bottom
+/// footprint the chat reserves (`ChatBottomObstruction.height`), so it never
+/// covers the newest bubble or the ↓ control, and it wraps instead of
+/// cutting off the word "offline".
+struct IOSComposerOfflineNotice: View {
+    let text: String
+
+    /// A long computer name is shortened so "offline" stays in view.
+    static let maxNameLength = 28
+
+    static func text(deviceName: String?) -> String {
+        guard var name = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            return String(localized: "Device is offline — message will deliver when it reconnects.")
+        }
+        if name.count > maxNameLength { name = String(name.prefix(maxNameLength - 1)) + "…" }
+        return String(localized: "\(name) is offline — message will deliver when it reconnects.")
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.ultraThinMaterial))
+            .padding(.horizontal, 16)
+            .accessibilityIdentifier("chat-offline-notice")
     }
 }
 

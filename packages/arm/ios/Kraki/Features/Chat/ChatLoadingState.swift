@@ -72,14 +72,19 @@ enum ChatBottomObstruction {
         return extra > 0.5 ? extra.rounded(.up) : 0
     }
 
+    /// `offlineNoticeHeight`: the measured "computer is offline" notice above
+    /// the composer (0 when hidden). A persistent status counts as footprint:
+    /// the newest bubble and the ↓ control rest above it instead of under it.
     static func height(
         composerClearance: CGFloat,
         composerVisible: Bool,
-        compacting: Bool
+        compacting: Bool,
+        offlineNoticeHeight: CGFloat = 0
     ) -> CGFloat {
         let composerFloor: CGFloat = composerVisible ? composerClearance : 0
         let compactionFloor: CGFloat = compacting ? 40 : 0
         let spacing: CGFloat = composerVisible && compacting ? 8 : 0
-        return composerFloor + compactionFloor + spacing
+        let notice: CGFloat = composerVisible && offlineNoticeHeight > 0 ? offlineNoticeHeight.rounded(.up) + 8 : 0
+        return composerFloor + compactionFloor + spacing + notice
     }
 }
