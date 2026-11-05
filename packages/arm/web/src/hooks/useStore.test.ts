@@ -494,6 +494,41 @@ describe('drafts across tabs (K-323)', () => {
     expect(storedDrafts()).toEqual([]);
   });
 
+  it("never takes characters out of the draft this tab is typing", () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      useStore.getState().setActiveSessionId('sess-x');
+      useStore.getState().setDraft('sess-x', 'hello');
+      // A background tab's write that crossed this tab's last keystrokes.
+      otherTabWrites([['sess-x', 'hel'], ['sess-y', 'b']]);
+      expect(useStore.getState().drafts.get('sess-x')).toBe('hello');
+      expect(useStore.getState().drafts.get('sess-y')).toBe('b');
+    } finally { focus.mockRestore(); }
+  });
+
+  it("a write keeps drafts stored by another tab even when their event never arrived", () => {
+    // Another tab stored a draft; this tab (frozen, say) never saw the event.
+    const stored = JSON.parse(localStorage.getItem('kraki-store') ?? '{"state":{},"version":0}');
+    stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'b']] };
+    localStorage.setItem('kraki-store', JSON.stringify(stored));
+    useStore.getState().setDraft('sess-x', 'a');
+    expect(storedDrafts()).toEqual([['sess-y', 'b'], ['sess-x', 'a']]);
+    // Nor does another persisted change carry this tab's stale copy of them.
+    stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'bc'], ['sess-x', 'a']] };
+    localStorage.setItem('kraki-store', JSON.stringify(stored));
+    useStore.getState().togglePin('sess-z');
+    expect(storedDrafts()).toEqual([['sess-y', 'bc'], ['sess-x', 'a']]);
+    useStore.getState().setDraft('sess-x', '');
+    expect(storedDrafts()).toEqual([['sess-y', 'bc']]);
+  });
+
+  it('signing out clears every stored draft', () => {
+    otherTabWrites([['sess-y', 'b']]);
+    useStore.getState().setDraft('sess-x', 'a');
+    useStore.getState().reset();
+    expect(storedDrafts()).toEqual([]);
+  });
+
   it('ignores other keys and unreadable values', () => {
     useStore.getState().setDraft('sess-a', 'typed');
     window.dispatchEvent(new StorageEvent('storage', { key: 'other', newValue: '{}', storageArea: localStorage }));
