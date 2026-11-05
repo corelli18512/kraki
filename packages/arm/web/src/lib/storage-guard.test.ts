@@ -33,9 +33,14 @@ describe('K-201: storage the browser refuses or that is full', () => {
     useStore.getState().upsertSession({
       id: 's-full-2', deviceId: 'd', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0,
     } as never);
+    // Writes are coalesced to the end of the task (microtask).
+    await Promise.resolve();
     const attempts = setItem.mock.calls.length;
     expect(attempts).toBeGreaterThan(0);
-    for (let i = 0; i < 5; i++) useStore.getState().setStatus(i % 2 ? 'connected' : 'connecting');
+    for (let i = 0; i < 5; i++) {
+      useStore.getState().setStatus(i % 2 ? 'connected' : 'connecting');
+      await Promise.resolve();
+    }
     expect(setItem.mock.calls.length).toBe(attempts);
   });
 

@@ -499,24 +499,29 @@ describe('drafts across tabs (K-323)', () => {
     localStorage.setItem('kraki-store', newValue);
     window.dispatchEvent(new StorageEvent('storage', { key: 'kraki-store', newValue, storageArea: localStorage }));
   }
-  const storedDrafts = () => JSON.parse(localStorage.getItem('kraki-store')!).state.drafts.entries;
+  /** Writes are coalesced to the end of the task: let them land first. */
+  const storedDrafts = async () => {
+    await Promise.resolve();
+    return JSON.parse(localStorage.getItem('kraki-store')!).state.drafts.entries;
+  };
 
-  it("keeps another tab's draft when this tab types one", () => {
+  it("keeps another tab's draft when this tab types one", async () => {
     otherTabWrites([['sess-a', 'draft in tab A']]);
     expect(useStore.getState().drafts.get('sess-a')).toBe('draft in tab A');
     useStore.getState().setDraft('sess-b', 'draft in tab B');
-    expect(storedDrafts()).toEqual([['sess-a', 'draft in tab A'], ['sess-b', 'draft in tab B']]);
+    expect(await storedDrafts()).toEqual([['sess-a', 'draft in tab A'], ['sess-b', 'draft in tab B']]);
   });
 
-  it("follows another tab's sent (cleared) draft and does not echo the write", () => {
+  it("follows another tab's sent (cleared) draft and does not echo the write", async () => {
     useStore.getState().setDraft('sess-a', 'typed');
+    await Promise.resolve();
     const write = vi.spyOn(Storage.prototype, 'setItem');
     otherTabWrites([]);
     expect(useStore.getState().drafts.size).toBe(0);
     // Only the other tab's own write: this tab does not write back over it.
     expect(write).toHaveBeenCalledTimes(1);
     write.mockRestore();
-    expect(storedDrafts()).toEqual([]);
+    expect(await storedDrafts()).toEqual([]);
   });
 
   it("never takes characters out of the draft this tab is typing", () => {
@@ -531,27 +536,27 @@ describe('drafts across tabs (K-323)', () => {
     } finally { focus.mockRestore(); }
   });
 
-  it("a write keeps drafts stored by another tab even when their event never arrived", () => {
+  it("a write keeps drafts stored by another tab even when their event never arrived", async () => {
     // Another tab stored a draft; this tab (frozen, say) never saw the event.
     const stored = JSON.parse(localStorage.getItem('kraki-store') ?? '{"state":{},"version":0}');
     stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'b']] };
     localStorage.setItem('kraki-store', JSON.stringify(stored));
     useStore.getState().setDraft('sess-x', 'a');
-    expect(storedDrafts()).toEqual([['sess-y', 'b'], ['sess-x', 'a']]);
+    expect(await storedDrafts()).toEqual([['sess-y', 'b'], ['sess-x', 'a']]);
     // Nor does another persisted change carry this tab's stale copy of them.
     stored.state.drafts = { __type: 'Map', entries: [['sess-y', 'bc'], ['sess-x', 'a']] };
     localStorage.setItem('kraki-store', JSON.stringify(stored));
     useStore.getState().togglePin('sess-z');
-    expect(storedDrafts()).toEqual([['sess-y', 'bc'], ['sess-x', 'a']]);
+    expect(await storedDrafts()).toEqual([['sess-y', 'bc'], ['sess-x', 'a']]);
     useStore.getState().setDraft('sess-x', '');
-    expect(storedDrafts()).toEqual([['sess-y', 'bc']]);
+    expect(await storedDrafts()).toEqual([['sess-y', 'bc']]);
   });
 
-  it('signing out clears every stored draft', () => {
+  it('signing out clears every stored draft', async () => {
     otherTabWrites([['sess-y', 'b']]);
     useStore.getState().setDraft('sess-x', 'a');
     useStore.getState().reset();
-    expect(storedDrafts()).toEqual([]);
+    expect(await storedDrafts()).toEqual([]);
   });
 
   it('ignores other keys and unreadable values', () => {

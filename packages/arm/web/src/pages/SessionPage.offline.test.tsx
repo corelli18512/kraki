@@ -9,7 +9,7 @@ import { RECONNECTING_DEBOUNCE_MS } from '../hooks/useShowsReconnecting';
 
 vi.mock('../components/chat/Voice', () => ({
   MicButton: () => null, VoiceError: () => null, VoiceRow: () => null, VoiceTranscript: () => null,
-  useDictation: () => ({ active: false }), useStartDictation: () => () => {},
+  useDictation: () => ({ active: false }), useStartDictation: () => () => {}, useStopDictationOnLeave: () => {},
 }));
 
 const banner = () => screen.queryByText('Mac is offline — messages will be sent when it reconnects');
