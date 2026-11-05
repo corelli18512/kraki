@@ -1000,7 +1000,7 @@ final class MessageStore {
             // bubble back to unanswered while confirmation is in flight.
             return
         }
-        card.action = action
+        card.action = Self.notingAnsweredElsewhere(action, replacing: card.action)
         if action != nil { card.narratedSinceAction = false }
         cards[sessionId] = card
     }

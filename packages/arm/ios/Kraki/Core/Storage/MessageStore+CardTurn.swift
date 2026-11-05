@@ -3,6 +3,18 @@
 import Foundation
 
 extension MessageStore {
+    /// Another device decided the permission first: Tentacle's resolved card
+    /// carries that decision, not the one this device showed optimistically.
+    /// Say so rather than silently flipping it (K-345).
+    static func notingAnsweredElsewhere(_ incoming: ChatMessage?, replacing current: ChatMessage?) -> ChatMessage? {
+        guard var incoming, let current, current.payload["localPending"]?.boolValue == true,
+              let id = promptID(current), promptID(incoming) == id,
+              let ours = current.payload["decision"]?.stringValue,
+              let theirs = incoming.payload["decision"]?.stringValue, ours != theirs else { return incoming }
+        incoming.payload["localError"] = AnyCodable(String(localized: "Already answered on another device."))
+        return incoming
+    }
+
     /// An action that only says what happened last (a completed tool, a
     /// decided permission): narration that resumes supersedes it.
     static func isSettledTail(_ action: ChatMessage) -> Bool {
