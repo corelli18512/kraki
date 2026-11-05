@@ -859,10 +859,9 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func commitTitleEdit() {
-        // Unchanged: no rename, so an auto title does not become a fixed one.
-        if let title = MacSessionInfoRules.titleToSaveOnClose(
-            editing: editingTitle, draft: titleDraft, original: titleEditOriginal
-        ) {
+        // Not editing, or unchanged: no rename, so an auto title does not
+        // become a fixed one (and clearing a never-set title is a no-op).
+        if editingTitle, let title = session.titleEdit(titleDraft) {
             appState.commandSender?.renameSession(sessionId: session.id, title: title)
         }
         editingTitle = false

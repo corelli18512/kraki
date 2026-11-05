@@ -36,6 +36,9 @@ struct SessionListHeader: View {
         .padding(.bottom, 6)
         .animation(.snappy(duration: 0.25), value: isSearching)
         .animation(.snappy(duration: 0.25), value: deviceFilter)
+        // A second computer arriving adds the Filter control: Search slides
+        // over instead of jumping 52 pt in one frame.
+        .animation(.snappy(duration: 0.25), value: showsFilter)
         // A filter that no longer matches a known computer is cleared.
         .onChange(of: devices.map(\.id)) { _, ids in
             if let deviceFilter, !ids.contains(deviceFilter) { self.deviceFilter = nil }
@@ -54,7 +57,7 @@ struct SessionListHeader: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Search Sessions")
             .accessibilityIdentifier("session-list-search")
-            if showsFilter { filterMenu }
+            if showsFilter { filterMenu.transition(.opacity) }
         }
         .frame(minHeight: Self.controlSize)
         .transition(.opacity)
@@ -155,14 +158,13 @@ struct SessionListHeader: View {
     }
 
     /// A checkmarked choice with a session-count subtitle (native menu row).
+    /// The label is plain Text, Text, Image: wrapped in a `Label`, the menu
+    /// drops the subtitle.
     private func menuItem(_ id: String?, _ title: String, detail: String, symbol: String) -> some View {
         Toggle(isOn: Binding(get: { deviceFilter == id }, set: { if $0 { deviceFilter = id } })) {
-            Label {
-                Text(title)
-                Text(detail)
-            } icon: {
-                Image(systemName: symbol)
-            }
+            Text(title)
+            Text(detail)
+            Image(systemName: symbol)
         }
     }
 

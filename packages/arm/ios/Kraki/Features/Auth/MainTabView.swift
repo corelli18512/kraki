@@ -5,6 +5,12 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     let allowsInitialNavigation: Bool
+    /// The pre-iOS 26 tab bar on any system (tests run on iOS 26 only).
+    #if DEBUG
+    var forcesLegacyTabs = false
+    #else
+    let forcesLegacyTabs = false
+    #endif
     /// Open Sessions, oldest first. On wide windows the first one is shown
     /// beside the list (the Mac's selection) and later ones (forks) are
     /// pushed over it; on narrow windows all are pushed over the list. The
@@ -21,7 +27,7 @@ struct MainTabView: View {
 
     var body: some View {
         Group {
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), !forcesLegacyTabs {
                 modernTabView
             } else {
                 legacyTabView
@@ -131,6 +137,12 @@ struct MainTabView: View {
         appState.deviceStore.navigateToDeviceId = nil
     }
 
+    /// Sessions tab badge: hidden at 0, capped at "99+".
+    static func unreadBadge(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count > 99 ? "99+" : String(count)
+    }
+
     // MARK: - Sub-views (shared)
 
     private var sessionsContent: some View {
@@ -210,7 +222,7 @@ struct MainTabView: View {
                     LucideIconType.botMessageSquare.tabImage()
                 }
             }
-            .badge(appState.sessionStore.totalUnread)
+            .badge(Self.unreadBadge(appState.sessionStore.totalUnread).map { Text(verbatim: $0) })
 
             Tab(value: 1) {
                 devicesContent
@@ -266,8 +278,11 @@ struct MainTabView: View {
 
     // MARK: - Pre-iOS 26 fallback
 
+    /// The trailing "+" is a plain tab item here, made an action by the same
+    /// interceptor as the iOS 26 search-role tab: it opens the New Session
+    /// sheet and is never selected.
     private var legacyTabView: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             sessionsContent
                 .tag(0)
                 .tabItem {
@@ -277,7 +292,7 @@ struct MainTabView: View {
                         LucideIconType.botMessageSquare.tabImage()
                     }
                 }
-                .badge(appState.sessionStore.totalUnread)
+                .badge(Self.unreadBadge(appState.sessionStore.totalUnread).map { Text(verbatim: $0) })
 
             devicesContent
                 .tag(1)
@@ -298,6 +313,16 @@ struct MainTabView: View {
                         LucideIconType.userCog.tabImage()
                     }
                 }
+
+            Color.clear
+                .tag(3)
+                .tabItem {
+                    Label("New Session", systemImage: "plus")
+                }
+        }
+        .background {
+            TabActionInterceptor(actionTitle: String(localized: "New Session")) { showNewSession = true }
+                .frame(width: 0, height: 0)
         }
     }
 }

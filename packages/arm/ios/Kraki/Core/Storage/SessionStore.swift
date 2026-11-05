@@ -40,6 +40,17 @@ struct SessionInfo: Identifiable, Equatable, Codable {
 
     var displayTitle: String { title ?? autoTitle ?? String(localized: "New Session") }
 
+    /// The title to send when the title editor commits `draft`, or nil when
+    /// nothing changed. The editor opens with the shown title (manual or
+    /// auto); committing it unchanged must not turn an auto title into a
+    /// manual one, and clearing a title that was never set is a no-op.
+    func titleEdit(_ draft: String) -> String? {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == (title ?? autoTitle ?? "") { return nil }
+        if trimmed.isEmpty && title == nil { return nil }
+        return trimmed
+    }
+
     // MARK: - Codable
     //
     // SessionStore's on-disk snapshot uses these keys. Transient
@@ -819,7 +830,7 @@ final class SessionStore {
             existing.agent = digest.agent
             existing.model = digest.model
             existing.reasoningEffort = digest.reasoningEffort
-            existing.title = digest.title
+            existing.title = listedTitle(digest)
             existing.autoTitle = digest.autoTitle
             existing.state = digest.state
             existing.mode = mode
@@ -919,6 +930,7 @@ final class SessionStore {
             popToSessionListSignal &+= 1
         }
         for id in removedIDs {
+            unconfirmedTitles.removeValue(forKey: id)
             nextSessions.removeValue(forKey: id)
             nextPinned.remove(id)
             nextModes.removeValue(forKey: id)
@@ -943,7 +955,7 @@ final class SessionStore {
                 existing.agent = digest.agent
                 existing.model = digest.model
                 existing.reasoningEffort = digest.reasoningEffort
-                existing.title = digest.title
+                existing.title = listedTitle(digest)
                 existing.autoTitle = digest.autoTitle
                 existing.state = digest.state
                 existing.mode = digest.mode
@@ -1031,6 +1043,7 @@ final class SessionStore {
             popToSessionListSignal &+= 1
         }
         sessions.removeValue(forKey: id)
+        unconfirmedTitles.removeValue(forKey: id)
         pinnedSessions.remove(id)
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
@@ -1065,6 +1078,39 @@ final class SessionStore {
         if let title { sessions[id]?.title = title.isEmpty ? nil : title }
         if let autoTitle { sessions[id]?.autoTitle = autoTitle.isEmpty ? nil : autoTitle }
         scheduleSave()
+    }
+
+    /// Manual titles renamed on this device that the computer has not echoed
+    /// yet ("" = cleared). A session_list the computer sent before it got the
+    /// rename (offline rename, then reconnect) must not flash the old title.
+    @ObservationIgnored private(set) var unconfirmedTitles: [String: String] = [:]
+
+    /// A rename sent from this device: shown at once, kept until confirmed.
+    func renameLocally(_ id: String, title: String) {
+        setTitle(id, title: title, autoTitle: nil)
+        unconfirmedTitles[id] = title
+    }
+
+    /// The computer's `session_title_updated`: authoritative for the manual
+    /// title, where absent means none is set (it was cleared). One that does
+    /// not carry this device's pending rename (an auto title the computer
+    /// sent before it got the rename) updates only the auto title; the
+    /// computer echoes renames in order, so ours still arrives and confirms.
+    func applyTitleUpdate(_ id: String, title: String?, autoTitle: String?) {
+        if let pending = unconfirmedTitles[id], (title ?? "") != pending {
+            setTitle(id, title: nil, autoTitle: autoTitle)
+            return
+        }
+        unconfirmedTitles.removeValue(forKey: id)
+        setTitle(id, title: title ?? "", autoTitle: autoTitle)
+    }
+
+    /// A listed session's manual title, unless this device renamed it and the
+    /// list predates that rename.
+    private func listedTitle(_ digest: SessionDigest) -> String? {
+        guard let renamed = unconfirmedTitles[digest.id] else { return digest.title }
+        if (digest.title ?? "") == renamed { unconfirmedTitles.removeValue(forKey: digest.id) }
+        return renamed.isEmpty ? nil : renamed
     }
 
     func setState(_ id: String, _ state: SessionState) {
@@ -1246,6 +1292,7 @@ final class SessionStore {
     func reset() {
         KLog.d("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
         sessions.removeAll()
+        unconfirmedTitles.removeAll()
         activeSessionId = nil
         autoReadSuppressedSessions.removeAll()
         pinnedSessions.removeAll()
