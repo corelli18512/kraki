@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { prepareReportPreview } from '../../lib/report-preview';
 import { HtmlArtifactPanel, exportHtmlReport, withArtifactCsp } from './HtmlArtifactPanel';
+import { ChatHeader } from './ChatHeader';
 
 const attachment = vi.hoisted(() => ({ status: 'loading', text: null as string | null, error: null as string | null }));
 const useText = vi.hoisted(() => vi.fn(() => attachment));
@@ -33,6 +34,18 @@ describe('HtmlArtifactPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close Report' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+  it.each([false, true])('K-213: Escape closes only the mode menu, not the report under it (narrow=%s)', (narrow) => {
+    const onClose = vi.fn();
+    render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><ChatHeader title="Session" mode="auto" narrow={narrow} onMode={() => {}} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('leaves the report open when Escape belongs to an image preview above it', () => {
     const onClose = vi.fn();
     const { rerender } = render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><div className="kimage-viewer" /></>);
