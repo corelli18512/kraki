@@ -28,6 +28,7 @@ const mockGetConfigDir = vi.fn().mockReturnValue('/tmp/fake-kraki');
 const mockGetConfigPath = vi.fn().mockReturnValue('/tmp/fake-kraki/config.json');
 const mockGetKrakiHome = vi.fn().mockReturnValue('/tmp/fake-kraki');
 const mockLoadChannelKey = vi.fn();
+const mockSaveChannelKey = vi.fn();
 const mockIsDaemonRunning = vi.fn();
 const mockGetDaemonStatus = vi.fn();
 const mockStartDaemon = vi.fn();
@@ -48,6 +49,7 @@ vi.mock('../config.js', () => ({
   getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
   getVersion: vi.fn(() => '1.2.3'),
   loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
+  saveChannelKey: (...args: unknown[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: vi.fn(() => 'dev_test'),
   saveGitHubToken: vi.fn(),
   loadGitHubToken: vi.fn(() => null),
@@ -608,6 +610,47 @@ describe('CLI setup --headless', () => {
     const json = JSON.parse(stdoutOutput.join('').trim());
     expect(json.ok).toBe(true);
     expect(json.agents).toEqual(['claude']);
+  });
+
+  it('accepts --agent pi (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--agent', 'pi']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ agents: ['pi'] }));
+    expect(JSON.parse(stdoutOutput.join('').trim()).ok).toBe(true);
+  });
+
+  it('rejects an unknown --auth without saving a config (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'bogus']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json).toMatchObject({ ok: false, code: 'bad_auth' });
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  for (const relay of ['https://relay.example', 'wss://', 'wss://relay example', 'ws:// ']) {
+    it(`rejects --relay "${relay}" without saving a config (K-272)`, async () => {
+      await runCli(['setup', '--headless', '--relay', relay]);
+      const json = JSON.parse(stdoutOutput.join('').trim());
+      expect(json).toMatchObject({ ok: false, code: 'bad_relay' });
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+    });
+  }
+
+  it('treats a bare relay host as wss:// like the wizard (K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', ' relay.example:4000 ']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ relay: 'wss://relay.example:4000' }));
+  });
+
+  it('saves --api-key as the channel key for an API-key relay (K-126/K-272)', async () => {
+    await runCli(['setup', '--headless', '--relay', 'ws://127.0.0.1:4000', '--auth', 'apikey', '--api-key', 'sekret']);
+    expect(mockSaveChannelKey).toHaveBeenCalledWith('sekret');
+    expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'apikey', relay: 'ws://127.0.0.1:4000' }));
+  });
+
+  it('refuses --auth apikey with no key (K-272)', async () => {
+    mockLoadChannelKey.mockReturnValue(null);
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--auth', 'apikey']);
+    expect(JSON.parse(stdoutOutput.join('').trim())).toMatchObject({ ok: false, code: 'missing_api_key' });
+    expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 
   it('omits agents (auto) when --agent is auto', async () => {

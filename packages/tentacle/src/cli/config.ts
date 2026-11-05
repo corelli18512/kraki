@@ -177,6 +177,20 @@ export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<v
 
 // ── kraki setup --headless — non-interactive setup ──────
 
+/** Sign-in methods a computer can be set up with (the wizard offers the same). */
+const HEADLESS_AUTH_METHODS = ['github_token', 'apikey', 'open'] as const;
+type HeadlessAuthMethod = typeof HEADLESS_AUTH_METHODS[number];
+
+function isRelayUrl(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'ws:' || url.protocol === 'wss:') && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
 export function getArgValue(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
@@ -188,15 +202,30 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     gracefulExit(1);
   };
 
-  const relay = getArgValue(args, '--relay');
+  const relayArg = getArgValue(args, '--relay')?.trim();
   const auth = getArgValue(args, '--auth') ?? 'github_token';
+  const apiKey = getArgValue(args, '--api-key')?.trim();
   const deviceName = getArgValue(args, '--device-name');
   const githubToken = getArgValue(args, '--github-token');
-  const agentArg = getArgValue(args, '--agent'); // copilot | claude | both | auto
+  const agentArg = getArgValue(args, '--agent'); // copilot | claude | codex | pi | both | auto
   const anthropicKey = getArgValue(args, '--anthropic-key');
 
-  if (!relay) {
+  if (!relayArg) {
     return fail('missing_relay', '--relay is required');
+  }
+  // Same rule as the setup wizard: a bare host means wss://.
+  const relay = /^[a-z][a-z0-9+.-]*:\/\//i.test(relayArg) ? relayArg : `wss://${relayArg}`;
+  if (!isRelayUrl(relay)) {
+    return fail('bad_relay', `--relay must be a ws:// or wss:// URL (got "${relayArg}")`);
+  }
+  if (!HEADLESS_AUTH_METHODS.includes(auth as HeadlessAuthMethod)) {
+    return fail('bad_auth', `--auth must be one of: ${HEADLESS_AUTH_METHODS.join(', ')} (got "${auth}")`);
+  }
+  // An API-key relay registers this computer with the key (saved as the
+  // channel key, which the daemon and `kraki connect` send).
+  if (auth === 'apikey' && !apiKey) {
+    const { loadChannelKey } = await import('../config.js');
+    if (!loadChannelKey()) return fail('missing_api_key', '--auth apikey needs --api-key <key>');
   }
 
   // Map --agent to an explicit allow-list. Omit for auto-detection.
@@ -215,11 +244,14 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     case 'codex':
       agents = ['codex'];
       break;
+    case 'pi':
+      agents = ['pi'];
+      break;
     case 'both':
       agents = ['copilot', 'claude'];
       break;
     default:
-      return fail('bad_agent', `--agent must be one of: copilot, claude, codex, both, auto (got "${agentArg}")`);
+      return fail('bad_agent', `--agent must be one of: copilot, claude, codex, pi, both, auto (got "${agentArg}")`);
   }
 
   // Persist an Anthropic key into ~/.claude/settings.json so the daemon
@@ -238,6 +270,10 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
     const { saveGitHubToken } = await import('../config.js');
     saveGitHubToken(githubToken);
   }
+  if (auth === 'apikey' && apiKey) {
+    const { saveChannelKey } = await import('../config.js');
+    saveChannelKey(apiKey);
+  }
 
   const { hostname } = await import('node:os');
   const { getOrCreateDeviceId, DEFAULT_LOG_VERBOSITY } = await import('../config.js');
@@ -245,7 +281,7 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
 
   const config: KrakiConfig = {
     relay,
-    authMethod: auth as KrakiConfig['authMethod'],
+    authMethod: auth as HeadlessAuthMethod,
     device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
     ...(agents && { agents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
