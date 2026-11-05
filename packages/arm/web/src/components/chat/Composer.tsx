@@ -53,9 +53,10 @@ const PLACEHOLDER = {
 
 type StagedImage = { attachment: Attachment; preview: string };
 
-/** Formats sent as they are encoded; anything else (HEIC, BMP, TIFF…) is
- *  re-encoded as JPEG, which every agent accepts. */
+/** Formats sent as they are encoded. HEIC/HEIF photos are re-encoded as JPEG;
+ *  anything else (SVG, AVIF, BMP, ICO…) as PNG, which keeps transparency. */
 const ENCODED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PHOTO_TYPES = /^image\/hei[cf]$/;
 
 function readDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -77,8 +78,8 @@ async function compressImage(file: File): Promise<StagedImage | 'unreadable' | '
   URL.revokeObjectURL(url);
   let { width, height } = img;
   if (!width || !height) return 'unreadable';
-  // A canvas keeps only the first frame: a GIF within the limit goes as is.
-  if (file.type === 'image/gif' && file.size <= MAX_IMAGE_SIZE) {
+  // A canvas keeps only the first frame: a GIF within the limits goes as is.
+  if (file.type === 'image/gif' && file.size <= MAX_IMAGE_SIZE && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
     const dataUrl = await readDataUrl(file).catch(() => null);
     if (!dataUrl) return 'unreadable';
     return { attachment: { type: 'image', mimeType: 'image/gif', data: dataUrl.split(',')[1] }, preview: dataUrl };
@@ -92,7 +93,7 @@ async function compressImage(file: File): Promise<StagedImage | 'unreadable' | '
   canvas.width = width;
   canvas.height = height;
   canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
-  const type = ENCODED_TYPES.has(file.type) ? file.type : 'image/jpeg';
+  const type = ENCODED_TYPES.has(file.type) ? file.type : PHOTO_TYPES.test(file.type) ? 'image/jpeg' : 'image/png';
   for (const [encoding, quality] of [[type, 0.8], ['image/jpeg', 0.6]] as const) {
     const dataUrl = canvas.toDataURL(encoding, quality);
     const data = dataUrl.split(',')[1];
@@ -112,7 +113,10 @@ export function pastedImage(data: DataTransfer): File | undefined {
   if (!image) return undefined;
   const text = data.getData('text/plain').replace(/\uFFFC/g, '').trim();
   const webAddress = !/\s/.test(text) && /^(https?|data):/i.test(text);
-  return !text || webAddress || text === image.name ? image : undefined;
+  // Copied files carry their names, one per line.
+  const names = new Set([...data.files].map((f) => f.name));
+  const fileNames = text.split('\n').every((line) => !line.trim() || names.has(line.trim()));
+  return !text || webAddress || fileNames ? image : undefined;
 }
 
 /** The staged image survives a reload or a discarded tab (like the draft
@@ -122,7 +126,13 @@ const STAGED_IMAGE_KEY = 'kraki-composer-image';
 function readStagedImage(sessionId: string): StagedImage | null {
   try {
     const stored = JSON.parse(sessionStorage.getItem(STAGED_IMAGE_KEY) ?? 'null') as { sessionId?: string; attachment?: Attachment } | null;
-    const attachment = stored?.sessionId === sessionId ? stored.attachment : undefined;
+    if (stored && stored.sessionId !== sessionId) {
+      // The composer remounts per Session: another Session's image is dropped,
+      // so switching away clears it (K-202).
+      sessionStorage.removeItem(STAGED_IMAGE_KEY);
+      return null;
+    }
+    const attachment = stored?.attachment;
     return attachment?.type === 'image' && attachment.data && attachment.mimeType
       ? { attachment, preview: `data:${attachment.mimeType};base64,${attachment.data}` }
       : null;
@@ -184,6 +194,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     writeStagedImage(currentSession.current, next);
     setImageState(next);
   }, []);
+  // An image still compressing when the composer unmounts (a Session switch)
+  // is dropped, not stored for the Session left behind.
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
@@ -332,7 +346,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const result = await compressImage(file);
     if (result === 'unreadable') useStore.getState().setLastError(t('composer.imageUnreadable'));
     else if (result === 'tooLarge') useStore.getState().setLastError(t('composer.imageTooLarge'));
-    else if (currentSession.current === owner) setImage(result);
+    else if (mounted.current && currentSession.current === owner) setImage(result);
   };
 
   const voiceSend = dictation.active;

@@ -174,11 +174,11 @@ describe('Composer — images in answers (Mac ComposerAnswerImages)', () => {
 });
 
 /** jsdom cannot decode images: stub decoding (`decodes`) and canvas encoding. */
-function stubImagePipeline(decodes: boolean) {
+function stubImagePipeline(decodes: boolean, size = 10) {
   const OriginalImage = window.Image;
   class FakeImage {
     width = 0; height = 0; onload: (() => void) | null = null; onerror: (() => void) | null = null;
-    set src(_v: string) { setTimeout(() => { if (decodes) { this.width = 10; this.height = 10; this.onload?.(); } else this.onerror?.(); }, 0); }
+    set src(_v: string) { setTimeout(() => { if (decodes) { this.width = size; this.height = size; this.onload?.(); } else this.onerror?.(); }, 0); }
   }
   (window as unknown as { Image: unknown }).Image = FakeImage;
   const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/jpeg;base64,AAAA');
@@ -240,6 +240,27 @@ describe('Composer — image errors and formats (K-200)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(onSend).toHaveBeenCalledWith('[image]', [{ type: 'image', mimeType: 'image/gif', data: btoa('GIF89a') }], 'prompt');
   });
+
+  it('a GIF larger than the size cap is resized like any other image', async () => {
+    const stub = stubImagePipeline(true, 2048);
+    try {
+      render(<Composer {...imgProps} />);
+      await pick(new File(['GIF89a'], 'big.gif', { type: 'image/gif' }));
+      expect(stub.toDataURL).toHaveBeenCalledWith('image/png', 0.8);
+    } finally { stub.restore(); }
+  });
+
+  it('SVG, AVIF and other formats are re-encoded as PNG, keeping transparency', async () => {
+    for (const [name, type] of [['logo.svg', 'image/svg+xml'], ['icon.avif', 'image/avif']]) {
+      const stub = stubImagePipeline(true);
+      try {
+        const view = render(<Composer {...imgProps} />);
+        await pick(new File(['x'], name, { type }));
+        expect(stub.toDataURL.mock.calls[0]).toEqual(['image/png', 0.8]);
+        view.unmount();
+      } finally { stub.restore(); }
+    }
+  });
 });
 
 /** A clipboard with `files` and a `text/plain` string. */
@@ -256,6 +277,10 @@ describe('Composer — paste: text wins over an image (K-217, Mac MacComposerPas
     expect(pastedImage(clipboard([png], 'Q1\t42\nQ2\t57'))).toBeUndefined();
     expect(pastedImage(clipboard([png], 'https://example.com/cat.png'))).toBe(png);
     expect(pastedImage(clipboard([png], 'image.png'))).toBe(png);
+    // Several copied files carry their names, one per line.
+    const pdf = new File(['x'], 'notes.pdf', { type: 'application/pdf' });
+    expect(pastedImage(clipboard([pdf, png], 'notes.pdf\nimage.png\n'))).toBe(png);
+    expect(pastedImage(clipboard([pdf, png], 'notes.pdf\nsomething else'))).toBeUndefined();
     expect(pastedImage(clipboard([png], ' \uFFFC '))).toBe(png);
     expect(pastedImage(clipboard([], 'text only'))).toBeUndefined();
     expect(pastedImage(clipboard([new File(['x'], 'a.pdf', { type: 'application/pdf' })]))).toBeUndefined();
@@ -310,9 +335,12 @@ describe('Composer — the staged image survives a reload (K-202)', () => {
       view = render(<Composer {...props} sessionId="composer-reload" />);
       await pick(new File(['png'], 'a.png', { type: 'image/png' }));
     } finally { stub.restore(); }
-    view!.rerender(<Composer {...props} sessionId="composer-other" />);
+    // SessionPage remounts the composer per Session (ImagePreviewProvider key).
+    view!.unmount();
+    const other = render(<Composer {...props} sessionId="composer-other" />);
     expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
-    view!.rerender(<Composer {...props} sessionId="composer-reload" />);
+    other.unmount();
+    render(<Composer {...props} sessionId="composer-reload" />);
     expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
     expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
 
@@ -320,6 +348,32 @@ describe('Composer — the staged image survives a reload (K-202)', () => {
     try { await pick(new File(['png'], 'a.png', { type: 'image/png' })); } finally { again.restore(); }
     expect(sessionStorage.getItem('kraki-composer-image')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
+  });
+
+  it('a switch in the same composer clears it too', async () => {
+    const stub = stubImagePipeline(true);
+    let view: ReturnType<typeof render>;
+    try {
+      view = render(<Composer {...props} sessionId="composer-reload" />);
+      await pick(new File(['png'], 'a.png', { type: 'image/png' }));
+    } finally { stub.restore(); }
+    view!.rerender(<Composer {...props} sessionId="composer-other" />);
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+    view!.rerender(<Composer {...props} sessionId="composer-reload" />);
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+    expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
+  });
+
+  it('an image still compressing when the Session switches is not stored for it', async () => {
+    const stub = stubImagePipeline(true);
+    try {
+      const view = render(<Composer {...props} sessionId="composer-reload" />);
+      const input = document.querySelector<HTMLInputElement>('input[type=file]')!;
+      fireEvent.change(input, { target: { files: [new File(['png'], 'a.png', { type: 'image/png' })] } });
+      view.unmount();
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    } finally { stub.restore(); }
     expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
   });
 });
