@@ -252,10 +252,13 @@ final class ChatViewModel {
 
     /// Rows newer than the window already stored on this device (local
     /// pagination). Network catch-up is not this: it lands silently.
+    /// `persistedHead` (observed) can sit past the last stored row in a
+    /// legacy session marked caught up through seqs clients never store;
+    /// those are not rows, so the window at the last stored row is the tail.
     var hasNewerLocalRows: Bool {
         guard let store = appState?.messageStore else { return false }
         let bottom = windowBottomSeq
-        return bottom > 0 && bottom < store.persistedHead(sessionId)
+        return bottom > 0 && bottom < min(store.persistedHead(sessionId), store.dbLastSeq(sessionId))
     }
 
     /// Connected, but this device has not yet stored the session's newest

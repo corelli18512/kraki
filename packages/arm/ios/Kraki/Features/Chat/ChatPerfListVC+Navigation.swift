@@ -340,6 +340,13 @@ extension ChatPerfListVC {
                 iter += 1
             }
             chatPerfLog.log("[reanchor] slide gap=\(gap) iters=\(iter)")
+            // The page cap stopped the slide short of rows this device already
+            // has: reload the tail instead, or the newest turns stay hidden
+            // below a send or ↓ that should have reached them (K-016).
+            if vm.hasNewerLocalRows {
+                vm.jumpToHead()
+                chatPerfLog.log("[reanchor] slide capped → jumpToHead")
+            }
         } else {
             vm.jumpToHead()                              // no window / large gap → instant reload
             chatPerfLog.log("[reanchor] jumpToHead gap=\(gap)")
@@ -366,7 +373,7 @@ extension ChatPerfListVC {
     func jumpToLiveBottom(animated: Bool) {
         scrollPolicy.beginTailNavigation(
             offset: collectionView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         widthAnchorGeneration += 1  // a pending re-layout anchor restore must not undo it
         // Suppress edge paging for the duration of the glide: right after the
@@ -427,6 +434,12 @@ extension ChatPerfListVC {
     func endBottomGlide() {
         guard suppressPagingForBottom else { return }
         scrollPolicy.endNavigation()
+        // A tail glide animates to the tail measured when it started. Rows
+        // that warmed meanwhile (a freshly reloaded tail window) move the
+        // tail, so land on where it is now.
+        if followingBottom, !collectionView.isTracking {
+            pinToBottom(reason: "glide-end")
+        }
         chatPerfLog.log("[bottom] glide-end win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] off=\(Int(collectionView.contentOffset.y))")
         settleEdges()
         updateOverlay()

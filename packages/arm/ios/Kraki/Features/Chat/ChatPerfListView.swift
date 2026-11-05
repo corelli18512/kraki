@@ -837,7 +837,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmWindow()
         pager.resume()
         setVisibleBodiesInteractive(true)
-        scrollPolicy.endUserInteraction()
+        scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
         settleEdges()
     }
 
@@ -852,7 +852,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             warmWindow()
             pager.resume()
             setVisibleBodiesInteractive(true)
-            scrollPolicy.endUserInteraction()
+            scrollPolicy.endUserInteraction(restingDistanceToBottom: tailFollowDistance())
             settleEdges()
             // `isDragging` can still read true inside this callback.
             DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility() }
@@ -870,7 +870,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         codeHighlightSettleWork?.cancel()
         // NOTE: we deliberately do NOT flush a pending page here. The pending
@@ -885,7 +885,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // Re-sample after cancelling programmatic glide state. The shared
         // policy preserves a harmless tail grab until movement establishes
         // explicit older/newer intent.
-        scrollPolicy.refreshFollowingTail(distanceToBottom: distanceToBottom())
+        scrollPolicy.refreshFollowingTail(distanceToBottom: tailFollowDistance())
         // Stand down warming AND page measurement for the duration of the
         // gesture/fling so no expensive self-size competes with scroll frames.
         // Discard stale visible-height jobs from the old viewport; the new visible
@@ -910,12 +910,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         scrollIndicator.beginScrolling()
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollPolicy.recordUserIntent(
             .older,
             offset: scrollView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollingToTop = true
         return true

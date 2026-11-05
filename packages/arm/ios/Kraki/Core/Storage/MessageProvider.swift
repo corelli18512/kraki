@@ -296,6 +296,13 @@ final class MessageProvider {
         return loaded
     }
 
+    /// After `SessionStore.captureEntryUnreadBoundary`: when the unread part
+    /// starts before the tail window, open the window at its first row.
+    func anchorEntryWindowAtFirstUnread(_ sessionId: String) {
+        guard let appState, let boundary = appState.sessionStore.entryUnreadBoundaries[sessionId] else { return }
+        appState.messageStore.anchorWindowAtFirstUnread(sessionId, after: boundary)
+    }
+
     /// Snapshot of the messages currently in memory for the session.
     /// Same shape as `MessageStore.currentWindow` but exposed here so
     /// callers don't take a dependency on MessageStore directly.

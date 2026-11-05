@@ -91,6 +91,7 @@ struct SessionDetailView: View {
             // Capture the read position SYNCHRONOUSLY, before markRead below:
             // the chat lands on the first new message (ChatScrollPolicy).
             sessionStore.captureEntryUnreadBoundary(sessionId)
+            appState.messageProvider?.anchorEntryWindowAtFirstUnread(sessionId)
             // Defer markRead one runloop turn so ChatView's entry-scroll
             // task can snapshot the unread state before it's cleared.
             Task { @MainActor in

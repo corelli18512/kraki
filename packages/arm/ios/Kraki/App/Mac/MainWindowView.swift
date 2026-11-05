@@ -682,6 +682,7 @@ struct MainWindowView: View {
         // Before this entry marks the Session read: the chat lands on the
         // first new message (ChatScrollPolicy.UnreadEntry).
         appState.sessionStore.captureEntryUnreadBoundary(id)
+        appState.messageProvider?.anchorEntryWindowAtFirstUnread(id)
         let nextViewModel = ChatViewModel(sessionId: id, appState: appState)
         nextViewModel.refreshMessageCache()
         let generation = (chatPresentation?.generation ?? 0) &+ 1
