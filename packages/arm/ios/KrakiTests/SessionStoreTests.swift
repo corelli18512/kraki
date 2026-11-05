@@ -196,6 +196,26 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.drafts["sess-1"])
     }
 
+    /// K-039: a session deleted while it is open (here, from another device,
+    /// or missing from its computer's session list) returns to the list.
+    func testDeletingTheOpenSessionSignalsReturnToTheSessionList() {
+        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
+        store.upsertSession(makeDigest(id: "other"), deviceId: "dev-1", deviceName: "MB")
+        store.activeSessionId = "open"
+        let before = store.popToSessionListSignal
+
+        store.removeSession("other")
+        XCTAssertEqual(store.popToSessionListSignal, before, "another session's delete keeps the chat open")
+
+        store.removeSession("open")
+        XCTAssertEqual(store.popToSessionListSignal, before &+ 1, "session_deleted for the open chat")
+
+        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
+        store.reconcileSessionList([makeDigest(id: "kept")], deviceId: "dev-1", deviceName: "MB")
+        XCTAssertNil(store.sessions["open"])
+        XCTAssertEqual(store.popToSessionListSignal, before &+ 2, "dropped from its computer's session list")
+    }
+
     // MARK: - Properties
 
     func testSetMode() {

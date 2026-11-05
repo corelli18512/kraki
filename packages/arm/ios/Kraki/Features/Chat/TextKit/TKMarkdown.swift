@@ -108,8 +108,8 @@ enum TKMarkdown {
         }
     }
 
-    /// A run this long without a natural break (space, `/`, `-`) is a token
-    /// (base64, hash, URL part), not a word.
+    /// A run this long of printable ASCII without a natural break (`/`, `-`)
+    /// is a token (base64, hash, path part), not a word.
     static let longTokenLength = 24
     /// Characters between the break opportunities given to a long token.
     static let longTokenBreakStride = 4
@@ -119,27 +119,36 @@ enum TKMarkdown {
     /// turn it off). Give long tokens zero-width break opportunities instead,
     /// so they wrap as written. Copy strips them (`plainText`,
     /// `TKBodyTextView.copy`).
+    ///
+    /// Only printable ASCII forms a token: any other character (CJK, Thai,
+    /// emoji, combining marks) ends the run, so scripts written without
+    /// spaces keep their own line-breaking rules.
     static func breakingLongTokens(_ piece: NSAttributedString) -> NSAttributedString {
         let ns = piece.string as NSString
-        guard ns.length >= longTokenLength else { return piece }
+        let length = ns.length
+        guard length >= longTokenLength else { return piece }
         var insertions: [Int] = []
-        var runStarts: [Int] = []   // composed-character starts of the current run
+        var runStart = 0
+        var runLength = 0
         func closeRun() {
-            if runStarts.count >= longTokenLength {
-                for index in stride(from: longTokenBreakStride, to: runStarts.count, by: longTokenBreakStride) {
-                    insertions.append(runStarts[index])
+            if runLength >= longTokenLength {
+                for offset in stride(from: longTokenBreakStride, to: runLength, by: longTokenBreakStride) {
+                    insertions.append(runStart + offset)
                 }
             }
-            runStarts.removeAll(keepingCapacity: true)
+            runLength = 0
         }
-        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length),
-                               options: .byComposedCharacterSequences) { substring, range, _, _ in
-            guard let substring else { return }
-            if substring.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) })
-                || substring == "/" || substring == "-" || substring == "\u{200B}" || substring == "\u{FFFC}" {
-                closeRun()
+        let slash = UInt16(UInt8(ascii: "/")), hyphen = UInt16(UInt8(ascii: "-"))
+        var units = [unichar](repeating: 0, count: length)
+        ns.getCharacters(&units, range: NSRange(location: 0, length: length))
+        for index in 0..<length {
+            let unit = units[index]
+            // `!`...`~`: printable ASCII other than space.
+            if unit > 0x20, unit < 0x7F, unit != slash, unit != hyphen {
+                if runLength == 0 { runStart = index }
+                runLength += 1
             } else {
-                runStarts.append(range.location)
+                closeRun()
             }
         }
         closeRun()

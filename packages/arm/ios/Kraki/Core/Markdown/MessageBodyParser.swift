@@ -318,8 +318,11 @@ func mailAutolinkURL(_ text: String) -> URL? {
     guard !text.contains(where: \.isWhitespace) else { return nil }
     let address = text.lowercased().hasPrefix("mailto:") ? String(text.dropFirst(7)) : text
     let parts = address.split(separator: "@", omittingEmptySubsequences: false)
+    // A domain is letters, digits, `.` and `-` (not `git@github.com:org/repo.git`).
     guard parts.count == 2, !parts[0].isEmpty, parts[1].contains("."),
-          !parts[1].hasPrefix("."), !parts[1].hasSuffix(".") else { return nil }
+          !parts[1].hasPrefix("."), !parts[1].hasSuffix("."),
+          parts[1].unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "." || $0 == "-") })
+    else { return nil }
     return URL(string: "mailto:" + address)
 }
 
