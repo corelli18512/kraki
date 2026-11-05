@@ -305,9 +305,24 @@ describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
     mockInput.mockResolvedValueOnce("ws://my-vps:4000");       // relay URL
     mockSelect.mockResolvedValueOnce("apikey");                // auth method
 
+    mockPassword.mockResolvedValueOnce(" relay-api-key ");      // API key
+
     const result = await runSetup();
     expect(result.relay).toBe("ws://my-vps:4000");
     expect(result.authMethod).toBe("apikey");
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+
+  it("asks for the API key on an API-key relay and saves it for the daemon (K-126)", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://my-vps:4000";
+    mockRelayMethods = ['apikey', 'challenge'];
+    mockInput.mockResolvedValueOnce("ws://my-vps:4000");
+    mockPassword.mockResolvedValueOnce(" relay-api-key ");
+
+    const result = await runSetup();
+    expect(result.authMethod).toBe("apikey");
+    expect(mockPassword).toHaveBeenCalledOnce();
+    expect(mockSaveChannelKey).toHaveBeenCalledWith("relay-api-key");
     mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
   });
 
@@ -369,6 +384,20 @@ describe("relayAuthToken — open (self-hosted) relay", () => {
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
     mockChannelKey.mockReturnValueOnce("");
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
+  });
+});
+
+describe("relayAuthToken — API-key relay (K-126)", () => {
+  const apikeyConfig = { relay: "ws://localhost:4000", authMethod: "apikey" } as Parameters<typeof relayAuthToken>[0];
+
+  it("pairs with the saved API key", async () => {
+    mockChannelKey.mockReturnValueOnce("relay-api-key");
+    await expect(relayAuthToken(apikeyConfig, false)).resolves.toBe("relay-api-key");
+  });
+
+  it("says how to enter a missing key instead of sending no token", async () => {
+    mockChannelKey.mockReturnValueOnce(null);
+    await expect(relayAuthToken(apikeyConfig, false)).rejects.toThrow(/API key/);
   });
 });
 

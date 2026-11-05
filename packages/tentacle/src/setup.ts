@@ -6,7 +6,7 @@
  */
 
 import { wsProxyOptions } from './proxy.js';
-import { select, input, confirm } from '@inquirer/prompts';
+import { select, input, confirm, password } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { homedir, hostname, platform, userInfo } from 'node:os';
@@ -22,6 +22,7 @@ import {
   getConfigPath,
   loadConfig,
   loadChannelKey,
+  saveChannelKey,
 } from './config.js';
 import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
@@ -783,6 +784,18 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
   } else {
     throw new Error('No supported auth method found on this relay');
   }
+  if (authMethod === 'apikey') {
+    // The relay registers this computer (and `kraki connect` pairs phones)
+    // only with its API key; without it the daemon was refused as "removed
+    // from the account" (K-126). Saved as the channel key the daemon sends.
+    const key = await password({
+      message: 'API key:',
+      mask: '*',
+      theme: promptTheme,
+      validate: (v) => (v.trim() ? true : 'Enter the API key of this relay'),
+    });
+    saveChannelKey(key.trim());
+  }
 
   const name = deviceName();
   const config: KrakiConfig = {
@@ -829,6 +842,11 @@ export async function relayAuthToken(config: KrakiConfig, interactive: boolean):
   // A self-hosted open relay with OPEN_SHARED_KEY checks this token; one
   // without a key accepts anything, so 'dev' stays the keyless fallback.
   if (config.authMethod === 'open') return loadChannelKey() || 'dev';
+  if (config.authMethod === 'apikey') {
+    const key = loadChannelKey();
+    if (!key) throw new Error('This relay needs an API key and none is saved. Run `kraki config reset` to enter it.');
+    return key;
+  }
   if (config.authMethod !== 'github_token') return undefined;
   const { loadGitHubToken } = await import('./config.js');
   const saved = loadGitHubToken();
