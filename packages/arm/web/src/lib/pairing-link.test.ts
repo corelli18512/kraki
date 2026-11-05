@@ -55,11 +55,13 @@ describe('pairing link (release review A10 / D5)', () => {
     // any static import of the app from main.tsx would bypass this gate.
     const main = readFileSync(resolve(__dirname, '../main.tsx'), 'utf8');
     const staticImports = [...main.matchAll(/^import\s.*?from\s+'([^']+)'|^import\s+'([^']+)'/gm)].map(m => m[1] ?? m[2]);
-    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/boot-loader', './lib/desktop-auth-callback', './lib/pairing-link']);
+    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/boot-loader', './lib/desktop-auth-callback', './lib/pairing-link', './lib/storage-guard']);
     expect(main).toContain("import('./boot')");
     const gate = readFileSync(resolve(__dirname, 'pairing-link.ts'), 'utf8');
     const gateImports = [...gate.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1]);
     expect(gateImports).toEqual(['../i18n']);
+    const guard = readFileSync(resolve(__dirname, 'storage-guard.ts'), 'utf8');
+    expect([...guard.matchAll(/^import\s/gm)]).toEqual([]);
     const loader = readFileSync(resolve(__dirname, 'boot-loader.ts'), 'utf8');
     expect([...loader.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n']);
     const callback = readFileSync(resolve(__dirname, 'desktop-auth-callback.ts'), 'utf8');

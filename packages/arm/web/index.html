@@ -8,7 +8,8 @@
     <script>
       // Apply dark mode before first paint to avoid flash and iOS PWA white status bar
       (function() {
-        var t = localStorage.getItem('kraki-theme');
+        var t = null;
+        try { t = localStorage.getItem('kraki-theme'); } catch (e) { /* storage blocked */ }
         var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
         if (dark) document.documentElement.classList.add('dark');
       })();

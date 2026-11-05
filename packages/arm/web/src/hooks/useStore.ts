@@ -145,6 +145,7 @@ function relabelSessions(sessions: Store['sessions'], deviceId: string, name: st
  *  set, even one that changed nothing persisted (a session_list ran ~450 of
  *  them). Store slices are immutable, so identical slice references mean the
  *  stored JSON is already current. */
+let storageFullReported = false;
 function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | undefined): PersistStorage<PersistedStore> | undefined {
   if (!storage) return storage;
   let written: StorageValue<PersistedStore> | null = null;
@@ -156,7 +157,15 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
     getItem: (name) => storage.getItem(name),
     setItem: (name, value) => {
       if (unchanged(value)) return;
-      storage.setItem(name, value);
+      // Full storage (quota) must not make every store update throw (K-201):
+      // the in-memory state stays authoritative for this page.
+      try {
+        storage.setItem(name, value);
+      } catch (err) {
+        if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
+        storageFullReported = true;
+        return;
+      }
       written = value;
     },
     removeItem: (name) => {

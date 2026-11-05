@@ -1,3 +1,6 @@
+// Storage the browser refuses is replaced first: later modules read it while
+// loading.
+import './lib/storage-guard';
 // Localization first: bundled resources only (no relay client), so the
 // pairing interstitial below is already in the user's language.
 import './i18n';
