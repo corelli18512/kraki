@@ -21,6 +21,7 @@
 
 import { execFileSync } from 'node:child_process';
 import http from 'node:http';
+import tls from 'node:tls';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
 export interface ProxySettings {
@@ -184,3 +185,31 @@ export function applyProcessProxy(env: NodeJS.ProcessEnv = process.env): ProxySe
   return settings;
 }
 
+
+type CaStore = 'default' | 'system' | 'bundled' | 'extra';
+interface TlsCaApi {
+  getCACertificates?: (type?: CaStore) => string[];
+  setDefaultCACertificates?: (certs: string[]) => void;
+}
+
+/**
+ * Also trust the operating system's certificate store (macOS Keychain,
+ * Windows store; on Linux the OpenSSL default paths). Node trusts only its
+ * bundled roots (plus NODE_EXTRA_CA_CERTS), so behind a corporate TLS proxy
+ * whose root an MDM profile installed, every relay and sign-in connection
+ * failed with an error only the daemon log showed. Adds to the default set,
+ * never replaces it. Returns how many system roots were added, or null when
+ * this Node cannot (older than 22.19 / 24.5) or reading the store failed.
+ */
+export function trustSystemCertificates(api: TlsCaApi = tls as unknown as TlsCaApi): number | null {
+  if (!api.getCACertificates || !api.setDefaultCACertificates) return null;
+  try {
+    const current = api.getCACertificates('default');
+    const known = new Set(current);
+    const added = api.getCACertificates('system').filter((cert) => !known.has(cert));
+    if (added.length > 0) api.setDefaultCACertificates([...current, ...added]);
+    return added.length;
+  } catch {
+    return null;
+  }
+}

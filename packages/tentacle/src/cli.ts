@@ -14,7 +14,7 @@
  *   kraki --version     Show version
  */
 
-import { applyProcessProxy } from './proxy.js';
+import { applyProcessProxy, trustSystemCertificates } from './proxy.js';
 import chalk from 'chalk';
 import { loadConfig, getConfigPath, getVersion } from './config.js';
 import { INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, runDaemonReleaseSmoke } from './daemon.js';
@@ -85,6 +85,7 @@ async function main(): Promise<void> {
   hideChildWindowsByDefault();
   // Networks that need a proxy (env or the macOS system proxy): see proxy.ts.
   applyProcessProxy();
+  trustSystemCertificates();
   const args = process.argv.slice(2);
   const cmd = args[0];
 
