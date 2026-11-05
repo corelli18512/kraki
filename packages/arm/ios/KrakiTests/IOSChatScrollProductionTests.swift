@@ -447,33 +447,14 @@ final class IOSChatScrollProductionTests: XCTestCase {
         let entryRawTopSeq: Int
     }
 
-    private struct BubbleFrame {
-        let id: String
-        let screenY: CGFloat
-    }
-
-    private struct ScrollSnapshot {
-        let itemCount: Int
-        let itemIDs: [String]
-        let topSeq: Int
-        let contentHeight: CGFloat
-        let viewportHeight: CGFloat
-        let contentOffsetY: CGFloat
-        let maximumOffsetY: CGFloat
-        let distanceToBottom: CGFloat
-        let visibleCellsMaterialized: Bool
-        let visibleBubbles: [BubbleFrame]
-        let firstVisibleBubble: BubbleFrame?
-
-        func bubble(named id: String) -> BubbleFrame? {
-            visibleBubbles.first { $0.id == id }
-        }
-    }
-
+    /// `newerRowsBelowWindow`: enter with the window left in history mode, its
+    /// bottom at least that many stored rows above the newest one (older
+    /// paging trimmed them), as after reading far back.
     private func makeFixture(
         totalMessages: Int,
         lastMessageParagraphs: Int = 4,
-        bodyRepeats: Int = 4
+        bodyRepeats: Int = 4,
+        newerRowsBelowWindow: Int = 0
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-ios-scroll-gate-\(UUID().uuidString)", isDirectory: true)
@@ -504,6 +485,19 @@ final class IOSChatScrollProductionTests: XCTestCase {
             deviceId: "ios-scroll-device"
         )
         _ = appState.messageStore.loadInitialWindow(sessionId)
+        if newerRowsBelowWindow > 0 {
+            let store = appState.messageStore
+            store.heightForSeq = { _, _ in 100 }
+            store.maxWindowPx = 3_000
+            while let state = store.windowState(sessionId),
+                  state.bottomSeq > totalMessages - newerRowsBelowWindow, state.topSeq > 1 {
+                let page = store.dbMessagesBefore(sessionId, beforeSeq: state.topSeq, limit: 10)
+                guard !page.isEmpty else { break }
+                store.prependOlderPage(sessionId, page)
+            }
+            XCTAssertLessThanOrEqual(store.windowState(sessionId)?.bottomSeq ?? .max,
+                                     totalMessages - newerRowsBelowWindow)
+        }
 
         let viewController = ChatPerfListVC(
             sessionId: sessionId,
@@ -649,6 +643,138 @@ final class IOSChatScrollProductionTests: XCTestCase {
         while Date() < deadline {
             RunLoop.main.run(mode: .default, before: min(deadline, Date().addingTimeInterval(0.01)))
         }
+    }
+}
+/// Geometry snapshots of the production list.
+extension IOSChatScrollProductionTests {
+    fileprivate struct BubbleFrame {
+        let id: String
+        let screenY: CGFloat
+    }
+
+    fileprivate struct ScrollSnapshot {
+        let itemCount: Int
+        let itemIDs: [String]
+        let topSeq: Int
+        let contentHeight: CGFloat
+        let viewportHeight: CGFloat
+        let contentOffsetY: CGFloat
+        let maximumOffsetY: CGFloat
+        let distanceToBottom: CGFloat
+        let visibleCellsMaterialized: Bool
+        let visibleBubbles: [BubbleFrame]
+        let firstVisibleBubble: BubbleFrame?
+
+        func bubble(named id: String) -> BubbleFrame? {
+            visibleBubbles.first { $0.id == id }
+        }
+    }
+}
+
+/// Follow/re-anchor regressions from the QA campaign (K-016, K-018, K-055).
+extension IOSChatScrollProductionTests {
+    /// K-018: scrolling back down through history, each newer page that lands
+    /// while the reader rests at the loaded bottom must appear below them, not
+    /// re-pin the view to that page's last row (which cascaded to the newest
+    /// message, skipping whole pages).
+    func testNewerPageLandsBelowTheReaderInsteadOfRepinningToItsTail() throws {
+        let fixture = try makeFixture(totalMessages: 300, bodyRepeats: 1, newerRowsBelowWindow: 120)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+        let store = fixture.appState.messageStore
+        drainMainRunLoop(milliseconds: 900)
+        let bottomBefore = store.windowState(fixture.sessionId)?.bottomSeq ?? 0
+        XCTAssertLessThanOrEqual(bottomBefore, 180, "entered in history mode")
+
+        // Reading downward, resting on the loaded bottom.
+        let atLoadedBottom = snapshot(collectionView)
+        collectionView.setContentOffset(
+            CGPoint(x: collectionView.contentOffset.x, y: atLoadedBottom.maximumOffsetY), animated: false)
+        viewController.automationMarkUserScrollingTowardNewer()
+        viewController.scrollViewDidScroll(collectionView)
+        viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
+        XCTAssertFalse(viewController.automationPolicy.followingTail,
+                       "the loaded bottom of a history window is not the conversation tail")
+        let lastSeen = try XCTUnwrap(snapshot(collectionView).visibleBubbles.last)
+        drainMainRunLoop(milliseconds: 2_500)
+
+        XCTAssertGreaterThan(store.windowState(fixture.sessionId)?.bottomSeq ?? 0, bottomBefore,
+                             "a newer page was loaded")
+        let after = snapshot(collectionView)
+        let stillSeen = try XCTUnwrap(after.bubble(named: lastSeen.id),
+                                      "the row the reader was on must stay on screen")
+        XCTAssertEqual(stillSeen.screenY, lastSeen.screenY, accuracy: 2,
+                       "a newer page must not move the reader")
+        XCTAssertGreaterThan(after.distanceToBottom, 100, "the new rows wait below the reader")
+    }
+
+    /// K-016: sending (or ↓) from deep history returns to the newest message of
+    /// the whole conversation even when the gap exceeds the slide's page cap.
+    func testReturningToNewestFromDeepHistoryReachesTheHead() throws {
+        let fixture = try makeFixture(totalMessages: 400, bodyRepeats: 1, newerRowsBelowWindow: 250)
+        drainMainRunLoop(milliseconds: 900)
+        XCTAssertLessThanOrEqual(fixture.appState.messageStore.windowState(fixture.sessionId)?.bottomSeq ?? .max, 150)
+
+        fixture.viewController.returnToNewestAfterLocalSubmit()
+        // The re-anchor itself (synchronous) must reach the head: newer edge
+        // paging afterwards is not guaranteed to run (or to follow).
+        XCTAssertEqual(fixture.appState.messageStore.windowState(fixture.sessionId)?.bottomSeq, 400,
+                       "the window must reach the head, not stop after the slide cap")
+        drainMainRunLoop(milliseconds: 1_800)
+        let after = snapshot(fixture.collectionView)
+        XCTAssertNotNil(after.bubble(named: "ios-scroll-gate:400"), "the newest message is on screen")
+        XCTAssertLessThanOrEqual(abs(after.distanceToBottom), 1.5)
+    }
+
+    /// K-055: a short drag at the tail that dismisses the keyboard leaves the
+    /// list overscrolled past the (shrunken) tail; the rubber band back reads
+    /// as older movement. Resting on the tail again must keep following it, so
+    /// the next keyboard or text-size change keeps the last turn visible.
+    func testBounceBackToTheTailAfterADragKeepsFollowing() throws {
+        let fixture = try makeFixture(totalMessages: 80, bodyRepeats: 1)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+        drainMainRunLoop(milliseconds: 900)
+        let tail = snapshot(collectionView).maximumOffsetY
+
+        viewController.scrollViewWillBeginDragging(collectionView)
+        viewController.automationUserScrollActive = true
+        for y in [tail - 30, tail + 69, tail + 40, tail + 10, tail] {
+            collectionView.contentOffset.y = y
+            viewController.scrollViewDidScroll(collectionView)
+        }
+        viewController.automationUserScrollActive = false
+        viewController.scrollViewDidEndDragging(collectionView, willDecelerate: true)
+        viewController.scrollViewDidEndDecelerating(collectionView)
+
+        XCTAssertLessThanOrEqual(abs(snapshot(collectionView).distanceToBottom), 1)
+        XCTAssertTrue(viewController.automationPolicy.followingTail,
+                      "resting on the tail after the bounce must follow it again")
+
+        // The next keyboard (a taller bottom inset) keeps the last turn visible.
+        viewController.updateBottomContentInset(54 + 300)
+        collectionView.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(abs(snapshot(collectionView).distanceToBottom), 1,
+                                 "the last turn stays above the keyboard")
+    }
+
+    /// Older intent that stops short of the tail is still older intent.
+    func testDragStoppingShortOfTheTailStaysInHistory() throws {
+        let fixture = try makeFixture(totalMessages: 80, bodyRepeats: 1)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+        drainMainRunLoop(milliseconds: 900)
+        let tail = snapshot(collectionView).maximumOffsetY
+
+        viewController.scrollViewWillBeginDragging(collectionView)
+        viewController.automationUserScrollActive = true
+        for y in [tail - 4, tail - 12] {
+            collectionView.contentOffset.y = y
+            viewController.scrollViewDidScroll(collectionView)
+        }
+        viewController.automationUserScrollActive = false
+        viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
+        XCTAssertFalse(viewController.automationPolicy.followingTail)
     }
 }
 #endif
