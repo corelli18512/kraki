@@ -14,5 +14,16 @@ extension MessageInputView {
     static func isLiteralNewlineKey(_ modifiers: EventModifiers) -> Bool {
         !modifiers.isDisjoint(with: [.shift, .option, .control])
     }
+
+    /// How long after a Shift/Option/Control-Return its newline still counts
+    /// as typed text. A time window, not the next run-loop turn, because the
+    /// text system may apply the newline after the key event returns.
+    static let literalNewlineWindow: TimeInterval = 0.25
+
+    static func isLiteralNewlineFresh(_ keyAt: Date?, now: Date) -> Bool {
+        guard let keyAt else { return false }
+        let age = now.timeIntervalSince(keyAt)
+        return age >= 0 && age < literalNewlineWindow
+    }
 }
 #endif

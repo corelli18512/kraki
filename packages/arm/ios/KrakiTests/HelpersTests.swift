@@ -27,6 +27,11 @@ final class HelpersTests: XCTestCase {
         XCTAssertTrue(MessageInputView.isLiteralNewlineKey([.control, .shift]))
         XCTAssertFalse(MessageInputView.isLiteralNewlineKey([]))
         XCTAssertFalse(MessageInputView.isLiteralNewlineKey(.command), "Command-Return sends")
+        // The flag outlives the key event's run-loop turn, but not by long.
+        let now = Date()
+        XCTAssertTrue(MessageInputView.isLiteralNewlineFresh(now.addingTimeInterval(-0.1), now: now))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineFresh(now.addingTimeInterval(-1), now: now))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineFresh(nil, now: now))
     }
 
     func testAccountUsagePercentIsClampedAtDecode() throws {

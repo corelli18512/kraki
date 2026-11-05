@@ -94,8 +94,9 @@ struct MessageInputView: View {
     @State private var abortPending = false
     /// When the composer last submitted (see `MessageComposerPolicy.acceptsStop`).
     @State private var lastSubmitAt: Date?
-    /// A hardware Shift/Option/Control-Return is being typed: its newline is text.
-    @State private var literalNewlinePending = false
+    /// When a hardware Shift/Option/Control-Return was pressed: the newline
+    /// it types next is text (see `isLiteralNewlineFresh`).
+    @State private var literalNewlineKeyAt: Date?
     @State private var showVoiceConsent = false
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
@@ -766,8 +767,10 @@ struct MessageInputView: View {
                 // Only a single typed newline at the end is the return key:
                 // pasted text that happens to end with a newline is kept as
                 // a draft, not sent.
-                let literalNewline = literalNewlinePending
-                literalNewlinePending = false
+                let literalNewline = Self.isLiteralNewlineFresh(literalNewlineKeyAt, now: Date())
+                // The key press is spent by the newline it typed; an unrelated
+                // edit leaves it to expire.
+                if literalNewline, newValue.count == text.count + 1 { literalNewlineKeyAt = nil }
                 if Self.isReturnKeySubmit(old: text, new: newValue, literalNewline: literalNewline) {
                     // The field already shows the newline. Store it as well,
                     // so a draft that is not sent (empty / whitespace) is
@@ -786,9 +789,7 @@ struct MessageInputView: View {
         // it as for Return, and the edit above keeps it instead of sending.
         .onKeyPress(.return, phases: .down) { press in
             guard Self.isLiteralNewlineKey(press.modifiers) else { return .ignored }
-            literalNewlinePending = true
-            // Only for the edit this key press makes.
-            DispatchQueue.main.async { literalNewlinePending = false }
+            literalNewlineKeyAt = Date()
             return .ignored
         }
         // Grows up to 5 lines, then scrolls inside the field.
