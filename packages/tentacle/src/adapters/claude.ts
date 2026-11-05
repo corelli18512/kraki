@@ -25,6 +25,7 @@ import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMo
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
+import { fitToMaxDimension } from '../image-resize.js';
 import { handleSDKMessage } from './claude-messages.js';
 import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions, releasePendingForMode } from './claude-permissions.js';
 import { resetSubagentPhase } from './claude-subagents.js';
@@ -43,6 +44,9 @@ export { linkIntoShadow };
 
 /** Upper bound for the startup model/account probe. */
 const CLAUDE_PROBE_TIMEOUT_MS = 20_000;
+
+/** Anthropic's per-image limit, which applies to the base64 data. */
+const CLAUDE_MAX_IMAGE_BASE64 = 5 * 1024 * 1024;
 
 export class ClaudeAdapter extends AgentAdapter {
   sessions = new Map<string, SessionEntry>();
@@ -499,7 +503,7 @@ export class ClaudeAdapter extends AgentAdapter {
     // Lazily start the query on first message — the SDK binary needs a
     // prompt to work with, so we pass the first user message directly
     // instead of using the streaming input channel.
-    const content = this.buildUserContent(sessionId, text, attachments);
+    const content = await this.buildUserContent(sessionId, text, attachments);
     if (!entry.query) {
       await this.spawnQuery(sessionId, content);
       return;
@@ -513,9 +517,12 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /** Text plus user-attached images as Anthropic content blocks. Images may
-   *  arrive inline (base64) or as a content_ref into the AttachmentStore. */
-  private buildUserContent(sessionId: string, text: string, attachments?: Attachment[]): string | Array<Record<string, unknown>> {
+   *  arrive inline (base64) or as a content_ref into the AttachmentStore. An
+   *  image over the API's per-image limit is scaled down; one still too large
+   *  is left out with a note, instead of failing the whole prompt. */
+  private async buildUserContent(sessionId: string, text: string, attachments?: Attachment[]): Promise<string | Array<Record<string, unknown>>> {
     const images: Array<Record<string, unknown>> = [];
+    let omitted = 0;
     for (const att of attachments ?? []) {
       let data: string | undefined;
       let mimeType = att.mimeType;
@@ -526,7 +533,22 @@ export class ClaudeAdapter extends AgentAdapter {
         if (hit) { data = hit.bytes.toString('base64'); mimeType = hit.meta.mimeType ?? mimeType; }
       }
       if (!data || !/^image\/(png|jpeg|gif|webp)$/.test(mimeType)) continue;
+      if (data.length > CLAUDE_MAX_IMAGE_BASE64) {
+        const original = Buffer.from(data, 'base64');
+        const fitted = await fitToMaxDimension(original, mimeType).catch(() => ({ bytes: original, mimeType }));
+        data = fitted.bytes.toString('base64');
+        mimeType = fitted.mimeType;
+        if (data.length > CLAUDE_MAX_IMAGE_BASE64) {
+          logger.warn({ sessionId, bytes: original.length }, 'Image attachment too large for Claude; left out');
+          omitted += 1;
+          continue;
+        }
+      }
       images.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data } });
+    }
+    if (omitted > 0) {
+      const note = `[${omitted === 1 ? 'An attached image was' : `${omitted} attached images were`} too large to send (limit 5 MB each) and ${omitted === 1 ? 'was' : 'were'} left out.]`;
+      text = text ? `${text}\n\n${note}` : note;
     }
     if (images.length === 0) return text;
     return [...(text ? [{ type: 'text', text }] : []), ...images];

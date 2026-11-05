@@ -75,6 +75,32 @@ describe('ClaudeAdapter — audit findings C1–C7', () => {
     ]);
   });
 
+  it('scales an image over the 5 MB API limit down before sending it (K-285)', async () => {
+    const sharp = (await import('sharp')).default;
+    const raw = (await import('node:crypto')).randomBytes(6000 * 1000 * 3); // noise: barely compresses
+    const png = await sharp(raw, { raw: { width: 6000, height: 1000, channels: 3 } }).png().toBuffer();
+    expect(png.toString('base64').length).toBeGreaterThan(5 * 1024 * 1024);
+    await createClaude(); cc().sessions.get('s')!.query = {};
+    const iterator = cc().sessions.get('s')!.inputIterable[Symbol.asyncIterator]();
+    await claude.sendMessage('s', 'big', [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }]);
+    const content = ((await iterator.next()).value as { message: { content: Array<{ type: string; text?: string; source?: { data: string } }> } }).message.content;
+    const image = content.find((b) => b.type === 'image');
+    expect(image?.source?.data.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect((await sharp(Buffer.from(image!.source!.data, 'base64')).metadata()).width).toBe(2000);
+    expect(content[0]).toEqual({ type: 'text', text: 'big' });
+  }, 60_000);
+
+  it('leaves out an image that is still too large and says so in the prompt (K-285)', async () => {
+    await createClaude(); cc().sessions.get('s')!.query = {};
+    const iterator = cc().sessions.get('s')!.inputIterable[Symbol.asyncIterator]();
+    // Not decodable, so it cannot be scaled: it must not reach the API.
+    const tooBig = 'A'.repeat(6 * 1024 * 1024);
+    await claude.sendMessage('s', 'look', [{ type: 'image', data: tooBig, mimeType: 'image/png' }]);
+    const content = ((await iterator.next()).value as { message: { content: unknown } }).message.content;
+    expect(typeof content).toBe('string');
+    expect(content).toMatch(/^look\n\n\[An attached image was too large to send/);
+  });
+
   it('C1 also passes images on the very first (lazy) prompt', async () => {
     await createClaude();
     await claude.sendMessage('s', 'first', [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }]);
