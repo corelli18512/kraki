@@ -27,7 +27,8 @@ function build() {
   const client = {
     adapter: { createSession },
     pendingRequestIds: new Map<string, string>(),
-    sessionManager: { markIdle: vi.fn() },
+    // getMeta: a refused create never announced a session (agents-adapters K-008).
+    sessionManager: { markIdle: vi.fn(), getMeta: vi.fn(() => undefined) },
     send,
   } as unknown as RelayClient;
   const create = (cwd?: string) => handleCreateSession(client, {
