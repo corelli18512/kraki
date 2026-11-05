@@ -138,12 +138,26 @@ stop_running_daemon() {
 
 start_daemon() {
   STATUS=$("${INSTALL_DIR}/${BINARY_NAME}" status --json 2>/dev/null || true)
-  if printf '%s' "$STATUS" | grep -q '"running": *true'; then
+  # A daemon that has just (re)started shows its launchd job before its PID
+  # and version; wait for them so restart can stop it (K-358).
+  WAITED=0
+  while [ "$WAITED" -lt 10 ] \
+    && printf '%s' "$STATUS" | grep -q '"running": *true' \
+    && printf '%s' "$STATUS" | grep -q '"pid": *null'; do
+    sleep 1
+    WAITED=$((WAITED + 1))
+    STATUS=$("${INSTALL_DIR}/${BINARY_NAME}" status --json 2>/dev/null || true)
+  done
+  # Kraki for Mac / Windows manage their own daemon (managedLabel set): leave
+  # it to them, `start` only prints a notice.
+  if printf '%s' "$STATUS" | grep -q '"running": *true' \
+    && printf '%s' "$STATUS" | grep -q '"managedLabel": *null'; then
     INSTALLED=$(printf '%s' "$STATUS" | sed -n 's/^{"ok":true,"version":"\([^"]*\)".*/\1/p')
     RUNNING=$(printf '%s' "$STATUS" | sed -n 's/.*"daemonVersion":"\([^"]*\)".*/\1/p')
     if [ -z "$RUNNING" ] || [ "$RUNNING" != "$INSTALLED" ]; then
       echo "  Restarting Kraki on the new version..."
-      "${INSTALL_DIR}/${BINARY_NAME}" restart
+      "${INSTALL_DIR}/${BINARY_NAME}" restart \
+        || echo "  Could not restart Kraki on the new version. Run: kraki restart"
       return
     fi
   fi

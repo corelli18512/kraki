@@ -86,6 +86,7 @@ for (const installerPath of installerPaths) {
     });
 
     it('removes the download when the final move fails (K-276)', () => {
+      if (process.getuid?.() === 0) return; // chmod does not block root's move
       const root = mkdtempSync(join(tmpdir(), 'kraki-inst-tmp-'));
       const tmp = join(root, 'tmp');
       const dest = join(root, 'ro');
@@ -117,26 +118,62 @@ for (const installerPath of installerPaths) {
     });
 
     describe('start_daemon (K-358)', () => {
-      const startWith = (status: string) => {
+      // Each `status` call prints the next line of `statuses` (the last one
+      // repeats); `restartExit` is the stubbed `kraki restart` exit code.
+      const startWith = (statuses: string | string[], restartExit = 0) => {
         const dir = mkdtempSync(join(tmpdir(), 'kraki-inst-start-'));
         const calls = join(dir, 'calls');
-        stubBin(dir, 'kraki', `echo "$1" >> ${calls}\n[ "$1" = status ] && printf '%s\\n' '${status}'\nexit 0`);
-        const result = run(`INSTALL_DIR=${dir}; BINARY_NAME=kraki; start_daemon`);
+        const lines = Array.isArray(statuses) ? statuses : [statuses];
+        writeFileSync(join(dir, 'statuses'), `${lines.join('\n')}\n`);
+        stubBin(dir, 'kraki', [
+          `echo "$1" >> ${calls}`,
+          'if [ "$1" = status ]; then',
+          `  n=$(grep -c '^status$' ${calls}); total=$(wc -l < ${dir}/statuses)`,
+          '  [ "$n" -gt "$total" ] && n=$total',
+          `  sed -n "\${n}p" ${dir}/statuses`,
+          'fi',
+          `[ "$1" = restart ] && exit ${restartExit}`,
+          'exit 0',
+        ].join('\n'));
+        const result = run(`sleep() { :; }\nINSTALL_DIR=${dir}; BINARY_NAME=kraki; start_daemon`);
         expect(result.status).toBe(0);
-        return readFileSync(calls, 'utf8').trim().split('\n').filter((c) => c !== 'status');
+        const all = readFileSync(calls, 'utf8').trim().split('\n');
+        return { calls: all.filter((c) => c !== 'status'), statusCalls: all.filter((c) => c === 'status').length, stdout: result.stdout };
       };
+      const status = (daemon: string) => `{"ok":true,"version":"0.39.0","daemon":{${daemon}}}`;
 
       it('restarts a daemon still running the old version', () => {
-        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":"0.30.0"}}')).toEqual(['restart']);
+        expect(startWith(status('"running":true,"pid":458,"managedLabel":null,"daemonVersion":"0.30.0"')).calls).toEqual(['restart']);
       });
 
       it('restarts a running daemon whose version is unknown', () => {
-        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":null}}')).toEqual(['restart']);
+        expect(startWith(status('"running":true,"pid":458,"managedLabel":null,"daemonVersion":null')).calls).toEqual(['restart']);
       });
 
       it('just starts when the daemon is stopped or already on the new version', () => {
-        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":false,"pid":null,"daemonVersion":null}}')).toEqual(['start']);
-        expect(startWith('{"ok":true,"version":"0.39.0","daemon":{"running":true,"pid":458,"daemonVersion":"0.39.0"}}')).toEqual(['start']);
+        expect(startWith(status('"running":false,"pid":null,"managedLabel":null,"daemonVersion":null')).calls).toEqual(['start']);
+        expect(startWith(status('"running":true,"pid":458,"managedLabel":null,"daemonVersion":"0.39.0"')).calls).toEqual(['start']);
+      });
+
+      it('waits for a just-started daemon to report its PID before deciding', () => {
+        const result = startWith([
+          status('"running":true,"pid":null,"managedLabel":null,"daemonVersion":null'),
+          status('"running":true,"pid":null,"managedLabel":null,"daemonVersion":null'),
+          status('"running":true,"pid":458,"managedLabel":null,"daemonVersion":"0.39.0"'),
+        ]);
+        expect(result.statusCalls).toBe(3);
+        expect(result.calls).toEqual(['start']);
+      });
+
+      it('gives up waiting after about 10 s and does not fail the install when restart fails', () => {
+        const result = startWith(status('"running":true,"pid":null,"managedLabel":null,"daemonVersion":null'), 1);
+        expect(result.statusCalls).toBe(11);
+        expect(result.calls).toEqual(['restart']);
+        expect(result.stdout).toContain('Run: kraki restart');
+      });
+
+      it('leaves a daemon managed by Kraki for Mac or Windows to its app', () => {
+        expect(startWith(status('"running":true,"pid":458,"managedLabel":"chat.kraki.mac","daemonVersion":"0.30.0"')).calls).toEqual(['start']);
       });
     });
   });
