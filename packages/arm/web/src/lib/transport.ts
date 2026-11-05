@@ -60,6 +60,14 @@ export function loadStoredDevice(): StoredDevice | null {
   } catch { return null; }
 }
 
+/** loadStoredDevice without the log line, for the check on every connect. */
+function readStoredDevice(): StoredDevice | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 export function saveStoredDevice(device: StoredDevice): void {
   logger.info('saveStoredDevice:', device);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
@@ -311,7 +319,7 @@ export class KrakiTransport {
    *  would sign the old identity in again and save it (K-318). */
   private identitySignedOutElsewhere(): boolean {
     if (!this.storedDeviceId || this.pairingToken || this.githubCode) return false;
-    return loadStoredDevice()?.deviceId !== this.storedDeviceId;
+    return readStoredDevice()?.deviceId !== this.storedDeviceId;
   }
 
   connect() {
