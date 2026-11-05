@@ -633,6 +633,34 @@ describe('CLI config reset', () => {
     await runCli(['config', 'reset']);
     expect(mockRunSetup).toHaveBeenCalled();
   });
+
+  it('K-270: keeps the computer name chosen before instead of renaming it to the hostname', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://old', authMethod: 'github_token', device: { name: "Ada's studio Mac", id: 'dev_1' } });
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: "Ada's studio Mac" } });
+    await runCli(['config', 'reset']);
+    expect(mockRunSetup).toHaveBeenCalledWith({ deviceName: "Ada's studio Mac" });
+  });
+
+  it('K-124: restarts a running `kraki start` daemon so it uses the new config', async () => {
+    const fresh = { relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } };
+    mockLoadConfig.mockReturnValue(fresh);
+    mockRunSetup.mockResolvedValue(fresh);
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 999_999_999 });
+    mockStopDaemon.mockReturnValue(true);
+    mockStartDaemon.mockResolvedValue(1234);
+    await runCli(['config', 'reset']);
+    expect(mockStopDaemon).toHaveBeenCalled();
+    expect(mockStartDaemon).toHaveBeenCalledWith(fresh);
+  });
+
+  it('leaves a stopped daemon stopped', async () => {
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
+    mockIsDaemonRunning.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    await runCli(['config', 'reset']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
 });
 
 // ── default (no args) ───────────────────────────────────
