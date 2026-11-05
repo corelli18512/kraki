@@ -47,6 +47,13 @@ describe('truncateUtf8', () => {
     expect(out.slice(0, -1)).toBe('好'.repeat(Array.from(out).length - 1));
   });
 
+  it('K-216: never splits a ZWJ or flag emoji sequence', () => {
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+    expect(truncateUtf8(`ab${family}cd`, 2 + 10 + 3)).toBe('ab…');
+    const flags = '\u{1F1EF}\u{1F1F5}'.repeat(5);
+    expect(truncateUtf8(flags, 8 + 4 + 3)).toBe('\u{1F1EF}\u{1F1F5}…');
+  });
+
   it('never splits an emoji surrogate pair', () => {
     const out = truncateUtf8('😀'.repeat(10), 9);
     expect(out).toBe('😀…');

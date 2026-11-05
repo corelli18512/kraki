@@ -779,6 +779,17 @@ describe('KrakiWSClient', () => {
       expect(sent.payload.text).toBe('Hello agent');
     });
 
+    it('K-216: sendInput preview is cut on a grapheme boundary (no lone surrogate or split ZWJ emoji)', async () => {
+      const client = await setupClient();
+      const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+      client.sendInput('sess-1', `${'a'.repeat(79)}\u{1F600} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-1')?.text).toBe('a'.repeat(79));
+      client.sendInput('sess-2', `${'a'.repeat(76)}${family} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-2')?.text).toBe('a'.repeat(76));
+      client.sendInput('sess-3', `${'a'.repeat(70)}${family} tail`);
+      expect(useStore.getState().sessionPreviews.get('sess-3')?.text).toBe(`${'a'.repeat(70)}${family} t`);
+    });
+
     it('sendInput carries active-turn steer delivery', async () => {
       const client = await setupClient();
       client.sendInput('sess-1', 'Change direction', { delivery: 'steer' });
