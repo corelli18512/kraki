@@ -321,6 +321,7 @@
 		67620251E6E55F8EC3D52F60 /* ChatWidthChangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47B0F0157D26B2B521186EBA /* ChatWidthChangeTests.swift */; };
 		683B96FC8D6290D73BD26644 /* AttachmentRequestModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */; };
 		6856421EC696E6C930A56346 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2053230A2F15EC2518979 /* NotificationService.swift */; };
+		68748F9C5F0BAF28530D5570 /* ToolResultPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE672A605D5D4A3D6A31D129 /* ToolResultPreview.swift */; };
 		68D1986FB0D305A056E0BF47 /* DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 063CF9F10027975D232E4285 /* DeviceTrust.swift */; };
 		699EF196E7BD561AC9A1E88C /* SessionListReconcilePerfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19ED0DA842EA67CB8B2F5D35 /* SessionListReconcilePerfTests.swift */; };
 		6AA16838C7627EDD7F6BF334 /* UsagePeekController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC679062E3ABAECE586C024 /* UsagePeekController.swift */; };
@@ -3184,6 +3185,7 @@
 				2C0D85737E6D0F881D7CF1D0 /* ThemePlatform.swift in Sources */,
 				6006EB03F1FC303FC76A1531 /* ThisMacSetupStep.swift in Sources */,
 				B6922FDD9F417397FB74E61E /* ToolChipHeader.swift in Sources */,
+				68748F9C5F0BAF28530D5570 /* ToolResultPreview.swift in Sources */,
 				861AF5304EF7CEADE103EB21 /* ToolStatusIcon.swift in Sources */,
 				0586AEFC6250C23DFFDEB549 /* TransientScrollIndicator.swift in Sources */,
 				40A1135A70EFBBC66418181C /* TurnSpineProjection.swift in Sources */,
