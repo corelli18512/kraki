@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { KrakiLogo } from './components/KrakiLogo';
 import { markNotificationEntry } from './lib/chat/unread-entry';
 import { useEffect, useRef } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
@@ -141,7 +141,9 @@ export function App() {
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
-            <Outlet />
+            {/* Signed out (a removed device returning on a /session/ link):
+                the sign-in screen, not an empty chat with no way to pair. */}
+            {status === 'awaiting_login' && inSubPage ? <Navigate to="/" replace /> : <Outlet />}
           </ErrorBoundary>
         </main>
       </div>

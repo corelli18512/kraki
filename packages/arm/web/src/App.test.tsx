@@ -41,6 +41,22 @@ describe('App', () => {
     expect(container.firstChild).toBeTruthy();
   });
 
+  it('K-088: a signed-out browser on a /session/ link gets the sign-in screen, not an empty chat', () => {
+    useStore.getState().setStatus('awaiting_login');
+    renderApp('/session/s1');
+    expect(screen.queryByText('Session content')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+  });
+
+  it('K-088: a device removed while a session is open lands on the sign-in screen', () => {
+    useStore.getState().setStatus('connected');
+    renderApp('/session/s1');
+    expect(screen.getByText('Session content')).toBeInTheDocument();
+    act(() => { useStore.getState().setStatus('awaiting_login'); });
+    expect(screen.queryByText('Session content')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+  });
+
   it('renders the session sidebar', () => {
     useStore.getState().setStatus('connected');
     const { getAllByLabelText } = renderApp();
