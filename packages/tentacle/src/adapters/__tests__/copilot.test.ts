@@ -1721,7 +1721,7 @@ describe('CopilotAdapter', () => {
 
   describeEviction('idle-session eviction', () => {
     type AdapterInternals = {
-      sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
+      sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock }; turn: { beginTurn: () => void } }>;
       lastActivityAt: Map<string, number>;
       turnHasOutput: Map<string, boolean>;
     };
@@ -1806,13 +1806,14 @@ describe('CopilotAdapter', () => {
       expect(internals.sessions.has(blocked.sessionId)).toBe(true);
     });
 
-    it('does NOT evict a session currently mid-turn (turnHasOutput=true)', async () => {
+    it('does NOT evict a session currently mid-turn', async () => {
       await adapter.start();
       const turning = await adapter.createSession({});
 
       const internals = adapter as unknown as AdapterInternals;
       internals.lastActivityAt.set(turning.sessionId, 0);
       internals.turnHasOutput.set(turning.sessionId, true);
+      internals.sessions.get(turning.sessionId)!.turn.beginTurn();
 
       mockRuntimeRssMB(3000, 1);
 
@@ -1820,6 +1821,24 @@ describe('CopilotAdapter', () => {
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(turning.sessionId)).toBe(true);
+    });
+
+    it('K-280: evicts an idle session whose last turn produced output', async () => {
+      await adapter.start();
+      const done = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(done.sessionId, 0);
+      // The finished turn wrote a reply: the flag stays set after it settled.
+      internals.turnHasOutput.set(done.sessionId, true);
+      expect(adapter.isTurnSettled(done.sessionId)).toBe(true);
+
+      mockRuntimeRssMB(3000, 1);
+
+      await evictIdleSessions(adapter);
+
+      expect(mockSessions[0].disconnect).toHaveBeenCalled();
+      expect(internals.sessions.has(done.sessionId)).toBe(false);
     });
 
     it('fires onSessionEvicted so relay-client can mark the session disconnected', async () => {
