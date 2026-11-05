@@ -2156,6 +2156,86 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('splits a multicast to more online apps than the Head accepts into envelopes of at most 64 (K-136)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      const others = Array.from({ length: 69 }, (_, i) => `app-${i}`);
+      for (const id of others) {
+        ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_joined', device: { id, role: 'app', encryptionKey: `pub-${id}` } })));
+      }
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'to everyone' });
+      const envelopes = ws.sent.map((raw) => JSON.parse(raw) as { type: string; to?: unknown }).filter((e) => e.type === 'multicast');
+      expect(envelopes.length).toBeGreaterThan(1);
+      expect(envelopes.every((e) => Array.isArray(e.to) && e.to.length <= 64)).toBe(true);
+      const reached = new Set(envelopes.flatMap((e) => e.to as string[]));
+      expect([...reached].sort()).toEqual(['consumer-dev', ...others].sort());
+      expect(decodePulseSends(ws.sent).filter((m) => m.type === 'agent_message')).toHaveLength(envelopes.length);
+    } finally { cleanup(); }
+  });
+
+  it('never sends a payload whole through the relay above its message limit (K-038)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      loggedLines.length = 0;
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'x'.repeat(8 * 1024 * 1024) });
+      // consumer-dev never declared fragments: nothing for it on the wire.
+      expect(pulsePayloads(ws.sent)).toHaveLength(0);
+      expect(loggedLines.some((a) => typeof a[1] === 'string' && /too large to send whole/.test(a[1]))).toBe(true);
+
+      // The same payload goes as fragments once the app can reassemble them.
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'y'.repeat(8 * 1024 * 1024) });
+      const frags = pulsePayloads(ws.sent);
+      expect(frags.length).toBeGreaterThan(100);
+      expect(frags.every((f) => isPayloadFragment(f.payload))).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('does not send fragments an app would discard as over its reassembly budget (K-038)', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      loggedLines.length = 0;
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'z'.repeat(49 * 1024 * 1024) });
+      expect(pulsePayloads(ws.sent)).toHaveLength(0);
+      expect(loggedLines.some((a) => typeof a[1] === 'string' && /larger than an app reassembles/.test(a[1]))).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('keeps the fragments declaration of an app that stayed online across a relay reconnect (K-302)', async () => {
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      ws.emit('message', Buffer.from(consumerJson({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.emit('close', 1006, Buffer.from(''));
+      await vi.advanceTimersByTimeAsync(100);
+      const next = sockets.at(-1)!;
+      expect(next).not.toBe(ws);
+      next.emit('open');
+      next.emit('message', Buffer.from(JSON.stringify({
+        type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'open' },
+        devices: [{ id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub', online: true }],
+      })));
+      const ref = store.put('sess_1', Buffer.alloc(120 * 1024, 0x61), 'application/octet-stream');
+      next.sent.length = 0;
+      next.emit('message', Buffer.from(consumerJson({
+        type: 'request_attachment', deviceId: 'consumer-dev', sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 0 },
+      })));
+      const frags = pulsePayloads(next.sent).filter((p) => isPayloadFragment(p.payload));
+      expect(frags.length).toBeGreaterThan(2);
+    } finally { cleanup(); }
+  });
+
   it('reassembles fragmented payloads from apps before decrypting', async () => {
     const { adapter, client, cleanup } = buildClientWithStore();
     try {
