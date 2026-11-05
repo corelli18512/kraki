@@ -230,6 +230,8 @@ export class KrakiTransport {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   intentionalClose = false;
   private replacedElsewhere = false;
+  /** The banner text shown when replaced, in the language of that moment. */
+  private replacedBanner: string | null = null;
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
   private authenticated = false;
@@ -435,7 +437,8 @@ export class KrakiTransport {
     this.outageStartedAt = null;
     getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
-    getStore().setLastError(replacedElsewhereMessage());
+    this.replacedBanner = replacedElsewhereMessage();
+    getStore().setLastError(this.replacedBanner);
   }
 
   /** True while another tab holds this device's connection. */
@@ -446,7 +449,8 @@ export class KrakiTransport {
     if (!this.replacedElsewhere) return;
     logger.info('Reclaiming connection:', reason);
     this.replacedElsewhere = false;
-    if (getStore().lastError === replacedElsewhereMessage()) getStore().setLastError(null);
+    if (this.replacedBanner !== null && getStore().lastError === this.replacedBanner) getStore().setLastError(null);
+    this.replacedBanner = null;
     this.reconnectDelay = RECONNECT_BASE;
     this.connect();
   }

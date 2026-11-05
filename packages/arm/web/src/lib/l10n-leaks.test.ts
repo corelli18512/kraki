@@ -29,6 +29,18 @@ describe('K-199: transport messages follow the UI language', () => {
     await i18next.changeLanguage('zh-Hans');
     expect(replacedElsewhereMessage()).toBe('Kraki 已在另一个标签页或窗口中打开。回到此标签页即可在这里使用。');
   });
+
+  it('the "open in another tab" banner is cleared on reclaim even after a language change', async () => {
+    useStore.getState().reset();
+    const transport = new KrakiTransport({ onOpen: async () => {}, onParsedMessage: () => {} });
+    const internals = transport as unknown as { handleReplaced(): void; reclaim(reason: string): void; connect(): void };
+    internals.connect = () => {};
+    internals.handleReplaced();
+    expect(useStore.getState().lastError).toBe(replacedElsewhereMessage());
+    await i18next.changeLanguage('zh-Hans');
+    internals.reclaim('focus');
+    expect(useStore.getState().lastError).toBeNull();
+  });
 });
 
 describe('K-199: service worker notification texts', () => {

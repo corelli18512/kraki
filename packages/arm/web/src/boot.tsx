@@ -23,7 +23,7 @@ trackVisualViewport();
 syncDesktopLanguage();
 registerServiceWorker();
 // The worker's notification texts follow the UI language.
-onLanguageChanged(() => registerServiceWorker());
+onLanguageChanged((lang) => registerServiceWorker({ prod: import.meta.env.PROD, lang }));
 // Performance data (Settings › Share Performance Data): Windows shell only.
 diag.start(desktopDiagHttp(), { version: desktop?.version ?? '0', build: desktopBuildNumber() });
 

@@ -12,17 +12,17 @@ const logger = createLogger('push');
 
 /** The service worker script, told the app's language so its notification
  *  texts match the UI (it cannot read the app's settings). */
-export function serviceWorkerUrl(): string {
-  return `/sw.js?lang=${encodeURIComponent(resolveLanguage())}`;
+export function serviceWorkerUrl(lang: string = resolveLanguage()): string {
+  return `/sw.js?lang=${encodeURIComponent(lang)}`;
 }
 
 /** Install the service worker at launch so the app opens offline (K-112),
  *  and so it learns the current UI language. Production web only: the
  *  desktop shell serves its own files, the dev server changes every save,
  *  and automated browsers keep request mocking deterministic without it. */
-export function registerServiceWorker(env: { prod: boolean } = { prod: import.meta.env.PROD }): void {
+export function registerServiceWorker(env: { prod: boolean; lang?: string } = { prod: import.meta.env.PROD }): void {
   if (!env.prod || window.krakiDesktop || !('serviceWorker' in navigator) || navigator.webdriver) return;
-  navigator.serviceWorker.register(serviceWorkerUrl()).catch((err: unknown) => {
+  navigator.serviceWorker.register(serviceWorkerUrl(env.lang)).catch((err: unknown) => {
     logger.warn('Service worker registration failed', { error: (err as Error)?.message });
   });
 }

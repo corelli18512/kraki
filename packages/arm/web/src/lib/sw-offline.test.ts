@@ -104,9 +104,11 @@ describe('K-112: the worker is installed at launch', () => {
     expect(register).not.toHaveBeenCalled();
     registerServiceWorker({ prod: true });
     expect(register).toHaveBeenCalledWith('/sw.js?lang=en');
+    registerServiceWorker({ prod: true, lang: 'zh-Hans' });
+    expect(register).toHaveBeenLastCalledWith('/sw.js?lang=zh-Hans');
     (window as { krakiDesktop?: unknown }).krakiDesktop = {};
     registerServiceWorker({ prod: true });
-    expect(register).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledTimes(2);
     delete (window as { krakiDesktop?: unknown }).krakiDesktop;
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
   });
