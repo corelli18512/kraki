@@ -123,6 +123,21 @@ export function App() {
     navigate(`/session/${sid}`);
   }), [navigate]);
 
+  // Clicking a Web Push notification while a tab is open (public/sw.js).
+  useEffect(() => {
+    const worker = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    if (!worker) return;
+    const open = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; sessionId?: unknown } | null;
+      if (data?.type !== 'kraki:open-session' || typeof data.sessionId !== 'string') return;
+      markNotificationEntry(data.sessionId);
+      navigate(`/session/${data.sessionId}`);
+    };
+    worker.addEventListener('message', open);
+    worker.startMessages?.();
+    return () => worker.removeEventListener('message', open);
+  }, [navigate]);
+
   useEffect(() => {
     if (navigateToSession) {
       navigate(`/session/${navigateToSession}`);

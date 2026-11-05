@@ -57,6 +57,21 @@ describe('App', () => {
     expect(screen.getByText('Dashboard content')).toBeInTheDocument();
   });
 
+  it('K-109: a Web Push notification click opens its Session in this tab', () => {
+    const worker = new EventTarget() as EventTarget & { startMessages: () => void };
+    worker.startMessages = vi.fn();
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: worker });
+    try {
+      useStore.getState().setStatus('connected');
+      renderApp('/');
+      expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+      act(() => { worker.dispatchEvent(new MessageEvent('message', { data: { type: 'kraki:open-session', sessionId: 's1' } })); });
+      expect(screen.getByText('Session content')).toBeInTheDocument();
+    } finally {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    }
+  });
+
   it('renders the session sidebar', () => {
     useStore.getState().setStatus('connected');
     const { getAllByLabelText } = renderApp();

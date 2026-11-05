@@ -1390,6 +1390,12 @@ export class KrakiWSClient {
         this.startPulseTick();
         this.foregroundActivity.start();
         if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
+        // A browser tab notifies only through Web Push, and its service worker
+        // leaves out the Session on screen (public/sw.js). So the Head must
+        // push to this device even while the tab is connected (K-032).
+        if (!desktop && msg.features?.includes('app_visibility')) {
+          this.transport.sendRaw({ type: 'app_visibility', visible: false });
+        }
         this.attachmentPulls.resume();
         this.localLink?.start();
         this.localLink?.poke();

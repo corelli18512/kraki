@@ -213,6 +213,19 @@ describe('KrakiWSClient', () => {
       expect(state.devices.size).toBe(1);
     });
 
+    it('K-032: a browser tab asks the Head to keep pushing to it while connected', async () => {
+      for (const [features, expected] of [[['app_visibility'], 1], [[], 0], [undefined, 0]] as const) {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        client.connect();
+        await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+        lastWsInstance.sentMessages = [];
+        lastWsInstance._receive({ type: 'auth_ok', deviceId: 'dev-web-123', devices: [], ...(features ? { features } : {}) });
+        const visibility = lastWsInstance.sentMessages.map((m) => JSON.parse(m)).filter((m) => m.type === 'app_visibility');
+        expect(visibility, String(features)).toEqual(expected ? [{ type: 'app_visibility', visible: false }] : []);
+        client.disconnect();
+      }
+    });
+
     it('does not send replay requests on auth_ok (session sync is triggered by session_list)', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
