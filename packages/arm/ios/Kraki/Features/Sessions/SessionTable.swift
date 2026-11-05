@@ -351,7 +351,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                     return false
                 }(),
                 pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
-                isDeliveryOnline: appState.isFullyOnline
+                isDeliveryOnline: appState.isFullyOnline,
+                presenceKnown: appState.hasCompletedInitialConnect
             )
             nextFingerprints[session.id] = fp
             if sessionFingerprints[session.id] != fp {
@@ -409,7 +410,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         isAwaitingGreeting: Bool,
         isCompacting: Bool,
         pendingInputs: [ChatMessage] = [],
-        isDeliveryOnline: Bool = true
+        isDeliveryOnline: Bool = true,
+        presenceKnown: Bool = true
     ) -> Int {
         var hasher = Hasher()
         let projection = SessionCardProjection.make(
@@ -419,7 +421,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             draft: store.drafts[session.id],
             isCompacting: isCompacting,
             pendingInputs: pendingInputs,
-            isDeliveryOnline: isDeliveryOnline
+            isDeliveryOnline: isDeliveryOnline,
+            presenceKnown: presenceKnown
         )
         hasher.combine(session.id)
         hasher.combine(session.pinned)
@@ -445,6 +448,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         hasher.combine(device?.name ?? "")
         hasher.combine(device?.online ?? false)
+        hasher.combine(presenceKnown)
         hasher.combine(device?.lastSeen ?? "")
         hasher.combine(isAwaitingGreeting)
         return hasher.finalize()

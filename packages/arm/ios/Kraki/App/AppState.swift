@@ -243,6 +243,7 @@ final class AppState {
     var connectionStatus: ConnectionStatus = .awaitingLogin {
         didSet {
             guard connectionStatus != oldValue else { return }
+            if connectionStatus != .authenticating { isAwaitingAuthInfo = false }
             #if os(macOS)
             if connectionStatus == .connected {
                 authRecoveryAttempts = 0
@@ -465,6 +466,11 @@ final class AppState {
     /// is materialising.
     var isOAuthInFlight: Bool = false
 
+    /// The open socket only asked the relay which sign-in methods it offers
+    /// (`auth_info`); nobody is being signed in yet. The sign-in screen keeps
+    /// its actions (Scan QR Code) instead of saying "Signing you in…".
+    var isAwaitingAuthInfo: Bool = false
+
     /// True while the WS layer is actively trying to (re)connect after
     /// a drop, or sitting authenticated-pending-handshake. Used by the
     /// brand-header status indicator.
@@ -480,7 +486,10 @@ final class AppState {
             // the window must say so instead of looking connected-but-empty.
             return hasCompletedInitialConnect || isSigningInWithCredentials
             #else
-            return hasCompletedInitialConnect
+            // A returning user (stored pairing) opens the Sessions shell from
+            // cache before the first sign-in; while that sign-in cannot
+            // complete the shell must say so, not look connected-but-offline.
+            return hasCompletedInitialConnect || hasStoredCredentials
             #endif
         default:
             return false
@@ -689,6 +698,10 @@ final class AppState {
         }
         client.onRecover = { [weak self] reason, code, quietFor in
             self?.stability.transportLost(reason: reason, code: code, quietFor: quietFor)
+            if reason == "transport_error", let notice = Self.transportFailureNotice(code: code),
+               self?.lastError != notice {
+                self?.lastError = notice
+            }
         }
         client.onReconnectAttempt = { [weak self] attempt in
             self?.updateReconnectAttempt(attempt)
@@ -883,6 +896,15 @@ extension AppState {
         ))
     }
     #endif
+
+    /// A transport failure that retrying cannot fix, in the user's words.
+    /// App Transport Security refuses plain `ws://` to a host name before
+    /// anything is sent (a self-hosted relay); without this the app only
+    /// said "Connecting…" forever.
+    static func transportFailureNotice(code: Int?) -> String? {
+        guard code == NSURLErrorAppTransportSecurityRequiresSecureConnection else { return nil }
+        return String(localized: "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address.")
+    }
 
     /// `auth_ok` capabilities of this relay connection.
     func applyRelayCapabilities(_ authOk: [String: Any]) {

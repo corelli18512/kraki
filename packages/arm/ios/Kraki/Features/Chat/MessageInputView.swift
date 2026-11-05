@@ -165,15 +165,23 @@ struct MessageInputView: View {
         if let submitFailure { return submitFailure }
         guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
-        if device?.online != true {
-            if let name = device?.name ?? session?.deviceName {
-                return String(localized: "\(name) is offline — message will deliver when it reconnects.")
-            }
-            return String(localized: "Device is offline — message will deliver when it reconnects.")
+        return Self.offlineHint(deviceOnline: device?.online,
+                                deviceName: device?.name ?? session?.deviceName,
+                                presenceKnown: appState.hasCompletedInitialConnect)
+    }
+
+    /// The computer-offline pill. Before the first sign-in the cached devices
+    /// carry no live presence (all restored offline): the computer is not
+    /// known to be offline, the relay may be what is unreachable, and the
+    /// title says "Signing in…" — so nothing is blamed. Reconnecting is
+    /// silent here too (the title says "Connecting…"); input keeps working
+    /// and queues until the connection is back.
+    static func offlineHint(deviceOnline: Bool?, deviceName: String?, presenceKnown: Bool) -> String? {
+        guard presenceKnown, deviceOnline != true else { return nil }
+        if let name = deviceName {
+            return String(localized: "\(name) is offline — message will deliver when it reconnects.")
         }
-        // Reconnecting is silent here (the title says "Connecting…"); input
-        // keeps working and queues until the connection is back.
-        return nil
+        return String(localized: "Device is offline — message will deliver when it reconnects.")
     }
 
     /// Voice transcription is available anywhere this composer accepts text,

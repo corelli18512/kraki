@@ -23,6 +23,7 @@ struct MainTabView: View {
             }
         }
         .tint(.krakiPrimary)
+        .overlay(alignment: .top) { SignedInErrorToast() }
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
@@ -295,6 +296,61 @@ struct MainTabView: View {
                     }
                 }
         }
+    }
+}
+
+/// Errors raised while signed in (`AppState.lastError`: a refused region
+/// redirect, an auth outage that is being retried, a refused server command)
+/// used to be rendered only on the sign-in screen, i.e. never. Show them over
+/// the signed-in shell; tapping dismisses, and a newer error replaces it.
+struct SignedInErrorToast: View {
+    @Environment(AppState.self) private var appState
+    static let visibleSeconds: Double = 8
+
+    var body: some View {
+        ZStack {
+            if let message = Self.visibleMessage(appState.lastError) {
+                content(message)
+                    .id(message)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: message) {
+                        try? await Task.sleep(for: .seconds(Self.visibleSeconds))
+                        guard !Task.isCancelled else { return }
+                        dismiss(message)
+                    }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: appState.lastError)
+    }
+
+    static func visibleMessage(_ lastError: String?) -> String? {
+        guard let lastError, !lastError.isEmpty else { return nil }
+        return lastError
+    }
+
+    /// Clears the error only if it is still the one shown.
+    private func dismiss(_ message: String) {
+        if appState.lastError == message { appState.lastError = nil }
+    }
+
+    private func content(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.primary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .frame(maxWidth: 420)
+            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+            .onTapGesture { dismiss(message) }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(Text("Dismiss"))
+            .accessibilityIdentifier("signed-in.error")
     }
 }
 
