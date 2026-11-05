@@ -284,6 +284,7 @@ struct MacCommands: Commands {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)
             }
+            .disabled(!MacUpdateController.updatesAvailable())
             Divider()
             Button("Connect Your Phone…") {
                 NotificationCenter.default.post(name: .macOpenPairing, object: nil)
@@ -308,25 +309,64 @@ struct MacCommands: Commands {
     }
 }
 
-/// Reconnecting restarts the service on this Mac, which stops every running
-/// turn here: ask first when one is running.
+/// Reconnecting, or switching which tentacle runs agents here, restarts the
+/// service on this Mac, which stops every running turn here: ask first when
+/// one is running.
 @MainActor
 enum MacReconnectConfirmation {
-    static func runningSessionsHere(appState: AppState, tentacleCLI: TentacleCLIManager) -> Int {
-        guard let here = tentacleCLI.configInfo?.deviceId else { return 0 }
-        return appState.sessionStore.sessions.values.filter { $0.deviceId == here && $0.state != .idle }.count
+    enum Action: Equatable {
+        /// This Mac › Reconnect, Settings › This Mac › Reconnect.
+        case reconnect
+        /// Settings › This Mac › Run agents with (built in / external CLI).
+        case switchMode
     }
 
-    static func confirm(appState: AppState, tentacleCLI: TentacleCLIManager) -> Bool {
+    struct Prompt: Equatable {
+        let title: String
+        let message: String
+        let confirmButton: String
+    }
+
+    nonisolated static func runningSessions(in sessions: some Sequence<SessionInfo>, deviceId: String?) -> Int {
+        guard let deviceId else { return 0 }
+        return sessions.filter { $0.deviceId == deviceId && $0.state != .idle }.count
+    }
+
+    static func runningSessionsHere(appState: AppState, tentacleCLI: TentacleCLIManager) -> Int {
+        runningSessions(in: appState.sessionStore.sessions.values, deviceId: tentacleCLI.configInfo?.deviceId)
+    }
+
+    /// The question, or nil when nothing runs here and no question is needed.
+    nonisolated static func prompt(for action: Action, running: Int) -> Prompt? {
+        guard running > 0 else { return nil }
+        switch action {
+        case .reconnect:
+            return Prompt(
+                title: String(localized: "Reconnect this Mac?"),
+                message: running == 1
+                    ? String(localized: "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.")
+                    : String(localized: "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them."),
+                confirmButton: String(localized: "Reconnect")
+            )
+        case .switchMode:
+            return Prompt(
+                title: String(localized: "Switch how this Mac runs agents?"),
+                message: running == 1
+                    ? String(localized: "A session is running on this Mac. Switching restarts Kraki here and stops it.")
+                    : String(localized: "\(running) sessions are running on this Mac. Switching restarts Kraki here and stops them."),
+                confirmButton: String(localized: "Switch")
+            )
+        }
+    }
+
+    static func confirm(appState: AppState, tentacleCLI: TentacleCLIManager, action: Action = .reconnect) -> Bool {
         let running = runningSessionsHere(appState: appState, tentacleCLI: tentacleCLI)
-        guard running > 0 else { return true }
+        guard let prompt = prompt(for: action, running: running) else { return true }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = String(localized: "Reconnect this Mac?")
-        alert.informativeText = running == 1
-            ? String(localized: "A session is running on this Mac. Reconnecting restarts Kraki here and stops it.")
-            : String(localized: "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them.")
-        alert.addButton(withTitle: String(localized: "Reconnect"))
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.addButton(withTitle: prompt.confirmButton)
         alert.addButton(withTitle: String(localized: "Cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
@@ -353,7 +393,6 @@ extension TentacleCLIManager {
 // MARK: - Notifications
 
 extension Notification.Name {
-    static let macOpenLogs        = Notification.Name("mac.openLogs")
     static let macOpenPairing     = Notification.Name("mac.openPairing")
     static let macOpenNewSession  = Notification.Name("mac.openNewSession")
     static let macFocusNewSessionComposer = Notification.Name("mac.focusNewSessionComposer")

@@ -13,7 +13,7 @@ import Sparkle
 
 @MainActor
 final class MacUpdateController: NSObject, SPUUpdaterDelegate {
-    static let productionBundleIdentifier = "chat.kraki.mac"
+    nonisolated static let productionBundleIdentifier = "chat.kraki.mac"
 
     private var started = false
 
@@ -25,8 +25,14 @@ final class MacUpdateController: NSObject, SPUUpdaterDelegate {
         )
     }()
 
+    /// Only the production app has an updater; Dev and test builds disable
+    /// "Check for Updates…" instead of offering a command that does nothing.
+    nonisolated static func updatesAvailable(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> Bool {
+        bundleIdentifier == productionBundleIdentifier
+    }
+
     static func makeIfProduction() -> MacUpdateController? {
-        guard Bundle.main.bundleIdentifier == productionBundleIdentifier else {
+        guard updatesAvailable() else {
             return nil
         }
         return MacUpdateController()

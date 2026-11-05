@@ -49,6 +49,9 @@ final class AppState {
     /// Per session, how many Stops were lost with the local link; the
     /// composer settles its Stop latch on a change.
     var stopsLostWithLocalLink: [String: Int] = [:]
+    /// Tentacles whose route switched (local link ↔ Head) since their last
+    /// subscription snapshot; that snapshot may keep the live reply on screen.
+    @ObservationIgnored var routeSwitchedTentacles: Set<String> = []
     #endif
     var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated
