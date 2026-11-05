@@ -71,6 +71,19 @@ describe('turn end sidebar row (K-098)', () => {
     expect(useStore.getState().closingTurns.has('s1')).toBe(false);
   });
 
+  it("an earlier turn's fallback timer does not end a later turn's closing state", () => {
+    vi.useFakeTimers();
+    route({ type: 'idle', seq: 5, payload: {} });
+    vi.advanceTimersByTime(1_000);
+    route({ type: 'active', seq: 6, payload: {} });
+    vi.advanceTimersByTime(2_000);
+    route({ type: 'idle', seq: 7, payload: {} });
+    vi.advanceTimersByTime(2_000);
+    expect(useStore.getState().closingTurns.has('s1')).toBe(true);
+    vi.advanceTimersByTime(TURN_CLOSING_MAX_MS);
+    expect(useStore.getState().closingTurns.has('s1')).toBe(false);
+  });
+
   it('a synthetic idle for an already idle session does not show working', () => {
     useStore.getState().upsertSession({ ...useStore.getState().sessions.get('s1')!, state: 'idle' });
     route({ type: 'idle', seq: 1, payload: {} });
