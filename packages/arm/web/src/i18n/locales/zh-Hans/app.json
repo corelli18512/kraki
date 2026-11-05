@@ -41,7 +41,8 @@
     "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
     "deleteAccount": "无法删除账户。请重试。",
     "permissionSend": "无法发送。请重试。",
-    "permissionUnconfirmed": "Agent 尚未确认。请重试。"
+    "permissionUnconfirmed": "Agent 尚未确认。请重试。",
+    "keysUnavailable": "此浏览器无法保存 Kraki 的加密密钥，因此无法登录。请通过 HTTPS 在普通（非隐私）窗口中打开 Kraki。"
   },
   "scanner": {
     "denied": "无法访问相机。请检查浏览器或设备设置。",

@@ -11,7 +11,7 @@ import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
-import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
+import { ensureDeviceKeys, sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
@@ -262,7 +262,7 @@ export class KrakiWSClient {
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
-        // Key init failed — E2E will not work
+        // authenticate() retries and tells the user if keys are unavailable.
       });
     }
     this.transport.connect();
@@ -1244,8 +1244,19 @@ export class KrakiWSClient {
       return;
     }
 
+    const epoch = this.connectionEpoch;
+    const keysReady = await ensureDeviceKeys(this.encryption.keyStore);
+    // The socket this was for closed while the keys were being created. The
+    // next socket authenticates on its own open; sending here as well put a
+    // second auth on it ("Unknown message type: auth") and spent the token twice.
+    if (epoch !== this.connectionEpoch) return;
+    if (!keysReady) {
+      this.refuseWithoutDeviceKeys();
+      return;
+    }
+
     const usedToken = await sendAuth(
-      (msg) => this.transport.sendRaw(msg),
+      (msg) => { if (epoch === this.connectionEpoch) this.transport.sendRaw(msg); },
       this.encryption.keyStore,
       this.transport.pairingToken,
       this.transport.storedDeviceId,
@@ -1263,6 +1274,19 @@ export class KrakiWSClient {
       this.transport.codeVerifier = undefined;
       this.transport.redirectUri = undefined;
     }
+  }
+
+  /** The browser cannot keep encryption keys (plain-http self-host, blocked
+   *  IndexedDB). Pairing anyway half-paired silently and signed out on every
+   *  reload: stop, keep the pairing code unspent, and say why. */
+  private refuseWithoutDeviceKeys(): void {
+    this.transport.githubCode = undefined;
+    this.transport.codeVerifier = undefined;
+    this.transport.redirectUri = undefined;
+    this.disconnect();
+    const store = getStore();
+    store.setLastError(t('app:errors.keysUnavailable'));
+    store.setStatus('awaiting_login');
   }
 
   /** Legacy non-Pulse envelopes have only the live domain. Keep their pre-auth
