@@ -349,8 +349,13 @@ export const outbox = {
     diag.sends.retried(clientId, true);
     phase(entry, 'retry');
     if (entry.state === 'correcting') { this.dispatchStaged(clientId, entry.originalText ?? entry.text); return; }
+    // Sent text-only by the user's choice: the "not kept" note no longer
+    // applies, and a later reload must not mark it failed again (K-100).
+    if (entry.attachmentsDropped) {
+      update((entries) => entries.map((e) => (e.clientId === clientId ? { ...e, attachmentsDropped: undefined } : e)));
+    }
     setState(clientId, 'sending');
-    transmit({ ...entry, state: 'sending' });
+    transmit({ ...entry, attachmentsDropped: undefined, state: 'sending' });
   },
 
   /** The Tentacle (re)greeted: inputs it has not echoed may be lost. If it

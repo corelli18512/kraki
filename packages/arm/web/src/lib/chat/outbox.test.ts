@@ -393,6 +393,18 @@ describe('K-100: attachments too large to keep across a reload', () => {
     expect(sent).toEqual([]);
   });
 
+  it('after the user retries it text-only, the note is gone and another reload does not fail it again', () => {
+    outbox.send('s', 'look at this', { attachments: [bigImage] });
+    outbox.reloadForTesting();
+    const [restored] = outbox.forSession('s');
+    sent = [];
+    outbox.retry(restored.clientId);
+    expect(sent).toHaveLength(1);
+    expect(outbox.forSession('s')[0].attachmentsDropped).toBeUndefined();
+    outbox.reloadForTesting();
+    expect(outbox.forSession('s')[0].state).not.toBe('failed');
+  });
+
   it('a small image survives the reload and is resent with it', () => {
     const small = { type: 'image' as const, mimeType: 'image/png', data: 'x'.repeat(1_000) };
     outbox.send('s', 'small', { attachments: [small] });
