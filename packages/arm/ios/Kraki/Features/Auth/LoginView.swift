@@ -120,6 +120,10 @@ struct LoginView: View {
             }
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // GitHub sign-in arrives with the relay's `auth_info`, possibly
+            // after the actions are already shown: ease the subtitle and
+            // button in instead of snapping the layout.
+            .animation(.easeInOut(duration: 0.25), value: oauthAvailable)
         }
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
@@ -141,15 +145,19 @@ struct LoginView: View {
     private var isConnecting: Bool {
         Self.showsStatusPanel(oauthInFlight: appState.isOAuthInFlight,
                               pairingInFlight: appState.pairingInFlightSince != nil,
-                              status: appState.connectionStatus)
+                              status: appState.connectionStatus,
+                              isAwaitingAuthInfo: appState.isAwaitingAuthInfo)
     }
 
-    /// The background connection that only fetches the sign-in options
-    /// (`.connecting` with nothing started) keeps the actions: while the
-    /// relay is unreachable "Scan QR Code" must stay available (K-035).
-    static func showsStatusPanel(oauthInFlight: Bool, pairingInFlight: Bool, status: ConnectionStatus) -> Bool {
+    /// Only a sign-in the user started replaces the actions with "Signing
+    /// you in…". The background connection that only fetches the sign-in
+    /// options keeps them: while the relay is unreachable (`.connecting`
+    /// with nothing started, K-035) or slow to answer `auth_info` (K-185),
+    /// "Scan QR Code" must stay available.
+    static func showsStatusPanel(oauthInFlight: Bool, pairingInFlight: Bool, status: ConnectionStatus,
+                                 isAwaitingAuthInfo: Bool = false) -> Bool {
         if oauthInFlight || pairingInFlight { return true }
-        return status == .authenticating
+        return status == .authenticating && !isAwaitingAuthInfo
     }
 
     /// Still reaching the relay, nothing started: a quiet line above the actions.

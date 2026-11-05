@@ -34,6 +34,7 @@
  */
 
 import type { AgentAdapter, TurnLifecycleEvent } from './base.js';
+import { readableProviderError } from './provider-error.js';
 
 type Sink = Pick<AgentAdapter, 'onNarration' | 'onNarrationTrace' | 'onMessage' | 'onError' | 'onIdle'>;
 
@@ -189,7 +190,7 @@ export class TurnTracker {
     if (this.aborted) { this.resetProse(); return; }
     if (error) {
       this.resetProse(); // unfinished prose is not shown, not even as a draft
-      this.sink.onError?.(this.sessionId, { message: error, ...this.event() });
+      this.sink.onError?.(this.sessionId, { message: readableProviderError(error), ...this.event() });
       return;
     }
     this.takeBuffer();

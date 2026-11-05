@@ -210,6 +210,16 @@
         }
       }
     },
+    "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki 无法连接使用主机名的未加密 ws:// 地址。请使用中继服务器的 wss:// 地址或其 IP 地址。"
+          }
+        }
+      }
+    },
     "Couldn't reach the relay to pair. Check your connection, then scan the code again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -2025,16 +2035,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "认证失败。请扫描新的配对二维码。"
-          }
-        }
-      }
-    },
-    "Authentication failed. Scan a pairing QR code to get started." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "认证失败。请扫描配对二维码以开始使用。"
           }
         }
       }
@@ -9208,6 +9208,26 @@
         }
       }
     },
+    "Sign-in failed. Try again, or scan a pairing QR code." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录失败。请重试，或扫描配对二维码。"
+          }
+        }
+      }
+    },
+    "Sign-in is temporarily unavailable. Try again in a moment." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录暂时不可用。请稍后再试。"
+          }
+        }
+      }
+    },
     "Sign-in needed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -10496,6 +10516,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此服务器要求 Kraki 连接到不受信任的地址。"
+          }
+        }
+      }
+    },
+    "This server doesn't accept new pairings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务器不接受新的配对。"
           }
         }
       }

@@ -151,6 +151,7 @@ extension AppState {
 
     private func startPairing(_ link: PairingLink) {
         lastError = nil
+        isAwaitingAuthInfo = false
         pendingPairingPrompt = nil
         let started = Date()
         pairingInFlightSince = started

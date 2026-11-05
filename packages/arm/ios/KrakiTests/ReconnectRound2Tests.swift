@@ -112,4 +112,99 @@ final class ReconnectRound2Tests: XCTestCase {
         XCTAssertLessThanOrEqual(app.messageStore.dbLastSeq(sid), 8, "rows of the old incarnation above the new head are not stored")
         XCTAssertLessThanOrEqual(app.messageStore.persistedHead(sid), 8)
     }
+
+    /// K-076: the relay's English `message` is never shown; known codes get
+    /// the app's localized copy.
+    func testRelayAuthErrorsShowTheAppsCopyNotTheRelaysEnglish() throws {
+        let (app, root) = try makeApp()
+        defer { app.disconnect(); try? FileManager.default.removeItem(at: root) }
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        let auth = try XCTUnwrap(app.authManager)
+        auth.debugIsolatedIdentity = true
+        #if os(macOS)
+        AuthManager.debugCLICredentialLoader = { _ in nil }
+        defer { AuthManager.debugCLICredentialLoader = nil }
+        #endif
+
+        // A pairing code that was already used / expired (no stored device).
+        auth.debugSetStoredDeviceId(nil)
+        auth.handleAuthError(message: ["code": "invalid_pairing_token", "message": "Invalid or expired pairing token"])
+        XCTAssertEqual(app.lastError, PairingFailureText.describe("bad_proof"))
+
+        // A removed device.
+        auth.debugSetStoredDeviceId("k076-device")
+        auth.handleAuthError(message: ["code": "unknown_device", "message": "Unknown device"])
+        XCTAssertEqual(app.lastError, "Authentication failed. Please scan a new pairing QR code.")
+
+        // A transient outage being retried.
+        auth.debugSetStoredDeviceId("k076-device")
+        auth.handleAuthError(message: ["code": "auth_rejected", "message": "No auth provider accepted the token"])
+        XCTAssertEqual(app.lastError, "Authentication temporarily unavailable. Reconnecting…")
+
+        // No paired device: a relay outage asks for a retry, not a QR scan,
+        // and a failed GitHub sign-in gets neutral copy.
+        auth.debugSetStoredDeviceId(nil)
+        auth.handleAuthError(message: ["code": "service_unavailable", "message": "Auth service unavailable"])
+        XCTAssertEqual(app.lastError, "Sign-in is temporarily unavailable. Try again in a moment.")
+        auth.debugSetStoredDeviceId(nil)
+        auth.handleAuthError(message: ["code": "auth_rejected", "message": "No auth provider accepted the token"])
+        XCTAssertEqual(app.lastError, "Sign-in failed. Try again, or scan a pairing QR code.")
+
+        XCTAssertEqual(RelayAuthErrorText.describe(code: "pairing_disabled", fallback: "x"),
+                       "This server doesn't accept new pairings.")
+        XCTAssertEqual(RelayAuthErrorText.describe(code: "something_new", fallback: "fallback"), "fallback")
+    }
+
+    /// K-185: asking a slow relay for its sign-in methods is not a sign-in;
+    /// the actions (Scan QR Code) stay available meanwhile.
+    func testWaitingForAuthInfoKeepsTheSignInActions() throws {
+        let (app, root) = try makeApp()
+        defer { app.disconnect(); try? FileManager.default.removeItem(at: root) }
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        let auth = try XCTUnwrap(app.authManager)
+        auth.debugIsolatedIdentity = true
+        auth.debugSetStoredDeviceId(nil)
+        app.connectionStatus = .authenticating
+        auth.requestAuthInfo()
+        XCTAssertTrue(app.isAwaitingAuthInfo)
+        XCTAssertFalse(LoginView.showsStatusPanel(oauthInFlight: false, pairingInFlight: app.pairingInFlightSince != nil,
+                                                  status: app.connectionStatus,
+                                                  isAwaitingAuthInfo: app.isAwaitingAuthInfo))
+        // A real sign-in (GitHub code) shows "Signing you in…".
+        auth.authenticateWithGitHubCode("code")
+        XCTAssertFalse(app.isAwaitingAuthInfo)
+        XCTAssertTrue(LoginView.showsStatusPanel(oauthInFlight: false, pairingInFlight: app.pairingInFlightSince != nil,
+                                                 status: app.connectionStatus,
+                                                 isAwaitingAuthInfo: app.isAwaitingAuthInfo))
+        // The answer arrives: back to the sign-in screen.
+        app.connectionStatus = .authenticating
+        auth.requestAuthInfo()
+        app.onAuthInfoReceived(githubClientId: "gh")
+        XCTAssertFalse(app.isAwaitingAuthInfo)
+        XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+    }
+
+    /// K-185: Scan QR is usable while `auth_info` is pending. A late
+    /// `auth_info_response` must not drop the pairing in flight back to the
+    /// sign-in screen.
+    func testLateAuthInfoKeepsAPairingInFlight() throws {
+        let (app, root) = try makeApp()
+        defer { app.disconnect(); try? FileManager.default.removeItem(at: root) }
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        let auth = try XCTUnwrap(app.authManager)
+        auth.debugIsolatedIdentity = true
+        auth.debugSetStoredDeviceId(nil)
+        app.connectionStatus = .authenticating
+        auth.requestAuthInfo()
+        XCTAssertTrue(app.isAwaitingAuthInfo)
+        auth.authenticateWithPairingToken("t")
+        app.onAuthInfoReceived(githubClientId: "gh")
+        XCTAssertEqual(app.connectionStatus, .authenticating)
+        XCTAssertTrue(LoginView.showsStatusPanel(oauthInFlight: false, pairingInFlight: app.pairingInFlightSince != nil,
+                                                 status: app.connectionStatus,
+                                                 isAwaitingAuthInfo: app.isAwaitingAuthInfo))
+    }
 }

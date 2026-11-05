@@ -201,6 +201,9 @@ extension AppState {
         // Back before a deferred teardown ran: nothing was closed.
         if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
         let keptSocket = backgroundSocketGrace.resume()
+        // The kept socket may have gone half-open while suspended: prove it
+        // now instead of waiting for the 22 s liveness ping.
+        if keptSocket { wsClient?.probeAfterResume() }
         #else
         let keptSocket = false
         #endif
@@ -386,9 +389,12 @@ extension AppState {
     /// hasn't been initiated yet).
     func onAuthInfoReceived(githubClientId: String?) {
         self.githubClientId = githubClientId
+        let wasAwaitingAuthInfo = isAwaitingAuthInfo
+        isAwaitingAuthInfo = false
         // If a user-initiated auth (OAuth code, pairing token) raced
-        // ahead of this response, leave its `.authenticating` in place.
-        if connectionStatus == .authenticating {
+        // ahead of this response, leave its `.authenticating` in place:
+        // starting that auth already cleared `isAwaitingAuthInfo` (K-185).
+        if connectionStatus == .authenticating && wasAwaitingAuthInfo {
             connectionStatus = .awaitingLogin
         }
     }

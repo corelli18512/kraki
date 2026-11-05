@@ -281,6 +281,7 @@ final class AuthManager {
     /// client id is. Response handled by `handleAuthInfoResponse`.
     func requestAuthInfo() {
         KLog.d("ℹ️ Requesting auth_info from relay")
+        appState?.isAwaitingAuthInfo = true
         sendRaw(["type": "auth_info"])
     }
 
@@ -309,6 +310,7 @@ final class AuthManager {
     ///    rejects this; clients should request `auth_info` first and
     ///    route the user through GitHub OAuth or pairing instead.
     func authenticate() {
+        appState?.isAwaitingAuthInfo = false
         var signingPublicKey: String?
         var encryptionPublicKey: String?
 
@@ -601,7 +603,7 @@ final class AuthManager {
             // retry on a replacement socket instead of falling back to LoginView
             // or stale Keychain challenge auth.
             KLog.d("⏳ CLI auth backend unavailable — keeping token, reconnecting")
-            appState.lastError = reason ?? String(localized: "Authentication service temporarily unavailable. Reconnecting…")
+            appState.lastError = RelayAuthErrorText.describe(code: code, fallback: String(localized: "Authentication service temporarily unavailable. Reconnecting…"))
             appState.wsClient?.recover(reason: "auth_retry")
         } else if storedDeviceId != nil {
             // Only destroy the persisted pairing on a DETERMINISTIC failure —
@@ -634,7 +636,8 @@ final class AuthManager {
                 let discarded = appState.commandSender?.unsentMessageCount ?? 0
                 let discardedDrafts = appState.unsentDraftCount
                 appState.resetIdentity(clearRelayURL: false)
-                let failure = reason ?? String(localized: "Authentication failed. Please scan a new pairing QR code.")
+                // The app's own copy, never the relay's English reason (K-076).
+                let failure = RelayAuthErrorText.describe(code: code, fallback: String(localized: "Authentication failed. Please scan a new pairing QR code."))
                 appState.onAuthFailed(error: Self.fatalAuthErrorText(failure, discardedMessages: discarded, discardedDrafts: discardedDrafts))
                 #if os(macOS)
                 if failedWithoutCLIToken {
@@ -651,12 +654,12 @@ final class AuthManager {
                 // Transient: keep the paired identity and reconnect — the next
                 // challenge attempt succeeds once the backend recovers.
                 KLog.d("⏳ Transient auth error (code=\(code ?? "nil")) — keeping credentials, reconnecting")
-                appState.lastError = reason ?? String(localized: "Authentication temporarily unavailable. Reconnecting…")
+                appState.lastError = RelayAuthErrorText.describe(code: code, fallback: String(localized: "Authentication temporarily unavailable. Reconnecting…"))
                 appState.wsClient?.recover(reason: "auth_retry")
             }
         } else {
             appState.onAuthFailed(
-                error: reason ?? String(localized: "Authentication failed. Scan a pairing QR code to get started.")
+                error: RelayAuthErrorText.describeSignInFailure(code: code)
             )
             if appState.connectionStatus == .awaitingLogin {
                 requestAuthInfo()
@@ -709,6 +712,7 @@ final class AuthManager {
         redirectUri: String? = nil
     ) {
         pairingToken = nil
+        appState?.isAwaitingAuthInfo = false
         appState?.connectionStatus = .authenticating
 
         // Mint / load our key pair NOW so the relay can register the
