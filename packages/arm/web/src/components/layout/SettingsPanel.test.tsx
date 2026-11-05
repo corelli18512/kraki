@@ -185,6 +185,17 @@ describe('SettingsPanel native preferences parity', () => {
     expect(!!screen.queryByRole('tab', { name: 'This PC' })).toBe(shown);
     ua.mockRestore();
   });
+  it.each([
+    ['iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1', false],
+    ['Android phone', 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36', false],
+    ['Mac', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', true],
+  ])('shows the keyboard-only usage shortcut only where there is a keyboard: %s (K-228)', (_name, userAgent, shown) => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+    open();
+    expect(!!screen.queryByRole('switch', { name: 'Peek at account usage' })).toBe(shown);
+    expect(!!screen.queryByText('Shortcut')).toBe(shown);
+    ua.mockRestore();
+  });
   it('the Dogfood row says when the switch is impossible instead of "Switching…" forever (K-229)', async () => {
     const { applyAccountChannel } = await import('../../lib/auth');
     // A browser that refuses the channel cookie.

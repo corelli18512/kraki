@@ -51,6 +51,9 @@ const settingsTabs = (): readonly SettingsTab[] => (desktop?.builtIn || desktop?
   ? tabs
   : tabs.filter((name) => name !== 'This PC'));
 
+/** A phone browser has no keyboard to hold the usage shortcut on. */
+const phoneBrowser = (): boolean => !desktop && /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
+
 /** Same section, copy and default (on) as Mac DiagSettingsSection. */
 export function performanceDataFooter() { return translate('settings:performance.footer'); }
 
@@ -294,7 +297,7 @@ export function SettingsPanel({
         )}
       </SettingsSection>
       <LanguageSettingsRow />
-      <SettingsSection title={t('general.accountUsage')}>
+      {!phoneBrowser() && <SettingsSection title={t('general.accountUsage')}>
         <SettingsRow label={t('general.holdUsage', { shortcut: shortcutLabel(shortcut.shortcut) })}>
           <SettingsSwitch
             label={t('general.peekUsage')}
@@ -337,7 +340,7 @@ export function SettingsPanel({
         <p className="kp-foot">
           {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : isMacBrowser() ? 'general.shortcutFooterSidebarMac' : 'general.shortcutFooterSidebar')}
         </p>
-      </SettingsSection>
+      </SettingsSection>}
       {state.archiveInfo.size > 0 && <section className="kp-section">
         <h3>{t('tabs.sessions')}</h3>
         <ArchiveSettings />
