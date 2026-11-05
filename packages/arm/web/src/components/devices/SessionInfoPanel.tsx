@@ -140,8 +140,12 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                 type="button"
                 aria-label={copied ? t('sessionInfo.idCopied') : t('sessionInfo.copyId')}
                 onClick={() => {
-                  void navigator.clipboard
-                    .writeText(session.id)
+                  // Without the Clipboard API (plain-http self-hosted relay)
+                  // `navigator.clipboard` is undefined: fail into the message.
+                  // Called synchronously: Safari only allows it in the click.
+                  let write: Promise<void>;
+                  try { write = navigator.clipboard.writeText(session.id); } catch (err) { write = Promise.reject(err); }
+                  void write
                     .then(() => {
                       clearTimeout(copyTimer.current);
                       setCopied(true);
