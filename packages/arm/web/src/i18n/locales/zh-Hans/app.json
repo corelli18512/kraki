@@ -41,10 +41,13 @@
     "noTarget": "无法发送：此会话没有目标设备。请尝试重新连接。",
     "deleteAccount": "无法删除账户。请重试。",
     "permissionSend": "无法发送。请重试。",
-    "permissionUnconfirmed": "Agent 尚未确认。请重试。"
+    "permissionUnconfirmed": "Agent 尚未确认。请重试。",
+    "keysUnavailable": "此浏览器无法保存 Kraki 的加密密钥，因此无法登录。请通过 HTTPS 在普通（非隐私）窗口中打开 Kraki。"
   },
   "scanner": {
     "denied": "无法访问相机。请检查浏览器或设备设置。",
+    "noCamera": "未找到相机。请连接相机，或直接在此设备上打开配对链接。",
+    "unavailable": "无法启动相机。请关闭正在使用相机的其他应用后重试。",
     "back": "返回",
     "pointAt": "将相机对准 <command>kraki connect</command> 生成的二维码"
   },

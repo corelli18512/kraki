@@ -71,7 +71,7 @@ export function providerLabel(provider: string | null | undefined): string {
 
 /** Own errors keep their key so the text follows a language switch; shell
  *  errors arrive as text. */
-type SettingsErrorKey = 'identifyPC' | 'readPreferences' | 'savePreference' | 'shortcut' | 'disablePush' | 'blockedNotifications' | 'updatePush' | 'copyDiagnostics';
+type SettingsErrorKey = 'identifyPC' | 'readPreferences' | 'savePreference' | 'shortcut' | 'disablePush' | 'blockedNotifications' | 'updatePush' | 'pushRefused' | 'copyDiagnostics';
 type SettingsError = { key: SettingsErrorKey } | { message: string };
 
 export function SettingsPanel({
@@ -210,8 +210,22 @@ export function SettingsPanel({
             setError({ key: 'blockedNotifications' });
             return;
           }
-          wsClient.registerPushToken({ provider: 'web_push', token });
-          setPushEnabled(true);
+          const registration = await wsClient.registerPushToken({ provider: 'web_push', token });
+          if (registration === 'registered') {
+            setPushEnabled(true);
+          } else if (registration === 'refused') {
+            // No pushes will come, so don't keep a subscription that reads
+            // as "on". In-app notifications still turn on.
+            await unsubscribeFromPush().catch(() => false);
+            setPushEnabled(false);
+            setError({ key: 'pushRefused' });
+          } else {
+            // Offline or no answer: not a refusal. Keep the subscription (a
+            // queued registration may still land) and let the user retry.
+            setPushEnabled(false);
+            setError({ key: 'updatePush' });
+            return;
+          }
         }
       } catch {
         setError({ key: 'updatePush' });
@@ -388,11 +402,11 @@ export function SettingsPanel({
           </button>
         </div>
       </SettingsSection>
-      {state.status === 'connected' && (
-        <div className="kp-section kp-section-untitled">
-          <DeleteAccountSection />
-        </div>
-      )}
+      {/* Shown offline too (as on iOS): a drop mid-deletion keeps its progress
+          and answer visible, and asking offline says to connect first. */}
+      <div className="kp-section kp-section-untitled">
+        <DeleteAccountSection />
+      </div>
     </>
   ) : (
     <p className="text-center text-text-secondary">{t('account.notSignedIn')}</p>

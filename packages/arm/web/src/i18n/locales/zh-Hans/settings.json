@@ -166,6 +166,7 @@
     "disablePush": "无法关闭推送通知。",
     "blockedNotifications": "通知已被阻止。请在网站设置中开启。",
     "updatePush": "无法更新推送通知。",
+    "pushRefused": "中继服务器未接受此浏览器的推送通知。Kraki 打开时仍会显示通知。",
     "copyDiagnostics": "无法复制诊断信息。"
   },
   "account": {
