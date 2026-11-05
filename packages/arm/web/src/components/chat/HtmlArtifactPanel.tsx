@@ -36,9 +36,10 @@ function reportFileName(name: string): string {
  *  the report in a new tab instead. The tab is same-origin (about:blank), so
  *  the report runs in a sandboxed frame with an opaque origin, as in the
  *  in-app preview. Must run synchronously inside the click (popup blocker). */
-function openReportTab(html: string, fileName: string): void {
+function openReportTab(html: string, fileName: string): boolean {
   const tab = window.open('', '_blank');
-  if (!tab) throw new Error(t('chat:report.openFailed'));
+  // Pop-ups blocked, a home-screen web app, an in-app browser: download instead.
+  if (!tab) return false;
   tab.opener = null;
   const doc = tab.document;
   doc.title = fileName;
@@ -54,6 +55,7 @@ function openReportTab(html: string, fileName: string): void {
   frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:#fff';
   frame.srcdoc = withArtifactCsp(html);
   doc.body.append(frame);
+  return true;
 }
 
 /** Browser copies keep the original HTML, with a self-contained Mermaid runtime. */
@@ -64,10 +66,7 @@ export async function exportHtmlReport(html: string, name: string): Promise<void
     return;
   }
   const fileName = reportFileName(name);
-  if (isIOSBrowser(navigator.userAgent, navigator.maxTouchPoints)) {
-    openReportTab(html, fileName);
-    return;
-  }
+  if (isIOSBrowser(navigator.userAgent, navigator.maxTouchPoints) && openReportTab(html, fileName)) return;
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   const link = document.createElement('a');
   link.href = url;

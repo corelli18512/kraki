@@ -184,8 +184,11 @@ describe('HtmlArtifactPanel', () => {
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
     expect(frame.srcdoc).toMatch(/^<meta http-equiv="Content-Security-Policy"/);
     expect(frame.srcdoc).toContain('<script>run()</script>');
+    // No tab (pop-ups blocked, home-screen web app, in-app browser): the
+    // download still happens instead of an error.
     open.mockReturnValue(null);
-    await expect(exportHtmlReport('<p>x</p>', 'r.html')).rejects.toThrow('Couldn’t open this report in the browser.');
+    await expect(exportHtmlReport('<p>x</p>', 'r.html')).resolves.toBeUndefined();
+    expect(click).toHaveBeenCalledOnce();
     vi.restoreAllMocks();
   });
   it('K-235: report header buttons get a 44 pt tall touch target on touch screens', () => {
