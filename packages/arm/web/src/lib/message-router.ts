@@ -10,7 +10,7 @@ import { captureMessageGeneration, isMessageGenerationCurrent } from './message-
 import { ingestChunk } from './attachments';
 import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
-import { allowAutoRead, suppressAutoRead } from './read-visibility';
+import { allowAutoRead, forgetSentRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
 import { diag } from './diag';
 
@@ -470,6 +470,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_read': {
       const readSeq = (msg as SessionReadMessage).payload?.seq;
+      // The Tentacle's own word on the read cursor (ours applied, or another
+      // device's change): a read sent from here is settled.
+      forgetSentRead(sid);
       const session = getStore().sessions.get(sid);
       if (session && typeof readSeq === 'number') {
         if (readSeq < (session.readSeq ?? 0)) suppressAutoRead(sid);
