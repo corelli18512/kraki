@@ -164,6 +164,8 @@ function unchangedSkippingStorage(storage: PersistStorage<PersistedStore> | unde
       } catch (err) {
         if (!storageFullReported) console.warn('[Kraki] could not save app state', err);
         storageFullReported = true;
+        // Don't serialize and fail again for the same state on every update.
+        written = value;
         return;
       }
       written = value;

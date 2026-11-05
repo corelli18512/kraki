@@ -26,6 +26,19 @@ describe('K-201: storage the browser refuses or that is full', () => {
     expect(useStore.getState().sessions.has('s-full')).toBe(true);
   });
 
+  it('with full storage, updates that change nothing saved do not retry the failed write', async () => {
+    const { useStore } = await import('../hooks/useStore');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('full', 'QuotaExceededError'); });
+    useStore.getState().upsertSession({
+      id: 's-full-2', deviceId: 'd', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0,
+    } as never);
+    const attempts = setItem.mock.calls.length;
+    expect(attempts).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i++) useStore.getState().setStatus(i % 2 ? 'connected' : 'connecting');
+    expect(setItem.mock.calls.length).toBe(attempts);
+  });
+
   it('theme and usage shortcut settings work with full storage', async () => {
     const { setTheme } = await import('../hooks/useTheme');
     const { setUsageShortcut, useUsageShortcut } = await import('./usage-shortcut');
