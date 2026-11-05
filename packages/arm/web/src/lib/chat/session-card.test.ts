@@ -1,6 +1,7 @@
 import { outbox, checkDeadlines } from './outbox';
 import { describe, expect, it } from 'vitest';
 import { i18next } from '../../i18n';
+import { formatClockTime } from '../../i18n/format';
 import { sessionTimeLabel, sessionTimestamp, sessionPendingPreview, type SessionPendingInput } from './session-card';
 
 const pending = (values: Partial<SessionPendingInput> = {}): SessionPendingInput => ({
@@ -9,8 +10,10 @@ const pending = (values: Partial<SessionPendingInput> = {}): SessionPendingInput
 
 describe('sessionTimeLabel (SessionTimeFormatter)', () => {
   const now = new Date(2026, 5, 10, 12, 0);
-  it('uses local 24-hour time today and lowercase yesterday', () => {
-    expect(sessionTimeLabel(new Date(2026, 5, 10, 9, 5).toISOString(), now)).toBe('09:05');
+  it("uses local time today in the user's 12/24-hour cycle and lowercase yesterday (K-305)", () => {
+    expect(sessionTimeLabel(new Date(2026, 5, 10, 9, 5).toISOString(), now)).toBe(formatClockTime(new Date(2026, 5, 10, 9, 5)));
+    expect(formatClockTime(new Date(2026, 5, 10, 23, 19), 'en-US')).toMatch(/^11:19\s?PM$/);
+    expect(formatClockTime(new Date(2026, 5, 10, 23, 19), 'en-GB')).toBe('23:19');
     expect(sessionTimeLabel(new Date(2026, 5, 9, 23, 59).toISOString(), now)).toBe('yesterday');
   });
   it('uses elapsed whole calendar days with a minimum of two, never weekdays/dates', () => {

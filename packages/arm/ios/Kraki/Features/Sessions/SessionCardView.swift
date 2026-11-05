@@ -58,6 +58,7 @@ private struct SessionCardBody: View, Equatable {
     /// are exactly 20 / 18 pt at the default size.
     @ScaledMetric(relativeTo: .body) private var titleRowHeight: CGFloat = 20
     @ScaledMetric(relativeTo: .footnote) private var lineRowHeight: CGFloat = 18
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var deviceStatusColor: Color {
         guard projection.deviceOnline == true else { return .gray }
@@ -81,8 +82,11 @@ private struct SessionCardBody: View, Equatable {
             .padding(.top, 3)
 
             VStack(alignment: .leading, spacing: 2) {
+                // Fixed below the accessibility sizes (cards keep their
+                // height and match Mac/web); grows for a second title line.
                 titleRow
-                    .frame(height: titleRowHeight)
+                    .frame(height: dynamicTypeSize.isAccessibilitySize ? nil : titleRowHeight)
+                    .frame(minHeight: titleRowHeight)
                 metadataRow
                     .frame(minHeight: lineRowHeight)
                 previewRow
@@ -92,14 +96,16 @@ private struct SessionCardBody: View, Equatable {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .modifier(VoiceOverCardElement())
     }
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
+            // Accessibility text sizes: a second line instead of "New S…".
             Text(cardTitle)
                 .scaledFont(18, weight: .semibold)
                 .foregroundStyle(Color.textTitle)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 .truncationMode(.tail)
 
             if projection.deviceOnline == false {
@@ -127,10 +133,13 @@ private struct SessionCardBody: View, Equatable {
             }
 
             if !projection.timeLabel.isEmpty {
+                // Never "yesterd…": the title gives up width first.
                 Text(projection.timeLabel)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
             }
         }
     }
@@ -168,7 +177,25 @@ private struct SessionCardBody: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([projection.status.accessibilityLabel, projection.previewText].compactMap { $0 }.joined(separator: ": "))
+        // Without a preview the row shows "Session created": say that rather
+        // than exposing an empty element.
+        .accessibilityLabel([projection.statusAccessibilityLabel, projection.previewText ?? String(localized: "Session created")]
+            .compactMap { $0 }.joined(separator: ": "))
+    }
+}
+
+/// With VoiceOver on, a card is one stop (title, time, device/model and
+/// preview read together) instead of a stop per text. Other clients (Voice
+/// Control, UI automation) keep the individual texts.
+private struct VoiceOverCardElement: ViewModifier {
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    func body(content: Content) -> some View {
+        if voiceOverEnabled {
+            content.accessibilityElement(children: .combine)
+        } else {
+            content
+        }
     }
 }
 #endif

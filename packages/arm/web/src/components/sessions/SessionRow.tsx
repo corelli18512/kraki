@@ -107,7 +107,7 @@ export const SessionRow = memo(function SessionRow({
       </span>
       <span className="ksr-body">
         <span className="ksr-line1">
-          <span className="ksr-title">{title}</span>
+          <span className="ksr-title" dir="auto">{title}</span>
           {narrow && device && !device.online && <span className="ksr-offline">{t('row.offline')}</span>}
           {pinned && <Pin className="ksr-pin" aria-label={t('row.pinned')} />}
           <span className="ksr-spacer" />
@@ -127,7 +127,7 @@ export const SessionRow = memo(function SessionRow({
         <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
           <span className="ksr-status-slot" data-status={pending?.status ?? status}><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText
-            ? <span className="ksr-preview">{previewText}</span>
+            ? <span className="ksr-preview" dir="auto">{previewText}</span>
             : <span className="ksr-preview is-empty">{t('row.created')}</span>}
         </span>
       </span>

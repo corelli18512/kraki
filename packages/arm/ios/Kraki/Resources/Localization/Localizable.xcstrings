@@ -58,6 +58,16 @@
         }
       }
     },
+    "Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿"
+          }
+        }
+      }
+    },
     "This Mac is reconnecting…" : {
       "localizations" : {
         "zh-Hans" : {

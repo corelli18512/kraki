@@ -282,10 +282,16 @@ struct BubbleImageGallery: View {
         Button {
             open(entryID)
         } label: {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
+            // The fill image is an overlay so it never sizes the button: a
+            // `scaledToFill` child made the frame (tap / VoiceOver target) the
+            // overflow size, covering neighbouring bubbles.
+            Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .contentShape(Rectangle())
         }

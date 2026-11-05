@@ -180,9 +180,10 @@ struct SessionInfoSheet: View {
 
                 Divider()
 
-                infoRow(String(localized: "Total cost"), value: formatCost(usage.totalCost))
+                infoRow(String(localized: "Total cost"), value: formatCost(usage.totalCost), keepsValueOnOneLine: true)
                 if usage.totalDurationMs > 0 {
-                    infoRow(String(localized: "Duration"), value: formatDuration(usage.totalDurationMs))
+                    infoRow(String(localized: "Duration"), value: formatDuration(usage.totalDurationMs),
+                            keepsValueOnOneLine: true)
                 }
             }
         }
@@ -345,11 +346,15 @@ struct SessionInfoSheet: View {
             .foregroundStyle(.secondary)
     }
 
-    private func infoRow(_ label: String, value: String) -> some View {
+    /// `keepsValueOnOneLine`: numbers (cost, duration, tokens) never break
+    /// mid-number at large text sizes; the label wraps instead.
+    private func infoRow(_ label: String, value: String, keepsValueOnOneLine: Bool = false) -> some View {
         infoRow(label: label) {
             Text(value)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: keepsValueOnOneLine, vertical: false)
+                .layoutPriority(keepsValueOnOneLine ? 1 : 0)
         }
     }
 
@@ -376,7 +381,7 @@ struct SessionInfoSheet: View {
         // other value so token rows match exactly. Tokens drop the
         // monospaced-digit treatment so the visual baseline lines up
         // with non-numeric values like the model name or the date.
-        infoRow(label, value: formatTokenCount(count))
+        infoRow(label, value: formatTokenCount(count), keepsValueOnOneLine: true)
     }
 }
 

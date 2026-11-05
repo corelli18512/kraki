@@ -415,7 +415,8 @@ struct SessionsSidebarView: View {
 
     private func accessibilityValue(for session: SessionInfo) -> String {
         let preview = appState.sessionStore.sessionPreviews[session.id]
-        let hasDraft = appState.sessionStore.drafts[session.id]?.isEmpty == false
+        let draft = appState.sessionStore.drafts[session.id]?.collapseWhitespace()
+        let hasDraft = draft?.isEmpty == false
         let status = SessionCardStatus.resolve(
             sessionState: {
                 if case .compacting = appState.messageStore.runtimeStatus(session.id) {
@@ -428,7 +429,8 @@ struct SessionsSidebarView: View {
                 ? appState.deviceStore.devices[session.deviceId]?.online : nil,
             hasDraft: hasDraft
         )
-        return [status.accessibilityLabel, preview?.text]
+        // Like the row: a draft replaces the last sent preview.
+        return [status.accessibilityLabel(isDraft: hasDraft), hasDraft ? draft : preview?.displayText()]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
@@ -594,6 +596,7 @@ struct MacSidebarSessionRow: View {
                 Text(projection.timeLabel)
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textMuted)
+                    .fixedSize()
             }
         }
     }
@@ -625,8 +628,9 @@ struct MacSidebarSessionRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([projection.status.accessibilityLabel, projection.previewText].compactMap { $0 }.joined(separator: ": "))
-        .help(projection.status.accessibilityLabel ?? "")
+        .accessibilityLabel([projection.statusAccessibilityLabel, projection.previewText ?? String(localized: "Session created")]
+            .compactMap { $0 }.joined(separator: ": "))
+        .help(projection.statusAccessibilityLabel ?? "")
     }
 }
 

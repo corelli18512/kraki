@@ -386,6 +386,19 @@ final class CommandSender {
         bucket[clientId] = message
         outbox[sessionId] = bucket
         persistOutbox()
+        announceDeliveryProblem(state)
+    }
+
+    /// The bubble's status changes away from the VoiceOver cursor: say it.
+    private func announceDeliveryProblem(_ state: PendingState) {
+        switch state {
+        case .failed:
+            appState?.announceForAccessibility(SessionDeliveryStatus.failed.accessibilityLabel)
+        case .unconfirmed:
+            appState?.announceForAccessibility(SessionDeliveryStatus.unconfirmed.accessibilityLabel)
+        default:
+            break
+        }
     }
 
     /// Confirmation is the Tentacle echo. Only *stalled* time counts: the

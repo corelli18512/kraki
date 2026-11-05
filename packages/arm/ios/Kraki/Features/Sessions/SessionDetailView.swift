@@ -13,6 +13,7 @@ struct SessionDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sessionSplit) private var split
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionId: String
 
@@ -213,7 +214,7 @@ struct SessionDetailView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: ChatHeaderMetrics.height)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: modePickerExpanded)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: modePickerExpanded)
     }
 
     @ViewBuilder
@@ -336,6 +337,7 @@ struct HeaderModePicker: View {
     let sessionId: String
     @Binding var expanded: Bool
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Reference-typed so UIKit control callbacks (which capture a copy of
     /// this view) always reach the one live countdown.
     @State private var idle = IdleCountdown()
@@ -382,7 +384,7 @@ struct HeaderModePicker: View {
             .animation(.easeInOut(duration: 0.3), value: current)
             .onAppear { scheduleCollapse() }
             .onDisappear { idle.cancel() }
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
             .accessibilityIdentifier("chat.mode.picker")
         } else {
             Button {
@@ -404,7 +406,7 @@ struct HeaderModePicker: View {
             .accessibilityLabel("Session mode, \(modeTitle(current))")
             .accessibilityHint("Shows the session modes")
             .accessibilityIdentifier("chat.mode.collapsed")
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
         }
     }
 
