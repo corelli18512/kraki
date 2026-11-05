@@ -14,11 +14,12 @@ final class SessionCardAccessibilityTests: XCTestCase {
         super.tearDown()
     }
 
-    private func session(id: String = "a11y-card", effort: ReasoningEffort? = nil) -> SessionInfo {
+    private func session(id: String = "a11y-card", effort: ReasoningEffort? = nil,
+                         state: SessionState = .idle) -> SessionInfo {
         SessionInfo(
             id: id, deviceId: "dev", deviceName: "mac", agent: "pi",
             model: "gpt-5", reasoningEffort: effort, title: "Card a11y",
-            state: .idle, mode: .safe, lastSeq: 0, readSeq: 0, messageCount: 0,
+            state: state, mode: .safe, lastSeq: 0, readSeq: 0, messageCount: 0,
             createdAt: Date(timeIntervalSince1970: 1_700_000_000), pinned: false
         )
     }
@@ -41,7 +42,25 @@ final class SessionCardAccessibilityTests: XCTestCase {
         XCTAssertEqual(SessionCardStatus.humanMessage.accessibilityLabel(isDraft: true), "Draft")
     }
 
-    func testCardWithoutEffortExposesNoEmptyEffortElement() throws {
+    /// Only the idle draft glyph reads "Draft"; a running or blocked session
+    /// with a draft still reads its real status, which is what the glyph shows.
+    func testDraftDoesNotHideARunningOrBlockedStatus() {
+        let running = SessionCardProjection.make(
+            session: session(state: .active), device: nil, preview: nil, draft: "x")
+        XCTAssertEqual(running.status, .active)
+        XCTAssertEqual(running.statusAccessibilityLabel, "Running")
+
+        let approval = SessionCardProjection.make(
+            session: session(), device: nil,
+            preview: SessionPreview(text: "Run ls?", type: "permission", timestamp: "2026-09-26T12:00:00.000Z"),
+            draft: "x")
+        XCTAssertEqual(approval.status, .approval)
+        XCTAssertEqual(approval.statusAccessibilityLabel, "Waiting for approval")
+        XCTAssertEqual(SessionCardStatus.active.accessibilityLabel(isDraft: true), "Running")
+    }
+
+    /// The card without a preview used to expose an empty preview element.
+    func testCardWithoutPreviewExposesNoEmptyElement() throws {
         try requireForegroundUITests()
         let tree = try AccessibilityTreeHost()
         self.tree = tree

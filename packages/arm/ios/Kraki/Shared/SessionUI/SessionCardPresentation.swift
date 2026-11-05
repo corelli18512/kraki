@@ -66,9 +66,10 @@ enum SessionCardStatus: Equatable {
     }
 
     /// A draft resolves to `.humanMessage` (it shares that glyph slot), but it
-    /// is not a sent message: VoiceOver must not read it as one.
+    /// is not a sent message: VoiceOver must not read it as one. Any other
+    /// status (running, approval, …) outranks the draft, as on screen.
     func accessibilityLabel(isDraft: Bool) -> String? {
-        isDraft ? String(localized: "Draft") : accessibilityLabel
+        isDraft && self == .humanMessage ? String(localized: "Draft") : accessibilityLabel
     }
 }
 
