@@ -386,14 +386,13 @@ final class CommandSender {
         bucket[clientId] = message
         outbox[sessionId] = bucket
         persistOutbox()
-        announceDeliveryProblem(state, cause: cause)
+        announceDeliveryProblem(state)
     }
 
     /// The bubble's status changes away from the VoiceOver cursor: say it.
-    /// Signing out fails every queued input at once; that is not news.
-    private func announceDeliveryProblem(_ state: PendingState, cause: String?) {
+    private func announceDeliveryProblem(_ state: PendingState) {
         switch state {
-        case .failed where cause != "signed_out":
+        case .failed:
             appState?.announceForAccessibility(SessionDeliveryStatus.failed.accessibilityLabel)
         case .unconfirmed:
             appState?.announceForAccessibility(SessionDeliveryStatus.unconfirmed.accessibilityLabel)

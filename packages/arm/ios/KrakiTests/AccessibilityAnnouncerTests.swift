@@ -55,6 +55,22 @@ final class AccessibilityAnnouncerTests: XCTestCase {
         XCTAssertEqual(spoken, ["Paired with Studio Mac",
                                 "Couldn't pair with Studio Mac\nThe code belongs to a different computer."])
     }
+
+    /// A voice message that finishes correcting while signed out fails: that
+    /// is the user's own send, so it is announced like any other failure.
+    func testSignedOutVoiceSendFailureIsAnnounced() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-announce-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.hasStoredCredentials = false
+        var spoken: [String] = []
+        app.announceForAccessibility = { spoken.append($0) }
+        let sender = CommandSender(appState: app, outboxURL: root.appendingPathComponent("outbox.json"))
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: "voice", text: "raw"))
+        XCTAssertFalse(sender.dispatchStagedInput(sessionId: "voice", clientId: clientId, text: "corrected"))
+        XCTAssertEqual(spoken, [SessionDeliveryStatus.failed.accessibilityLabel])
+    }
 }
 
 #if os(iOS)
