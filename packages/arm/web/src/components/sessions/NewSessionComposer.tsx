@@ -143,6 +143,27 @@ function ChoiceRow({ title, detail, selected, enabled = true, mark, onClick }: {
   );
 }
 
+/** Space kept under the device list: the popover's padding and a margin. */
+const DEVICE_LIST_BOTTOM_GAP = 24;
+const DEVICE_LIST_MIN_HEIGHT = 120;
+
+/** The computers in the device popover; it scrolls when the window is too
+ *  short for all of them (ten computers in a 640 px window ran off-screen). */
+function DeviceList({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const fit = () => {
+      const top = ref.current?.getBoundingClientRect().top ?? 0;
+      setMaxHeight(Math.max(DEVICE_LIST_MIN_HEIGHT, Math.floor(window.innerHeight - top - DEVICE_LIST_BOTTOM_GAP)));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
+  return <div ref={ref} className="ns-device-list" style={maxHeight === undefined ? undefined : { maxHeight }}>{children}</div>;
+}
+
 function ChoiceSection({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <div className="ns-section">
@@ -333,6 +354,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
             </PillButton>
             {openPill === 'device' && (
               <Popover onClose={close}>
+                <DeviceList>
                 <ChoiceSection title={t('composer.online')}>
                   {online.map((d) => (
                     <ChoiceRow
@@ -353,6 +375,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
                     {offline.length > 6 && <div className="ns-more">{t('composer.moreOffline', { count: offline.length - 6 })}</div>}
                   </ChoiceSection>
                 )}
+                </DeviceList>
               </Popover>
             )}
           </div>

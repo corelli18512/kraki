@@ -172,3 +172,28 @@ describe('NewSessionComposer pending start (K-206)', () => {
     } finally { create.mockRestore(); }
   });
 });
+
+// K-209: with many computers the device list scrolls inside the popover
+// instead of running off the bottom of a short window.
+describe('NewSessionComposer device picker in a short window (K-209)', () => {
+  it('limits the computer list to the space below it', () => {
+    const height = window.innerHeight;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: this.classList.contains('ns-device-list') ? 406 : 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 640 });
+    try {
+      useStore.getState().setDevices(Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, name: `Computer ${i}`, role: 'tentacle' as const, online: i < 4 })));
+      render(<NewSessionComposer />);
+      fireEvent.click(screen.getByTestId('new-session-device'));
+      const list = document.querySelector('.ns-device-list') as HTMLElement;
+      expect(list).not.toBeNull();
+      expect(list.style.maxHeight).toBe('210px');
+      expect(list).toHaveTextContent('Computer 0');
+      expect(list).toHaveTextContent('Computer 9');
+    } finally {
+      rect.mockRestore();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    }
+  });
+});
