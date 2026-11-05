@@ -182,6 +182,22 @@ describe('a daemon crash after echoing an input, before dispatching it (K-138)',
     await resumeDisconnectedSessions(next.client);
     expect(rows(next.sm, sessionId).map((r) => r.type)).toEqual(['user_message', 'agent_message', 'idle']);
   });
+
+  it('does not read the log of a disconnected session with nothing undispatched', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.input(sessionId, 'A', 'cid-a');
+    await vi.waitFor(() => expect(first.adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    first.cb('onMessage')(sessionId, { content: 'done' });
+    first.cb('onIdle')(sessionId);
+    first.sm.markDisconnected(sessionId);
+
+    const sm = new SessionManager(dir);
+    const read = vi.spyOn(sm, 'getMessagesAfterSeq');
+    const next = build(sm);
+    await resumeDisconnectedSessions(next.client);
+    expect(read).not.toHaveBeenCalled();
+  });
 });
 
 describe('an answer typed in the composer (2-36)', () => {

@@ -75,11 +75,14 @@ export async function resumeDisconnectedSessions(client: RelayClient): Promise<v
 export function closeTurnLostInRestart(client: RelayClient, sessionId: string, wasActive = true): void {
   const lastSeq = client.sessionManager.getMeta(sessionId)?.lastSeq ?? 0;
   if (lastSeq <= 0) return;
+  // Decide from the small cached ledger first: reading the spine builds the
+  // session's seq index (a full scan of messages.jsonl), which startup must
+  // not do for every idle or disconnected session.
+  const undispatched = client.sessionManager.getInputLedger(sessionId)
+    .find((entry) => entry.userSeq === lastSeq && entry.status === 'persisted');
+  if (!wasActive && !undispatched) return;
   const [last] = client.sessionManager.getMessagesAfterSeq(sessionId, lastSeq - 1, 1);
   if (last?.type !== 'user_message') return;
-  const undispatched = client.sessionManager.getInputLedger(sessionId)
-    .find((entry) => entry.userSeq === last.seq && entry.status === 'persisted');
-  if (!wasActive && !undispatched) return;
   if (undispatched) {
     client.sessionManager.recordInputLedger(sessionId, { ...undispatched, status: 'rejected', updatedAt: new Date().toISOString() });
   }
@@ -87,7 +90,7 @@ export function closeTurnLostInRestart(client: RelayClient, sessionId: string, w
     type: 'failed',
     payload: {
       message: undispatched
-        ? 'Kraki restarted on this computer before this message reached the agent. Send it again.'
+        ? 'Kraki restarted on this computer before this message reached the agent. If no reply follows, send it again.'
         : 'Kraki restarted on this computer while this turn was running.',
       code: 'process_lost',
       failedAt: new Date().toISOString(),
