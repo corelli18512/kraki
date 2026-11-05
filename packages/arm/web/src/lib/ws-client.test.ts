@@ -951,7 +951,7 @@ describe('KrakiWSClient', () => {
       const client = await connected();
       client.requestAccountDeletion();
       lastWsInstance._receive({ type: 'server_error', message: 'Try again later' });
-      expect(useAccountDeletion.getState().state).toEqual({ kind: 'failed', message: 'Try again later' });
+      expect(useAccountDeletion.getState().state).toEqual({ kind: 'failed', message: "The server couldn't complete that. Try again." });
     });
 
     it('an offline device learns it from auth_error account_deleted', async () => {
@@ -1446,7 +1446,8 @@ describe('KrakiWSClient', () => {
         requestId: 'req-123',
       });
 
-      expect(useStore.getState().lastError).toBe('Target device "dev-xyz" is not online');
+      // K-218: raw relay text is not shown; unknown errors read generically.
+      expect(useStore.getState().lastError).toBe("The server couldn't complete that. Try again.");
     });
 
     it('clears pending prompt on server_error with matching requestId', async () => {

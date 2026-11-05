@@ -62,5 +62,17 @@
     "failedTitle": "Kraki 无法加载",
     "failed": "应用的一部分缺失，通常是因为 Kraki 刚刚更新。重新加载以获取最新版本。",
     "reload": "重新加载"
+  },
+  "serverErrors": {
+    "generic": "服务器无法完成此操作。请重试。",
+    "deviceNotFound": "该设备已不在此账户中。",
+    "removeOnline": "此设备在线。请先断开连接再移除。",
+    "nameTooLong": "名称过长。",
+    "renameFailed": "无法重命名设备。请稍后重试。",
+    "pairingDisabled": "此服务器已关闭新设备配对。",
+    "pairingUnavailable": "配对暂时不可用。请稍后重试。",
+    "targetUnreachable": "暂时无法连接到这台电脑。请确认它在线。",
+    "createSession": "无法创建会话：{{detail}}",
+    "createSessionGeneric": "无法创建会话。"
   }
 }

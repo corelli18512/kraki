@@ -62,5 +62,17 @@
     "failedTitle": "Kraki couldn't load",
     "failed": "Part of the app is missing, usually because Kraki was just updated. Reload to get the latest version.",
     "reload": "Reload"
+  },
+  "serverErrors": {
+    "generic": "The server couldn't complete that. Try again.",
+    "deviceNotFound": "That device is no longer on this account.",
+    "removeOnline": "This device is online. Disconnect it before removing it.",
+    "nameTooLong": "That name is too long.",
+    "renameFailed": "Couldn't rename the device. Try again later.",
+    "pairingDisabled": "Pairing new devices is turned off on this server.",
+    "pairingUnavailable": "Pairing is temporarily unavailable. Try again later.",
+    "targetUnreachable": "That computer can't be reached right now. Check that it is online.",
+    "createSession": "Couldn't create the session: {{detail}}",
+    "createSessionGeneric": "Couldn't create the session."
   }
 }

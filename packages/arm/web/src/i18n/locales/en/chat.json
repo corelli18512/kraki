@@ -52,7 +52,8 @@
       "empty": "empty",
       "invalidHash": "Attachment id is not a valid content hash",
       "checksumMismatch": "Attachment checksum mismatch",
-      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}"
+      "sizeMismatch": "Attachment size mismatch: expected {{expected}}, got {{actual}}",
+      "chunkTimeout": "Timed out receiving the attachment (part {{index}}, {{attempts}} attempts)."
     }
   },
   "bubble": {

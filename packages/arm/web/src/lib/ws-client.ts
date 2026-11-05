@@ -24,6 +24,7 @@ import { ArmPulse } from './arm-pulse';
 import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
 import { diag } from './diag';
 import { traceEvent } from './trace';
+import { serverErrorText } from './server-errors';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
 import { AttachmentPullQueue } from './attachment-pull-queue';
@@ -1434,13 +1435,13 @@ export class KrakiWSClient {
         const serverErr = msg as ServerErrorMessage;
         // A server error while a deletion is pending is its answer.
         const del = useAccountDeletion.getState();
-        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || t('app:errors.deleteAccount') });
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message ? serverErrorText(serverErr.message) : t('app:errors.deleteAccount') });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
           this.cmdState.clearRequest(ref);
         }
-        getStore().setLastError(serverErr.message);
+        getStore().setLastError(serverErrorText(serverErr.message));
         break;
       }
 
