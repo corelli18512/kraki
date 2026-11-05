@@ -80,7 +80,7 @@ kraki stop        # stops Kraki and removes its login item (launchd job / Window
 
 Then remove what the installer put on the computer:
 
-- **macOS:** `rm -rf ~/.local/share/kraki/Kraki.app ~/.local/bin/kraki`
+- **macOS:** `rm -rf ~/.local/share/kraki/Kraki.app ~/.local/bin/kraki ~/Library/LaunchAgents/cloud.corelli.kraki.plist` (`kraki stop` removes the login item only while Kraki is running)
 - **Linux:** `rm ~/.local/bin/kraki` (`/usr/local/bin/kraki` for a global install)
 - **Windows:** `Remove-Item -Recurse "$env:LOCALAPPDATA\Kraki"`, and remove that folder from your user `Path`
 - **npm:** `npm uninstall -g @kraki/tentacle`
