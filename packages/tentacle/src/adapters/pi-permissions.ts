@@ -52,9 +52,10 @@ export function piSubagentToolKind(toolName: string, input: Record<string, unkno
 }
 
 export function toolsForMode(_mode: Mode): string[] | undefined {
-  // Full tool set in every mode (undefined = pi default set). Mutating calls in
-  // safe are gated per-call by the permission-gate extension instead of
-  // being stripped, so pi can still write/bash after the user approves.
+  // Full tool set in every mode (undefined = pi default set; the Kraki tools
+  // extension adds grep/find/ls). Mutating calls in safe are gated per-call by
+  // the permission-gate extension instead of being stripped, so pi can still
+  // write/bash after the user approves.
   return undefined;
 }
 

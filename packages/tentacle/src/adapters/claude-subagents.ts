@@ -7,6 +7,23 @@ export function stopAwaitingSubagents(adapter: ClaudeAdapter, entry: SessionEntr
   entry.awaitingSubagents = false;
   if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
   entry.subagentSettleTimer = undefined;
+  if (entry.subagentHoldTimer) clearTimeout(entry.subagentHoldTimer);
+  entry.subagentHoldTimer = undefined;
+}
+
+/** (Re)start the held turn's inactivity bound: a background subagent that
+ *  never reports would otherwise keep the turn open forever. Any subagent
+ *  activity while held restarts it (Pi has the same bound). */
+export function armSubagentHoldTimer(adapter: ClaudeAdapter, sessionId: string, entry: SessionEntry): void {
+  if (entry.subagentHoldTimer) clearTimeout(entry.subagentHoldTimer);
+  entry.subagentHoldTimer = setTimeout(() => {
+    if (!entry.awaitingSubagents || adapter.sessions.get(sessionId) !== entry) return;
+    logger.warn({ sessionId, running: entry.runningSubagents?.size, idleMs: ClaudeAdapter.SUBAGENT_HOLD_IDLE_MS }, 'Claude background subagents made no progress for too long; settling');
+    entry.runningSubagents?.clear();
+    resetSubagentPhase(adapter, entry);
+    adapter.finishTurn(entry);
+  }, ClaudeAdapter.SUBAGENT_HOLD_IDLE_MS);
+  entry.subagentHoldTimer.unref?.();
 }
 
 /** Track subagent tasks; once none run while the turn is held open, give

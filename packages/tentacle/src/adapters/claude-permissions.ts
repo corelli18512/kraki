@@ -230,14 +230,11 @@ export function broadcastPendingResolutions(adapter: ClaudeAdapter, sessionId: s
   }
   entry.pendingPermissions.clear();
   for (const [qId, q] of entry.pendingQuestions) {
-    // Session ending with a question still open: echo `questions` back
-    // (required by the SDK schema) with whatever answers were collected so
-    // far in this serial chain (empty if none), so the SDK renders the rest
-    // as unanswered rather than throwing on a missing `questions` field.
-    q.resolve({
-      behavior: 'allow',
-      updatedInput: { questions: q.questions ?? [], answers: q.collected ?? {} },
-    });
+    // Stop / session end with a question still open: the user did not
+    // answer. Deny it like a withdrawn request (see handleAskUserQuestion's
+    // onAbort) — an `allow` with empty answers reads to the model as an
+    // answer.
+    q.resolve({ behavior: 'deny', message: 'Not answered: the user stopped the turn' });
     adapter.onQuestionAutoResolved?.(sessionId, qId);
   }
   entry.pendingQuestions.clear();

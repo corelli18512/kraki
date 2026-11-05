@@ -41,11 +41,22 @@ export async function handleCreateSession(client: RelayClient, msg: ConsumerMess
     client.pendingRequestIds.delete(preSessionId);
     const errorMsg = `Couldn't create the session: ${(err as Error).message}`;
     logger.warn({ err, agentId, model }, 'create_session failed');
+    // The agent may fail after it announced the session (session_created
+    // went out and the app opened it): report on that session, where the
+    // user is looking, not as a session-less error. Its meta was created
+    // 'active'; mark it disconnected and idle so it stops showing as running
+    // and the next message tries to reopen it (and fails visibly if it can't).
+    const announced = !!client.sessionManager.getMeta(preSessionId);
     client.send({
       type: 'error',
-      sessionId: '',
+      sessionId: announced ? preSessionId : '',
       payload: { message: errorMsg, ...(requestId && { requestId }) },
     });
+    if (announced) {
+      client.sessionManager.markDisconnected(preSessionId);
+      client.send({ type: 'idle', sessionId: preSessionId, payload: {} });
+      client.broadcastSessionList();
+    }
   }
 }
 

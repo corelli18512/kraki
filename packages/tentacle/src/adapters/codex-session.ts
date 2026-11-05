@@ -103,6 +103,8 @@ export interface CodexSession {
    *  turn/interrupt leaves running commands alive (verified 0.157.1), so
    *  abort terminates exactly these via thread/backgroundTerminals. */
   turnCommandItems: Set<string>;
+  /** A contextCompaction item started and not yet completed. */
+  compacting?: boolean;
   /** Kraki's view of the current turn: reply vs narration, error, user stop,
    *  idle once. A queued steer of the same relay turn continues it. */
   turn: TurnTracker;

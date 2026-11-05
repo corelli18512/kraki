@@ -255,6 +255,15 @@ export default function krakiTools(pi) {
     },
   });
 
+  // Pi starts with read/bash/edit/write only. Add its read-only search tools
+  // (never --tools: that allowlist would also drop every extension's tools),
+  // or the model searches through bash, which asks for approval in safe mode.
+  pi.on("session_start", () => {
+    const active = pi.getActiveTools();
+    const missing = ["grep", "find", "ls"].filter((name) => !active.includes(name));
+    if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
+  });
+
   // Permission gate — ask the host to confirm every non-capability tool. Loaded
   // in ALL modes and always firing; the ADAPTER decides (via its copilot-aligned
   // policy on the live mode) whether to auto-approve silently or raise a card.

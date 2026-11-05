@@ -177,6 +177,22 @@ describe('ClaudeAdapter — audit findings C1–C7', () => {
     expect(abort?.signal.aborted).toBe(true);
   });
 
+  it('K-132: a failed startup probe is retried and the recovered models re-greet the apps', async () => {
+    vi.useFakeTimers();
+    sdk.query.mockImplementationOnce(() => ({ supportedModels: async () => { throw new Error('probe broke'); } }));
+    const changed = vi.fn();
+    claude.onCapabilitiesChanged = changed;
+    await claude.start();
+    expect(await claude.listModels()).toEqual([]);
+    expect(claude.modelListError()).toBe('probe broke');
+    await vi.advanceTimersByTimeAsync(ClaudeAdapter.MODEL_RETRY_FIRST_MS);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(await claude.listModels()).toEqual(['sonnet']);
+    expect(sdk.query).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(sdk.query).toHaveBeenCalledTimes(2);
+  });
+
   it('C5 uses an explicit CLAUDE_CONFIG_DIR when creating its session shadow', async () => {
     const custom = join(root, 'custom-claude'); mkdirSync(custom); mkdirSync(join(root, '.claude'));
     writeFileSync(join(custom, 'settings.json'), JSON.stringify({ marker: 'explicit-config' }));

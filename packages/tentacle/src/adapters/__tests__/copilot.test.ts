@@ -142,6 +142,10 @@ vi.mock('node:module', () => ({
   },
 }));
 
+// The packaged (SEA) build waits differently for a late Copilot CLI.
+const sea = vi.hoisted(() => ({ value: false }));
+vi.mock('node:sea', () => ({ isSea: () => sea.value }));
+
 // Mock execSync so we don't actually call `gh auth token`
 import { execSync as realExecSync } from 'node:child_process';
 vi.mock('node:child_process', () => ({
@@ -316,6 +320,27 @@ describe('CopilotAdapter', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('K-281: Copilot CLI missing at start in the packaged build', () => {
+    afterEach(() => { sea.value = false; });
+    it('fails at once instead of holding daemon readiness for 30 s (the agent retry brings it up later)', async () => {
+      sea.value = true;
+      mockedExecSync.mockImplementation((command: string) => {
+        if (command.includes('command -v copilot') || command.includes('where.exe copilot')) throw new Error('not found');
+        return 'fake-gh-token\n';
+      });
+      vi.useFakeTimers();
+      try {
+        const started = adapter.start().then(() => 'started', (err: Error) => err.message);
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        const outcome = await Promise.race([started, Promise.resolve('pending')]);
+        expect(outcome).toMatch(/Copilot CLI not found/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('resolveCopilotCliPath', () => {
@@ -1734,7 +1759,7 @@ describe('CopilotAdapter', () => {
 
   describeEviction('idle-session eviction', () => {
     type AdapterInternals = {
-      sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
+      sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock }; turn: { beginTurn: () => void } }>;
       lastActivityAt: Map<string, number>;
       turnHasOutput: Map<string, boolean>;
     };
@@ -1819,13 +1844,14 @@ describe('CopilotAdapter', () => {
       expect(internals.sessions.has(blocked.sessionId)).toBe(true);
     });
 
-    it('does NOT evict a session currently mid-turn (turnHasOutput=true)', async () => {
+    it('does NOT evict a session currently mid-turn', async () => {
       await adapter.start();
       const turning = await adapter.createSession({});
 
       const internals = adapter as unknown as AdapterInternals;
       internals.lastActivityAt.set(turning.sessionId, 0);
       internals.turnHasOutput.set(turning.sessionId, true);
+      internals.sessions.get(turning.sessionId)!.turn.beginTurn();
 
       mockRuntimeRssMB(3000, 1);
 
@@ -1833,6 +1859,24 @@ describe('CopilotAdapter', () => {
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(turning.sessionId)).toBe(true);
+    });
+
+    it('K-280: evicts an idle session whose last turn produced output', async () => {
+      await adapter.start();
+      const done = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(done.sessionId, 0);
+      // The finished turn wrote a reply: the flag stays set after it settled.
+      internals.turnHasOutput.set(done.sessionId, true);
+      expect(adapter.isTurnSettled(done.sessionId)).toBe(true);
+
+      mockRuntimeRssMB(3000, 1);
+
+      await evictIdleSessions(adapter);
+
+      expect(mockSessions[0].disconnect).toHaveBeenCalled();
+      expect(internals.sessions.has(done.sessionId)).toBe(false);
     });
 
     it('fires onSessionEvicted so relay-client can mark the session disconnected', async () => {

@@ -235,12 +235,54 @@ export class ClaudeAdapter extends AgentAdapter {
       );
     }
 
+    const loggedOut = await this.probeModels(sdk);
+    if (loggedOut) {
+      throw new Error(
+        'Claude Code is not logged in. Run `claude` and use /login (Claude subscription), ' +
+        'or configure ANTHROPIC_API_KEY / a cloud provider, then restart Kraki.',
+      );
+    }
+    if (this.cachedModels.length === 0) this.scheduleModelRetry(sdk);
+
+    logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
+  }
+
+  /** First delay before re-probing after a failed or empty model list. */
+  static MODEL_RETRY_FIRST_MS = 60_000;
+  private modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private modelRetryDelayMs = ClaudeAdapter.MODEL_RETRY_FIRST_MS;
+  private stopped = false;
+
+  /** A failed, wedged or empty startup probe left Claude with no models until
+   *  a daemon restart. Re-probe with backoff (up to 15 min); a recovery
+   *  re-greets the apps. */
+  private scheduleModelRetry(sdk: typeof import('@anthropic-ai/claude-agent-sdk')): void {
+    if (this.stopped || this.modelRetryTimer) return;
+    const delay = this.modelRetryDelayMs;
+    this.modelRetryDelayMs = Math.min(delay * 2, 15 * 60_000);
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = undefined;
+      if (this.stopped) return;
+      void this.probeModels(sdk).then(() => {
+        if (this.stopped) return;
+        if (this.cachedModels.length === 0) { this.scheduleModelRetry(sdk); return; }
+        logger.info({ count: this.cachedModels.length }, 'Claude model list recovered');
+        this.onCapabilitiesChanged?.();
+      });
+    }, delay);
+    this.modelRetryTimer.unref?.();
+  }
+
+  /** One throwaway control-only query: fills the model list and reports
+   *  whether Claude has no credential at all (true = logged out). */
+  private async probeModels(sdk: typeof import('@anthropic-ai/claude-agent-sdk')): Promise<boolean> {
     // Authentication is the SDK's business: an API key, ANTHROPIC_AUTH_TOKEN,
     // a cloud provider, or a Claude subscription login are all valid. One
     // throwaway control-only query (no model call) lists models and reports
     // whether ANY credential is configured; Kraki does not guess from env vars.
     const env = this.claudeEnv(secureStorageEnv());
     let loggedOut = false;
+    this.lastModelListError = undefined;
     const ac = new AbortController();
     // A wedged Claude CLI must not hold the daemon (and every other agent)
     // back from starting: bound the probe and always tear it down.
@@ -298,6 +340,8 @@ export class ClaudeAdapter extends AgentAdapter {
         this.cachedModels = resolved;
         logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
       }
+      // An empty list is retried (cachedModels stays empty) but is not a start
+      // failure: `kraki agents` reports it as needs_login.
     } catch (err) {
       this.lastModelListError = (err as Error).message;
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
@@ -306,17 +350,13 @@ export class ClaudeAdapter extends AgentAdapter {
       ac.abort();
     }
 
-    if (loggedOut) {
-      throw new Error(
-        'Claude Code is not logged in. Run `claude` and use /login (Claude subscription), ' +
-        'or configure ANTHROPIC_API_KEY / a cloud provider, then restart Kraki.',
-      );
-    }
-
-    logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
+    return loggedOut;
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
+    this.modelRetryTimer = undefined;
     for (const [sessionId, entry] of this.sessions) {
       try {
         broadcastPendingResolutions(this, sessionId);
@@ -1053,6 +1093,7 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+  static SUBAGENT_HOLD_IDLE_MS = 30 * 60_000;
 
   // ── Permission handler ────────────────────────────
 
@@ -1061,6 +1102,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private cleanupSessionState(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    if (entry?.subagentHoldTimer) clearTimeout(entry.subagentHoldTimer);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
