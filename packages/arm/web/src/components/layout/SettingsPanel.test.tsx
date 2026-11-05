@@ -221,3 +221,25 @@ describe('Account Usage on narrow layouts (K-104)', () => {
     expect(screen.getByText('“Account Usage” in the sidebar', { exact: false })).toBeInTheDocument();
   });
 });
+
+// K-212: the web Settings window is a modal dialog for assistive technology
+// and the keyboard: aria-modal, focus moves in on open and back on close.
+describe('Settings window modality on the web (K-212)', () => {
+  it('is aria-modal, focuses the selected tab and returns focus on close', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    try {
+      const view = render(<SettingsPanel open onClose={vi.fn()} />);
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveAttribute('aria-modal', 'true');
+      expect(screen.getByRole('tab', { name: 'General' })).toHaveFocus();
+      view.rerender(<SettingsPanel open={false} onClose={vi.fn()} />);
+      expect(opener).toHaveFocus();
+    } finally { opener.remove(); }
+  });
+  it('inline (narrow) Settings is not modal and does not take focus', () => {
+    render(<SettingsPanel open inline onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog')).not.toHaveAttribute('aria-modal');
+    expect(screen.getByRole('tab', { name: 'General' })).not.toHaveFocus();
+  });
+});

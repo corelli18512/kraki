@@ -177,3 +177,32 @@ describe('Sidebar native search and ordering', () => {
     expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
   });
 });
+
+// K-212: the "+" and app menus work from the keyboard.
+describe('Sidebar menus from the keyboard (K-212)', () => {
+  it('opens the + menu with Shift+F10, focuses its first item and returns focus on Escape', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const plus = screen.getByTestId('sidebar-new-session');
+    plus.focus();
+    fireEvent.keyDown(plus, { key: 'F10', shiftKey: true });
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Import Session…' })).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(plus).toHaveFocus();
+  });
+  it('moves focus into the app menu when it opens', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    fireEvent.click(screen.getByLabelText('App menu'));
+    expect(screen.getByRole('menuitem', { name: 'Devices' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Devices' }), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Account Usage' })).toHaveFocus();
+  });
+  it('announces the reconnecting status', () => {
+    useStore.getState().setStatus('connecting');
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('Connecting…');
+  });
+});

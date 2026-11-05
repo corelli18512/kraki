@@ -109,8 +109,10 @@ export function SettingsPanel({
   const isWindows = desktop?.platform === 'win32';
   const windowRef = useRef<HTMLDivElement>(null);
 
+  // The Settings window is modal (web and Windows): focus moves in, Tab stays
+  // in, and focus goes back to where it was on close.
   useEffect(() => {
-    if (!open || inline || !isWindows) return;
+    if (!open || inline) return;
     const previous = document.activeElement as HTMLElement | null;
     const panel = windowRef.current;
     panel?.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')?.focus();
@@ -135,7 +137,7 @@ export function SettingsPanel({
       window.removeEventListener('keydown', key);
       previous?.focus();
     };
-  }, [open, inline, isWindows]);
+  }, [open, inline]);
 
   useEffect(() => {
     if (!open) return;
@@ -574,7 +576,7 @@ export function SettingsPanel({
         ref={windowRef}
         className={`${inline ? 'kp-inline' : 'kp-window'}${isWindows ? ' kp-windows' : ''}`}
         role="dialog"
-        aria-modal={isWindows && !inline ? true : undefined}
+        aria-modal={inline ? undefined : true}
         aria-label={t('title')}
         data-testid="settings-window"
       >

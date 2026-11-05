@@ -17,6 +17,7 @@ import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
 import { desktop } from '../../lib/desktop';
+import { focusFirstMenuItem, isContextMenuKey, onMenuKeyDown } from '../../lib/menu-keyboard';
 import { sessionTimestamp } from '../../lib/chat/session-card';
 import './sidebar.css';
 
@@ -100,11 +101,20 @@ export function Sidebar() {
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
-  // Escape dismisses either rail menu wherever focus is (the native menus do).
+  const appMenuButton = useRef<HTMLButtonElement>(null);
+  const appMenuRef = useRef<HTMLDivElement>(null);
+  const plusButton = useRef<HTMLButtonElement>(null);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  // An opened rail menu takes focus on its first item (arrow keys move on).
+  useEffect(() => { if (appMenu) focusFirstMenuItem(appMenuRef.current); }, [appMenu]);
+  useEffect(() => { if (plusMenu) focusFirstMenuItem(plusMenuRef.current); }, [plusMenu]);
+  // Escape dismisses either rail menu wherever focus is (the native menus do)
+  // and gives focus back to the button that opened it.
   useEffect(() => {
     if (!appMenu && !plusMenu) return;
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      (appMenu ? appMenuButton : plusButton).current?.focus();
       setAppMenu(false);
       setPlusMenu(false);
     };
@@ -173,10 +183,10 @@ export function Sidebar() {
       <div className="ksb is-wide">
         <div className="ksb-top">
           <div className="ksb-app-menu-wrap">
-            <button type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
+            <button ref={appMenuButton} type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-haspopup="menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
             {appMenu && <>
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
-              <div className="ksb-plus-menu ksb-app-menu" role="menu">
+              <div ref={appMenuRef} className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={onMenuKeyDown}>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> {t('tabs.devices')}</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={usageShortcutEnabled ? t('sidebar.usageShortcut', { shortcut: usageShortcut }) : t('general.accountUsage')} data-testid="sidebar-usage"><Gauge /> {t('general.accountUsage')}</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> {t('sidebar.settings')}</button>
@@ -197,24 +207,29 @@ export function Sidebar() {
           </label>
           <div className="ksb-plus-wrap">
             <button
+              ref={plusButton}
               type="button"
               className={`ksb-icon ksb-new${sessionId ? '' : ' is-composing'}`}
               aria-label={t('sidebar.newSessionLabel')}
+              aria-haspopup="menu"
+              aria-expanded={plusMenu}
               title={t('sidebar.newSessionShortcut')}
               onClick={startNewSession}
               onContextMenu={(e) => { e.preventDefault(); setPlusMenu((v) => !v); }}
+              // The right-click menu from the keyboard: Menu key, Shift+F10 or ↓.
+              onKeyDown={(e) => { if (isContextMenuKey(e) || e.key === 'ArrowDown') { e.preventDefault(); setPlusMenu(true); } }}
               data-testid="sidebar-new-session"
             ><Plus /></button>
             {plusMenu && (
-              <div className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)}>
+              <div ref={plusMenuRef} className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)} onKeyDown={onMenuKeyDown}>
                 <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); startNewSession(); }}><Plus /> {t('sidebar.newSession')}</button>
                 <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> {t('sidebar.importSession')}</button>
               </div>
             )}
           </div>
         </div>
-        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
+        {reconnecting && <div className="ksb-status" role="status"><span className="kspinner ksb-spin" aria-hidden /> {t('sidebar.connecting')}</div>}
+        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status" role="status"><span className="kspinner ksb-spin" aria-hidden /> {t('sidebar.connecting')}</div>}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
@@ -228,7 +243,7 @@ export function Sidebar() {
         <>
           <div className="ksb-hero">
             <Brand />
-            {reconnecting && <span className="kspinner ksb-spin" aria-label={t('sidebar.connectingLabel')} />}
+            {reconnecting && <span className="kspinner ksb-spin" role="status" aria-label={t('sidebar.connectingLabel')} />}
           </div>
           <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
         </>
