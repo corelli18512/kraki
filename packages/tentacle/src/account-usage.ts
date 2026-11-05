@@ -23,13 +23,14 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AccountUsage, AccountUsageWindow, UsageHistorySample } from '@kraki/protocol';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
+import { appBundledCliCandidates } from './agent-paths.js';
 import { createLogger } from './logger.js';
 import { getProxyForUrl } from './update.js';
 
@@ -405,11 +406,8 @@ export class UsageClient {
 /** Desktop-bundled binaries first (they match the app's own login), then CLIs on PATH. */
 export function codexExecutables(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
   const list = env.KRAKI_CODEX_PATH ? [env.KRAKI_CODEX_PATH] : [];
-  if (process.platform === 'darwin') {
-    for (const app of ['Codex.app', 'ChatGPT.app']) {
-      list.push(`/Applications/${app}/Contents/Resources/codex`, join(home, 'Applications', app, 'Contents/Resources/codex'));
-    }
-  }
+  // The same desktop-app locations agent detection uses (they had drifted).
+  list.push(...appBundledCliCandidates('codex', { os: platform(), home, isExecutable: () => true, listDir: () => [] }));
   list.push('codex');
   return list.filter(p => p === 'codex' || existsSync(p));
 }

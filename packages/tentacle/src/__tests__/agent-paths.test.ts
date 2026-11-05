@@ -13,6 +13,11 @@ describe('agent CLIs inside desktop apps', () => {
     expect(findAppBundledCli('codex', deps([p, q]))).toBe(q);
   });
 
+  it('K-287: also finds the codex binary at Contents/Resources/codex (layout the usage check used)', () => {
+    const p = '/Applications/Codex.app/Contents/Resources/codex';
+    expect(findAppBundledCli('codex', deps([p]))).toBe(p);
+  });
+
   it('picks the newest Claude Code the Claude desktop app downloaded', () => {
     const root = '/Users/u/Library/Application Support/Claude/claude-code';
     const bin = (v: string) => `${root}/${v}/claude.app/Contents/MacOS/claude`;

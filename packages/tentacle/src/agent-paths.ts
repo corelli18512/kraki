@@ -53,8 +53,12 @@ export function appBundledCliCandidates(name: string, deps: AppCliDeps = default
   if (deps.os !== 'darwin') return [];
   const appDirs = ['/Applications', join(deps.home, 'Applications')];
   if (name === 'codex') {
-    return appDirs.flatMap((dir) => ['ChatGPT.app', 'Codex.app'].map((app) =>
-      join(dir, app, 'Contents', 'Resources', 'codex-cli', 'bin', 'codex')));
+    // Two bundle layouts are in use (codex-cli/bin/codex, and codex directly
+    // in Resources); detection and the usage check share this one list.
+    return appDirs.flatMap((dir) => ['ChatGPT.app', 'Codex.app'].flatMap((app) => [
+      join(dir, app, 'Contents', 'Resources', 'codex-cli', 'bin', 'codex'),
+      join(dir, app, 'Contents', 'Resources', 'codex'),
+    ]));
   }
   if (name === 'claude') {
     const root = join(deps.home, 'Library', 'Application Support', 'Claude', 'claude-code');
