@@ -179,11 +179,17 @@ function base64UrlEncode(bytes: Uint8Array): string {
  * request: any answer means reachable.
  */
 export async function canReachGitHub(fetcher: typeof fetch = fetch, timeoutMs = 5000): Promise<boolean> {
+  // AbortController, not AbortSignal.timeout: Safari added that only in 16,
+  // and a throw there would block sign-in on older Safari.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    await fetcher('https://github.com/favicon.ico', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    await fetcher('https://github.com/favicon.ico', { mode: 'no-cors', cache: 'no-store', signal: controller.signal });
     return true;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

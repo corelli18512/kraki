@@ -92,6 +92,26 @@ describe('DashboardPage', () => {
     }
   });
 
+  it('leaves Cmd/Ctrl/middle clicks on the Mac download to the browser (K-324)', () => {
+    useStore.getState().setStatus('awaiting_login');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)');
+    try {
+      renderWithRoute('/', <DashboardPage />);
+      const link = screen.getByText("Use this Mac's coding agents? Download Kraki for Mac").closest('a')!;
+      for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
+        // Not prevented: the browser opens the releases-page href itself.
+        expect(fireEvent.click(link, init)).toBe(true);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      agent.mockRestore();
+    }
+  });
+
   it('shows only pairing copy when oauth login is unavailable', () => {
     vi.stubEnv('VITE_GITHUB_CLIENT_ID', '');
     useStore.getState().setStatus('awaiting_login');

@@ -65,6 +65,9 @@ export function DashboardPage() {
   // load of the sign-in page (K-324).
   const onMac = isMacBrowser();
   const downloadMac = useCallback(async (event: React.MouseEvent<HTMLAnchorElement>) => {
+    // Cmd/Ctrl/Shift/middle click keep the browser's own new-tab handling
+    // of the releases-page href.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     window.location.href = await resolveMacDmgUrl();
   }, []);
