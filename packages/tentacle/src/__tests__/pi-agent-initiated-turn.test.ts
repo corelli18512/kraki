@@ -582,4 +582,60 @@ describe('RelayClient: a pi wake run after the hold timed out', () => {
     expect(t.session.proc.request.mock.calls.filter(c => c[0] === 'abort')).toEqual([]);
     expect(t.client.activeInputTurnIds.get(t.sessionId)).not.toBe(wakeTurnId);
   });
+
+  it('a steer during W joins W: one reply, one idle', async () => {
+    const t = build();
+    await idleAfterPrompt(t);
+    const wakeTurnId = await startWake(t);
+    handleConsumerMessage(t.client, { type: 'send_input', sessionId: t.sessionId, deviceId: 'app-1', payload: { text: 'also check CI', clientId: 'cid-s', delivery: 'steer' } });
+    await vi.waitFor(() => expect(t.session.proc.request).toHaveBeenCalledWith('prompt', expect.objectContaining({ streamingBehavior: 'steer' }), expect.anything()));
+    await vi.waitFor(() => expect(t.client.inputDispatches.has(t.sessionId)).toBe(false));
+    expect(t.client.activeInputTurnIds.get(t.sessionId)).toBe(wakeTurnId);
+    await reply(t, 'CI green too.');
+    expect(t.rows().map(r => r.type)).toEqual(['user_message', 'agent_message', 'idle', 'user_message', 'agent_message', 'idle']);
+    expect(t.rows()[3].payload).toMatchObject({ delivery: 'steer' });
+    expect(t.client.settledAdapterTurnIds.get(t.sessionId)).toBe(wakeTurnId);
+    expect(t.sm.getMeta(t.sessionId)?.state).toBe('idle');
+  });
+
+  it('Stop of a W turn (abort_session) ends it as aborted; the stopped runs reporting back stay dropped', async () => {
+    const t = build();
+    await idleAfterPrompt(t);
+    const wakeTurnId = await startWake(t);
+    await bash(t, 'B', 'make');
+    handleConsumerMessage(t.client, { type: 'abort_session', sessionId: t.sessionId, deviceId: 'app-1', payload: {} });
+    await vi.waitFor(() => expect(t.sm.getMeta(t.sessionId)?.state).toBe('idle'));
+    expect(t.rows().at(-1)).toMatchObject({ type: 'idle', payload: { reason: 'aborted' } });
+    expect(t.client.settledAdapterTurnIds.get(t.sessionId)).toBe(wakeTurnId);
+    await vi.waitFor(() => expect(t.client.inputChains.has(t.sessionId)).toBe(false));
+    const rowsAfterStop = t.rows().length;
+    // A stopped run's notice wakes the agent again: no new turn, nothing relayed.
+    await t.emit({ type: 'agent_start' });
+    await reply(t, 'The worker was stopped.');
+    expect(t.client.activeInputTurnIds.get(t.sessionId)).toBe(wakeTurnId);
+    expect(t.rows()).toHaveLength(rowsAfterStop);
+  });
+
+  describe('declines when exactly one RelayClient guard is set', () => {
+    const guards: Array<[string, (t: ReturnType<typeof build>) => void]> = [
+      ['inputChains', t => { t.client.inputChains.set(t.sessionId, new Promise(() => {})); }],
+      ['inputDispatches', t => { t.client.inputDispatches.set(t.sessionId, new Promise(() => {})); }],
+      ['resumeInFlight', t => { t.client.resumeInFlight.set(t.sessionId, new Promise(() => {})); }],
+      ['steerAcceptanceInFlight', t => { t.client.steerAcceptanceInFlight.add(t.sessionId); }],
+      ['session ended', t => { t.sm.endSession(t.sessionId, 'test'); }],
+    ];
+    it.each(guards)('%s', async (_name, arm) => {
+      const t = build();
+      await idleAfterPrompt(t);
+      const settledTurnId = t.client.activeInputTurnIds.get(t.sessionId)!;
+      expect(t.client.settledAdapterTurnIds.get(t.sessionId)).toBe(settledTurnId);
+      arm(t);
+      const sentBefore = t.sent.length;
+      await t.emit({ type: 'agent_start' });
+      expect(t.client.activeInputTurnIds.get(t.sessionId)).toBe(settledTurnId);
+      expect(t.session.turn.isSettled).toBe(true);
+      expect(t.sent.slice(sentBefore).filter(m => m.type === 'active')).toEqual([]);
+      expect(t.sm.getMeta(t.sessionId)?.agentTurnStartSeqs).toBeUndefined();
+    });
+  });
 });
