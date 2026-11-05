@@ -862,6 +862,14 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 })
             }
         }
+        // The "Turn failed" reason sits in the SwiftUI action slot, under this
+        // cell's long-press menu, so the menu offers it (it cannot be selected).
+        if content.action?.type == "failed",
+           let reason = content.action?.payload["message"]?.stringValue, !reason.isEmpty {
+            actions.append(UIAction(title: String(localized: "Copy Error"), image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = reason
+            })
+        }
         if content.canShowSteps {
             actions.append(UIAction(title: String(localized: "Show Steps"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
                 self?.openSteps()
@@ -961,11 +969,50 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         _ interaction: UIContextMenuInteraction,
         configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-        guard bubbleBG.frame.contains(location), !messageActions().isEmpty else { return nil }
+        // Built now, at the long-press: a streaming bubble keeps growing under
+        // the open menu, and Copy must copy what the user pressed, not what
+        // the bubble had become when Copy was tapped.
+        let actions = messageActions()
+        guard bubbleBG.frame.contains(location), !actions.isEmpty else { return nil }
         lastMenuLocation = location
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            UIMenu(children: self?.messageActions() ?? [])
+        return UIContextMenuConfiguration(identifier: Self.menuIdentifier, previewProvider: nil) { _ in
+            UIMenu(children: actions)
         }
+    }
+
+    private static let menuIdentifier = "chat.kraki.bubble" as NSString
+
+    /// Lift the bubble itself (rounded, only its on-screen part), not a
+    /// rectangle of the whole cell: a tall reply's cell preview was a cropped
+    /// square that scrolled inside the menu.
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        highlightPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
+    }
+
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configuration: UIContextMenuConfiguration,
+        dismissalPreviewForItemWithIdentifier identifier: any NSCopying
+    ) -> UITargetedPreview? {
+        bubblePreview()
+    }
+
+    func bubblePreview() -> UITargetedPreview? {
+        guard renderClipView.window != nil, !bubbleBG.isHidden, bubbleBG.frame.width > 0 else { return nil }
+        var visible = bubbleBG.frame
+        if let scrollView = sequence(first: superview, next: { $0?.superview }).lazy.compactMap({ $0 as? UIScrollView }).first {
+            visible = visible.intersection(renderClipView.convert(scrollView.bounds, from: scrollView))
+        }
+        guard !visible.isNull, visible.height > 1 else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        let radii = bubbleBG.radii
+        parameters.visiblePath = UIBezierPath(roundedRect: visible, cornerRadius: min(radii.0, radii.1, radii.2, radii.3))
+        return UITargetedPreview(view: renderClipView, parameters: parameters)
     }
 
     override func layoutSubviews() {
