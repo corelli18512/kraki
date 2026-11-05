@@ -201,10 +201,12 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
 
   // Computers come online after the composer appeared (first launch, a
   // restart, an update): until the user picks one by hand, keep the default
-  // — last used, else this PC, else any online one — current.
+  // — last used, else this PC, else any online one — current. A computer the
+  // user picked stays picked when it goes offline (the status line says so):
+  // a typed prompt never moves to another computer silently.
   const onlineKey = online.map((d) => d.id).join(',');
   useEffect(() => {
-    if (userPickedDevice.current && device?.online) return;
+    if (userPickedDevice.current && device) return;
     selectDefaults();
   }, [onlineKey, localId]); // eslint-disable-line react-hooks/exhaustive-deps
 

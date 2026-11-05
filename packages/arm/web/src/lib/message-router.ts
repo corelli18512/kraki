@@ -185,8 +185,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'device_greeting') {
     const greeting = (msg as DeviceGreetingMessage).payload;
     store.setDeviceOnline(msg.deviceId, true);
-    if (greeting?.agents?.length) {
-      store.setDeviceAgents(msg.deviceId, greeting.agents);
+    // A Tentacle with no coding agent leaves `agents` out: the greeting is the
+    // answer ("no coding agent"), so store it as empty, not as still unknown.
+    if (greeting) {
+      store.setDeviceAgents(msg.deviceId, greeting.agents ?? []);
     }
     if (greeting?.version) {
       store.setDeviceVersion(msg.deviceId, greeting.version);

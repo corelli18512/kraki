@@ -124,3 +124,27 @@ describe('NewSessionComposer', () => {
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 });
+
+// K-097 (owner decision): when the computer the user picked goes offline, the
+// composer keeps it (and says it is offline) instead of silently switching the
+// typed prompt to another computer.
+describe('NewSessionComposer picked computer goes offline (K-097)', () => {
+  it('keeps the picked computer and shows it offline', () => {
+    const agents = [{ type: 'code' as const, id: 'pi' as const, models: ['m'] }];
+    useStore.getState().setDevices([
+      { id: 'a', name: 'Computer A', role: 'tentacle', online: true },
+      { id: 'b', name: 'Computer B', role: 'tentacle', online: true },
+    ]);
+    useStore.getState().setDeviceAgents('a', agents);
+    useStore.getState().setDeviceAgents('b', agents);
+    render(<NewSessionComposer />);
+    fireEvent.click(screen.getByTestId('new-session-device'));
+    fireEvent.click(screen.getByRole('option', { name: 'Computer B' }));
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Computer B');
+    // device_left: agents cleared, then offline (ws-client).
+    act(() => { useStore.getState().clearDeviceAgents('b'); useStore.getState().setDeviceOnline('b', false); });
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Computer B');
+    expect(screen.getByText('Computer B is offline', { exact: false })).toBeInTheDocument();
+    expect(screen.getByTestId('new-session-create')).toBeDisabled();
+  });
+});
