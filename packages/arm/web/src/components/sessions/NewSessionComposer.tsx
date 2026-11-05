@@ -21,6 +21,7 @@ import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voic
 import { newSessionContext } from '../../lib/voice/context';
 import './new-session.css';
 import { updateComposerScrollFade } from '../chat/Composer';
+import { isImeComposing } from '../../lib/ime';
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
 const AGENT_PREF_KEY = 'kraki:last-agent-by-device';
@@ -309,7 +310,7 @@ export function NewSessionComposer({ placeholder, minRows = 3, onCreated }: {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isImeComposing(e)) {
               e.preventDefault();
               submit();
             }
