@@ -393,7 +393,7 @@ extension ChatPerfListVC {
     /// changes (e.g. device availability). Expansion of the floating composer
     /// never reaches this path; older-history reading remains independent.
     var shouldFollowLiveTail: Bool {
-        scrollPolicy.shouldFollowTail(distanceToBottom: distanceToBottom())
+        scrollPolicy.shouldFollowTail(distanceToBottom: tailFollowDistance())
     }
 
     func updateBottomContentInset(_ value: CGFloat) {

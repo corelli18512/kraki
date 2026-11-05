@@ -77,6 +77,10 @@ enum HTMLReportMermaid {
 
     /// Renders every Mermaid block once the document is parsed. Uses
     /// `strict` security (no HTML labels with script, no click callbacks).
+    /// A dark page gets Mermaid's dark theme: the default one draws dark
+    /// lines and labels that vanish on it. "Dark" is the page's own painted
+    /// background (a report may stay light in dark mode), else its dark
+    /// `color-scheme` under a dark system appearance.
     static let bootSource = """
     (function () {
       var selector = 'pre.mermaid, div.mermaid, code.language-mermaid';
@@ -86,8 +90,25 @@ enum HTMLReportMermaid {
         pre.classList.add('mermaid');
         pre.textContent = code.textContent;
       });
+      function pageIsDark() {
+        // The canvas converts any computed colour (rgb, oklch, lab, color(display-p3 …)) to 0-255 sRGB.
+        var ink = document.createElement('canvas').getContext('2d');
+        var layers = [document.body, document.documentElement];
+        for (var i = 0; i < layers.length; i++) {
+          if (!layers[i] || !ink) continue;
+          ink.clearRect(0, 0, 1, 1);
+          ink.fillStyle = 'rgba(0,0,0,0)'; // an unparsable colour keeps this and is skipped
+          ink.fillStyle = getComputedStyle(layers[i]).backgroundColor;
+          ink.fillRect(0, 0, 1, 1);
+          var c = ink.getImageData(0, 0, 1, 1).data;
+          if (c[3] === 0) continue;
+          return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] < 128;
+        }
+        var scheme = getComputedStyle(document.documentElement).colorScheme || '';
+        return /dark/.test(scheme) && !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      }
       try {
-        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: pageIsDark() ? 'dark' : 'default' });
         window.mermaid.run({ querySelector: 'pre.mermaid:not([data-processed]), div.mermaid:not([data-processed])' })
           .catch(function () {});
       } catch (e) {}

@@ -107,10 +107,10 @@ final class MessageStore {
     /// top. iOS previously materialized 200 rows at entry, which made one rich
     /// history window repeatedly rebuild hundreds of offscreen geometries.
     #if os(macOS)
-    private static let initialWindowSize = 15
+    static let initialWindowSize = 15
     private static let defaultMinimumPixelManagedWindowCount = 15
     #else
-    private static let initialWindowSize = 30
+    static let initialWindowSize = 30
     private static let defaultMinimumPixelManagedWindowCount = 1
     #endif
     /// Maximum count of in-memory window before `expandWindow` trims

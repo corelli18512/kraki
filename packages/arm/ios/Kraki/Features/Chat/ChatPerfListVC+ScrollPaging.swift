@@ -11,7 +11,7 @@ extension ChatPerfListVC {
     func noteUserScrollOffset(_ offsetY: CGFloat) {
         scrollPolicy.observeUserOffset(
             offsetY,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
     }
 
@@ -58,24 +58,24 @@ extension ChatPerfListVC {
     func automationMarkUserScrolledAway() {
         scrollPolicy.beginUserInteraction(
             offset: collectionView?.contentOffset.y ?? 0,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollPolicy.recordUserIntent(
             .older,
             offset: collectionView?.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
     }
 
     func automationMarkUserScrollingTowardNewer() {
         scrollPolicy.beginUserInteraction(
             offset: collectionView?.contentOffset.y ?? 0,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         scrollPolicy.recordUserIntent(
             .newer,
             offset: collectionView?.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
     }
 
