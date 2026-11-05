@@ -109,12 +109,21 @@ export function wireAdapterEvents(client: RelayClient): void {
     recordTrace(client, { type: 'permission', sessionId, payload: { ...action.payload, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
   };
 
-  // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
-  client.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
-    client.card.resolvePrompt(sessionId, permissionId, { decision: 'approve' });
-    client.openPermissions.get(sessionId)?.delete(permissionId);
+  // Resolved without the operator: approved by a switch to an automatic
+  // mode, or cancelled (agent gone, Stop, mode switch). A request that is no
+  // longer open was already closed on the spine (e.g. a Stop records it as
+  // cancelled), so a late adapter cleanup must not record it again.
+  client.adapter.onPermissionAutoResolved = (sessionId, permissionId, resolution) => {
+    if (client.openPermissions.get(sessionId)?.delete(permissionId) !== true) return;
+    const approved = resolution === 'approved';
+    client.card.resolvePrompt(sessionId, permissionId, approved ? { decision: 'approve' } : undefined);
     client.broadcastSessionList();
-    recordTrace(client, { type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
+    recordTrace(client, {
+      type: 'permission',
+      sessionId,
+      payload: { id: permissionId, description: '', toolName: '', args: {}, ...(approved ? { decision: 'approve' as const } : { cancelled: true }) },
+    });
+    client.send({ type: 'permission_resolved', sessionId, payload: { permissionId, resolution } });
   };
 
   // Withdrawn by the agent (timeout/cancel): stop routing answers to it. On

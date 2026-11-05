@@ -210,12 +210,13 @@ enum SubagentSteps {
 /// A permission step: what was asked and what was decided.
 enum PermissionStep {
     /// The earlier record's request (description, tool) with the later
-    /// record's decision and deny reason.
+    /// record's decision and deny reason, or its cancellation.
     static func merged(_ earlier: ChatMessage, with later: ChatMessage) -> ChatMessage {
         var next = earlier
         for key in ["decision", "reason"] {
             if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
         }
+        if later.cancelled { next.payload["cancelled"] = later.payload["cancelled"] }
         for key in ["description", "toolName"] where next.payload[key]?.stringValue?.isEmpty != false {
             if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
         }
