@@ -276,8 +276,9 @@ struct SessionsSidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Keyboard navigation follows what this list shows.
-        .onChange(of: SessionListFilter(deviceId: selectedDeviceFilter, query: searchText), initial: true) { _, filter in
+        // Keyboard navigation follows what this list shows (search only: the
+        // sidebar has no computer filter).
+        .onChange(of: SessionListFilter(deviceId: nil, query: searchText), initial: true) { _, filter in
             appState.sessionStore.navigationFilter = filter
         }
         .onDisappear { appState.sessionStore.navigationFilter = SessionListFilter() }
