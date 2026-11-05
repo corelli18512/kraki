@@ -110,6 +110,7 @@ final class ChatTableTests: XCTestCase {
         let runs = parseMarkdownInline("Write <mailto:team@kraki.chat> or <team@kraki.chat>.")
         XCTAssertEqual(runs.compactMap(\.link).map(\.absoluteString), ["mailto:team@kraki.chat", "mailto:team@kraki.chat"])
         XCTAssertNil(parseMarkdownInline("<not an address>").first?.link)
+        XCTAssertNil(parseMarkdownInline("<git@github.com:org/repo.git>").first?.link)
     }
 
     // MARK: Row splitting
