@@ -30,7 +30,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
-import { appBundledCliCandidates } from './agent-paths.js';
+import { appBundledCliCandidates, isExecutableFile } from './agent-paths.js';
 import { createLogger } from './logger.js';
 import { getProxyForUrl } from './update.js';
 
@@ -409,7 +409,7 @@ export function codexExecutables(env: NodeJS.ProcessEnv = process.env, home = ho
   // The same desktop-app locations agent detection uses (they had drifted).
   list.push(...appBundledCliCandidates('codex', { os: platform(), home, isExecutable: () => true, listDir: () => [] }));
   list.push('codex');
-  return list.filter(p => p === 'codex' || existsSync(p));
+  return list.filter(p => p === 'codex' || isExecutableFile(p));
 }
 
 export function runCodexAppServer(codexHome: string, timeoutMs = 25_000): Promise<{ account: Record<string, unknown>; limits: Record<string, unknown> }> {

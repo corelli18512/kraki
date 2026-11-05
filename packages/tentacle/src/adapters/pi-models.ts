@@ -7,6 +7,17 @@ import type { PiAdapter } from './pi.js';
 import { type PiModelRow, parsePiListModels, type PiListModelsError, runPiListModels, resolveDefaultModel, piThinkingLevelsFor, queryPiCatalog } from './pi-catalog.js';
 import { logger } from './pi-session.js';
 
+/** A signed-out Pi lists no models. That is retried like a failure, but it is
+ *  not a start error: `modelListError()` stays undefined so `kraki agents`
+ *  reports needs_login rather than "didn't start". */
+function emptyModelListError(): Error {
+  return Object.assign(new Error('pi listed no models (not signed in to any provider?)'), { emptyModelList: true });
+}
+
+function isEmptyModelList(err: unknown): boolean {
+  return (err as { emptyModelList?: boolean } | null)?.emptyModelList === true;
+}
+
 export function fetchModels(adapter: PiAdapter): PiModelRow[] {
   // Cache only the raw catalog: reread preferences for every capabilities
   // request so an already-running adapter can pick up scope changes.
@@ -34,7 +45,7 @@ export function ensureRawModels(adapter: PiAdapter): Promise<PiModelRow[] | null
       if (adapter.stopped) return null;
       // A signed-out Pi lists no models. Caching that as the catalog kept the
       // picker empty after the user signed in, until a daemon restart.
-      if (rows.length === 0) throw new Error('pi listed no models (not signed in to any provider?)');
+      if (rows.length === 0) throw emptyModelListError();
       adapter.cachedModels = rows;
       const recovered = adapter.modelListFailed;
       adapter.modelListFailed = false;
@@ -46,7 +57,7 @@ export function ensureRawModels(adapter: PiAdapter): Promise<PiModelRow[] | null
     } catch (err) {
       const e = err as PiListModelsError;
       adapter.modelListFailed = true;
-      adapter.lastModelListError = e.message;
+      adapter.lastModelListError = isEmptyModelList(e) ? undefined : e.message;
       logger.warn({
         err: e.message,
         elapsedMs: Date.now() - started,
@@ -100,7 +111,7 @@ export function ensureRawModelsSync(adapter: PiAdapter): void {
       env: process.env,
     });
     const rows = parsePiListModels(stdout);
-    if (rows.length === 0) throw new Error('pi listed no models (not signed in to any provider?)');
+    if (rows.length === 0) throw emptyModelListError();
     adapter.cachedModels = rows;
     logger.info({ count: adapter.cachedModels.length }, 'Fetched pi model list (sync)');
     if (adapter.modelListFailed) {
@@ -111,7 +122,7 @@ export function ensureRawModelsSync(adapter: PiAdapter): void {
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list (sync)');
     adapter.modelListFailed = true;
-    adapter.lastModelListError = (err as Error).message;
+    adapter.lastModelListError = isEmptyModelList(err) ? undefined : (err as Error).message;
     scheduleModelRetry(adapter);
   }
 }

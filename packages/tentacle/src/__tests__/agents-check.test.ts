@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PiAdapter } from '../adapters/pi.js';
 import type { AgentId } from '@kraki/protocol';
 import { runAgentsCheckWith, type AgentsCheckEvent, type AgentsCheckDeps } from '../agents-check.js';
 import type { AgentAdapter } from '../adapters/base.js';
@@ -60,6 +64,24 @@ describe('kraki agents --json', () => {
     const pi = fakeAdapter({ models: [], listError: 'spawn EINVAL' });
     const { results } = await run(['pi'], { pi });
     expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'error', detail: 'spawn EINVAL' });
+  });
+
+  it('K-132: a signed-out Pi (empty model list, retried in the background) still reads as needs_login, not "didn\'t start"', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-agents-check-pi-'));
+    vi.stubEnv('PI_CODING_AGENT_DIR', dir);
+    const cli = join(dir, 'pi');
+    writeFileSync(cli, `#!/usr/bin/env node
+      if (process.argv.includes('--list-models')) console.log('No models available. Use /login or set an API key environment variable.');
+    `, 'utf8');
+    chmodSync(cli, 0o755);
+    try {
+      const pi = new PiAdapter({ cliPath: cli, modelListRetryDelaysMs: [60_000] });
+      const { results } = await run(['pi'], { pi: pi as unknown as ReturnType<typeof fakeAdapter> }, 10_000);
+      expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'needs_login', hint: expect.stringContaining('/login') });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -320,9 +320,9 @@ export class ClaudeAdapter extends AgentAdapter {
 
         this.cachedModels = resolved;
         logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
-      } else {
-        this.lastModelListError = 'Claude listed no models';
       }
+      // An empty list is retried (cachedModels stays empty) but is not a start
+      // failure: `kraki agents` reports it as needs_login.
     } catch (err) {
       this.lastModelListError = (err as Error).message;
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
@@ -1062,6 +1062,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private cleanupSessionState(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    if (entry?.subagentHoldTimer) clearTimeout(entry.subagentHoldTimer);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);

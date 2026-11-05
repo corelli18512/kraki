@@ -230,7 +230,8 @@ describe('pi --list-models recovery', () => {
     adapter.onCapabilitiesChanged = () => { changed++; };
 
     expect(await adapter.listModels()).toEqual([]);
-    expect(adapter.modelListError()).toMatch(/no models/);
+    // Retried, but not reported as a start failure (kraki agents: needs_login).
+    expect(adapter.modelListError()).toBeUndefined();
     await until(() => changed === 1);
     expect(count()).toBe(2);
     expect(await adapter.listModels()).toEqual(['anthropic/opus']);

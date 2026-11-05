@@ -110,5 +110,8 @@ describe('K-008: input to a session whose agent cannot run', () => {
     const error = sent.find((m) => m.type === 'error');
     expect(created?.sessionId).toBeTruthy();
     expect(error?.sessionId).toBe(created?.sessionId);
+    // The session must not stay 'active' (running) in every app's list.
+    expect(sent.find((m) => m.type === 'idle')?.sessionId).toBe(created?.sessionId);
+    expect(client.sessionManager.getMeta(created!.sessionId)?.state).toBe('disconnected');
   });
 });

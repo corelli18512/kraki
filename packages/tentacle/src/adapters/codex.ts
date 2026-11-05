@@ -164,7 +164,7 @@ export class CodexAdapter extends AgentAdapter {
       if (this.stopping) return;
       if (!this.rpc?.alive) { this.scheduleModelRetry(); return; }
       void this.loadModels(this.rpc).then(() => {
-        if (this.models.length === 0) return;
+        if (this.stopping || this.models.length === 0) return;
         logger.info({ models: this.models.map((m) => m.id) }, 'codex model list recovered');
         this.modelRetryDelayMs = CodexAdapter.MODEL_RETRY_FIRST_MS;
         this.onCapabilitiesChanged?.();
@@ -526,7 +526,7 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   /** How long Stop waits for the app-server to confirm turn/interrupt. */
-  static INTERRUPT_TIMEOUT_MS = 5_000;
+  static INTERRUPT_TIMEOUT_MS = 15_000;
 
   async interruptActive(s: CodexSession): Promise<void> {
     if (!s.activeTurnId) return;

@@ -27,6 +27,18 @@ describe.runIf(process.platform === 'darwin')('codexExecutables (K-287)', () => 
     expect(list).toContain(bin);
     expect(list.at(-1)).toBe('codex');
   });
+
+  it('skips a Contents/Resources/codex directory', () => {
+    const home = tmp();
+    const dir = join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex');
+    mkdirSync(dir, { recursive: true });
+    const bin = join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex-cli', 'bin', 'codex');
+    mkdirSync(join(bin, '..'), { recursive: true });
+    writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+    const list = codexExecutables({}, home);
+    expect(list).not.toContain(dir);
+    expect(list).toContain(bin);
+  });
 });
 
 describe('discoverCredentials', () => {
