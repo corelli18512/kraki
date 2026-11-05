@@ -349,6 +349,21 @@ enum DeviceName {
         }
     }
 
+    /// `draft` cut to the limit while typing, at a character boundary so an
+    /// emoji or accented letter is never split into a broken one (K-189).
+    static func clampDraft(_ draft: String) -> String {
+        guard draft.unicodeScalars.count > maxLength else { return draft }
+        var kept = ""
+        var scalars = 0
+        for character in draft {
+            let count = character.unicodeScalars.count
+            if scalars + count > maxLength { break }
+            kept.append(character)
+            scalars += count
+        }
+        return kept
+    }
+
     /// What to send for `draft` typed over `device`'s name: `""` clears the
     /// custom name, nil means nothing changed (or the name is too long).
     static func renameValue(draft: String, for device: DeviceSummary) -> String? {

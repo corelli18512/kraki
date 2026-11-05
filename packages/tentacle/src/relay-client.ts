@@ -1667,7 +1667,8 @@ export class RelayClient {
   // ── Subscription account usage ───────────────────────
 
   accountUsage: AccountUsage[] | null = null;
-  /** Advertised as the `account_usage` feature so apps can tell "no accounts" from "too old". */
+  /** Advertised as the `account_usage` feature so apps can tell "no accounts" from "too old";
+   *  `account_usage_off` when turned off, so apps don't advise updating (K-084). */
   accountUsageEnabled = false;
   setAccountUsageEnabled(enabled: boolean): void {
     if (this.accountUsageEnabled === enabled) return;
@@ -1761,7 +1762,7 @@ export class RelayClient {
       kind: this.options.device.kind,
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
-      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : []),
+      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, this.accountUsageEnabled ? 'account_usage' : 'account_usage_off',
         ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : []),
         ...(this.deviceTrust ? [DEVICE_TRUST_FEATURE] : [])],
       ...(this.deviceTrust ? { trust: { enforced: this.deviceTrust.enforced } } : {}),

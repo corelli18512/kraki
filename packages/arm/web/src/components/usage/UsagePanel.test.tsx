@@ -3,7 +3,7 @@ import { act, render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import type { AccountUsage, DeviceSummary } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
-import { OPEN_USAGE_EVENT, UsageRing, UsagePanel } from './UsagePanel';
+import { OPEN_USAGE_EVENT, UsageRing, UsagePanel, devicesNeedingUsageUpdate } from './UsagePanel';
 
 vi.mock('../../lib/ws-client', () => ({ wsClient: { deviceHasFeature: () => true, refreshAccountUsage: vi.fn() } }));
 
@@ -59,5 +59,15 @@ describe('account tile staleness (K-233)', () => {
     const root = renderTile(limited(48 * 3_600_000));
     expect(root.querySelector('.ua-stale')).not.toBeNull();
     expect(root.querySelector('.ur-num.is-stale')).not.toBeNull();
+  });
+});
+
+describe('devicesNeedingUsageUpdate (K-084)', () => {
+  const device = (id: string, name: string): DeviceSummary => ({ id, name, role: 'tentacle', online: true });
+  it('does not tell a computer with account usage turned off to update', () => {
+    const devices = new Map([['old', device('old', 'Old Mac')], ['off', device('off', 'Usage Off')], ['new', device('new', 'New Mac')]]);
+    const features: Record<string, string[]> = { old: [], off: ['account_usage_off'], new: ['account_usage'] };
+    const outdated = devicesNeedingUsageUpdate(devices.values(), new Map(), (id, f) => features[id]?.includes(f));
+    expect(outdated.map((d) => d.id)).toEqual(['old']);
   });
 });

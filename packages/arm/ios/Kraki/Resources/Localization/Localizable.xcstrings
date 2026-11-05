@@ -3503,6 +3503,26 @@
         }
       }
     },
+    "Couldn't remove the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法移除设备。请在连接后重试。"
+          }
+        }
+      }
+    },
+    "Couldn't rename the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法重命名设备。请在连接后重试。"
+          }
+        }
+      }
+    },
     "Couldn't send — your text is kept. Try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -9368,6 +9388,16 @@
         }
       }
     },
+    "Some computers have the same name. Open one and tap its name to rename it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有几台电脑同名。打开其中一台，轻点名称即可重命名。"
+          }
+        }
+      }
+    },
     "Something went wrong. Nothing was changed." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11197,6 +11227,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "也在手机上使用 Kraki"
+          }
+        }
+      }
+    },
+    "Varies" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不一致"
           }
         }
       }

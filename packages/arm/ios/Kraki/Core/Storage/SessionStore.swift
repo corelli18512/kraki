@@ -175,6 +175,19 @@ final class SessionStore {
 
     var archivedCount: Int { archiveInfo.values.reduce(0) { $0 + $1.count } }
 
+    /// Archive After chosen here but not yet confirmed by that computer's
+    /// `session_list` (it was offline): sent when it next reports (K-082).
+    var pendingAutoArchiveDays: [String: Int] = [:]
+
+    /// The Archive After value to show: the one every computer has (or will
+    /// get), `nil` when they differ.
+    var autoArchiveDays: Int? {
+        let computers = Set(archiveInfo.keys).union(pendingAutoArchiveDays.keys)
+        let values = Set(computers.compactMap { pendingAutoArchiveDays[$0] ?? archiveInfo[$0]?.days })
+        if values.isEmpty { return 14 }
+        return values.count == 1 ? values.first : nil
+    }
+
     func archivedCount(deviceId: String?) -> Int {
         guard let deviceId else { return archivedCount }
         return archiveInfo[deviceId]?.count ?? 0
@@ -1005,7 +1018,10 @@ final class SessionStore {
         return discardingStagedImages(of: removedIDs)
     }
 
-    func removeSession(_ id: String) {
+    /// `keepingComposer` keeps the Session's unsent draft and staged image
+    /// (in memory only): used when a removed computer takes its sessions off
+    /// the list, so the text is back if the computer returns (K-317).
+    func removeSession(_ id: String, keepingComposer: Bool = false) {
         if sessionListRevealId == id {
             sessionListRevealId = nil
         }
@@ -1018,8 +1034,10 @@ final class SessionStore {
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
-        drafts.removeValue(forKey: id)
-        stagedImages.removeValue(forKey: id)
+        if !keepingComposer {
+            drafts.removeValue(forKey: id)
+            stagedImages.removeValue(forKey: id)
+        }
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
     }

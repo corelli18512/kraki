@@ -654,6 +654,7 @@ final class MessageRouter {
             if appState.sessionStore.archiveInfo[tentacleDeviceId] != info {
                 appState.sessionStore.archiveInfo[tentacleDeviceId] = info
             }
+            appState.commandSender?.reconcileAutoArchiveDays(deviceId: tentacleDeviceId, reported: days)
         }
         guard appState.sessionStore.acceptsSessionListSnapshot(
             deviceId: tentacleDeviceId,
@@ -928,6 +929,13 @@ final class MessageRouter {
               let raw = payload["phase"] as? String,
               let phase = DeviceUpdateProgress.Phase(rawValue: raw) else { return }
         let previous = appState.deviceStore.updateProgress[deviceId]
+        // Every app gets every status. Another app's request refused while an
+        // update is running ("already in progress") is not this update's
+        // failure: keep showing the running one (K-322).
+        if phase == .failed, let previous, previous.isActive,
+           let running = previous.requestId, let failed = payload["requestId"] as? String, failed != running {
+            return
+        }
         appState.deviceStore.setUpdateProgress(deviceId, DeviceUpdateProgress(
             phase: phase,
             requestId: payload["requestId"] as? String ?? previous?.requestId,

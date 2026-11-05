@@ -15,6 +15,7 @@ import { outbox } from './chat/outbox';
 import { diag } from './diag';
 import { requestErrorText } from './server-errors';
 import { sliceGraphemes } from './format';
+import { isActivePhase } from './device-update';
 
 const logger = createLogger('msg-router');
 
@@ -213,6 +214,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'device_update_status') {
     const p = (msg as DeviceUpdateStatusMessage).payload;
     const prev = store.updateProgress.get(msg.deviceId);
+    // Every app gets every status. Another app's request refused while an
+    // update is running ("already in progress") is not this update's
+    // failure: keep showing the running one (K-322).
+    if (p.phase === 'failed' && prev && isActivePhase(prev.phase) && prev.requestId && p.requestId && p.requestId !== prev.requestId) {
+      return;
+    }
     store.setUpdateProgress(msg.deviceId, {
       phase: p.phase,
       requestId: p.requestId ?? prev?.requestId,

@@ -626,6 +626,13 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => {
             if (previousModel) {
               client.sessionManager.setModel(sessionId, previousModel, previousReasoningEffort);
+              // Apps switch their picker optimistically (K-010): restate the
+              // model the agent is still running so every app reverts.
+              client.send({
+                type: 'session_model_set',
+                sessionId,
+                payload: { model: previousModel, reasoningEffort: previousReasoningEffort },
+              });
             }
             logger.error({ err, sessionId }, 'setSessionModel failed');
             client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to change model', err) } });

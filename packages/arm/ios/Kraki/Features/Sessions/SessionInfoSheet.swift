@@ -390,8 +390,10 @@ private struct ModelPickerNav: Hashable {}
 /// In-sheet model picker. Reuses the same `ModelPickerCard` component
 /// the New Session sheet uses, so reasoning-effort segmentation, the
 /// glass card look, and selection chevrons all behave identically.
-/// Applies the chosen model + effort live via `setSessionModel`.
-private struct ModelPickerScreen: View {
+/// Applies the chosen model + effort live via `setSessionModel`, and follows
+/// the session's model when the computer restates it (a rejected change
+/// reverts, K-010) so the checkmark and a later effort change use it.
+struct ModelPickerScreen: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let session: SessionInfo
@@ -415,6 +417,9 @@ private struct ModelPickerScreen: View {
     private var modelDetails: [ModelDetail] {
         appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
     }
+
+    private var liveModel: String? { appState.sessionStore.sessions[session.id]?.model }
+    private var liveEffort: ReasoningEffort? { appState.sessionStore.sessions[session.id]?.reasoningEffort }
 
     var body: some View {
         ScrollView {
@@ -448,6 +453,12 @@ private struct ModelPickerScreen: View {
             )
             .padding(.horizontal)
             .padding(.top, 8)
+        }
+        .onChange(of: liveModel) { _, model in
+            if let model, !model.isEmpty { selectedModel = model }
+        }
+        .onChange(of: liveEffort) { _, effort in
+            reasoningEffort = effort ?? liveModel.flatMap { SessionPrefs.lastEffort(model: $0) }
         }
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)
