@@ -397,4 +397,5 @@ export async function cmdRelayInfo(args: string[]): Promise<void> {
   });
 
   process.stdout.write(result + '\n');
+  if (!(JSON.parse(result) as { ok: boolean }).ok) gracefulExit(1);
 }

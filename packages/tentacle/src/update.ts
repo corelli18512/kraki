@@ -396,6 +396,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const latest = await fetchLatestVersion();
   if (!latest) {
     spinner.fail('Could not check for updates');
+    process.exitCode = 1;
     return;
   }
 
@@ -407,6 +408,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const method = detectInstallMethod();
   if (method !== 'npm' && method !== 'sea') {
     spinner.fail('Cannot determine install method. Update manually.');
+    process.exitCode = 1;
     return;
   }
   spinner.text = `Updating ${currentVersion} → ${latest}…`;

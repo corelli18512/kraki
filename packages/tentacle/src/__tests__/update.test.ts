@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
+import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, performUpdate, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -226,5 +226,23 @@ describe('update ignores dogfood releases', () => {
     expect(isNewer('0.38.12', '0.38.12-dev.57')).toBe(true);
     expect(isNewer('0.38.11', '0.38.12-dev.57')).toBe(false);
     expect(isNewer('0.38.12-dev.57', '0.38.11')).toBe(true);
+  });
+});
+
+describe('performUpdate exit code', () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('exits non-zero when the update check fails (K-267)', async () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    mockHttpsRequest.mockImplementation((_url: URL, _options: unknown, callback: (res: PassThrough) => void) =>
+      createMockRequest(() => callback(createMockResponse(500, '{"message":"down"}'))));
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await performUpdate('0.1.0');
+    expect(process.exitCode).toBe(1);
   });
 });

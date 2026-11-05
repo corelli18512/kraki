@@ -15,6 +15,7 @@ export function cmdConfig(): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
   console.log(JSON.stringify(config, null, 2));
@@ -24,6 +25,7 @@ export function cmdConfigRemoteUpdate(value?: string): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
   if (!value) {
@@ -46,6 +48,7 @@ export function cmdConfigLog(verbosity?: string): void {
   const config = loadConfig();
   if (!config) {
     console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
 
@@ -119,6 +122,7 @@ export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<v
       return;
     }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
+    gracefulExit(1);
     return;
   }
 
@@ -167,6 +171,7 @@ export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<v
       return;
     }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
+    gracefulExit(1);
   }
 }
 

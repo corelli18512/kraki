@@ -92,8 +92,10 @@ vi.mock('../banner.js', () => ({
 }));
 
 const mockResolveRelay = vi.fn();
+const mockRelayAuthToken = vi.fn();
 vi.mock('../setup.js', () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
+  relayAuthToken: (...args: unknown[]) => mockRelayAuthToken(...args),
   resolveRelay: (...args: unknown[]) => mockResolveRelay(...args),
   showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
 }));
@@ -183,6 +185,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  process.exitCode = undefined;
   process.argv = originalArgv;
   if (originalMetaFile === undefined) delete process.env.KRAKI_META_FILE;
   else process.env.KRAKI_META_FILE = originalMetaFile;
@@ -305,6 +308,13 @@ describe('CLI stop', () => {
     await runCli(['stop']);
     expect(consoleOutput.join('\n')).toContain('Failed');
   });
+
+  it('exits non-zero when the daemon could not be stopped (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockStopDaemon.mockReturnValue(false);
+    await runCli(['stop']);
+    expect(process.exitCode).toBe(1);
+  });
 });
 
 describe('CLI install mode', () => {
@@ -325,6 +335,14 @@ describe('CLI install mode', () => {
 });
 
 describe('CLI restart', () => {
+  it('exits non-zero without a config (K-267)', async () => {
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['restart']);
+    expect(consoleOutput.join('\n')).toContain('no config found');
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
+
   it('starts from existing config when the daemon is stopped', async () => {
     const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
     mockLoadConfig.mockReturnValue(config);
@@ -528,6 +546,39 @@ describe('CLI resolve-relay', () => {
   });
 });
 
+describe('CLI connect (interactive)', () => {
+  it('exits non-zero when the pairing token cannot be created (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockLoadConfig.mockReturnValue({ relay: 'wss://relay.test', authMethod: 'open', device: { name: 'x' } });
+    mockRelayAuthToken.mockRejectedValue(new Error('relay down'));
+    await runCli(['connect']);
+    await vi.waitFor(() => expect(consoleOutput.join('\n')).toContain('relay down'));
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('exits non-zero when the daemon runs without a config (K-267)', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockLoadConfig.mockReturnValue(null);
+    await runCli(['connect']);
+    expect(consoleOutput.join('\n')).toContain('No config found');
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('CLI relay-info', () => {
+  it('exits non-zero when the relay cannot be reached (K-267)', async () => {
+    // A port that was just freed: the connection is refused.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    await new Promise((resolve) => server.close(resolve));
+    await runCli(['relay-info', `ws://127.0.0.1:${port}`]);
+    await vi.waitFor(() => expect(stdoutOutput.join('')).toContain('"ok":false'), { timeout: 6000 });
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
 // ── setup --headless ────────────────────────────────────
 
 describe('CLI setup --headless', () => {
@@ -595,6 +646,15 @@ describe('CLI config', () => {
     await runCli(['config']);
     expect(consoleOutput.join('\n')).toContain('No config found');
   });
+
+  for (const args of [['config'], ['config', 'log'], ['config', 'remote-update', 'on']]) {
+    it(`kraki ${args.join(' ')} exits non-zero without a config (K-267)`, async () => {
+      mockLoadConfig.mockReturnValue(null);
+      await runCli(args);
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+    });
+  }
 
   it('shows current log verbosity', async () => {
     mockLoadConfig.mockReturnValue({
