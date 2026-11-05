@@ -50,6 +50,11 @@ function b64decode(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, 'base64'));
 }
 
+/** Largest inbound sequence gap a same-epoch RESET may announce. Far beyond
+ *  any real outbox loss; anything larger is treated as corrupt or hostile.
+ *  Same value as SwiftPulse `Endpoint.maxResetJump`. */
+const MAX_RESET_JUMP: Seq = 1n << 24n;
+
 export class Endpoint {
   private readonly params: PulseParams;
   private readonly random: () => number;
@@ -350,9 +355,16 @@ export class Endpoint {
     if (f.recvCursor >= this.outboxBase) {
       this.pruneOutbox(f.recvCursor, effects);
       this.resendWithGapAnnounce(f.recvCursor + 1n, effects, now);
+      // This resend already covers everything the peer is missing. Hole ACKs
+      // for the same cursor are usually in flight (the peer saw our live sends
+      // before this HELLO): treat the resend as the repair batch for that
+      // cursor so they do not trigger a second full resend. onTick still
+      // retries it if the peer stops advancing.
+      this.markRepairSent(f.recvCursor, now);
     } else {
       // Peer is behind our oldest retained seq — we pruned what it needs.
       this.resetPeerToFirstDeliverable(effects, now);
+      this.markRepairSent(f.recvCursor, now);
     }
     return effects;
   }
@@ -375,7 +387,19 @@ export class Endpoint {
     let oldest = this.sendSeq + 1n;
     for (const e of this.outbox) if (e.seq < oldest) oldest = e.seq;
     effects.push(this.transmit({ t: 'reset', epoch: this.epoch, oldest }, now));
-    this.resendFrom(oldest, effects, now);
+    // Announce a dropped tail too (e.g. a non-durable seq above the last
+    // durable one): otherwise the peer holds that gap open and treats every
+    // later send as a hole.
+    this.resendWithGapAnnounce(oldest, effects, now);
+  }
+
+  /** Record that a repair batch for `peerCursor` has just been sent, so
+   *  duplicate ACKs for that cursor are suppressed until onTick's bounded
+   *  retry. */
+  private markRepairSent(peerCursor: Seq, now: number): void {
+    if (peerCursor >= this.sendSeq) return;
+    this.repairCursor = peerCursor;
+    this.repairSentAt = now;
   }
 
   private onData(f: Extract<Frame, { t: 'data' }>, now: number): Effect[] {
@@ -411,9 +435,19 @@ export class Endpoint {
    */
   private onPeerCursor(peerCursor: Seq, now: number, explicitAck: boolean): Effect[] {
     const effects: Effect[] = [];
-    // ACKs are cumulative. Once a higher cursor has been observed and pruned,
-    // an older ACK can only be stale/in-flight; it must never rewind recovery.
-    if (peerCursor < this.outboxBase) return effects;
+    if (peerCursor < this.outboxBase) {
+      // The peer is missing seqs we already pruned: a piggybacked ack it sent
+      // before learning our new epoch (a stale cursor of our previous stream)
+      // advanced our base past what it really holds. Nothing it needs can be
+      // resent, so every later send is a hole to it; ignoring this ACK would
+      // leave the link deaf until it drops. Announce the gap once per cursor
+      // (onTick retries) so it skips ahead to what we can deliver.
+      if (!explicitAck || this.repairCursor === peerCursor) return effects;
+      this.repairCursor = peerCursor;
+      this.repairSentAt = now;
+      this.resetPeerToFirstDeliverable(effects, now);
+      return effects;
+    }
     if (peerCursor > this.lastPeerCursor) {
       this.lastPeerCursor = peerCursor;
       this.peerProgressAt = now;
@@ -477,6 +511,9 @@ export class Endpoint {
   }
 
   private onReset(f: Extract<Frame, { t: 'reset' }>): Effect[] {
+    // Seqs start at 1, so `oldest` 0 is malformed; adopting its epoch would
+    // make the real peer's next HELLO look like a restart.
+    if (f.oldest === 0n) return [];
     // A RESET naming an epoch we have not seen starts a new send stream (the
     // peer restarted). Our cursor refers to the old stream, so it is replaced,
     // not merely raised: a cursor left above `oldest` would drop the new
@@ -486,6 +523,12 @@ export class Endpoint {
       this.peerEpoch = f.epoch;
       this.recvCursor = f.oldest - 1n;
       return [{ t: 'reset-inbound', fromSeq: f.oldest, peerEpoch: f.epoch }];
+    }
+    // Within one stream `oldest` is untrusted: a huge jump would make every
+    // later frame look like a duplicate (a silent black hole). A real gap is
+    // bounded by what a peer can have dropped. Mirrors SwiftPulse.
+    if (f.oldest - 1n > this.recvCursor && f.oldest - 1n - this.recvCursor > MAX_RESET_JUMP) {
+      return [];
     }
     this.peerEpoch = f.epoch;
     if (f.oldest > this.recvCursor + 1n) {

@@ -301,6 +301,16 @@ lastRecvAt = now
 # HEARTBEAT additionally is liveness evidence (any frame is), no reply required
 ```
 
+An explicit ACK below `outboxBase` means the peer is missing seqs we already
+pruned (for example a piggybacked ack sent before the peer learned our new
+epoch advanced our base). It is answered like a HELLO behind the base: a
+`RESET{oldest = first deliverable}` plus the resend, once per cursor (the
+bounded repair retry covers a lost batch). Dropping it would leave the peer
+treating every later send as a hole. Every RESET-and-resend also announces a
+tail gap (§11.2), and the resume resend triggered by a HELLO counts as the
+repair batch for that cursor, so in-flight hole ACKs for the same cursor do
+not trigger a second full resend.
+
 ### 5.4 onBytes(RESET { peerEpoch', oldest })
 
 The peer cannot give us everything after our `recvCursor`; its earliest
@@ -314,6 +324,11 @@ if oldest > recvCursor + 1:
     emit ResetInbound(fromSeq = oldest, peerEpoch')
 # else: no gap; peer will resend from recvCursor+1 as usual (nothing to do)
 ```
+
+`oldest` is untrusted. A RESET with `oldest = 0` is malformed and ignored
+(its epoch is not adopted). Within the same epoch, a jump of more than 2^24
+seqs past `recvCursor` is ignored as corrupt or hostile; a RESET naming a new
+epoch may start anywhere.
 
 `ResetInbound` is the honest "you missed data that no longer exists; you are
 now re-synced at `oldest`." The application decides how to recover (e.g. reload
