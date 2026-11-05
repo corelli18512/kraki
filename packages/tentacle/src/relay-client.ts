@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import { type SessionManager, type PendingHumanAction } from './session-manager.js';
+import { type SessionManager, type PendingHumanAction, isSafeId } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import type { AccountUsage, UsageHistorySample } from '@kraki/protocol';
 import { EventsWatcher } from './events-watcher.js';
@@ -1557,37 +1557,68 @@ export class RelayClient {
     }
   }
 
-  /** Last time each app was told a command of it was refused (see
-   *  notifyTrustRejected). */
+  /** Last time each app was told a command of it was refused, per session
+   *  or request (see notifyTrustRejected). */
   private trustRejectedNoticeAt = new Map<string, number>();
+
+  /** Commands a user starts by hand. Only these are answered when device
+   *  trust refuses them: background traffic (subscriptions, feature
+   *  declarations, history reads) would otherwise use up the notice slot and
+   *  persist error rows the user never asked about. */
+  private static readonly TRUST_REJECTED_NOTICE_TYPES: ReadonlySet<string> = new Set([
+    'send_input', 'approve', 'deny', 'always_allow', 'abort_session', 'kill_session',
+    'delete_session', 'archive_session', 'rename_session', 'set_session_mode', 'set_session_model',
+    'pin_session', 'create_session', 'fork_session', 'import_session',
+  ]);
 
   /**
    * Tell a paired app that a command it signed was refused by device trust
-   * (its clock is off, it was delivered long after it was signed, or this
-   * computer could not record it), so it shows an error instead of waiting
-   * forever. Sent as an `error` on the command's session (or with its
-   * requestId), which every app already renders. At most one notice per app
-   * every few seconds: an app retrying with a skewed clock would otherwise
-   * get one per attempt.
+   * (its clock is off, it was delivered long after it was signed, this
+   * computer recently lost its replay state, or it could not record it), so
+   * it shows an error instead of waiting forever.
+   *
+   * - A command on a session known here: an `error` on that session through
+   *   send(), like every other session error (spine seq, persisted, every app).
+   * - A sessionless command with a requestId: a full `error` envelope
+   *   (`sessionId: ''`, seq, timestamp, deviceId) to the sender only, so its
+   *   placeholder fails.
+   * - Anything else: nothing.
+   *
+   * At most one notice per app and session (or request) every few seconds: an
+   * app retrying with a skewed clock would otherwise get one per attempt.
    */
   private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
+    if (typeof inner.type !== 'string' || !RelayClient.TRUST_REJECTED_NOTICE_TYPES.has(inner.type)) return;
+    const sessionId = isSafeId(inner.sessionId) && this.sessionManager.getMeta(inner.sessionId) ? inner.sessionId : undefined;
+    const rawRequestId = (inner.payload as { requestId?: unknown } | undefined)?.requestId;
+    const requestId = typeof rawRequestId === 'string' && rawRequestId !== '' && rawRequestId.length <= 128 ? rawRequestId : undefined;
+    if (!sessionId && !requestId) return;
     const now = Date.now();
-    if (now - (this.trustRejectedNoticeAt.get(appId) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
-    const sessionId = typeof inner.sessionId === 'string' ? inner.sessionId : undefined;
-    const requestId = typeof (inner.payload as { requestId?: unknown } | undefined)?.requestId === 'string'
-      ? (inner.payload as { requestId: string }).requestId
-      : undefined;
-    this.trustRejectedNoticeAt.set(appId, now);
+    const key = `${appId}\n${sessionId ?? `req:${requestId}`}`;
+    if (now - (this.trustRejectedNoticeAt.get(key) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
+    if (this.trustRejectedNoticeAt.size >= 256) {
+      for (const [k, at] of this.trustRejectedNoticeAt) {
+        if (now - at >= RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) this.trustRejectedNoticeAt.delete(k);
+      }
+    }
+    this.trustRejectedNoticeAt.set(key, now);
     const message = reason === 'from_future'
       ? 'This computer refused the request because this device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
       : reason === 'stale'
-        ? 'This computer refused the request because it was signed too long ago, or this device\'s clock is behind. Check the date and time, then try again.'
+        ? 'This computer refused the request because it was signed too long ago, or this device\'s clock is behind, or this computer recently reset its security state. Check the date and time; if they are right, wait a few minutes and try again.'
         : 'This computer could not record the request securely, so it was not run. Check that Kraki on the computer can write to its data folder, then try again.';
     logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
+    if (sessionId) {
+      this.send({ type: 'error', sessionId, payload: { message } });
+      return;
+    }
     this.sendReliableUnicastTo(appId, this.consumerKeys.get(appId) ?? NO_RSA_KEY, {
       type: 'error',
-      ...(sessionId ? { sessionId } : {}),
-      payload: { message, ...(requestId ? { requestId } : {}) },
+      sessionId: '',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { message, requestId },
     });
   }
 

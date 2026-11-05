@@ -341,7 +341,8 @@ describe('device trust — a paired app is told when its signed request is refus
     return { v: 2, blob: encryptV2(JSON.stringify(signed), [{ recipientId: TENTACLE, publicKey: env.tentacle.encryptionKey }]) };
   }
   const errorsFor = (env: Env, app: FakeApp) =>
-    readable(env, app).filter((m) => m.type === 'error') as Array<{ sessionId?: string; payload: { message: string; requestId?: string } }>;
+    readable(env, app).filter((m) => m.type === 'error') as Array<{ sessionId?: string; seq?: number; deviceId?: string; timestamp?: string; payload: { message: string; requestId?: string } }>;
+  const appendMessage = (env: Env) => (env.client.sessionManager as unknown as { appendMessage: ReturnType<typeof vi.fn> }).appendMessage;
 
   it('a command signed by a device whose clock is >10 min ahead gets a signed error on its session', async () => {
     const { env, phone } = paired();
@@ -351,10 +352,46 @@ describe('device trust — a paired app is told when its signed request is refus
     expect(sendInputCalls(env)).toHaveLength(0);
     const errors = errorsFor(env, phone);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ sessionId: 's1', __signed: true });
+    expect(errors[0]).toMatchObject({ sessionId: 's1', deviceId: TENTACLE, __signed: true });
     expect(errors[0]!.payload.message).toMatch(/clock is ahead/);
-    // Only the sender is told.
-    expect(env.sent.filter((s) => readable({ ...env, sent: [s] }, phone).some((m) => m.type === 'error')).every((s) => s.target === phone.id)).toBe(true);
+    // A session error like any other: a spine seq, persisted, so every app
+    // (iOS/Mac drop seq-less session messages) shows it and keeps it.
+    expect(errors[0]!.seq).toBeGreaterThan(0);
+    expect(typeof errors[0]!.timestamp).toBe('string');
+    expect(appendMessage(env)).toHaveBeenCalledWith('s1', 'error', expect.any(String), false);
+  });
+
+  it('a refused command on a session this computer does not have is not answered', async () => {
+    const { env, phone } = paired();
+    (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's-unknown', payload: { text: 'hi' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(0);
+    expect(appendMessage(env)).not.toHaveBeenCalledWith('s-unknown', 'error', expect.any(String), expect.anything());
+  });
+
+  it('refused background traffic is not answered and does not use up the notice for a user command', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    const ahead = Date.now() + 11 * 60_000;
+    env.deliver(signedAt(env, phone, { type: 'client_features', payload: { features: [] } }, ahead), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'set_session_subscription', sessionId: 's1', payload: { requestId: 'sub-1' } }, ahead), phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toHaveLength(0);
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi' } }, ahead), phone.id);
+    await flush();
+    expect(errorsFor(env, phone).map((e) => e.sessionId)).toEqual(['s1']);
+  });
+
+  it('two refused commands on different sessions within the limit are both answered', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    const behind = Date.now() - 16 * 60_000;
+    env.deliver(signedAt(env, phone, { type: 'delete_session', sessionId: 's1', payload: {} }, behind), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'rename_session', sessionId: 's2', payload: { title: 'x' } }, behind), phone.id);
+    await flush();
+    expect(errorsFor(env, phone).map((e) => e.sessionId).sort()).toEqual(['s1', 's2']);
   });
 
   it('a durable command delivered more than 15 min after it was signed is reported, not dropped silently', async () => {
@@ -376,11 +413,16 @@ describe('device trust — a paired app is told when its signed request is refus
     await flush();
     const errors = errorsFor(env, phone);
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.sessionId).toBeUndefined();
+    // The envelope apps route sessionless errors by: sessionId '' and a seq.
+    expect(errors[0]).toMatchObject({ sessionId: '', deviceId: TENTACLE });
+    expect(errors[0]!.seq).toBeGreaterThan(0);
+    expect(typeof errors[0]!.timestamp).toBe('string');
     expect(errors[0]!.payload.requestId).toBe('req-1');
+    // Only the sender is told.
+    expect(env.sent.filter((s) => readable({ ...env, sent: [s] }, phone).some((m) => m.type === 'error')).every((s) => s.target === phone.id)).toBe(true);
   });
 
-  it('a replay is not answered, and repeated refusals are rate-limited per app', async () => {
+  it('a replay is not answered, and repeated refusals on one session are rate-limited', async () => {
     const { env, phone } = paired();
     const captured = appSend(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'once' } });
     env.deliver(captured, phone.id);
