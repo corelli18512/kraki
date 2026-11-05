@@ -1096,6 +1096,7 @@ export class KrakiWSClient {
       currentPinned.add(sid);
     }
     store.setPinnedSessions(currentPinned);
+    store.markSessionListReceived(tentacleDeviceId);
 
     this.subscription.onSessionList(tentacleDeviceId);
 

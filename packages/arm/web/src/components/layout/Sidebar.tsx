@@ -7,6 +7,7 @@ import { useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
+import { useSessionListLoading } from '../../hooks/useSessionListLoading';
 import { SessionRow } from '../sessions/SessionRow';
 import { NewSessionDialog } from '../sessions/NewSessionDialog';
 import { ImportSessionDialog } from '../sessions/ImportSessionDialog';
@@ -84,7 +85,6 @@ export function Sidebar() {
   const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
-  const status = useStore((s) => s.status);
   const reconnecting = useShowsReconnecting();
   const [query, setQuery] = useState('');
   const [newOpen, setNewOpen] = useState(false);
@@ -111,6 +111,7 @@ export function Sidebar() {
   const sorted = useSortedSessions(query);
   const total = useStore((s) => s.sessions.size);
   const archivedCount = useArchivedCount();
+  const listLoading = useSessionListLoading();
 
   // New session on the wide layout = the composer in the idle pane (Mac):
   // leave the current session and put the cursor in the composer.
@@ -125,6 +126,8 @@ export function Sidebar() {
         <p>{t('sidebar.noResults')}</p>
         <span>{t('sidebar.trySearch')}</span>
       </div>
+    : total === 0 && archivedCount === 0 && listLoading
+    ? (reconnecting ? null : <div className="ksb-status" data-testid="sidebar-loading"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>)
     : total === 0 && archivedCount === 0
     ? (narrow
       ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
@@ -198,7 +201,6 @@ export function Sidebar() {
           </div>
         </div>
         {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
-        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> {t('sidebar.connecting')}</div>}
         <div className="ksb-scroll">{list}</div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}

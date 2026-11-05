@@ -103,6 +103,14 @@ describe('repeated session_list (Tentacle re-broadcast after each reply)', () =>
     messageProvider.clear();
   });
 
+  it('records that the computer answered, even with an empty list (K-096)', () => {
+    expect(useStore.getState().sessionListDevices.has('dev-t1')).toBe(false);
+    apply(sessionList([]));
+    expect(useStore.getState().sessionListDevices.has('dev-t1')).toBe(true);
+    useStore.getState().clearTransientState();
+    expect(useStore.getState().sessionListDevices.size).toBe(0);
+  });
+
   it('an unchanged list reads no IndexedDB rows and notifies no store subscriber', async () => {
     const list = sessionList(Array.from({ length: SESSIONS }, (_, i) => digest(i)));
     apply(list);
