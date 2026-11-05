@@ -362,6 +362,27 @@ describe('CLI start when something already runs (K-266, K-030)', () => {
   });
 });
 
+describe('CLI start after the account was deleted (K-277)', () => {
+  it('shows no connect code when the new daemon signed this computer out', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } };
+    // config.json is there for `kraki start`, then the daemon learns the
+    // account was deleted, removes it and exits.
+    let signedOut = false;
+    mockLoadConfig.mockImplementation(() => (signedOut ? null : config));
+    mockIsDaemonRunning.mockImplementation(() => !signedOut && mockStartDaemon.mock.calls.length === 0 ? false : !signedOut);
+    mockStartDaemon.mockImplementation(async () => { setTimeout(() => { signedOut = true; }, 20); return 1234; });
+
+    await runCli(['start']);
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+    expect(mockShowPairingQr).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('account was deleted');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+});
+
 describe('CLI install mode', () => {
   it('finishes setup without starting a worker or issuing a pairing token', async () => {
     process.env.KRAKI_INSTALL = '1';

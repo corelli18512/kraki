@@ -394,6 +394,13 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
   }
 
   const pid = await startDaemon(config);
+  if (await waitForDaemonConnection() === 'signed-out') {
+    console.log('');
+    console.log(chalk.yellow('  This computer was signed out: its Kraki account was deleted.'));
+    console.log(chalk.dim('  Run `kraki` to set Kraki up again.'));
+    process.exitCode = 1;
+    return;
+  }
   console.log('');
   console.log(`  ${chalk.green('✔')} ${chalk.bold('Kraki is running')} ${chalk.dim(`in the background (PID ${pid})${process.platform === 'darwin' ? ' and starts again when you log in' : ''}.`)}`);
   console.log('');
@@ -405,6 +412,25 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
 
   console.log(chalk.dim(`  ${chalk.bold('kraki status')} to check on it, ${chalk.bold('kraki agents')} to recheck agents, ${chalk.bold('kraki --help')} for more.`));
   console.log('');
+}
+
+/**
+ * After a start, wait (briefly) for the daemon's first relay connection
+ * before asking the relay for a connect code. A daemon whose account was
+ * deleted signs this computer out on that connection (removes config.json
+ * and its identity) and exits; asking for a code then signed the GitHub user
+ * up again and re-created the identity files the daemon had just removed
+ * (K-277). 'stopped' and 'timeout' keep the old behaviour (show the code).
+ */
+export async function waitForDaemonConnection(timeoutMs = 15_000): Promise<'connected' | 'signed-out' | 'stopped' | 'timeout'> {
+  const { readStatusFile } = await import('../status-file.js');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (readStatusFile()?.relayState === 'connected') return 'connected';
+    if (!isDaemonRunning()) return loadConfig() ? 'stopped' : 'signed-out';
+    if (Date.now() >= deadline) return 'timeout';
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 export function cmdStop(): void {

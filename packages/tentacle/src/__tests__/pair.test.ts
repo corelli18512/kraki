@@ -55,3 +55,36 @@ describe('pairing QR key fingerprint (release review D4)', () => {
     expect(keyFingerprint('abc')).toBe('ungWv48Bz-pBQUDeXa4iIw');
   });
 });
+
+describe('requestPairingToken on a signed-out computer (K-277)', () => {
+  it('asks the relay for nothing and re-creates no identity once config.json is gone', async () => {
+    const { WebSocketServer } = await import('ws');
+    const { existsSync, mkdirSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const home = process.env.KRAKI_HOME!;
+    mkdirSync(home, { recursive: true });
+    for (const f of ['config.json', 'device-id', 'keys']) rmSync(join(home, f), { recursive: true, force: true });
+    const requests: unknown[] = [];
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 6010 });
+    server.on('connection', (ws) => ws.on('message', (data) => {
+      requests.push(JSON.parse(data.toString()));
+      ws.send(JSON.stringify({ type: 'pairing_token_created', token: 'pt_1', expiresIn: 300 }));
+    }));
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const { requestPairingToken } = await import('../pair.js');
+      await expect(requestPairingToken('ws://127.0.0.1:6010', 'gho_token')).rejects.toThrow('signed out');
+      expect(requests).toEqual([]);
+      expect(existsSync(join(home, 'device-id'))).toBe(false);
+      expect(existsSync(join(home, 'keys'))).toBe(false);
+
+      // Signed in: the code is issued as before.
+      const { saveConfig } = await import('../config.js');
+      saveConfig({ relay: 'ws://127.0.0.1:6010', authMethod: 'open', device: { name: 'mac', id: 'dev_1' } });
+      await expect(requestPairingToken('ws://127.0.0.1:6010', 'dev')).resolves.toMatchObject({ pairingToken: 'pt_1' });
+      expect(requests).toHaveLength(1);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
