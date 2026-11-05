@@ -163,6 +163,16 @@ describe('create/import with no answer (K-204, K-206)', () => {
     } as unknown as InnerMessage, { cmdState, messageProvider } as never);
     expect(useStore.getState().lastError).toBe('Session imported but could not connect to agent');
   });
+
+  it('a session request error goes through requestErrorText (an empty one gets the generic line)', () => {
+    const cmdState = new CommandState();
+    useStore.getState().upsertSession({ id: 'local-4', deviceId: 'dev-t', agent: 'copilot', state: 'idle', messageCount: 0 });
+    handleDataMessage({
+      type: 'error', deviceId: 'dev-t', seq: 2, timestamp: new Date().toISOString(), sessionId: 'local-4',
+      payload: { message: '', requestId: 'req_import_empty' },
+    } as unknown as InnerMessage, { cmdState, messageProvider } as never);
+    expect(useStore.getState().lastError).toBe("The computer couldn't complete that. Try again.");
+  });
 });
 
 describe('remote update race (K-322)', () => {

@@ -351,7 +351,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }
       // A request's outcome outside any turn (an import that could not reach
       // its agent): the chat shows no standalone error, so say it here.
-      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(msg.payload.message);
+      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(requestErrorText(msg.payload.message));
       store.appendMessage(sid, msg);
       // A transient error does not own unread state. If the turn ultimately
       // fails, the Tentacle's terminal boundary + session_list creates it.
