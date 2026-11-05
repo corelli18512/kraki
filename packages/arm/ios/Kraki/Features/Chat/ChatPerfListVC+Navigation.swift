@@ -273,14 +273,16 @@ extension ChatPerfListVC {
         let target = landingOffset(forRowStart: frame.minY)
         let distance = abs(collectionView.contentOffset.y - target)
         updateJumpButtonVisibility()
-        if distance > collectionView.bounds.height * 2.5 {
+        let glides = !UIAccessibility.isReduceMotionEnabled
+        if glides, distance > collectionView.bounds.height * 2.5 {
             // Long hops: jump most of the way instantly, then glide the last
             // stretch so the motion stays legible without animating across
             // dozens of screens.
             let direction: CGFloat = target < collectionView.contentOffset.y ? 1 : -1
             collectionView.contentOffset.y = target + direction * collectionView.bounds.height * 0.6
         }
-        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: true)
+        // Reduce Motion: land at once.
+        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: glides)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             self?.endBottomGlide()
         }
@@ -361,7 +363,9 @@ extension ChatPerfListVC {
         chatPerfLog.log("[reanchor] win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] n=\(items.count) atNewest=\(atNewest)")
     }
 
-    func jumpToLiveBottom(animated: Bool) {
+    func jumpToLiveBottom(animated requestedAnimation: Bool) {
+        // Reduce Motion: land at once instead of gliding (send, ↓ Bottom).
+        let animated = requestedAnimation && !UIAccessibility.isReduceMotionEnabled
         scrollPolicy.beginTailNavigation(
             offset: collectionView.contentOffset.y,
             distanceToBottom: distanceToBottom()
