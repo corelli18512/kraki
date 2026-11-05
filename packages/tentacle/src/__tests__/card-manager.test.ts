@@ -174,6 +174,22 @@ describe('CardManager action part', () => {
     expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toBeNull();
   });
 
+  it('sends the new words BEFORE retiring the settled tail (K-064)', () => {
+    const { card, sent } = setup();
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
+    card.onNarrationFinal('s1', 'checking');
+    card.onToolStart('s1', tool('tc2', '$ ls'));
+    card.onToolComplete('s1', toolDone('tc2', '$ ls'));
+    sent.length = 0;
+    // A cleared slot before the reset delta left apps a frame with the old
+    // narration and no chip, or a tool-only bubble with nothing to draw.
+    card.onDelta('s1', 'here is the listing');
+    expect(sent.map((s) => s.type)).toEqual(['agent_message_delta', 'card_action']);
+    expect(msgs(sent)).toEqual([{ content: 'here is the listing', reset: true }]);
+    expect(actions(sent)).toEqual([null]);
+  });
+
   it('does NOT retire a RUNNING tool when narration streams in parallel', () => {
     const { card, sent } = setup();
     card.onToolStart('s1', tool('tc1', 'slow'));

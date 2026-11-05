@@ -706,6 +706,7 @@
 		EFCB36ED6A3073460B301A47 /* VoiceVocabularyNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92BF68CFEA168494A5D2D70E /* VoiceVocabularyNetworkTests.swift */; };
 		F0077DCBD0075BC8BE00B03E /* KrakiVoiceInputController+LeasePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231D6F4E2781C074AE0D9C5B /* KrakiVoiceInputController+LeasePolicy.swift */; };
 		F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */; };
+		F0BF2F9FADF73749B065521C /* CardToolHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55B6B351A2A6E4826E3FB9D9 /* CardToolHandoffTests.swift */; };
 		F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E8CC25E0F72D13A5394C5 /* PKCE.swift */; };
 		F157AE24305F556B410DAA89 /* ChatTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FED91289B8EAF2ACA20F81 /* ChatTableTests.swift */; };
 		F2A1E16FC453A5C1301BBB84 /* ForkNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D5AD31E3D716C02D89156 /* ForkNavigationTests.swift */; };
@@ -960,6 +961,7 @@
 		544DBB9238CBF414DCD2DFA4 /* MacComposerPastePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerPastePolicy.swift; sourceTree = "<group>"; };
 		5469FDA14AA91327B6DF4400 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
 		54972AAE7A91D45496261C20 /* ReconnectRound3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectRound3Tests.swift; sourceTree = "<group>"; };
+		55B6B351A2A6E4826E3FB9D9 /* CardToolHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardToolHandoffTests.swift; sourceTree = "<group>"; };
 		5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPlaceholderView+macOS.swift"; sourceTree = "<group>"; };
 		568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTrustViews.swift; sourceTree = "<group>"; };
 		56FE3464DA3DC8C37A09F34F /* SessionCardMetadataRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardMetadataRow.swift; sourceTree = "<group>"; };
@@ -2029,6 +2031,7 @@
 				98DCFE83552E9C0CD7A9240F /* BubbleImageReuseTests.swift */,
 				CBB7A51954B5ECF760DF289F /* BuildInfoTests.swift */,
 				91BA89B3FBD49242D8965545 /* CardDeltaDedupTests.swift */,
+				55B6B351A2A6E4826E3FB9D9 /* CardToolHandoffTests.swift */,
 				CC23045D8039F09CB9DCC48F /* CardTurnCatchUpTests.swift */,
 				870471E45E23ABCD41260C6F /* CardTurnGateTests.swift */,
 				D373C0A10241AC36D1B4E680 /* ChatLiveCardSignatureTests.swift */,
@@ -2549,6 +2552,7 @@
 				0DD9F4003EAF25381AF7BC92 /* BubbleImageReuseTests.swift in Sources */,
 				617005785EDB83753DF51AE8 /* BuildInfoTests.swift in Sources */,
 				90229ADB3C69936D7539EFE0 /* CardDeltaDedupTests.swift in Sources */,
+				F0BF2F9FADF73749B065521C /* CardToolHandoffTests.swift in Sources */,
 				0EDA4E4AACA33EF32E546BAF /* CardTurnCatchUpTests.swift in Sources */,
 				9914A1454DA0A4958D6DD68E /* CardTurnGateTests.swift in Sources */,
 				8954ABF6302479E09A474EDD /* ChatLiveCardSignatureTests.swift in Sources */,

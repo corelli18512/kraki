@@ -923,6 +923,8 @@ final class MessageStore {
         var action: ChatMessage?
         /// Which steer the card is drawn above (MessageStore+SteerPlacement).
         var steer = SteerPlacement()
+        /// Words arrived after the current action was set (see `setCardAction`).
+        var narratedSinceAction = false
     }
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its
@@ -959,6 +961,7 @@ final class MessageStore {
         var card = cards[sessionId] ?? SessionCard()
         card.followSteerOnNewSegment(reset: reset, content: content)
         card.text = reset ? content : card.text + content
+        if !content.isEmpty { card.narratedSinceAction = true }
         if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
             // Narration resumed: the retained resolved prompt is now superseded,
             // exactly as Tentacle intended when it cleared the slot.
@@ -971,15 +974,15 @@ final class MessageStore {
     func setCardAction(_ sessionId: String, _ action: ChatMessage?) {
         guard !closedCardTurns.contains(sessionId) else { return }
         var card = cards[sessionId] ?? SessionCard()
-        if action == nil, let current = card.action, Self.isResolvedPrompt(current) {
-            // Tentacle retires a resolved permission the instant narration
-            // resumes and sends the empty slot just BEFORE the first delta
-            // (usually a reset that replaces the earlier narration). Applying
-            // it on its own either deletes the whole live bubble (no draft) or
-            // strips the prompt and briefly exposes only the previous
-            // segment's narration. Keep the resolved prompt until the
-            // replacing narration arrives; a tool action or the turn end also
-            // supersedes it.
+        if action == nil, let current = card.action, Self.isSettledTail(current), !card.narratedSinceAction {
+            // Tentacle retires a resolved permission or a completed tool the
+            // instant narration resumes. Older Tentacles send the empty slot
+            // just BEFORE the first delta (usually a reset that replaces the
+            // earlier narration). Applying it on its own either deletes the
+            // whole live bubble (no draft) or strips the chip and briefly
+            // exposes only the previous segment's narration (K-064). Keep it
+            // until the replacing narration arrives; a tool action or the turn
+            // end also supersedes it. (Current Tentacles send the words first.)
             var retained = current
             retained.payload["retained"] = AnyCodable(true)
             // Tentacle only retires a prompt it has resolved, so the clear is
@@ -998,6 +1001,7 @@ final class MessageStore {
             return
         }
         card.action = action
+        if action != nil { card.narratedSinceAction = false }
         cards[sessionId] = card
     }
 

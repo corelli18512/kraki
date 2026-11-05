@@ -3,6 +3,12 @@
 import Foundation
 
 extension MessageStore {
+    /// An action that only says what happened last (a completed tool, a
+    /// decided permission): narration that resumes supersedes it.
+    static func isSettledTail(_ action: ChatMessage) -> Bool {
+        action.type == "tool_complete" || isResolvedPrompt(action)
+    }
+
     /// Reopen transient draft/action state for an accepted user input. A normal
     /// prompt starts a fresh turn and clears stale card state; a steer is a
     /// visible interjection inside the current lifecycle and must preserve the
