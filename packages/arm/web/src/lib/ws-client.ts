@@ -1358,6 +1358,9 @@ export class KrakiWSClient {
         break;
       }
       case 'auth_ok':
+        // Only a refusal of the sign-in itself counts; later auth errors in
+        // this session are not about the built-in token.
+        this.desktopTokenSent = undefined;
         this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
