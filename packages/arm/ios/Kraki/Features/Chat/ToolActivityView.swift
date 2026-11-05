@@ -175,8 +175,9 @@ struct ToolActivityView: View {
     private func lazyBody(ref: ContentRef) -> some View {
         switch attachmentStore.state(for: ref.id) {
         case .ready(_, let data):
+            let preview = ToolResultPreview(data)
             ScrollView {
-                Text(String(data: data, encoding: .utf8) ?? String(localized: "(non-utf8 bytes)"))
+                Text(preview?.text ?? String(localized: "(non-utf8 bytes)"))
                     .font(.caption2)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.secondary)
@@ -184,6 +185,11 @@ struct ToolActivityView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 240)
+            if let notice = preview?.truncationNotice {
+                Text(notice)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         case .error(let reason):
             Text("Couldn't load: \(reason)")
                 .font(.caption2)
