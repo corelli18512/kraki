@@ -3153,6 +3153,26 @@
         }
       }
     },
+    "Couldn't remove the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法移除设备。请在连接后重试。"
+          }
+        }
+      }
+    },
+    "Couldn't rename the device while offline. Try again when connected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线时无法重命名设备。请在连接后重试。"
+          }
+        }
+      }
+    },
     "Couldn't send — your text is kept. Try again." : {
       "localizations" : {
         "zh-Hans" : {

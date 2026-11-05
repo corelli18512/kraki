@@ -19,6 +19,9 @@ struct DeviceDetailView: View {
     @State private var showRename = false
     @State private var nameDraft = ""
     @State private var modelsExpanded = false
+    /// Rename/Remove could not be sent (relay link down): said here instead
+    /// of dropping the action silently (K-025).
+    @State private var actionError: String?
 
     private var isCurrentDevice: Bool {
         device.id == appState.deviceId
@@ -72,6 +75,15 @@ struct DeviceDetailView: View {
 
     var body: some View {
         List {
+            if let actionError {
+                Section {
+                    Label(actionError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("device.actionError")
+                }
+            }
+
             // Info rows
             Section {
                 Button {
@@ -207,7 +219,8 @@ struct DeviceDetailView: View {
             Button("Cancel", role: .cancel) {}
             Button("Save") {
                 if let name = DeviceName.renameValue(draft: nameDraft, for: device) {
-                    appState.commandSender?.renameDevice(deviceId: device.id, name: name)
+                    let sent = appState.commandSender?.renameDevice(deviceId: device.id, name: name) ?? false
+                    actionError = sent ? nil : String(localized: "Couldn't rename the device while offline. Try again when connected.")
                 }
             }
         } message: {
@@ -216,7 +229,8 @@ struct DeviceDetailView: View {
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                appState.commandSender?.removeDevice(deviceId: device.id)
+                let sent = appState.commandSender?.removeDevice(deviceId: device.id) ?? false
+                actionError = sent ? nil : String(localized: "Couldn't remove the device while offline. Try again when connected.")
             }
         } message: {
             Text("Are you sure you want to remove \(device.name)? The device will need to reconnect and re-authenticate to appear again.")

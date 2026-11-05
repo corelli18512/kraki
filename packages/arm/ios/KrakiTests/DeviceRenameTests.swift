@@ -117,6 +117,19 @@ final class DeviceRenameTests: XCTestCase {
         XCTAssertEqual(app.trustedDeviceName(gone), "Old iPad", "not on the account: the computer's name")
     }
 
+    /// K-025: rename/remove go to the relay on the raw socket. While that
+    /// socket is not signed in the frame used to vanish with no sign; now
+    /// nothing is sent and the caller is told, so the view can say so.
+    func testRenameAndRemoveReportWhenTheRelayLinkIsDown() throws {
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        defer { app.disconnect() }
+        XCTAssertFalse(app.sendRelayControl(["type": "rename_device", "deviceId": "t", "name": "x"]))
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertFalse(sender.renameDevice(deviceId: "t", name: "Work laptop"))
+        XCTAssertFalse(sender.removeDevice(deviceId: "t"))
+    }
+
     func testDeviceListCarriesTheDevicesOwnName() throws {
         let parsed = try XCTUnwrap(DeviceSummary(json: ["id": "t", "name": "Work laptop", "defaultName": "corelli-mbp", "role": "tentacle", "online": false]))
         XCTAssertEqual(parsed.name, "Work laptop")
