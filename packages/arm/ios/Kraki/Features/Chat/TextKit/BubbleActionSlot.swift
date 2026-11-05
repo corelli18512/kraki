@@ -145,8 +145,7 @@ struct BubbleActionSlot: View {
             }
             if let diff = PermissionDiffPreview.diff(message.args) {
                 PermissionDiffPreview(diff: diff, fontSize: 11)
-            } else if let summary = permissionArgsSummary(message),
-               summary != message.toolDescription {
+            } else if let summary = PermissionPromptCopy.argsSummary(message) {
                 Text(summary)
                     .scaledFont(11, design: .monospaced)
                     .foregroundStyle(Color.textSecondary)
@@ -206,21 +205,6 @@ struct BubbleActionSlot: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(primary ? String(localized: "Approve permission") : String(localized: "Deny permission"))
-    }
-
-    private func permissionArgsSummary(_ message: ChatMessage) -> String? {
-        guard let args = message.args else { return nil }
-        let tool = (message.toolName ?? "").lowercased()
-        switch tool {
-        case "shell", "bash":
-            return args["command"]?.stringValue
-        case "write_file", "edit_file", "create_file", "read_file", "view":
-            return args["path"]?.stringValue
-        case "fetch_url":
-            return args["url"]?.stringValue
-        default:
-            return args.values.compactMap(\.stringValue).first { !$0.isEmpty && $0.count < 200 }
-        }
     }
 
     private func questionInput(_ m: ChatMessage) -> some View {

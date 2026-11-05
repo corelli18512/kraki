@@ -642,8 +642,11 @@ extension ChatPerfListVC {
         syncLiveUpdates()
     }
 
-    /// Mirrors Mac `recordEntrances`: only new rows after the last surviving
-    /// old row, at most two (a catch-up burst is not a conversation beat), and
+    /// Like Mac `recordEntrances` (which caps per apply, not per burst): only
+    /// new rows after the last surviving old row, at most two per burst of
+    /// applies (a catch-up burst is not a conversation beat, even when it
+    /// lands one row per apply; rows of the burst that already started
+    /// entering snap into place), and
     /// a row that only changes identity (pending → echoed message, live card →
     /// landed answer) replaces an old tail row of the same role and does not
     /// enter again. Session entry and older pages never get here.
@@ -665,8 +668,8 @@ extension ChatPerfListVC {
         }
         guard let survivingTail = new.lastIndex(where: { oldSet.contains($0) }) else { return 0 }
         let appended = new[(survivingTail + 1)...].compactMap { id in entranceRole(id).map { (id, $0) } }
-        guard !appended.isEmpty, appended.count <= 2 else { return 0 }
-        var recorded = 0
+        guard !appended.isEmpty else { return 0 }
+        var recorded: [String] = []
         for (id, role) in appended {
             switch role {
             case .user where removedUser > 0: removedUser -= 1; continue
@@ -674,9 +677,48 @@ extension ChatPerfListVC {
             default: break
             }
             pendingEntrances[id] = (role == .user, now + 0.8)
-            recorded += 1
+            recorded.append(id)
         }
-        return recorded
+        guard !recorded.isEmpty else { return 0 }
+        if now - entranceBurst.lastAt > Self.entranceBurstGap { entranceBurst.ids = [] }
+        entranceBurst = (entranceBurst.ids + recorded, now)
+        guard entranceBurst.ids.count <= 2, appended.count <= 2 else {
+            cancelEntrances(entranceBurst.ids)
+            return 0
+        }
+        return recorded.count
+    }
+
+    /// An open question's row becomes its answered/closed row (same seq, the
+    /// `#q-open` identity suffix gone): its choices go away.
+    static func questionCloses(old: String, new: String) -> Bool {
+        guard old.hasSuffix("#q-open"), !new.hasSuffix("#q-open") else { return false }
+        let base = String(old.dropLast("#q-open".count))
+        return new == base || new.hasPrefix(base + "#")
+    }
+
+    /// The choices fade out into the answered state instead of vanishing in
+    /// one frame (K-168): a crossfade from the open row to the closed one.
+    func fadeChoicesOut(_ cell: UICollectionViewCell) {
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = Self.choicesFadeDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        // Core Animation files every CATransition under `kCATransition`.
+        cell.layer.add(fade, forKey: kCATransition)
+    }
+
+    static let choicesFadeDuration: CFTimeInterval = 0.2
+
+    /// The rows of a catch-up burst land in place: drop entrances not yet shown
+    /// and stop the ones (and the glide) already started by its first applies.
+    func cancelEntrances(_ ids: [String]) {
+        for id in ids {
+            pendingEntrances.removeValue(forKey: id)
+            guard let index = items.firstIndex(of: id) else { continue }
+            collectionView.cellForItem(at: IndexPath(item: index, section: 0))?.layer.removeAnimation(forKey: "kraki.entrance")
+        }
+        collectionView.layer.removeAnimation(forKey: "kraki.arrivalGlide")
     }
 
     enum EntranceRole { case user, reply }
@@ -788,6 +830,7 @@ extension ChatPerfListVC {
             for index in prefix..<(prefix + replaced) {
                 let indexPath = IndexPath(item: index, section: 0)
                 guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
+                if Self.questionCloses(old: old[index], new: new[index]) { fadeChoicesOut(cell) }
                 configureCell(cell, at: indexPath)
                 cell.setNeedsLayout()
             }

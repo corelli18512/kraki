@@ -89,7 +89,7 @@ import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { logger as relayLogger } from '../relay/shared.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
-import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
+import { PayloadAssembler, QUESTION_WITHDRAWN_FEATURE, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -3306,6 +3306,34 @@ describe('RelayClient pending-question digest', () => {
     askQ('q1');
     (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
     expect(preview()?.type).not.toBe('question');
+  });
+
+  /** Every online app declares `features` the way `client_features` does. */
+  const declareAppFeatures = (client: RelayClient, features: string[]) => {
+    for (const id of (client as unknown as { onlineApps(): string[] }).onlineApps()) client.appFeatures.set(id, new Set(features));
+  };
+
+  it('tells apps that a withdrawn question is closed (K-022)', () => {
+    const { adapter, client, ws, askQ, digest } = buildClient();
+    askQ('q1');
+    expect(digest()).toBeDefined(); // an app is connected
+    declareAppFeatures(client, [QUESTION_WITHDRAWN_FEATURE, 'fragments']);
+    ws.sent.length = 0;
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    const withdrawn = decodePulseSends(ws.sent).find((m) => m.type === 'question_withdrawn');
+    expect(withdrawn).toMatchObject({ sessionId: 'sess_1', payload: { questionId: 'q1' } });
+  });
+
+  it('does not send question_withdrawn to an app that did not declare it (older apps would cache it as a row)', () => {
+    const { adapter, client, ws, askQ, digest } = buildClient();
+    askQ('q1');
+    expect(digest()).toBeDefined(); // an app is connected
+    declareAppFeatures(client, ['fragments']);
+    ws.sent.length = 0;
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    const sent = decodePulseSends(ws.sent);
+    expect(sent.some((m) => m.type === 'question_withdrawn')).toBe(false);
+    expect(sent.some((m) => m.type === 'session_list')).toBe(true);
   });
 
   it('clears BOTH question and permission attention on terminal turn end (no short-circuit leak)', () => {

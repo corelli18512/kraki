@@ -22,6 +22,7 @@ import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/ch
 import './chat.css';
 
 const EMPTY: ChatMessage[] = [];
+const NO_WITHDRAWN: string[] = [];
 /** Older pages are requested this many seqs at a time. */
 const OLDER_PAGE = 60;
 /** Rows rendered on entry; revealing older rows grows it by a page. */
@@ -104,13 +105,15 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // and answerable (Mac ChatViewModel excludes failed answers too).
   const pendingAnswerTo = useMemo(() => pending.flatMap((e) => (e.answerTo && e.state !== 'failed' ? [e.answerTo] : [])), [pending]);
   const answerKey = pendingAnswerTo.join(',');
+  // The agent withdrew these (timeout, cancel): no longer answerable.
+  const withdrawn = useStore((s) => s.withdrawnQuestions.get(sessionId)) ?? NO_WITHDRAWN;
   const spine = useMemo(
-    () => spineRows(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead, i18n.language],
+    () => spineRows(messages, pendingAnswerTo, atHead, withdrawn),
+    [messages, answerKey, atHead, withdrawn, i18n.language],
   );
   const questions = useMemo(
-    () => openQuestions(messages, pendingAnswerTo, atHead),
-    [messages, answerKey, atHead, i18n.language],
+    () => openQuestions(messages, pendingAnswerTo, atHead, withdrawn),
+    [messages, answerKey, atHead, withdrawn, i18n.language],
   );
 
   const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';

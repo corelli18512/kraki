@@ -506,6 +506,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    // Live only: the open question is no longer answerable (K-022). Never stored:
+    // it carries a broadcast seq, not a spine seq.
+    case 'question_withdrawn':
+      store.withdrawQuestion(sid, msg.payload.questionId);
+      break;
+
     // send_input is stored by the head but display is handled by user_message
     // (tentacle broadcasts user_message back as round-trip confirmation)
     case 'send_input':

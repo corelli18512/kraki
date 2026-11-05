@@ -245,3 +245,14 @@ enum PermissionStep {
         message.payload["decision"]?.stringValue == "deny"
     }
 }
+
+/// An error step. Tentacle records its text as `payload.message` (as on the
+/// web); `content`/`result` are kept for older traces (K-053).
+enum ErrorStep {
+    static func text(_ message: ChatMessage) -> String {
+        for text in [message.errorMessage, message.content, message.result] {
+            if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { return text }
+        }
+        return String(localized: "Error")
+    }
+}

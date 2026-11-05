@@ -115,17 +115,23 @@ extension AppState: SessionSubscriptionHost {
         let draft = cardJSON["draft"] as? String ?? ""
         let actionPayload = cardJSON["action"].map { ["action": $0] }
         let action = MessageRouter.decodeCardAction(actionPayload)
-        messageStore.replaceCardFromSubscription(
-            sessionId,
-            draft: draft,
-            action: action,
-            state: digest.state
-        )
-
         let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
-        // The card belongs to the turn after `spineHeadSeq`: show it only once
-        // this device has the messages up to there (catch-up comes next).
-        messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+        if digest.state == .idle {
+            // The turn is over. A draft this device is behind on stays until
+            // its concluding bubble lands by catch-up (K-013).
+            messageStore.endCardTurn(sessionId, afterCatchUpTo: spineHeadSeq)
+            messageStore.holdCard(sessionId, untilSeq: 0)
+        } else {
+            messageStore.replaceCardFromSubscription(
+                sessionId,
+                draft: draft,
+                action: action,
+                state: digest.state
+            )
+            // The card belongs to the turn after `spineHeadSeq`: show it only
+            // once this device has the messages up to there (catch-up next).
+            messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
+        }
         messageProvider?.setTentacleInfo(
             sessionId: sessionId,
             lastSeq: spineHeadSeq,

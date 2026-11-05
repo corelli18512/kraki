@@ -6,7 +6,7 @@ import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
 import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, QUESTION_WITHDRAWN_FEATURE, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -680,15 +680,16 @@ export class KrakiWSClient {
     outbox.resendUnconfirmed((sessionId) => getStore().sessions.get(sessionId)?.deviceId === greeting.deviceId);
   }
 
-  /** Tell a Tentacle this app reassembles fragments. Needed again after the
-   *  Tentacle reconnects: it forgets apps' features on every auth. */
+  /** Tell a Tentacle this app reassembles fragments and understands
+   *  `question_withdrawn`. Needed again after the Tentacle reconnects: it
+   *  forgets apps' features on every auth. */
   private declareClientFeatures(tentacleId: string) {
     this.sendEncrypted({
       type: 'client_features',
       deviceId: getStore().deviceId ?? '',
       seq: 0,
       timestamp: new Date().toISOString(),
-      payload: { features: [PAYLOAD_FRAGMENT_FEATURE], targetDeviceId: tentacleId },
+      payload: { features: [PAYLOAD_FRAGMENT_FEATURE, QUESTION_WITHDRAWN_FEATURE], targetDeviceId: tentacleId },
     });
   }
 

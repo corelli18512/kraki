@@ -195,8 +195,9 @@ struct MacToolActivityRow: View {
         if let store = appState.attachmentStore {
             switch store.state(for: ref.id) {
             case .ready(_, let data):
+                let preview = ref.id == message.argsRef?.id ? ToolResultPreview.arguments(data) : ToolResultPreview(data)
                 ScrollView {
-                    Text(String(data: data, encoding: .utf8) ?? String(localized: "(non-utf8 bytes)"))
+                    Text(preview?.text ?? String(localized: "(non-utf8 bytes)"))
                         .font(.system(size: 11))
                         .fontDesign(.monospaced)
                         .foregroundStyle(.secondary)
@@ -204,6 +205,11 @@ struct MacToolActivityRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 240)
+                if let notice = preview?.truncationNotice {
+                    Text(notice)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
             case .error(let reason):
                 Text("Couldn't load: \(reason)")
                     .font(.system(size: 11))
