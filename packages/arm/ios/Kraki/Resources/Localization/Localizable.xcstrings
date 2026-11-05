@@ -9800,6 +9800,16 @@
         }
       }
     },
+    "The report stopped responding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告已停止响应。"
+          }
+        }
+      }
+    },
     "The session device is offline and no cached conversation is available." : {
       "localizations" : {
         "zh-Hans" : {
