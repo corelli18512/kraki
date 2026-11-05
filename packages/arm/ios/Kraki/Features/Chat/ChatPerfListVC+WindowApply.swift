@@ -643,7 +643,8 @@ extension ChatPerfListVC {
     }
 
     /// Mirrors Mac `recordEntrances`: only new rows after the last surviving
-    /// old row, at most two (a catch-up burst is not a conversation beat), and
+    /// old row, at most two per burst of applies (a catch-up burst is not a
+    /// conversation beat, even when it lands one row per apply), and
     /// a row that only changes identity (pending → echoed message, live card →
     /// landed answer) replaces an old tail row of the same role and does not
     /// enter again. Session entry and older pages never get here.
@@ -665,8 +666,8 @@ extension ChatPerfListVC {
         }
         guard let survivingTail = new.lastIndex(where: { oldSet.contains($0) }) else { return 0 }
         let appended = new[(survivingTail + 1)...].compactMap { id in entranceRole(id).map { (id, $0) } }
-        guard !appended.isEmpty, appended.count <= 2 else { return 0 }
-        var recorded = 0
+        guard !appended.isEmpty else { return 0 }
+        var recorded: [String] = []
         for (id, role) in appended {
             switch role {
             case .user where removedUser > 0: removedUser -= 1; continue
@@ -674,9 +675,27 @@ extension ChatPerfListVC {
             default: break
             }
             pendingEntrances[id] = (role == .user, now + 0.8)
-            recorded += 1
+            recorded.append(id)
         }
-        return recorded
+        guard !recorded.isEmpty else { return 0 }
+        if now - entranceBurst.lastAt > Self.entranceBurstGap { entranceBurst.ids = [] }
+        entranceBurst = (entranceBurst.ids + recorded, now)
+        guard entranceBurst.ids.count <= 2, appended.count <= 2 else {
+            cancelEntrances(entranceBurst.ids)
+            return 0
+        }
+        return recorded.count
+    }
+
+    /// The rows of a catch-up burst land in place: drop entrances not yet shown
+    /// and stop the ones (and the glide) already started by its first applies.
+    func cancelEntrances(_ ids: [String]) {
+        for id in ids {
+            pendingEntrances.removeValue(forKey: id)
+            guard let index = items.firstIndex(of: id) else { continue }
+            collectionView.cellForItem(at: IndexPath(item: index, section: 0))?.layer.removeAnimation(forKey: "kraki.entrance")
+        }
+        collectionView.layer.removeAnimation(forKey: "kraki.arrivalGlide")
     }
 
     enum EntranceRole { case user, reply }

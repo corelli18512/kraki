@@ -78,6 +78,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// time they are displayed: the user's from the trailing edge, the AI's
     /// from the leading edge. Expire if never shown.
     var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
+    /// Entrances recorded by applies in quick succession. A catch-up lands as
+    /// several applies a few ms apart: together they are one burst (K-062).
+    var entranceBurst: (ids: [String], lastAt: CFTimeInterval) = ([], 0)
+    static let entranceBurstGap: CFTimeInterval = 0.4
     static let entranceDuration: CFTimeInterval = 0.32
     static let entranceOffset: CGFloat = 48
     static let entranceTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
