@@ -21,9 +21,10 @@ const RECONNECT_FAST_WINDOW = 120_000;
 const RECONNECT_SLOW = 15_000;
 const RECONNECT_SLOW_WINDOW = 300_000;
 const RECONNECT_MAX = 30_000;
-/** No frame at all for this long on an authenticated socket → dead link
- *  (half-open). Pings every 10 s get a pong, and payload frames are ≤32 KB
- *  from fragment-capable Tentacles, so a live link is never this quiet. */
+/** A ping that has gone this long with no frame at all arriving after it →
+ *  dead link (half-open). Counted from the ping, not from the last frame, so
+ *  a latency spike of up to ~20 s (mobile handover, bufferbloat) does not drop
+ *  a live link (K-311), like the native apps' liveness ping timeout. */
 const LIVENESS_TIMEOUT = 22_000;
 const LIVENESS_CHECK = 2_000;
 /** A WebSocket handshake that has not opened by now is abandoned. */
@@ -235,6 +236,8 @@ export class KrakiTransport {
   /** When the current outage began (first failed/closed attempt). */
   private outageStartedAt: number | null = null;
   private lastRxAt = 0;
+  /** When the oldest ping with no frame received since was sent. */
+  private unansweredPingAt: number | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeListenersInstalled = false;
@@ -353,6 +356,7 @@ export class KrakiTransport {
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.lastRxAt = Date.now();
+      this.unansweredPingAt = null;
       let msg: Message;
       try {
         msg = JSON.parse(event.data as string) as Message;
@@ -559,12 +563,13 @@ export class KrakiTransport {
 
   private startPing() {
     this.pingTimer = setInterval(() => {
+      if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) this.unansweredPingAt ??= Date.now();
       this.send({ type: 'ping' });
     }, PING_INTERVAL);
     const ws = this.ws;
     this.livenessTimer = setInterval(() => {
       if (!ws || this.ws !== ws || !this.authenticated) return;
-      if (this.msSinceLastRx() > LIVENESS_TIMEOUT) {
+      if (this.unansweredPingAt !== null && Date.now() - this.unansweredPingAt > LIVENESS_TIMEOUT) {
         logger.warn('No frames from relay — link is dead, reconnecting');
         traceEvent({ comp: 'arm', evt: 'WS-LIVENESS-TIMEOUT', quietMs: this.msSinceLastRx() });
         this.abandon(ws);
@@ -601,6 +606,7 @@ export class KrakiTransport {
 
   private cleanup() {
     this.authenticated = false;
+    this.unansweredPingAt = null;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;

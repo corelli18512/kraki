@@ -2104,20 +2104,46 @@ describe('KrakiWSClient', () => {
       }
     });
 
-    it('a silent authenticated socket is abandoned after 22 s and replaced', async () => {
+    it('a silent authenticated socket is abandoned 22 s after an unanswered ping and replaced', async () => {
       vi.useFakeTimers();
       try {
         const client = new KrakiWSClient('ws://localhost:9999');
         await connectAndAuth(client);
         const dead = lastWsInstance;
         // The relay stops answering (half-open): our pings go unanswered.
+        // The first ping goes out ~10 s after open; 22 s later the link is dead.
         // (Assert on the socket itself: clients from other tests may create
         // sockets meanwhile.)
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(30_000);
         expect(dead.onmessage).not.toBeNull();
         await vi.advanceTimersByTimeAsync(5_000);
         expect(dead.onmessage).toBeNull(); // abandoned
         expect(dead.readyState).toBe(3);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('K-311: a 20 s latency spike does not drop a live link', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const ws = lastWsInstance;
+        // Every ping is answered, but each pong arrives 20 s after its ping.
+        const answered = new Set<number>();
+        for (let t = 0; t < 120_000; t += 500) {
+          await vi.advanceTimersByTimeAsync(500);
+          ws.sentMessages.forEach((m: string, i: number) => {
+            if (JSON.parse(m).type !== 'ping' || answered.has(i)) return;
+            answered.add(i);
+            setTimeout(() => ws._receive({ type: 'pong' }), 20_000);
+          });
+        }
+        expect(answered.size).toBeGreaterThan(5);
+        expect(ws.onmessage).not.toBeNull();
+        expect(ws.readyState).toBe(1);
         client.disconnect();
       } finally {
         vi.useRealTimers();
