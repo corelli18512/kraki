@@ -18,7 +18,7 @@ import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDevice
 import { ensureWindowsSystemPath, probeFdaDetailed, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 import { hideChildWindowsByDefault } from './windows-hide.js';
-import { applyProcessProxy } from './proxy.js';
+import { applyProcessProxy, unsupportedProxy, unsupportedProxyMessage } from './proxy.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -325,6 +325,10 @@ export async function startWorker(): Promise<WorkerResult> {
       logger.debug({ channelKeyPath }, `Loaded channel key from ${channelKeyPath}`);
     }
   }
+
+  // A PAC or SOCKS proxy is not used; say so where support looks (K-328).
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) logger.warn({ proxy: ignoredProxy }, unsupportedProxyMessage(ignoredProxy));
 
   // 3. Initialize components
   const sessionManager = new SessionManager();

@@ -37,6 +37,13 @@ describe('Kraki for Mac download link', () => {
     await expect(resolveMacDmgUrl(failing)).resolves.toBe(MAC_RELEASES_PAGE);
   });
 
+  it('falls back to the releases page when api.github.com never answers (K-324)', async () => {
+    const hanging = ((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })) as unknown as typeof fetch;
+    await expect(resolveMacDmgUrl(hanging, 10)).resolves.toBe(MAC_RELEASES_PAGE);
+  });
+
   it('only offers it on a Mac, not an iPad in desktop mode', () => {
     expect(isMacBrowser({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 0 })).toBe(true);
     expect(isMacBrowser({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 5 })).toBe(false);

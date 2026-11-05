@@ -213,7 +213,11 @@ async function main(): Promise<void> {
       await cmdSetupHeadless(args);
     } else if (args.includes('--json')) {
       const { runSetupJson } = await import('./setup-json.js');
-      process.exitCode = await runSetupJson(args);
+      const code = await runSetupJson(args);
+      // One-shot like `agents --json`: the caller may keep stdin (the OAuth
+      // callback pipe) open, which kept the process alive after its final
+      // event (K-273). Exit once that event has been written out.
+      process.stdout.write('', () => gracefulExit(code));
     } else {
       const managed = loadManagedBy();
       if (managed) {
@@ -317,7 +321,9 @@ main().catch((err) => {
   // User pressed Esc or Ctrl+C during a prompt — exit cleanly
   if (err?.name === 'ExitPromptError' || err?.message?.includes('User force closed')) {
     console.log(chalk.dim('\n  Cancelled.'));
-    gracefulExit(0);
+    // install.sh starts the daemon after a successful setup; a cancelled one
+    // must stop it there (K-276).
+    gracefulExit(process.env.KRAKI_INSTALL === '1' ? 130 : 0);
     return;
   }
   // Users see a one-line reason; the stack trace is only for KRAKI_DEBUG.

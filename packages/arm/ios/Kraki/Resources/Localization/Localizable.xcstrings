@@ -2913,6 +2913,16 @@
         }
       }
     },
+    "Could not reach GitHub. Check your network connection or proxy, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 GitHub。请检查网络连接或代理设置后重试。"
+          }
+        }
+      }
+    },
     "Could not reach Kraki. Check your network connection, then try again." : {
       "localizations" : {
         "zh-Hans" : {

@@ -29,7 +29,8 @@
     "downloadMac": "Use this Mac's coding agents? Download Kraki for Mac",
     "connecting": "Connecting to relay…",
     "selectSession": "Select a session from the sidebar to get started",
-    "generateQr": "Run <command>kraki connect</command> to generate a QR code."
+    "generateQr": "Run <command>kraki connect</command> to generate a QR code.",
+    "githubUnreachable": "Could not reach github.com. Check your network connection or proxy, then try again, or scan a QR code instead."
   },
   "errors": {
     "dismiss": "Dismiss error",
