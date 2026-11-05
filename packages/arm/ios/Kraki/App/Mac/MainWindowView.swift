@@ -286,19 +286,64 @@ struct MainWindowView: View {
     @State private var chatPresentation: ChatPresentation?
     @State private var selectedImagePreview: MacImagePreviewSelection?
     @State private var htmlArtifactSessions = MacHTMLArtifactSessionCache()
+    /// The window's width in layout points (see MacMainWindowColumns).
+    @State private var layoutWidth: CGFloat = 0
 
-    private let sidebarWidth: CGFloat = 280
-    private let inspectorWidth: CGFloat = 320
     private let desktopRailHeight: CGFloat = 40
+
+    private var columns: MacMainWindowColumns {
+        MacMainWindowColumns.resolve(
+            width: layoutWidth,
+            sidebarRequested: sidebarVisible,
+            inspectorRequested: inspectorShown
+        )
+    }
 
     /// New session = the composer in the idle pane (like a "new chat"):
     /// leave the current session and put the cursor in the composer.
     private func startNewSession() {
+        // The Delete confirmation is modal for this window: switching the chat
+        // behind it would leave the person confirming a deletion blind.
+        guard pendingDeleteSessionId == nil else { return }
         NewSessionComposer.nudgeRequestedAt = Date()
         selectedSessionId = nil
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .macFocusNewSessionComposer, object: nil)
         }
+    }
+
+    /// A Session chosen from a notification, the menu bar or Needs You.
+    private func selectSession(from note: Notification) {
+        let scope = note.userInfo?["scope"] as? String
+        // Not behind the Delete confirmation (see startNewSession).
+        guard scope == selectionNotificationScope, pendingDeleteSessionId == nil,
+              let sid = note.userInfo?["sessionId"] as? String else { return }
+        if note.userInfo?["fromNotification"] as? Bool == true {
+            appState.sessionStore.notificationEntrySessions.insert(sid)
+        }
+        selectedSessionId = sid
+    }
+
+    /// ⌘1–9 and Previous/Next Session.
+    private func navigateSession(from note: Notification) {
+        let ordered = appState.sessionStore.navigationOrderedSessions
+        // Not behind the Delete confirmation (see startNewSession).
+        guard !ordered.isEmpty, pendingDeleteSessionId == nil else { return }
+        let targetIndex: Int
+        if let index = note.userInfo?["index"] as? Int {
+            targetIndex = min(max(index, 0), ordered.count - 1)
+        } else {
+            let direction = note.userInfo?["direction"] as? Int ?? 1
+            let currentIndex = selectedSessionId.flatMap { id in
+                ordered.firstIndex(where: { $0.id == id })
+            }
+            if let currentIndex {
+                targetIndex = (currentIndex + direction + ordered.count) % ordered.count
+            } else {
+                targetIndex = direction < 0 ? ordered.count - 1 : 0
+            }
+        }
+        selectedSessionId = ordered[targetIndex].id
     }
 
     var body: some View {
@@ -309,50 +354,7 @@ struct MainWindowView: View {
     }
 
     private var authenticatedRoot: some View {
-        // A real two-section layout: each side owns its own 62pt header and
-        // content stack. Matching heights align them without a global overlay.
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                VStack(spacing: 0) {
-                    sidebarSectionHeader
-                    connectionNoticeRow
-                    AccountAccessUpgradeBanner()
-                    SessionsSidebarView(
-                        selectedSessionId: $selectedSessionId,
-                        searchText: sidebarSearchText,
-                        onNewSession: { startNewSession() }
-                    )
-                }
-                .frame(width: sidebarWidth)
-                .background(Color.surfacePrimary)
-                .transition(.move(edge: .leading).combined(with: .opacity))
-
-                Rectangle()
-                    .fill(Color.borderPrimary.opacity(0.55))
-                    .frame(width: 1)
-                    .padding(.vertical, 20)
-            }
-
-            HStack(spacing: 0) {
-                detailPane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.surfacePrimary)
-
-                if inspectorShown {
-                    Rectangle()
-                        .fill(Color.borderPrimary.opacity(0.55))
-                        .frame(width: 1)
-                        .padding(.bottom, 10)
-
-                    InspectorPane(selectedSessionId: selectedSessionId)
-                        .frame(width: inspectorWidth)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .ignoresSafeArea(.container, edges: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        columnsLayout
         .background(Color.surfacePrimary.ignoresSafeArea())
         .background(WindowChromeConfigurator(tint: Color.surfacePrimary))
         .background(
@@ -379,36 +381,14 @@ struct MainWindowView: View {
             pairingPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .macOpenNewSession)) { _ in
+            MacNewSessionRequest.pending = false
             startNewSession()
         }
         .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
-            let scope = note.userInfo?["scope"] as? String
-            guard scope == selectionNotificationScope else { return }
-            if let sid = note.userInfo?["sessionId"] as? String {
-                if note.userInfo?["fromNotification"] as? Bool == true {
-                    appState.sessionStore.notificationEntrySessions.insert(sid)
-                }
-                selectedSessionId = sid
-            }
+            selectSession(from: note)
         }
         .onReceive(NotificationCenter.default.publisher(for: .macNavigateSession)) { note in
-            let ordered = appState.sessionStore.navigationOrderedSessions
-            guard !ordered.isEmpty else { return }
-            let targetIndex: Int
-            if let index = note.userInfo?["index"] as? Int {
-                targetIndex = min(max(index, 0), ordered.count - 1)
-            } else {
-                let direction = note.userInfo?["direction"] as? Int ?? 1
-                let currentIndex = selectedSessionId.flatMap { id in
-                    ordered.firstIndex(where: { $0.id == id })
-                }
-                if let currentIndex {
-                    targetIndex = (currentIndex + direction + ordered.count) % ordered.count
-                } else {
-                    targetIndex = direction < 0 ? ordered.count - 1 : 0
-                }
-            }
-            selectedSessionId = ordered[targetIndex].id
+            navigateSession(from: note)
         }
         .onReceive(NotificationCenter.default.publisher(for: .macDeleteSession)) { note in
             pendingDeleteSessionId = (note.userInfo?["sessionId"] as? String) ?? selectedSessionId
@@ -514,6 +494,10 @@ struct MainWindowView: View {
             if let selectedSessionId {
                 prepareSelectedSession(selectedSessionId)
             }
+            // ⌘N while no main window was open (MacCommands).
+            if MacNewSessionRequest.take() {
+                startNewSession()
+            }
             #if DEBUG
             MacAutomationDriver.shared.updateSelectedSession(selectedSessionId)
             if let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
@@ -533,6 +517,65 @@ struct MainWindowView: View {
         }
     }
 
+    /// A real two-section layout: each side owns its own 62pt header and
+    /// content stack. Matching heights align them without a global overlay.
+    private var columnsLayout: some View {
+        HStack(spacing: 0) {
+            if columns.showsSidebar {
+                VStack(spacing: 0) {
+                    sidebarSectionHeader
+                    AccountAccessUpgradeBanner()
+                    SessionsSidebarView(
+                        selectedSessionId: $selectedSessionId,
+                        searchText: sidebarSearchText,
+                        onNewSession: { startNewSession() }
+                    )
+                    // Over the list, not above it: a notice that comes and
+                    // goes with every reconnect must not push the rows.
+                    .overlay(alignment: .bottom) { connectionNoticeRow }
+                }
+                .frame(width: MacMainWindowColumns.sidebarWidth)
+                .background(Color.surfacePrimary)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+
+                Rectangle()
+                    .fill(Color.borderPrimary.opacity(0.55))
+                    .frame(width: MacMainWindowColumns.seamWidth)
+                    .padding(.vertical, 20)
+            }
+
+            HStack(spacing: 0) {
+                detailPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.surfacePrimary)
+
+                if columns.showsInspector {
+                    Rectangle()
+                        .fill(Color.borderPrimary.opacity(0.55))
+                        .frame(width: MacMainWindowColumns.seamWidth)
+                        .padding(.bottom, 10)
+
+                    InspectorPane(selectedSessionId: selectedSessionId)
+                        .frame(width: MacMainWindowColumns.inspectorWidth)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { layoutWidth = $0 }
+        .background(
+            MacWindowWidthFitter(
+                requiredWidth: MacMainWindowColumns.requiredWidth(
+                    sidebarRequested: sidebarVisible,
+                    inspectorRequested: inspectorShown
+                ),
+                layoutWidth: layoutWidth
+            )
+        )
+    }
+
     /// Shown while the window is not signed in (first sign-in or reconnect).
     @ViewBuilder
     private var connectionNoticeRow: some View {
@@ -547,6 +590,8 @@ struct MainWindowView: View {
             .padding(.horizontal, 14)
             .frame(height: 26)
             .background(Color.surfaceSecondary.opacity(0.6))
+            // Same tint as before, but opaque: it sits over the rows.
+            .background(Color.surfacePrimary)
             .transition(.opacity)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("connection-notice")

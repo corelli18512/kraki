@@ -111,7 +111,10 @@ struct MacCommands: Commands {
         // Session menu — operations on the currently selected session.
         CommandMenu("Session") {
             Button("New Session") {
-                NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+                MacNewSessionRequest.request {
+                    openWindow(id: "main")
+                    MacPresenceController.shared.showMainWindow()
+                }
             }
             .keyboardShortcut("n", modifiers: .command)
 
@@ -365,6 +368,27 @@ extension Notification.Name {
     static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
     /// Object: the `MacUpdateChannel` to switch to (Settings › General).
     static let macSwitchUpdateChannel = Notification.Name("mac.switchUpdateChannel")
+}
+
+/// New Session (⌘N) asked for while no main window was there to receive it:
+/// the main window starts a new Session as soon as it appears.
+@MainActor
+enum MacNewSessionRequest {
+    static var pending = false
+
+    /// Session › New Session. With the main window closed (only Settings, or
+    /// no window) nothing receives the notification: `openMainWindow`, which
+    /// takes the request when it appears.
+    static func request(openMainWindow: () -> Void) {
+        pending = true
+        NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+        if pending { openMainWindow() }
+    }
+
+    static func take() -> Bool {
+        defer { pending = false }
+        return pending
+    }
 }
 
 /// Session Info asked for a Session whose chat may not be open yet (a row's
