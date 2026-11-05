@@ -211,6 +211,11 @@ export class RelayClient {
    *  This lets an active-turn steer follow the original prompt ACK immediately
    *  without waiting for the whole turn to become idle. */
   inputDispatches = new Map<string, Promise<void>>();
+  /** Turn id of the prompt being handed to the adapter, per session: the
+   *  relay opened the turn but the agent has not accepted it yet. A steer
+   *  that arrives now joins this turn; the adapter reporting "settled" in
+   *  this window only means it has not started the prompt. */
+  openingPromptTurns = new Map<string, string>();
   /** Idle has no turn identity. Hold it while a steer is awaiting adapter ACK so
    *  pre-steer completion cannot settle the newly accepted interjection. */
   steerAcceptanceInFlight = new Set<string>();

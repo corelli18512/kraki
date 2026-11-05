@@ -179,3 +179,38 @@ describe('an answer typed in the composer (2-36)', () => {
     expect(trace.entries.filter((e) => (e as { type: string }).type === 'tool_start')).toHaveLength(2);
   });
 });
+
+describe('steers sent while the first prompt is still opening its turn (K-014)', () => {
+  it('keep their send order on the spine and at the agent: 1, 2, 3', async () => {
+    const { adapter, sm, input } = build();
+    const { sessionId } = sm.createSession('claude');
+    sm.markIdle(sessionId);
+    // Like a real adapter, no turn is open until it accepts prompt #1
+    // (e.g. Pi respawning an idle-reaped process first).
+    let settled = true;
+    let acceptFirst!: () => void;
+    (adapter.isTurnSettled as Fn).mockImplementation(() => settled);
+    (adapter.sendMessage as Fn).mockImplementation((_sid: string, text: string) => text === 'one'
+      ? new Promise<void>((done) => { acceptFirst = () => { settled = false; done(); }; })
+      : Promise.resolve());
+
+    input(sessionId, 'one', 'cid-1');
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    // The app believes the session busy after #1 and sends #2 as a steer.
+    input(sessionId, 'two', 'cid-2', { delivery: 'steer' });
+    await flush();
+    acceptFirst();
+    await flush();
+    input(sessionId, 'three', 'cid-3', { delivery: 'steer' });
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(3));
+
+    const sent = (adapter.sendMessage as Fn).mock.calls.map((call) => [call[1], call[3]?.delivery ?? 'prompt']);
+    expect(sent).toEqual([['one', 'prompt'], ['two', 'steer'], ['three', 'steer']]);
+    const spine = rows(sm, sessionId);
+    // Prompt #1's turn was never closed by the steer that joined it.
+    expect(spine.map((r) => r.type)).toEqual(['user_message', 'user_message', 'user_message']);
+    expect(spine.map((r) => r.payload.content)).toEqual(['one', 'two', 'three']);
+    expect(spine.slice(1).map((r) => r.payload.delivery)).toEqual(['steer', 'steer']);
+    expect(sm.getMeta(sessionId)?.state).toBe('active');
+  });
+});

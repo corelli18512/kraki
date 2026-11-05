@@ -338,6 +338,10 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         const deliver = async () => {
           if (persistAtDispatch) persistInput();
           const idle = waitForTurnIdle(client, sessionId);
+          client.openingPromptTurns.set(sessionId, reservation.turnId);
+          const opened = () => {
+            if (client.openingPromptTurns.get(sessionId) === reservation.turnId) client.openingPromptTurns.delete(sessionId);
+          };
           try {
             const dispatch = dispatchInput(client, sessionId, async () => {
               await ensureSessionResumed(client, sessionId);
@@ -382,6 +386,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // idle. Explicit abort is the inverse: idle is authoritative even
             // if a preflight prompt RPC never ACKs, so release the input chain
             // without waiting for that stale transport Promise.
+            dispatch.then(opened, opened);
             const firstBoundary = await Promise.race([
               dispatch.then(() => 'accepted' as const),
               idle.then(() => 'idle' as const),
