@@ -251,13 +251,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
     /// How far the drawn bubble reaches below the drawn clip: > 0 means its
     /// rounded bottom is cut off flat on screen.
-    var bubbleClippedDepthForRegression: CGFloat {
-        let clip = renderClipView.layer.presentation()?.bounds.height ?? renderClipView.bounds.height
-        let frame = bubbleBG.layer.presentation()?.frame ?? bubbleBG.frame
-        let shape = bubbleBG.layer.sublayers?.first as? CAShapeLayer
-        let bottom = (shape?.presentation()?.path ?? shape?.path)?.boundingBox.maxY ?? frame.height
-        return frame.minY + bottom - clip
-    }
+    var bubbleClippedDepthForRegression: CGFloat { (bubbleBG.layer.presentation()?.frame ?? bubbleBG.frame).maxY - (renderClipView.layer.presentation()?.bounds.height ?? renderClipView.bounds.height) }
     /// Pending CA animations on the bubble background (must be none after a
     /// configure outside a UIView animation — no color/shape morph).
     var bubbleBackgroundAnimationKeysForRegression: [String] {
@@ -1041,9 +1035,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         let attachmentWidth = content.attachmentWidth(cellWidth: cellWidth)
         let imageHeight = content.imagesHeight(cellWidth: cellWidth)
         if imageHeight > 0 {
-            let imageY = content.hasBubbleContent
-                ? y + bubbleHeight + TKMetrics.attachmentSpacing
-                : y
+            let imageY = content.hasBubbleContent ? y + bubbleHeight + TKMetrics.attachmentSpacing : y
             let imageX: CGFloat
             switch content.kind {
             case .agent:
