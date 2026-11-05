@@ -2,7 +2,8 @@
 /// NewSessionSheet — Compact glass dialog for creating a new session.
 ///
 /// Design language: **Crossfade replace** (Apple Music / Wallet style).
-/// - Fixed `.height(360)` detent — no sheet resize, glass preserved.
+/// - A `.height` detent hugging the content; the form scrolls when the
+///   sheet is shorter (landscape with the keyboard, largest text sizes).
 /// - Tap a row → form content crossfades to the picker for that field,
 ///   filling the same area. Back chevron + title at top.
 /// - No NavigationStack push, no popover, no detent change ⇒ no flicker.
@@ -104,9 +105,16 @@ struct NewSessionSheet: View {
                 ZStack {
                     switch screen {
                     case .form:
-                        formCard
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formCardHeight = $0 }
-                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                        // Scrolls only when the sheet is shorter than its
+                        // content (landscape with the keyboard up, the
+                        // largest text sizes): the card gives way, and the
+                        // title and composer stay on screen.
+                        ScrollView {
+                            formCard
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formCardHeight = $0 }
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     case .devicePicker:
                         devicePickerCard
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
@@ -118,6 +126,8 @@ struct NewSessionSheet: View {
                 .animation(.easeInOut(duration: 0.22), value: screen)
                 .padding(.horizontal, 16)
                 .padding(.top, Self.cardTop)
+                // The form's scroll view takes the room, not the spacer below.
+                .layoutPriority(screen == .form ? 1 : 0)
 
                 Spacer(minLength: 0)
 

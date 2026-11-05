@@ -54,6 +54,34 @@ final class NewSessionJourneyUITests: XCTestCase {
         XCTAssertFalse(tabBarVisible, "\(label): no tab bar in the chat")
     }
 
+    /// K-073: in landscape the New Session sheet opens with the keyboard up;
+    /// its title, task field and Start button stay visible above it.
+    func testLandscapeSheetKeepsFieldAndStartAboveKeyboard() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        launch()
+        settle()
+        app.buttons["New Session"].firstMatch.tap()
+        let text = app.descendants(matching: .any).matching(identifier: "new-session-text").firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 3))
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        text.typeText("Landscape task")
+        settle()
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "new-session-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+        let start = app.buttons["new-session-send"].firstMatch
+        let title = app.staticTexts["New Session"].firstMatch
+        XCTAssertLessThanOrEqual(text.frame.maxY, keyboard.frame.minY + 1, "task field behind the keyboard")
+        XCTAssertLessThanOrEqual(start.frame.maxY, keyboard.frame.minY + 1, "Start behind the keyboard")
+        XCTAssertTrue(start.isHittable)
+        XCTAssertTrue(title.exists)
+        XCTAssertGreaterThanOrEqual(title.frame.minY, app.frame.minY, "sheet title clipped")
+        XCTAssertLessThanOrEqual(title.frame.maxY, keyboard.frame.minY)
+    }
+
     func testCreateFromPlusKeepsLayoutAndBackRestoresTabBar() {
         launch()
         let reference = openExistingAndMeasure()
