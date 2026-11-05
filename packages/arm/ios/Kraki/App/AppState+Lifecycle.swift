@@ -149,6 +149,7 @@ extension AppState {
         // A new sign-in is a new device: computers pair it again.
         resetDeviceTrust()
         preferencesManager?.resetVocabulary()
+        preferencesManager?.resetTheme()
         if clearRelayURL { clearStoredRelayURL() }
         deviceId = nil
         user = nil

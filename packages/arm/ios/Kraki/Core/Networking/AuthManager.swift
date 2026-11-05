@@ -491,11 +491,10 @@ final class AuthManager {
         // `colorScheme` AppStorage key sees the right value on its
         // first render after login. Web does the same in `auth_ok`'s
         // `applyPreferences` path.
-        if let userDict = message["user"] as? [String: Any],
-           let prefs = userDict["preferences"] as? [String: Any] {
-            Task { @MainActor in
-                appState.preferencesManager?.applyRemote(prefs)
-            }
+        // Also without stored preferences: a theme picked offline is sent.
+        let prefs = (message["user"] as? [String: Any])?["preferences"] as? [String: Any] ?? [:]
+        Task { @MainActor in
+            appState.preferencesManager?.applyAuthPreferences(prefs)
         }
 
         appState.voiceCapability = voiceCapability

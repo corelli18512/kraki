@@ -193,6 +193,13 @@ final class AppState {
         return state
     }
 
+    /// Tests: preferences sync on an isolated `UserDefaults`.
+    func usePreferencesManagerForTesting(defaults: UserDefaults) -> PreferencesManager {
+        let manager = PreferencesManager(appState: self, defaults: defaults)
+        preferencesManager = manager
+        return manager
+    }
+
     static func makeUnitTestHost() -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-unit-host-\(UUID().uuidString)", isDirectory: true)
