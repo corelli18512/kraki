@@ -273,8 +273,7 @@ struct MessageInputView: View {
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
-            .alert(
-                "Couldn't attach image",
+            .alert("Couldn't attach image",
                 isPresented: Binding(
                     get: { imageAttachError != nil },
                     set: { if !$0 { imageAttachError = nil } }
