@@ -24,6 +24,7 @@ import { version } from '../../../package.json';
 import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
+import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { DeviceNameEditor } from '../devices/DeviceNameEditor';
 import { signOut } from './ProfileBar';
@@ -284,6 +285,14 @@ export function SettingsPanel({
       </SettingsSection>
       <LanguageSettingsRow />
       <SettingsSection title={t('general.accountUsage')}>
+        {/* Narrow layouts (phones) have no app menu and no F6: open it here. */}
+        {inline && (
+          <SettingsRow label={t('general.accountUsage')}>
+            <button type="button" className="kp-button" onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))}>
+              {t('general.showUsage')}
+            </button>
+          </SettingsRow>
+        )}
         <SettingsRow label={t('general.holdUsage', { shortcut: shortcut.shortcut })}>
           <SettingsSwitch
             label={t('general.peekUsage')}
@@ -319,7 +328,7 @@ export function SettingsPanel({
           </button>
         </SettingsRow>
         <p className="kp-foot">
-          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : 'general.shortcutFooterSidebar')}
+          {t(bridge?.setUsageShortcut ? 'general.shortcutFooterFloating' : desktop ? 'general.shortcutFooterTray' : inline ? 'general.shortcutFooterInline' : 'general.shortcutFooterSidebar')}
         </p>
       </SettingsSection>
       {state.archiveInfo.size > 0 && <section className="kp-section">

@@ -91,7 +91,9 @@
     "holdUsage": "按住 {{shortcut}} 速览账户用量",
     "shortcutFooterFloating": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开；在其他应用上方时则悬浮显示。托盘中的“账户用量”可随时打开面板。",
     "shortcutFooterTray": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。托盘中的“账户用量”可随时打开面板。",
-    "shortcutFooterSidebar": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。侧边栏中的“账户用量”可随时打开面板。"
+    "shortcutFooterSidebar": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。侧边栏中的“账户用量”可随时打开面板。",
+    "shortcutFooterInline": "单击快捷键可选择其他按键：F1–F20，或与 Ctrl、Alt 或 Win 组合。Kraki 在前台时，面板在其窗口内打开。上方的“显示账户用量”可随时打开面板。",
+    "showUsage": "显示账户用量"
   },
   "title": "设置",
   "voice": {
