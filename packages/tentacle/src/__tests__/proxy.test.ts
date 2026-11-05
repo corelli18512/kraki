@@ -74,3 +74,34 @@ describe('parseWindowsProxy', async () => {
     expect(parseWindowsProxy(out)?.https).toBe('http://proxy.corp:8080');
   });
 });
+
+describe('trustSystemCertificates (K-295)', () => {
+  it('adds the OS store roots to the default set without dropping any', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    let installed: string[] | null = null;
+    const api = {
+      getCACertificates: (type?: string) => (type === 'system' ? ['corp-root', 'shared-root'] : ['bundled-root', 'shared-root']),
+      setDefaultCACertificates: (certs: string[]) => { installed = certs; },
+    };
+    expect(trustSystemCertificates(api)).toBe(1);
+    expect(installed).toEqual(['bundled-root', 'shared-root', 'corp-root']);
+  });
+
+  it('changes nothing on a Node without the API or when the store cannot be read', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    expect(trustSystemCertificates({})).toBeNull();
+    expect(trustSystemCertificates({
+      getCACertificates: () => { throw new Error('keychain locked'); },
+      setDefaultCACertificates: () => { throw new Error('must not be called'); },
+    })).toBeNull();
+  });
+
+  it('works against this Node', async () => {
+    const { trustSystemCertificates } = await import('../proxy.js');
+    const tls = await import('node:tls');
+    const before = tls.getCACertificates('default').length;
+    const added = trustSystemCertificates();
+    expect(added).not.toBeNull();
+    expect(tls.getCACertificates('default').length).toBe(before + (added ?? 0));
+  });
+});

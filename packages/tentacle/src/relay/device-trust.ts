@@ -31,7 +31,18 @@ export const PUSH_V2_PREFIX = 'v2.';
 export type OpenResult =
   | { kind: 'message'; inner: Record<string, unknown>; signed: boolean; toAll?: boolean }
   | { kind: 'pair_request'; signed: SignedMessage; inner: Record<string, unknown> }
-  | { kind: 'rejected'; reason: string };
+  | {
+      kind: 'rejected';
+      reason: string;
+      /** Set when a paired app's signature verified but the message was still
+       *  refused for a reason the app can act on (its clock, or this
+       *  computer's replay store): the app should be told, not left waiting. */
+      notify?: { appId: string; inner: Record<string, unknown> };
+    };
+
+/** Rejections of a verified paired-app message that the app is told about.
+ *  A replay is not: the app already had the original accepted. */
+const NOTIFIED_REJECTIONS: ReadonlySet<string> = new Set(['stale', 'from_future', 'replay_store_unwritable']);
 
 export interface PairOutcome {
   ok: boolean;
@@ -185,9 +196,13 @@ export class DeviceTrust {
       const device = this.store.get(outer.from);
       if (device) {
         const rejection = checkSignedMessage(outer, device.identityKey, this.selfId()!, this.store.replayGuard);
-        if (rejection) return reject(rejection, { from: outer.from, type: inner.type });
+        const notify = { appId: outer.from, inner };
+        if (rejection) {
+          const result = reject(rejection, { from: outer.from, type: inner.type });
+          return NOTIFIED_REJECTIONS.has(rejection) ? { ...result, notify } as OpenResult : result;
+        }
         // Persist the nonce before acting: a crash must not reopen the replay window.
-        if (!this.store.noteAccepted()) return reject('replay_store_unwritable', { from: outer.from });
+        if (!this.store.noteAccepted()) return { ...reject('replay_store_unwritable', { from: outer.from }), notify } as OpenResult;
         this.stats.signedIn++;
         return { kind: 'message', inner, signed: true, toAll: outer.to === ANY_RECIPIENT };
       }
@@ -240,7 +255,10 @@ export class DeviceTrust {
     // is recorded only once the pairing succeeds: failed attempts cost no
     // memory or disk. Replaying a successful one is harmless (one-time QR
     // secret / consumed enrollment file; identical keys only confirm again).
-    const replay = this.store.replayGuard.peek(signed);
+    // The forgotten-nonce floor is skipped: replaying a pairing is harmless
+    // (see above), and after lost replay state it would block pairing for
+    // minutes.
+    const replay = this.store.replayGuard.peek(signed, { ignoreFloor: true });
     if (replay) return fail(replay);
     const succeed = (outcome: PairOutcome): PairOutcome => {
       this.store.replayGuard.record(signed);
