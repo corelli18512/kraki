@@ -312,6 +312,47 @@ final class MacLaunchCoordinator {
     }
 }
 
+/// One Kraki per Mac account. A second copy (another app bundle, `open -n`)
+/// handed the built-in tentacle back and forth with the first and added a
+/// second menu bar item. A later launch shows the running one instead.
+enum MacSingleInstance {
+    struct Candidate: Equatable {
+        let pid: pid_t
+        let isTerminated: Bool
+    }
+
+    /// The instance already running, if any (never this process, never one
+    /// already quitting: an update relaunch must not exit).
+    static func runningInstance(among candidates: [Candidate], currentPID: pid_t) -> Candidate? {
+        candidates.first { $0.pid != currentPID && !$0.isTerminated }
+    }
+
+    /// Posted by a second launch; the running instance shows its window.
+    static func showWindowNotification(bundleId: String) -> Notification.Name {
+        Notification.Name("\(bundleId).showMainWindow")
+    }
+
+    /// Called first thing at launch. Debug harnesses (KRAKI_* environment)
+    /// and tests run beside a developer's own Kraki Dev on purpose.
+    @MainActor
+    static func handOffToRunningInstanceIfNeeded() {
+        #if DEBUG
+        if NativeTestRuntime.isRunningTests { return }
+        if ProcessInfo.processInfo.environment.keys.contains(where: { $0.hasPrefix("KRAKI_") }) { return }
+        #endif
+        guard let bundleId = Bundle.main.bundleIdentifier else { return }
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+        let candidates = apps.map { Candidate(pid: $0.processIdentifier, isTerminated: $0.isTerminated) }
+        guard let running = runningInstance(among: candidates, currentPID: getpid()),
+              let app = apps.first(where: { $0.processIdentifier == running.pid }) else { return }
+        KLog.d("second launch: showing the running instance (pid \(running.pid)) and exiting")
+        DistributedNotificationCenter.default().postNotificationName(
+            showWindowNotification(bundleId: bundleId), object: nil, userInfo: nil, deliverImmediately: true)
+        app.activate()
+        exit(0)
+    }
+}
+
 @main
 struct MacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
@@ -322,6 +363,7 @@ struct MacApp: App {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
     init() {
+        MacSingleInstance.handOffToRunningInstanceIfNeeded()
         // Two launch modes (selected via the `KRAKI_DEV_LOCAL` scheme
         // env var):
         //

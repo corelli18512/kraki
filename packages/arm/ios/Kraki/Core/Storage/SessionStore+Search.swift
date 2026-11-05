@@ -1,5 +1,11 @@
 import Foundation
 
+/// A session list's computer filter (`nil` = all) and search text.
+struct SessionListFilter: Equatable {
+    var deviceId: String?
+    var query = ""
+}
+
 extension SessionStore {
     /// Sessions matching an optional computer filter and a search query.
     /// Text search covers title, computer, model and the authoritative Preview,
