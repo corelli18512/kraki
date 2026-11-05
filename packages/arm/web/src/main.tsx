@@ -11,8 +11,15 @@ import { renderDesktopAuthCallback } from './lib/desktop-auth-callback';
 // token from the URL as soon as it is constructed. Keep this file's static
 // imports free of the app (boot.tsx is loaded dynamically).
 const rootElement = document.getElementById('root')!;
+
+/** Same key as the relay client's stored device (lib/transport.ts STORAGE_KEY),
+ *  read directly: this file must not import the app. */
+function hasStoredDevice(): boolean {
+  try { return !!localStorage.getItem('kraki_device'); } catch { return false; }
+}
+
 if (!renderDesktopAuthCallback(rootElement)) {
-  const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints);
+  const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints, hasStoredDevice());
   if (!renderPairingInterstitial(pairingDecision, rootElement)) {
     void import('./boot').then(({ boot }) => boot(rootElement));
   }

@@ -15,6 +15,25 @@ describe('pairing link (release review A10 / D5)', () => {
     expect(isOfficialRelay('not a url')).toBe(false);
   });
 
+  it('K-243: requires TLS for Kraki relays (as iOS does)', () => {
+    expect(isOfficialRelay('ws://relay.kraki.chat')).toBe(false);
+    expect(isOfficialRelay('ws://cn.relay.kraki.chat')).toBe(false);
+    expect(decidePairingLink('?relay=ws://relay.kraki.chat&token=pt_1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'relay.kraki.chat' });
+    // Local development relays stay plain ws://.
+    expect(isOfficialRelay('ws://localhost:4000')).toBe(true);
+  });
+
+  it('K-001: asks before a token-less ?relay= points a signed-out browser at another server', () => {
+    expect(decidePairingLink('?relay=wss://evil.example', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+    expect(decidePairingLink('?relay=wss://evil.example&confirmRelay=1', ANDROID)).toEqual({ kind: 'none' });
+    expect(decidePairingLink('?relay=wss://relay.kraki.chat', IPHONE)).toEqual({ kind: 'none' });
+    expect(decidePairingLink('?relay=ws://localhost:4000', ANDROID)).toEqual({ kind: 'none' });
+    // Signed in: the relay client ignores it, so nothing to confirm.
+    expect(decidePairingLink('?relay=wss://evil.example', ANDROID, 0, true)).toEqual({ kind: 'none' });
+    // A pairing link is always confirmed, signed in or not.
+    expect(decidePairingLink('?relay=wss://evil.example&token=pt_1', ANDROID, 0, true)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+  });
+
   it('offers the app on iPhone without spending the token', () => {
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1', IPHONE)).toEqual({ kind: 'offer-app' });
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1&web=1', IPHONE)).toEqual({ kind: 'proceed' });

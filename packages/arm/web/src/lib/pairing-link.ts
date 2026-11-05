@@ -25,7 +25,9 @@ export function isOfficialRelay(relay: string): boolean {
     if (configured) {
       try { if (new URL(configured).host === url.host) return true; } catch { /* ignore */ }
     }
-    return OFFICIAL_RELAY_HOST.test(url.hostname);
+    // Kraki's relays are only reached over TLS (as on iOS): a plain ws://
+    // link naming them is not one of ours and is confirmed like any other.
+    return url.protocol === 'wss:' && OFFICIAL_RELAY_HOST.test(url.hostname);
   } catch {
     return false;
   }
@@ -43,20 +45,26 @@ export type PairingLinkDecision =
   | { kind: 'offer-app' }
   | { kind: 'confirm-relay'; host: string };
 
+/** `hasStoredDevice`: this browser is already signed in. A link without a
+ *  token then cannot move it to another relay (the relay client keeps the
+ *  stored one), so there is nothing to confirm. Without a sign-in, a
+ *  token-less `?relay=` still points sign-in at that server and is confirmed. */
 export function decidePairingLink(
   search: string,
   userAgent: string,
   maxTouchPoints = 0,
+  hasStoredDevice = false,
 ): PairingLinkDecision {
   const params = new URLSearchParams(search);
   const token = params.get('token');
-  if (!token) return { kind: 'none' };
   const relay = params.get('relay');
+  if (!token && (!relay || hasStoredDevice)) return { kind: 'none' };
   if (relay && !isOfficialRelay(relay) && params.get('confirmRelay') !== '1') {
     let host = relay;
     try { host = new URL(relay).host; } catch { /* show raw */ }
     return { kind: 'confirm-relay', host };
   }
+  if (!token) return { kind: 'none' };
   if (isIOSBrowser(userAgent, maxTouchPoints) && params.get('web') !== '1') return { kind: 'offer-app' };
   return { kind: 'proceed' };
 }

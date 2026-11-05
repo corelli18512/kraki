@@ -256,7 +256,13 @@ export class KrakiTransport {
 
     // The desktop app connects to the relay its built-in Kraki was set up with.
     const desktopRelay = typeof window !== 'undefined' ? desktopCredentials()?.relay : undefined;
-    this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
+    // A link's ?relay= is followed only together with a pairing token (that
+    // pairing was confirmed by main.tsx), or before this browser is signed
+    // in. Without that, a crafted link would move a signed-in browser to
+    // another server, which gets its device id and challenge signatures.
+    const linkRelay = params.relay && (params.token || !stored?.deviceId) ? params.relay : undefined;
+    if (params.relay && !linkRelay) logger.warn('Ignoring ?relay= without a pairing token: this browser is signed in', { host: relayHost(params.relay) });
+    this._url = url ?? linkRelay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;
