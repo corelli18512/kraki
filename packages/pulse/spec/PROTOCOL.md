@@ -309,7 +309,8 @@ bounded repair retry covers a lost batch). Dropping it would leave the peer
 treating every later send as a hole. Every RESET-and-resend also announces a
 tail gap (§11.2), and the resume resend triggered by a HELLO counts as the
 repair batch for that cursor, so in-flight hole ACKs for the same cursor do
-not trigger a second full resend.
+not trigger a second full resend. (Implemented in the TS endpoint; SwiftPulse
+does not yet answer an ACK below the base or announce the tail gap on RESET.)
 
 ### 5.4 onBytes(RESET { peerEpoch', oldest })
 
