@@ -7,7 +7,7 @@ import SwiftUI
 /// composer's Stop spinner or "busy" latch on.
 @MainActor
 final class ComposerLatchSettlingTests: XCTestCase {
-    final class Latches { var awaitingActive = true; var abortPending = true }
+    final class Latches { var awaitingActive = true; var abortPending = true; var stopRejection: String? }
 
     private struct Probe: View {
         let sessionId: String
@@ -17,7 +17,8 @@ final class ComposerLatchSettlingTests: XCTestCase {
         var body: some View {
             Color.clear
                 .settlesComposerLatches(sessionId: sessionId, state: .active,
-                                        awaitingActive: $awaitingActive, abortPending: $abortPending)
+                                        awaitingActive: $awaitingActive, abortPending: $abortPending,
+                                        onStopRejected: { latches.stopRejection = $0 })
                 .onChange(of: awaitingActive) { _, value in latches.awaitingActive = value }
                 .onChange(of: abortPending) { _, value in latches.abortPending = value }
         }
@@ -25,7 +26,8 @@ final class ComposerLatchSettlingTests: XCTestCase {
 
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
 
-    func testErrorReplyEndsStopAndBusyLatches() throws {
+    /// Hosts the probe with both latches on, then lands an `error` row with `errorMessage`.
+    private func latchesAfterError(_ errorMessage: String) throws -> Latches {
         let sid = "latch-session"
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("latch-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -46,9 +48,35 @@ final class ComposerLatchSettlingTests: XCTestCase {
         drain(200)
         XCTAssertTrue(latches.awaitingActive && latches.abortPending)
 
-        app.messageStore.ingestBatch(sid, [row("error", 2, "Failed to abort session: busy")])
+        app.messageStore.ingestBatch(sid, [row("error", 2, errorMessage)])
         drain(300)
+        return latches
+    }
+
+    func testErrorReplyEndsStopAndBusyLatches() throws {
+        let latches = try latchesAfterError("Failed to abort session: busy")
         XCTAssertFalse(latches.awaitingActive, "the composer is no longer waiting for the turn")
         XCTAssertFalse(latches.abortPending, "Stop can be pressed again")
+        // K-312: the agent refused to stop; the composer says so, with its reason.
+        XCTAssertEqual(latches.stopRejection, String(localized: "Couldn't stop: \("busy")"))
+    }
+
+    /// K-312 review: another session error that lands while Stop is in flight
+    /// still ends the latches, but is not shown as the reason Stop failed.
+    func testUnrelatedErrorWhileStopIsPendingShowsNoStopNotice() throws {
+        let latches = try latchesAfterError("Failed to steer agent: x")
+        XCTAssertFalse(latches.awaitingActive)
+        XCTAssertFalse(latches.abortPending)
+        XCTAssertNil(latches.stopRejection)
+    }
+
+    func testStopRejectionNoticeKeepsTheReason() {
+        XCTAssertEqual(StopRejectionNotice.text(errorMessage: "Failed to abort session: adapter is busy"),
+                       String(localized: "Couldn't stop: \("adapter is busy")"))
+        XCTAssertNil(StopRejectionNotice.text(errorMessage: "Session not found"),
+                     "only the Stop's own failure is a reason Stop failed")
+        XCTAssertNil(StopRejectionNotice.text(errorMessage: "Failed to steer agent: x"))
+        XCTAssertEqual(StopRejectionNotice.text(errorMessage: "Failed to abort session: "),
+                       String(localized: "Couldn't stop the agent."))
     }
 }
