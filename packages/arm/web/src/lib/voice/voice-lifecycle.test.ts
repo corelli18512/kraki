@@ -124,6 +124,25 @@ describe('voice.summary controller hooks', () => {
     await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
     expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'permission', cause: name === 'NotAllowedError' ? 'permission' : 'mic_unavailable' }));
   });
+  it('checks for a microphone before taking a lease and opening the gateway (K-233)', async () => {
+    const summary = summaries();
+    const sendRaw = vi.fn();
+    configureVoiceTransport({ sendRaw, deviceId: () => 'd', userId: () => 'u', relayUrl: () => 'ws://localhost:4430', connected: () => true });
+    resetVoice();
+    onAuthOk({ brokerUrl: 'ws://localhost:4430/voice', resource: 'voice/doubao' }, []);
+    voiceSettings.grantConsent();
+    const opened = vi.fn();
+    vi.stubGlobal('WebSocket', class extends SpeechSocket { constructor() { super(); opened(); } });
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => { throw new DOMException('none', 'NotFoundError'); },
+      enumerateDevices: async () => [{ kind: 'videoinput' }],
+    } });
+    await startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    expect(useVoice.getState()).toMatchObject({ phase: 'failed', owner: 's', error: 'No microphone is available. Connect a microphone and try again.' });
+    expect(opened).not.toHaveBeenCalled();
+    expect(sendRaw).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'request_voice_lease' }));
+    expect(summary).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'failed', stage: 'permission', cause: 'mic_unavailable' }));
+  });
   it('broker socket connection failure is network, not the localized error message', async () => {
     const summary = summaries();
     vi.stubGlobal('WebSocket', class extends SpeechSocket {
@@ -158,6 +177,7 @@ describe('voice.summary controller hooks', () => {
     const summary = summaries();
     onLeaseGrant({ payload: { exp: 0, did: 'd' } } as never);
     const starting = startDictation('s', { fields: {}, vocabulary: [] }, vi.fn());
+    await vi.advanceTimersByTimeAsync(0); // the microphone check runs first
     if (mode === 'denied') onLeaseDenied('quota_exhausted', 'private detail');
     else await vi.advanceTimersByTimeAsync(10_000);
     await starting;

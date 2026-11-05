@@ -154,6 +154,20 @@ function getLease(): Promise<VoiceLease> {
 const WORKLET = `class C extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('kraki-capture',C);`;
 interface Capture { stop: () => void }
 
+/** False when this browser certainly has no microphone. Device kinds are
+ *  listed before permission is granted; when they can't be listed, assume one
+ *  (getUserMedia still reports it). */
+async function hasMicrophone(): Promise<boolean> {
+  const media = navigator.mediaDevices;
+  if (!media?.getUserMedia) return false;
+  if (!media.enumerateDevices) return true;
+  try {
+    return (await media.enumerateDevices()).some((device) => device.kind === 'audioinput');
+  } catch {
+    return true;
+  }
+}
+
 async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): Promise<Capture> {
   if (!navigator.mediaDevices?.getUserMedia) throw new VoiceFailure(t('settings:voice.errors.noMicrophone'), 'mic_unavailable');
   let stream: MediaStream;
@@ -234,6 +248,15 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.offline') }); return true;
   }
   useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
+  // No microphone at all: say so before taking a lease and opening the gateway.
+  if (!(await hasMicrophone())) {
+    if (useVoice.getState().phase !== 'connecting' || useVoice.getState().owner !== owner) return true;
+    diag.voices.stateChanged('requestingPermission');
+    fail(t('settings:voice.errors.noMicrophone'), 'mic_unavailable');
+    useVoice.setState({ owner });
+    return true;
+  }
+  if (rec || useVoice.getState().phase !== 'connecting' || useVoice.getState().owner !== owner) return true;
   const recordingId = uuid();
   let ws: WebSocket;
   try {
