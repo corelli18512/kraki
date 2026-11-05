@@ -86,9 +86,12 @@ export const SessionRow = memo(function SessionRow({
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
-    window.addEventListener('click', close);
+    // Listen from the next task: the tap that opened the menu (Swipe › More)
+    // is still bubbling to window when this effect runs and would close it.
+    const listen = setTimeout(() => window.addEventListener('click', close));
     window.addEventListener('keydown', onKey);
     return () => {
+      clearTimeout(listen);
       window.removeEventListener('click', close);
       window.removeEventListener('keydown', onKey);
     };
