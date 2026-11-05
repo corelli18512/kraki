@@ -14,14 +14,35 @@ enum IOSComposerTextMetrics {
     static var font: UIFont { UIFont.preferredFont(forTextStyle: .body) }
     static var lineHeight: CGFloat { ceil(font.lineHeight) }
 
+    /// Measured at most this many UTF-16 units first: a body pass measured a
+    /// pasted megabyte in full (twice), freezing the field for a minute.
+    static let measuredPrefixLength = 4_096
+
     static func height(_ text: String, width: CGFloat, maxHeight: CGFloat) -> CGFloat {
-        guard width > 1 else { return 0 }
+        measure(text, width: width, maxHeight: maxHeight).height
+    }
+
+    /// The height, and how many UTF-16 units were laid out to find it.
+    static func measure(_ text: String, width: CGFloat, maxHeight: CGFloat) -> (height: CGFloat, measuredLength: Int) {
+        guard width > 1 else { return (0, 0) }
+        let utf16 = text as NSString
+        if utf16.length > measuredPrefixLength {
+            // Text only adds lines, so a prefix that already fills the cap
+            // decides the height.
+            let prefixEnd = utf16.rangeOfComposedCharacterSequence(at: measuredPrefixLength).location
+            let prefix = utf16.substring(to: prefixEnd)
+            let prefixHeight = lineCount(prefix, width: width) * lineHeight
+            if prefixHeight >= maxHeight { return (maxHeight, prefixEnd) }
+        }
+        return (min(lineCount(text, width: width) * lineHeight, maxHeight), utf16.length)
+    }
+
+    private static func lineCount(_ text: String, width: CGFloat) -> CGFloat {
         let measured = (text.isEmpty ? " " : text as NSString).boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font], context: nil).height
-        let lines = max(1, (measured / font.lineHeight).rounded())
-        return min(lines * lineHeight, maxHeight)
+        return max(1, (measured / font.lineHeight).rounded())
     }
 }
 

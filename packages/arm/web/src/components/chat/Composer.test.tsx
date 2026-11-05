@@ -172,3 +172,57 @@ describe('Composer — images in answers (Mac ComposerAnswerImages)', () => {
     expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
   });
 });
+
+describe('Composer — dropping an image (K-120)', () => {
+  function stubImageDecoding() {
+    const OriginalImage = window.Image;
+    class FakeImage { width = 10; height = 10; onload: (() => void) | null = null; set src(_v: string) { setTimeout(() => this.onload?.(), 0); } }
+    (window as unknown as { Image: unknown }).Image = FakeImage;
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage() {} } as never);
+    const U = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    const saved = [U.createObjectURL, U.revokeObjectURL];
+    U.createObjectURL = () => 'blob:x'; U.revokeObjectURL = () => {};
+    return () => {
+      (window as unknown as { Image: unknown }).Image = OriginalImage;
+      toDataURL.mockRestore(); getContext.mockRestore(); [U.createObjectURL, U.revokeObjectURL] = saved;
+    };
+  }
+  const files = (...list: File[]) => ({ files: list, types: ['Files'], dropEffect: 'none' });
+
+  it('attaches a dropped image file instead of leaving the page', async () => {
+    const restore = stubImageDecoding();
+    render(<Composer {...props} />);
+    const composer = document.querySelector('.kcomposer')!;
+    const overData = files(new File(['x'], 'a.png', { type: 'image/png' }));
+    const over = fireEvent.dragOver(composer, { dataTransfer: overData });
+    expect(over).toBe(false); // default prevented: the browser does not open the file
+    expect(overData.dropEffect).toBe('copy'); // the page-wide guard leaves the composer's own answer
+    await act(async () => {
+      fireEvent.drop(composer, { dataTransfer: files(new File(['x'], 'a.png', { type: 'image/png' })) });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    restore();
+    expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('');
+  });
+
+  it('a file dropped elsewhere does not navigate; a busy turn takes no image', async () => {
+    render(<Composer {...props} busy canAbort intent="steer" />);
+    const outside = new Event('drop', { cancelable: true }) as Event & { dataTransfer: unknown };
+    outside.dataTransfer = files(new File(['x'], 'a.png', { type: 'image/png' }));
+    window.dispatchEvent(outside);
+    expect(outside.defaultPrevented).toBe(true);
+    const overOutside = new Event('dragover', { cancelable: true, bubbles: true }) as Event & { dataTransfer: { dropEffect: string } };
+    overOutside.dataTransfer = { ...files(new File(['x'], 'a.png', { type: 'image/png' })), dropEffect: 'copy' };
+    document.body.dispatchEvent(overOutside);
+    expect(overOutside.defaultPrevented).toBe(true);
+    expect(overOutside.dataTransfer.dropEffect).toBe('none'); // nothing outside the composer takes the file
+    await act(async () => {
+      fireEvent.drop(document.querySelector('.kcomposer')!, { dataTransfer: files(new File(['x'], 'a.png', { type: 'image/png' })) });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Replace image' })).not.toBeInTheDocument();
+  });
+});

@@ -306,9 +306,9 @@ struct MacChatComposer: View {
             }
             .background {
                 MacComposerPasteProbe(
-                    enabled: isFocused && canAttachImage,
+                    enabled: isFocused,
                     onPasteImage: { image in
-                        attachImage(image)
+                        guard offerImage(image) else { return }
                         requestComposerFocus()
                     }
                 )
@@ -348,6 +348,9 @@ struct MacChatComposer: View {
         // immediately; interpolating only the shell leaves text/buttons outside
         // the glass. Commit voice geometry atomically (waveform still animates).
         .animation(voiceOwnsComposer ? nil : .easeOut(duration: 0.18), value: contentHeightKey)
+        // The attach button says "drop one": the whole box takes the drop,
+        // not only the editor (whose own drop handling wins over its area).
+        .onDrop(of: [.fileURL, .image], delegate: MacComposerImageDrop(offer: offerImage))
     }
 
     /// The height the box's content will take for the current text.
@@ -455,7 +458,12 @@ struct MacChatComposer: View {
                 onRequestFocus: requestComposerFocus,
                 onSubmit: handleModeSubmit,
                 onSelection: { selection = $0 },
-                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) }
+                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) },
+                onDropImage: { image in
+                    guard offerImage(image) else { return false }
+                    requestComposerFocus()
+                    return true
+                }
             )
             .padding(.leading, 0)
             .padding(.trailing, MacComposerMetrics.textTrailingInset)
@@ -688,13 +696,17 @@ struct MacChatComposer: View {
         .accessibilityValue(previewImage == nil ? String(localized: "No image selected") : String(localized: "Image selected"))
     }
 
-    private var canUseImageSlot: Bool { canAttachImage && !voiceOwnsComposer }
+    private var canUseImageSlot: Bool { attachBlock == nil }
+
+    private var attachBlock: MacControlHelp.AttachBlock? {
+        .of(voice: voiceOwnsComposer, canAttach: canAttachImage,
+            answering: submissionIntent == .answerQuestion, agent: session?.agent)
+    }
 
     /// Per button, not on the slot: an outer `.help` would replace the ×'s own.
     /// Outside `.disabled` so it still shows (and says why) when greyed out.
     private var attachHelp: String {
-        MacControlHelp.attachImage(blocked: .of(voice: voiceOwnsComposer, canAttach: canAttachImage,
-            answering: submissionIntent == .answerQuestion, agent: session?.agent), hasImage: previewImage != nil)
+        MacControlHelp.attachImage(blocked: attachBlock, hasImage: previewImage != nil)
     }
 
     private func requestAbort() {
@@ -845,6 +857,18 @@ struct MacChatComposer: View {
         guard let image = MacComposerPastePolicy.image(from: .general) else { return }
         attachImage(image)
         isFocused = true
+    }
+
+    /// A pasted or dropped image: attached, or an alert says why not (while
+    /// the agent was busy a pasted image used to vanish without a word).
+    /// Same rule as the attach button.
+    private func offerImage(_ image: NSImage) -> Bool {
+        if let attachBlock {
+            imageAttachError = MacControlHelp.attachImage(blocked: attachBlock, hasImage: false)
+            return false
+        }
+        attachImage(image)
+        return true
     }
 
     private func attachImage(_ image: NSImage) {
