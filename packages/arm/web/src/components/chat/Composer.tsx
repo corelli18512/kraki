@@ -51,14 +51,38 @@ const PLACEHOLDER = {
   denyPermission: 'composer.placeholder.denyPermission',
 } as const;
 
-async function compressImage(file: File): Promise<{ attachment: Attachment; preview: string } | null> {
+type StagedImage = { attachment: Attachment; preview: string };
+
+/** Formats sent as they are encoded; anything else (HEIC, BMP, TIFF…) is
+ *  re-encoded as JPEG, which every agent accepts. */
+const ENCODED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+function readDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** The image to stage, or why it cannot be: `unreadable` when this browser
+ *  cannot decode it (corrupt, or HEIC outside Safari), `tooLarge` when even
+ *  the compressed copy exceeds the limit (K-200). */
+async function compressImage(file: File): Promise<StagedImage | 'unreadable' | 'tooLarge'> {
   const img = new window.Image();
   const url = URL.createObjectURL(file);
   img.src = url;
   await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; }).catch(() => null);
   URL.revokeObjectURL(url);
   let { width, height } = img;
-  if (!width || !height) return null;
+  if (!width || !height) return 'unreadable';
+  // A canvas keeps only the first frame: a GIF within the limit goes as is.
+  if (file.type === 'image/gif' && file.size <= MAX_IMAGE_SIZE) {
+    const dataUrl = await readDataUrl(file).catch(() => null);
+    if (!dataUrl) return 'unreadable';
+    return { attachment: { type: 'image', mimeType: 'image/gif', data: dataUrl.split(',')[1] }, preview: dataUrl };
+  }
   if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
     const scale = MAX_IMAGE_DIMENSION / Math.max(width, height);
     width = Math.round(width * scale);
@@ -68,14 +92,52 @@ async function compressImage(file: File): Promise<{ attachment: Attachment; prev
   canvas.width = width;
   canvas.height = height;
   canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
-  for (const [type, quality] of [[file.type || 'image/jpeg', 0.8], ['image/jpeg', 0.6]] as const) {
-    const dataUrl = canvas.toDataURL(type, quality);
+  const type = ENCODED_TYPES.has(file.type) ? file.type : 'image/jpeg';
+  for (const [encoding, quality] of [[type, 0.8], ['image/jpeg', 0.6]] as const) {
+    const dataUrl = canvas.toDataURL(encoding, quality);
     const data = dataUrl.split(',')[1];
     if (Math.ceil((data.length * 3) / 4) <= MAX_IMAGE_SIZE) {
       return { attachment: { type: 'image', mimeType: dataUrl.substring(5, dataUrl.indexOf(';')), data }, preview: dataUrl };
     }
   }
-  return null;
+  return 'tooLarge';
+}
+
+/** Mac `MacComposerPastePolicy`: text wins over an image (spreadsheet and
+ *  Office copies carry the text and a picture of it), unless the text is only
+ *  the image's own web address (a browser's Copy Image) or file name (a copied
+ *  file). Attachment placeholders (U+FFFC) are not text (K-217). */
+export function pastedImage(data: DataTransfer): File | undefined {
+  const image = [...data.files].find((f) => f.type.startsWith('image/'));
+  if (!image) return undefined;
+  const text = data.getData('text/plain').replace(/\uFFFC/g, '').trim();
+  const webAddress = !/\s/.test(text) && /^(https?|data):/i.test(text);
+  return !text || webAddress || text === image.name ? image : undefined;
+}
+
+/** The staged image survives a reload or a discarded tab (like the draft
+ *  text), in this tab only; switching Sessions still clears it (K-202). */
+const STAGED_IMAGE_KEY = 'kraki-composer-image';
+
+function readStagedImage(sessionId: string): StagedImage | null {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(STAGED_IMAGE_KEY) ?? 'null') as { sessionId?: string; attachment?: Attachment } | null;
+    const attachment = stored?.sessionId === sessionId ? stored.attachment : undefined;
+    return attachment?.type === 'image' && attachment.data && attachment.mimeType
+      ? { attachment, preview: `data:${attachment.mimeType};base64,${attachment.data}` }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStagedImage(sessionId: string, image: StagedImage | null): void {
+  try {
+    if (image) sessionStorage.setItem(STAGED_IMAGE_KEY, JSON.stringify({ sessionId, attachment: image.attachment }));
+    else sessionStorage.removeItem(STAGED_IMAGE_KEY);
+  } catch {
+    // Storage full or unavailable: the image stays staged in memory only.
+  }
 }
 
 export interface ComposerHandle {
@@ -107,7 +169,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const { t } = useTranslation('chat');
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
-  const [image, setImage] = useState<{ attachment: Attachment; preview: string } | null>(null);
+  const [image, setImageState] = useState<StagedImage | null>(() => readStagedImage(sessionId));
   // Images in an answer (Mac ComposerAnswerImages): only Pi's questions take
   // them, image-only answers included. For other agents attach is off while
   // answering and a staged image stays in the composer for a later message.
@@ -118,6 +180,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [abortPending, setAbortPending] = useState(false);
   const currentSession = useRef(sessionId);
   currentSession.current = sessionId;
+  const setImage = useCallback((next: StagedImage | null) => {
+    writeStagedImage(currentSession.current, next);
+    setImageState(next);
+  }, []);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
@@ -169,7 +235,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       fieldRef.current?.focus();
       return true;
     },
-  }), [sessionId, image, setDraft]);
+  }), [sessionId, image, setDraft, setImage]);
 
   // A new session (or the turn ending) resets the pending abort.
   useEffect(() => { setAbortPending(false); }, [sessionId, canAbort]);
@@ -184,7 +250,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   });
   useEffect(() => { if (!reachable) setAbortPending(false); }, [reachable]);
   useEffect(() => { if (trailingError) setAbortPending(false); }, [trailingError]);
-  useEffect(() => { setImage(null); }, [sessionId]);
+  // Another Session's composer starts without an image (the restored one
+  // belongs to the Session it was staged in).
+  const imageSession = useRef(sessionId);
+  useEffect(() => {
+    if (imageSession.current === sessionId) return;
+    imageSession.current = sessionId;
+    setImage(null);
+  }, [sessionId, setImage]);
 
   useEffect(() => {
     if (shouldAutoFocusTextInput()) fieldRef.current?.focus({ preventScroll: true });
@@ -239,7 +312,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onSend(trimmed || '[image]', sent ? [sent.attachment] : undefined, intent);
     setDraft(sessionId, '');
     if (sent) setImage(null);
-  }, [canSend, text, image, carriesImage, intent, onSend, setDraft, sessionId]);
+  }, [canSend, text, image, carriesImage, intent, onSend, setDraft, sessionId, setImage]);
 
   const primary = () => {
     if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation(intent === 'denyPermission' ? 'edit' : 'send'); return; }
@@ -255,9 +328,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const pickImage = async (file: File | undefined) => {
     if (!canAttach || !file || !file.type.startsWith('image/')) return;
+    const owner = sessionId;
     const result = await compressImage(file);
-    if (result) setImage(result);
-    else useStore.getState().setLastError(t('composer.imageTooLarge'));
+    if (result === 'unreadable') useStore.getState().setLastError(t('composer.imageUnreadable'));
+    else if (result === 'tooLarge') useStore.getState().setLastError(t('composer.imageTooLarge'));
+    else if (currentSession.current === owner) setImage(result);
   };
 
   const voiceSend = dictation.active;
@@ -310,7 +385,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; }}
           onPaste={(e) => {
-            const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'));
+            const file = pastedImage(e.clipboardData);
             if (file) { e.preventDefault(); void pickImage(file); }
           }}
           onKeyDown={(e) => {

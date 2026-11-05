@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { Composer, updateComposerScrollFade } from './Composer';
+import { Composer, pastedImage, updateComposerScrollFade } from './Composer';
 import { useStartDictation } from './Voice';
 import { outbox } from '../../lib/chat/outbox';
 import { useStore } from '../../hooks/useStore';
@@ -170,5 +170,156 @@ describe('Composer — images in answers (Mac ComposerAnswerImages)', () => {
     expect(onSend).toHaveBeenCalledWith('Amber', undefined, 'answerQuestion');
     // Still staged for the next message.
     expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+  });
+});
+
+/** jsdom cannot decode images: stub decoding (`decodes`) and canvas encoding. */
+function stubImagePipeline(decodes: boolean) {
+  const OriginalImage = window.Image;
+  class FakeImage {
+    width = 0; height = 0; onload: (() => void) | null = null; onerror: (() => void) | null = null;
+    set src(_v: string) { setTimeout(() => { if (decodes) { this.width = 10; this.height = 10; this.onload?.(); } else this.onerror?.(); }, 0); }
+  }
+  (window as unknown as { Image: unknown }).Image = FakeImage;
+  const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/jpeg;base64,AAAA');
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage() {} } as never);
+  const U = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+  const saved = [U.createObjectURL, U.revokeObjectURL];
+  U.createObjectURL = () => 'blob:x'; U.revokeObjectURL = () => {};
+  return {
+    toDataURL,
+    restore() {
+      (window as unknown as { Image: unknown }).Image = OriginalImage;
+      toDataURL.mockRestore(); getContext.mockRestore(); [U.createObjectURL, U.revokeObjectURL] = saved;
+    },
+  };
+}
+
+async function pick(file: File) {
+  const input = document.querySelector<HTMLInputElement>('input[type=file]')!;
+  await act(async () => {
+    fireEvent.change(input, { target: { files: [file] } });
+    await new Promise((r) => setTimeout(r, 50));
+  });
+}
+
+describe('Composer — image errors and formats (K-200)', () => {
+  const imgProps = { ...props, sessionId: 'composer-image' };
+  beforeEach(() => { useStore.getState().setLastError(null); sessionStorage.clear(); });
+
+  it('a corrupt or undecodable image says it cannot be read, not that it is too large', async () => {
+    const stub = stubImagePipeline(false);
+    try {
+      render(<Composer {...imgProps} />);
+      await pick(new File(['not an image'], 'broken.heic', { type: 'image/heic' }));
+    } finally { stub.restore(); }
+    expect(useStore.getState().lastError).toBe("This image can't be read here. Try a JPEG, PNG, GIF or WebP image.");
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+  });
+
+  it('a decodable HEIC is re-encoded as JPEG, never sent as HEIC', async () => {
+    const stub = stubImagePipeline(true);
+    const onSend = vi.fn();
+    try {
+      render(<Composer {...imgProps} onSend={onSend} />);
+      await pick(new File(['heic'], 'photo.heic', { type: 'image/heic' }));
+      expect(stub.toDataURL).toHaveBeenCalledWith('image/jpeg', 0.8);
+    } finally { stub.restore(); }
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(onSend).toHaveBeenCalledWith('[image]', [expect.objectContaining({ mimeType: 'image/jpeg' })], 'prompt');
+  });
+
+  it('a GIF within the limit is sent as is, keeping its animation', async () => {
+    const stub = stubImagePipeline(true);
+    const onSend = vi.fn();
+    try {
+      render(<Composer {...imgProps} onSend={onSend} />);
+      await pick(new File(['GIF89a'], 'cat.gif', { type: 'image/gif' }));
+      expect(stub.toDataURL).not.toHaveBeenCalled();
+    } finally { stub.restore(); }
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(onSend).toHaveBeenCalledWith('[image]', [{ type: 'image', mimeType: 'image/gif', data: btoa('GIF89a') }], 'prompt');
+  });
+});
+
+/** A clipboard with `files` and a `text/plain` string. */
+function clipboard(files: File[], text = ''): DataTransfer {
+  return { files, getData: (type: string) => (type === 'text/plain' ? text : '') } as unknown as DataTransfer;
+}
+
+describe('Composer — paste: text wins over an image (K-217, Mac MacComposerPastePolicy)', () => {
+  const png = new File(['png'], 'image.png', { type: 'image/png' });
+  beforeEach(() => { sessionStorage.clear(); });
+
+  it('decides between the text and the image', () => {
+    expect(pastedImage(clipboard([png]))).toBe(png);
+    expect(pastedImage(clipboard([png], 'Q1\t42\nQ2\t57'))).toBeUndefined();
+    expect(pastedImage(clipboard([png], 'https://example.com/cat.png'))).toBe(png);
+    expect(pastedImage(clipboard([png], 'image.png'))).toBe(png);
+    expect(pastedImage(clipboard([png], ' \uFFFC '))).toBe(png);
+    expect(pastedImage(clipboard([], 'text only'))).toBeUndefined();
+    expect(pastedImage(clipboard([new File(['x'], 'a.pdf', { type: 'application/pdf' })]))).toBeUndefined();
+  });
+
+  it('pasting text with a picture of it keeps the text and attaches nothing', async () => {
+    render(<Composer {...props} sessionId="composer-paste" />);
+    const allowed = fireEvent.paste(screen.getByRole('textbox'), { clipboardData: clipboard([png], 'Q1 42') });
+    expect(allowed).toBe(true);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+  });
+
+  it('pasting an image alone attaches it instead of inserting anything', async () => {
+    const stub = stubImagePipeline(true);
+    try {
+      render(<Composer {...props} sessionId="composer-paste" />);
+      const allowed = fireEvent.paste(screen.getByRole('textbox'), { clipboardData: clipboard([png]) });
+      expect(allowed).toBe(false);
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    } finally { stub.restore(); }
+    expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+  });
+});
+
+describe('Composer — the staged image survives a reload (K-202)', () => {
+  beforeEach(() => { sessionStorage.clear(); });
+
+  it('restores the image for its Session after a remount, and not in another Session', async () => {
+    const stub = stubImagePipeline(true);
+    let view: ReturnType<typeof render>;
+    try {
+      view = render(<Composer {...props} sessionId="composer-reload" />);
+      await pick(new File(['png'], 'a.png', { type: 'image/png' }));
+    } finally { stub.restore(); }
+    expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+    view!.unmount();
+
+    // A discarded tab reloads with only its sessionStorage.
+    const restored = render(<Composer {...props} sessionId="composer-reload" />);
+    expect(screen.getByRole('button', { name: 'Replace image' })).toBeInTheDocument();
+    restored.unmount();
+
+    render(<Composer {...props} sessionId="composer-other" />);
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+  });
+
+  it('switching Sessions still clears the staged image (WEB-168, by design); sending forgets it', async () => {
+    const stub = stubImagePipeline(true);
+    let view: ReturnType<typeof render>;
+    try {
+      view = render(<Composer {...props} sessionId="composer-reload" />);
+      await pick(new File(['png'], 'a.png', { type: 'image/png' }));
+    } finally { stub.restore(); }
+    view!.rerender(<Composer {...props} sessionId="composer-other" />);
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+    view!.rerender(<Composer {...props} sessionId="composer-reload" />);
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeInTheDocument();
+    expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
+
+    const again = stubImagePipeline(true);
+    try { await pick(new File(['png'], 'a.png', { type: 'image/png' })); } finally { again.restore(); }
+    expect(sessionStorage.getItem('kraki-composer-image')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(sessionStorage.getItem('kraki-composer-image')).toBeNull();
   });
 });

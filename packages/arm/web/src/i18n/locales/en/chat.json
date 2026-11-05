@@ -121,6 +121,7 @@
   },
   "composer": {
     "imageTooLarge": "Image is too large (max 3 MB after compression).",
+    "imageUnreadable": "This image can't be read here. Try a JPEG, PNG, GIF or WebP image.",
     "sendDictation": "Send dictation",
     "stop": "Stop agent",
     "submitAnswer": "Submit answer",

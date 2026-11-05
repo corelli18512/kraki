@@ -115,6 +115,7 @@
   },
   "composer": {
     "imageTooLarge": "图片过大（压缩后最大 3 MB）。",
+    "imageUnreadable": "无法读取此图片。请改用 JPEG、PNG、GIF 或 WebP 图片。",
     "sendDictation": "发送语音输入",
     "stop": "停止 Agent",
     "submitAnswer": "提交回答",
