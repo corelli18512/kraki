@@ -3308,6 +3308,16 @@ describe('RelayClient pending-question digest', () => {
     expect(preview()?.type).not.toBe('question');
   });
 
+  it('tells apps that a withdrawn question is closed (K-022)', () => {
+    const { adapter, ws, askQ, digest } = buildClient();
+    askQ('q1');
+    expect(digest()).toBeDefined(); // an app is connected
+    ws.sent.length = 0;
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    const withdrawn = decodePulseSends(ws.sent).find((m) => m.type === 'question_withdrawn');
+    expect(withdrawn).toMatchObject({ sessionId: 'sess_1', payload: { questionId: 'q1' } });
+  });
+
   it('clears BOTH question and permission attention on terminal turn end (no short-circuit leak)', () => {
     // Regression: clearOpenQuestions used `openQuestions.delete(sid) ||
     // openPermissions.delete(sid)`. The `||` short-circuited when the question

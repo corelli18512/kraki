@@ -117,10 +117,12 @@ export function wireAdapterEvents(client: RelayClient): void {
     recordTrace(client, { type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
   };
 
-  // Withdrawn by the agent (timeout/cancel): stop routing answers to it. On
-  // the spine the question closes as unanswered once anything else follows.
+  // Withdrawn by the agent (timeout/cancel): stop routing answers to it, and
+  // tell apps so its choices close now (K-022). On the spine the question
+  // closes as unanswered once anything else follows.
   client.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
     removeOpenQuestion(client, sessionId, questionId);
+    client.send({ type: 'question_withdrawn', sessionId, payload: { questionId } });
     client.broadcastSessionList();
   };
 

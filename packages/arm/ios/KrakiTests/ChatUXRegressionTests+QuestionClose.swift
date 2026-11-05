@@ -32,5 +32,24 @@ extension ChatUXRegressionTests {
         let fade = try XCTUnwrap(cell.layer.animation(forKey: kCATransition) as? CATransition, "choices vanish in one frame")
         XCTAssertEqual(fade.type, .fade)
     }
+
+    /// K-022: the agent withdrew its question (timeout, cancel). Its choices
+    /// close at once; tapping one sent a plain prompt that began a new turn.
+    func testWithdrawnQuestionClosesAtOnce() throws {
+        let fx = try makeFixture(total: 10)
+        drain(600)
+        try openQuestion(fx)
+        fx.app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+            "type": "question_withdrawn", "sessionId": sid, "deviceId": dev, "seq": 900,
+            "timestamp": "2026-09-01T00:00:05.000Z", "payload": ["questionId": "q1"],
+        ]))
+        fx.vc.syncLiveUpdates()
+        XCTAssertTrue(fx.vc.automationItemIDs.contains("\(sid):12"), "the question is drawn closed")
+        XCTAssertFalse(fx.vc.automationItemIDs.contains("\(sid):12#q-open"))
+        let vm = ChatViewModel(sessionId: sid, appState: fx.app)
+        XCTAssertTrue(vm.questions.isEmpty, "the composer no longer answers it")
+        let bubble = try XCTUnwrap(vm.displayMessages(spineRevision: 99).first { $0.seq == 12 })
+        XCTAssertNil(bubble.frozenCard?.action?.choices)
+    }
 }
 #endif

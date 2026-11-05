@@ -233,6 +233,7 @@
 		46954A5DADF3F9B154A8ECBC /* MacComposerUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60DFE95FA77E42BFE63ADB6E /* MacComposerUndoTests.swift */; };
 		46A3A1AA1A0318AD3709FD7E /* ReconnectingIndicatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8944F3F2DB7D6FAE31454B1B /* ReconnectingIndicatorTests.swift */; };
 		46AEB1D619ECB0277B3D042F /* EventMonitorForwarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */; };
+		4712C9AE2F6204A06D425F2E /* MessageRouter+LiveSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A8177F3167EE0C52F20B1D3 /* MessageRouter+LiveSignals.swift */; };
 		47FFECFD698CF0DE786EA64C /* MacChatBubbleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D720ACC636683293D505371 /* MacChatBubbleCell.swift */; };
 		48898113E756024CD42E3B7F /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
 		4996504C6982E0B6A3503A86 /* MacControlHelpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF864DCD55F230904C925921 /* MacControlHelpTests.swift */; };
@@ -662,6 +663,7 @@
 		DEF3457C9DDC84533AE6636B /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */; };
 		DFA7C9DEE69AE83C1C88F2AE /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
 		E0100C295B7D75341380EEAB /* IOSVoiceComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 931E212514D39039C91B350D /* IOSVoiceComposerTests.swift */; };
+		E02CA17586631ADF847DD60A /* MessageRouter+LiveSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A8177F3167EE0C52F20B1D3 /* MessageRouter+LiveSignals.swift */; };
 		E0B3A7FBDB277CFC8D00528A /* AccountAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA78D91ACB2BAF91DB09337 /* AccountAvatar.swift */; };
 		E0DAAF97C0DE942CD2102A57 /* PermissionPromptSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 475BC61FBB21B0BF58C346DD /* PermissionPromptSummaryTests.swift */; };
 		E16C9A35A79A9393D168930A /* VoiceInputCompletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3F63751768A02292B9A069 /* VoiceInputCompletion.swift */; };
@@ -847,6 +849,7 @@
 		1844CDC99B687DFFEE1E79CD /* MacChatDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatDocumentView.swift; sourceTree = "<group>"; };
 		19777D98E181CB40434BABBD /* MacQuestionAnswerOnceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacQuestionAnswerOnceTests.swift; sourceTree = "<group>"; };
 		19ED0DA842EA67CB8B2F5D35 /* SessionListReconcilePerfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListReconcilePerfTests.swift; sourceTree = "<group>"; };
+		1A8177F3167EE0C52F20B1D3 /* MessageRouter+LiveSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MessageRouter+LiveSignals.swift"; sourceTree = "<group>"; };
 		1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageRenderTests.swift; sourceTree = "<group>"; };
 		1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdateTests.swift; sourceTree = "<group>"; };
 		1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleActionSlot.swift; sourceTree = "<group>"; };
@@ -1461,6 +1464,7 @@
 				654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */,
 				17F9E82A9C961CEDB082953C /* MessageRouter+Devices.swift */,
 				FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */,
+				1A8177F3167EE0C52F20B1D3 /* MessageRouter+LiveSignals.swift */,
 				FEBAA416D48DE776B251DF97 /* MessageRouter+Replies.swift */,
 				11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */,
 				2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */,
@@ -2858,6 +2862,7 @@
 				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
 				F7B50B27C50074C2E07495C8 /* MessageRouter+DeviceTrust.swift in Sources */,
 				3812EBE54EE6E9F519B2040A /* MessageRouter+Devices.swift in Sources */,
+				E02CA17586631ADF847DD60A /* MessageRouter+LiveSignals.swift in Sources */,
 				53B12313E7DBCEE0F637DECF /* MessageRouter+Replies.swift in Sources */,
 				0D84FEFC83BB1552A71A855F /* MessageRouter.swift in Sources */,
 				F7469ADF2790C48517F2765F /* MessageStore+CardTurn.swift in Sources */,
@@ -3130,6 +3135,7 @@
 				348C4411EA05E81F65F1E554 /* MessageProvider.swift in Sources */,
 				EACF9AB072D5A72DB5F27D17 /* MessageRouter+DeviceTrust.swift in Sources */,
 				C48372F6CBE08B7FF43DDE1C /* MessageRouter+Devices.swift in Sources */,
+				4712C9AE2F6204A06D425F2E /* MessageRouter+LiveSignals.swift in Sources */,
 				84C05B5157270743A11B31D3 /* MessageRouter+Replies.swift in Sources */,
 				A5D83F4EAEE78022F37C596A /* MessageRouter.swift in Sources */,
 				EB5D1E77158F03E101D9A47C /* MessageStore+CardTurn.swift in Sources */,

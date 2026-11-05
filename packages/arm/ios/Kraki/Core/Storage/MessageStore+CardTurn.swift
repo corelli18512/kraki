@@ -97,3 +97,11 @@ extension MessageStore {
         }
     }
 }
+
+extension MessageStore {
+    /// The agent withdrew an open question: it is no longer answerable.
+    func withdrawQuestion(_ sessionId: String, questionId: String) {
+        guard withdrawnQuestions[sessionId]?.contains(questionId) != true else { return }
+        withdrawnQuestions[sessionId, default: []].insert(questionId)
+    }
+}

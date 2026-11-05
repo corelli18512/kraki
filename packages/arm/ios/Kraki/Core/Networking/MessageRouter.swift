@@ -619,7 +619,7 @@ final class MessageRouter {
             // transient envelope with a global-counter seq that
             // would silently pollute `getLastSeq`. If a new persistent
             // type is added, give it an explicit case + handler.
-            break
+            handleLiveSessionSignal(type, sessionId: sessionId, payload: payload)
         }
     }
 
