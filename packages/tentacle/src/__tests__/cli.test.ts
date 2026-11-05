@@ -324,6 +324,8 @@ describe('CLI start when something already runs (K-266, K-030)', () => {
     const out = consoleOutput.join('\n');
     expect(out).toContain('could not be verified');
     expect(out).not.toContain('already running');
+    // On stderr: Kraki for Mac shows stderr when the command fails.
+    expect(vi.mocked(console.error).mock.calls.flat().join('\n')).toContain('could not be verified');
     expect(process.exitCode).toBe(1);
     expect(mockStartDaemon).not.toHaveBeenCalled();
     process.exitCode = 0;
@@ -340,13 +342,13 @@ describe('CLI start when something already runs (K-266, K-030)', () => {
     process.exitCode = 0;
   });
 
-  it('K-030: says the worker is being restarted when only its supervisor runs', async () => {
+  it('K-030: says the worker is (re)starting when only its supervisor runs', async () => {
     mockLoadConfig.mockReturnValue(config);
     mockIsDaemonRunning.mockReturnValue(true);
     mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'restarting', supervisorPid: 4242 });
     await runCli(['start']);
     const out = consoleOutput.join('\n');
-    expect(out).toContain('being restarted');
+    expect(out).toContain('(re)starting');
     expect(out).toContain('4242');
     expect(out).not.toContain('PID null');
   });
@@ -749,7 +751,9 @@ describe('CLI config reset', () => {
     const fresh = { relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } };
     mockLoadConfig.mockReturnValue(fresh);
     mockRunSetup.mockResolvedValue(fresh);
-    mockIsDaemonRunning.mockReturnValue(true);
+    // Running until restarted, then gone: start's wait for the relay
+    // connection (K-277) ends at once instead of polling into later tests.
+    mockIsDaemonRunning.mockImplementation(() => mockStartDaemon.mock.calls.length === 0);
     mockGetDaemonStatus.mockReturnValue({ running: true, pid: 999_999_999 });
     mockStopDaemon.mockReturnValue(true);
     mockStartDaemon.mockResolvedValue(1234);

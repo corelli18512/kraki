@@ -336,6 +336,8 @@ describe('getDaemonStatus()', () => {
     mockLoadDaemonPid.mockReturnValue(null);
     mockLoadDaemonSupervisorPid.mockReturnValue(999999998);
     expect(getDaemonStatus('linux')).toEqual({ running: false, pid: null });
+    // Cleared, so later checks do not probe the dead PID again.
+    expect(mockClearDaemonSupervisorPid).toHaveBeenCalled();
   });
 
   it('K-266: an alive PID that cannot be verified is reported as such, with the refusal to start', () => {

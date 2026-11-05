@@ -469,7 +469,14 @@ export function isDaemonRunning(
  */
 function supervisorRestartingStatus(): DaemonStatus | null {
   const supervisorPid = loadDaemonSupervisorPid();
-  if (supervisorPid === null || inspectDaemonProcess(supervisorPid) !== 'daemon') return null;
+  if (supervisorPid === null) return null;
+  const identity = inspectDaemonProcess(supervisorPid);
+  if (identity === 'gone' || identity === 'other') {
+    // Left by a killed supervisor: clear it so later checks skip the probe.
+    clearDaemonSupervisorPid();
+    return null;
+  }
+  if (identity !== 'daemon') return null;
   return { running: true, pid: null, detail: 'restarting', supervisorPid };
 }
 

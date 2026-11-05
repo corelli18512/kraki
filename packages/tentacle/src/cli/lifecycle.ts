@@ -363,10 +363,10 @@ export async function cmdStart(atLogin = false): Promise<void> {
 export function printAlreadyRunning(status: DaemonStatus | undefined): void {
   const refusal = status ? daemonStartRefusal(status) : null;
   if (refusal) {
-    console.log(chalk.red(`  ${refusal}`));
+    console.error(chalk.red(`  ${refusal}`));
   } else if (status?.detail === 'restarting') {
-    console.log(chalk.yellow(`  🦑 Kraki is running, but its background worker stopped and is being restarted (supervisor PID ${status.supervisorPid}).`));
-    console.log(chalk.dim('  See `kraki logs` for why; `kraki stop` stops it.'));
+    console.log(chalk.yellow(`  🦑 Kraki is running, but its background worker is (re)starting (supervisor PID ${status.supervisorPid}).`));
+    console.log(chalk.dim('  If this lasts, see `kraki logs` for why; `kraki stop` stops it.'));
   } else {
     console.log(chalk.green(`  🦑 Kraki is already running (PID ${status?.pid})`));
   }

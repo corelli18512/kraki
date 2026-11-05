@@ -66,7 +66,7 @@ export function cmdStatus(jsonOutput = false): void {
   const managedBy = loadManagedBy();
   const owner = managedBy ? `, managed by ${ownerName(managedBy.by)}` : '';
   if (status.detail === 'restarting') {
-    console.log(`  Status:  ${chalk.yellow('restarting')} ${chalk.dim(`(the background worker keeps stopping; supervisor PID ${status.supervisorPid}${owner})`)}`);
+    console.log(`  Status:  ${chalk.yellow('restarting')} ${chalk.dim(`(the background worker is (re)starting; supervisor PID ${status.supervisorPid}${owner})`)}`);
     console.log(chalk.dim('           See `kraki logs`; `kraki stop` stops it.'));
   } else if (status.detail === 'unverified-pid') {
     console.log(`  Status:  ${chalk.yellow('unknown')} ${chalk.dim(`(PID ${status.pid} is alive but could not be verified as Kraki${owner})`)}`);
