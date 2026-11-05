@@ -364,7 +364,7 @@ extension ChatPerfListVC {
     func jumpToLiveBottom(animated: Bool) {
         scrollPolicy.beginTailNavigation(
             offset: collectionView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         widthAnchorGeneration += 1  // a pending re-layout anchor restore must not undo it
         // Suppress edge paging for the duration of the glide: right after the
