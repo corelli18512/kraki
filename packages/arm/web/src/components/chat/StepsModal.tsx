@@ -9,6 +9,7 @@ import type { ChatMessage } from '../../types/store';
 import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
 import { StepsList } from './StepsList';
+import { liveTurnTraceSeq, turnStepsRegion } from '../../lib/chat/turn-steps';
 
 /** Minimum spacing of live Steps re-pulls (each one re-sends the whole trace). */
 const LIVE_TRACE_REFRESH_MS = 2500;
@@ -16,54 +17,24 @@ const LIVE_TRACE_REFRESH_MS = 2500;
 const isTrace = (t: string) =>
   t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
   t === 'permission' || t === 'error';
-const isTurnStart = (message: ChatMessage) =>
-  message.type === 'user_message' && message.payload.delivery !== 'steer';
-
-function latestTurnStartSeq(messages: ChatMessage[] | undefined): number {
-  if (!messages) return -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (isTurnStart(messages[i])) return (messages[i] as { seq?: number }).seq ?? -1;
-  }
-  return -1;
-}
-
 /**
  * Collect the TRACE steps (narration + tool chips) belonging to one turn,
  * keyed by a `targetSeq`:
- *  - Concluded turn: `targetSeq` is the concluding agent_message's seq — steps
- *    are the trace entries between the PRIOR user_message and that bubble.
- *  - In-progress turn: `targetSeq` is the turn's leading user_message seq —
- *    steps are the trace entries AFTER it up to the next prompt (or the tail).
- * Mirrors the region logic in store.setTurnSteps so a live pull and this reader
- * agree on the same slice.
+ *  - Concluded turn: `targetSeq` is the concluding bubble's seq — steps are
+ *    the trace entries between the turn's start (the prompt, or the previous
+ *    turn's idle for a turn the agent started itself) and that bubble.
+ *  - In-progress turn: `targetSeq` is the turn's leading user_message seq, or
+ *    the seq after the idle it started from — steps are the trace entries
+ *    after that row up to the next prompt (or the tail).
+ * Shares the region logic with store.setTurnSteps (lib/chat/turn-steps.ts) so
+ * a pull and this reader agree on the same slice.
  */
 export function collectTurnSteps(messages: ChatMessage[] | undefined, targetSeq: number): ChatMessage[] {
   if (!messages) return [];
-  const targetIdx = messages.findIndex(
-    (m) => 'seq' in m && (m as { seq?: number }).seq === targetSeq,
-  );
-  if (targetIdx < 0) return [];
-
-  const inProgress = isTurnStart(messages[targetIdx]);
-  let start: number;
-  let end: number;
-  if (inProgress) {
-    start = targetIdx;
-    end = messages.length;
-    for (let i = targetIdx + 1; i < messages.length; i++) {
-      if (isTurnStart(messages[i]) || messages[i].type === 'send_input') { end = i; break; }
-    }
-  } else {
-    let turnStartIdx = -1;
-    for (let i = targetIdx - 1; i >= 0; i--) {
-      if (isTurnStart(messages[i])) { turnStartIdx = i; break; }
-    }
-    start = turnStartIdx;         // steps live after the prior user_message
-    end = targetIdx;              // …up to (before) the concluding bubble
-  }
-
+  const region = turnStepsRegion(messages, targetSeq);
+  if (!region) return [];
   const out: ChatMessage[] = [];
-  for (let i = start + 1; i < end; i++) {
+  for (let i = region.start + 1; i < region.end; i++) {
     if (isTrace(messages[i].type)) out.push(messages[i]);
   }
   return out;
@@ -81,9 +52,10 @@ export function useTurnSteps(
   bubbleSeq?: number,
 ): { steps: ChatMessage[]; targetSeq: number } {
   const messages = useStore((s) => s.messages.get(sessionId));
-  // For a live turn the target is the current turn's leading user_message; for a
-  // concluded turn it is the passed-in bubble seq.
-  const targetSeq = useMemo(() => live ? latestTurnStartSeq(messages) : bubbleSeq ?? -1, [live, bubbleSeq, messages]);
+  // For a live turn the target is the running turn's trace seq (its prompt, or
+  // the seq after the idle it started from); for a concluded turn it is the
+  // passed-in bubble seq.
+  const targetSeq = useMemo(() => live ? liveTurnTraceSeq(messages) : bubbleSeq ?? -1, [live, bubbleSeq, messages]);
   const steps = useMemo(() => collectTurnSteps(messages, targetSeq), [messages, targetSeq]);
   return { steps, targetSeq };
 }
@@ -104,7 +76,7 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
   const body = useRef<HTMLDivElement>(null);
   // Like Mac's StepsTarget, capture the opened turn once its prompt is known
   // (history can hydrate after the live card). Later turns must not retarget it.
-  const [openedSeq, setOpenedSeq] = useState(() => bubbleSeq ?? latestTurnStartSeq(useStore.getState().messages.get(sessionId)));
+  const [openedSeq, setOpenedSeq] = useState(() => bubbleSeq ?? liveTurnTraceSeq(useStore.getState().messages.get(sessionId)));
   const { steps, targetSeq } = useTurnSteps(sessionId, live && openedSeq < 0, openedSeq);
   useEffect(() => {
     if (openedSeq < 0 && targetSeq >= 0) setOpenedSeq(targetSeq);
