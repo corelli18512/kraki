@@ -315,7 +315,7 @@ jobs:
             # service (NSURLErrorDomain -1005) even after the notarization is
             # accepted.
             staple_app: false
-          - runner: macos-14
+          - runner: macos-26
             label: macOS arm64
             asset_name: kraki-cli-macos-arm64
             staple_app: true
