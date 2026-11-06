@@ -557,7 +557,7 @@ jobs:
       - build-binary
     # Runs whenever build-binary succeeded, so it is skipped with it (head-v*,
     # mac-v*, mac dry-runs). Publishing requires this job to succeed.
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 20
 
     steps:
