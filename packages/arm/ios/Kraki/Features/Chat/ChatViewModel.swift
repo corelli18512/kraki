@@ -292,14 +292,22 @@ final class ChatViewModel {
         return last.type == "idle"
     }
 
-    /// Leading normal prompt for the current logical turn. Steer messages are
-    /// visible user bubbles but remain inside this turn and do not become TRACE
-    /// anchors.
-    var lastUserMessage: ChatMessage? {
-        filteredMessages.last {
-            ($0.type == "user_message" || $0.type == "send_input")
-                && $0.payload["delivery"]?.stringValue != "steer"
+    /// TRACE pull target of the running turn (live Steps): the seq of its
+    /// leading normal prompt (steers stay inside the turn and are no anchor),
+    /// unless an `idle` comes after that prompt. Then the agent started this
+    /// turn itself (no prompt, e.g. Pi woken by a background run after the
+    /// previous turn settled) and the target is the seq after that idle, which
+    /// the tentacle resolves to the running turn. Older tentacles map it to
+    /// the previous prompt's trace.
+    var liveTraceSeq: Int? {
+        for message in filteredMessages.reversed() {
+            if (message.type == "user_message" || message.type == "send_input")
+                && message.payload["delivery"]?.stringValue != "steer" {
+                return message.seq
+            }
+            if message.type == "idle" { return message.seq + 1 }
         }
+        return nil
     }
 
     /// Steps hint for the streaming tail card: the running turn's accumulated
