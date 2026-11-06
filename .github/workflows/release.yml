@@ -516,7 +516,7 @@ jobs:
         run: node packages/tentacle/scripts/daemon-release-smoke.mjs packages/tentacle/dist/sea/Kraki.app/Contents/MacOS/kraki
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-${{ matrix.asset_name }}-${{ github.run_attempt }}
           path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
@@ -524,7 +524,7 @@ jobs:
 
       - name: Upload .app bundle artifact (macOS)
         if: runner.os == 'macOS' && matrix.staple_app
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-${{ matrix.asset_name }}-app-${{ github.run_attempt }}
           path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
@@ -542,7 +542,7 @@ jobs:
 
       - name: Upload unstapled .app bundle artifact (macOS x64)
         if: runner.os == 'macOS' && !matrix.staple_app
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unstapled-kraki-macos-x64-app-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kraki-macos-x64.unstapled.app.tar.gz
@@ -603,7 +603,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/out/kraki-macos-x64.app.tar.gz"
 
       - name: Upload .app bundle artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-kraki-cli-macos-x64-app-${{ github.run_attempt }}
           path: ${{ runner.temp }}/out/kraki-macos-x64.app.tar.gz
@@ -876,7 +876,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/sparkle-update/$SPARKLE_ARCHIVE"
 
       - name: Preserve matching dSYMs for diagnostics
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-symbols-${{ needs.prepare.outputs.release_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/KrakiMac.xcarchive/dSYMs
@@ -884,7 +884,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Sparkle update archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-kraki-mac-sparkle-update-${{ github.run_attempt }}
           path: ${{ runner.temp }}/sparkle-update/*.app.zip
@@ -935,7 +935,7 @@ jobs:
         # Not a build-kraki-* artifact: the publish job adds the feed after
         # the manifest and attestation (see "Add the dogfood Sparkle feed").
         if: needs.prepare.outputs.publish_mode == 'prerelease'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dogfood-feed-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dogfood-appcast/out/appcast-dogfood.xml
@@ -972,7 +972,7 @@ jobs:
           fi
 
       - name: Upload .app bundle artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-kraki-mac-gui-universal-app-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kraki-mac-gui-universal.app.tar.gz
@@ -1009,7 +1009,7 @@ jobs:
           ls -lh "$DMG"
 
       - name: Upload disk image artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-kraki-mac-dmg-${{ github.run_attempt }}
           path: ${{ runner.temp }}/Kraki.dmg
@@ -1114,7 +1114,7 @@ jobs:
           path: release-assets
 
       - name: Upload release assets bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets-${{ needs.prepare.outputs.release_sha }}-${{ github.run_attempt }}
           path: release-assets
