@@ -42,7 +42,7 @@ test('release.yml staples the macOS x64 CLI bundle on arm64 before anything publ
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // Windows checkouts are CRLF
   const job = (name) => workflow.split(new RegExp(`\\n  ${name}:\\n`))[1].split(/\n  [a-z-]+:\n/)[0];
   const staple = job('staple-macos-x64');
-  assert.match(staple, /runs-on: macos-14\n/);
+  assert.match(staple, /runs-on: macos-26\n/); // arm64 (macos-14 was retired)
   assert.match(staple, /apple-retry\.sh xcrun stapler staple "\$APP"/);
   assert.match(staple, /apple-retry\.sh xcrun stapler validate "\$APP"/);
   assert.match(staple, /spctl -a -vvv --type exec "\$APP"/);
