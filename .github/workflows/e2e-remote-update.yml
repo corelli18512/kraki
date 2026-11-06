@@ -30,8 +30,8 @@ jobs:
           - { label: "Linux npm",      runner: ubuntu-latest,  kind: npm }
           - { label: "Windows binary", runner: windows-latest, kind: binary }
           - { label: "Windows npm",    runner: windows-latest, kind: npm }
-          - { label: "macOS CLI app",  runner: macos-14,       kind: app }
-          - { label: "macOS npm",      runner: macos-14,       kind: npm }
+          - { label: "macOS CLI app",  runner: macos-26,       kind: app }
+          - { label: "macOS npm",      runner: macos-26,       kind: npm }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     defaults:
