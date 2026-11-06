@@ -9,4 +9,5 @@
 - Starting, stopping or updating the command-line Kraki shows a clear error with the CLI's own last line, never a raw "Command failed" message.
 - The window reopens on the display that held most of it.
 - Performance data is more accurate (already-current openings, reconnects, sleep and wake), and the one-time notice no longer takes keyboard focus.
+- When your sign-in has expired or was revoked, Kraki stays on "Sign in again" (it used to flip to "Disconnected" every few seconds) and Sign in with GitHub works from there.
 - Faster reconnects.
