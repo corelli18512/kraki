@@ -258,6 +258,7 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/SubagentStepsTests.swift
+      - path: KrakiTests/LiveTraceTargetTests.swift
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
       - path: KrakiTests/NativeStyleTests.swift
       - path: KrakiTests/ComposerGeometryProbeTests.swift

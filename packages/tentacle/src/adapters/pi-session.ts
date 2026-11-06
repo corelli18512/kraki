@@ -91,6 +91,16 @@ export interface PiSession {
   compactionStartedAt?: number;
   /** The stall warning was logged for the current silence (reset by activity). */
   stallWarned?: boolean;
+  /** Between a run's agent_start and its agent_settled: a further agent_start
+   *  in that window is a duplicate, never a new agent-initiated run. */
+  runInFlight?: boolean;
+  /** Steer RPCs not yet acknowledged: a run pi starts meanwhile may be the
+   *  steer itself (the turn settled while it was being accepted). */
+  steersInFlight?: number;
+  /** The user stopped the last turn: runs pi starts on its own afterwards
+   *  (e.g. the stopped background runs reporting back) open no new turn.
+   *  Cleared when Kraki submits the next input. */
+  stoppedByUser?: boolean;
   /** When the current background-subagent hold began (for its end log). */
   subagentHoldSince?: number;
   /** The last pi-subagents status snapshot's runs, serialized: an identical

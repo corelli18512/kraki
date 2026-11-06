@@ -4,7 +4,7 @@ import { DEFAULT_SESSION_MODE, toWireSessionMode } from '@kraki/protocol';
 import { makeHeadline } from '../tool-headline.js';
 import { RelayClient } from '../relay-client.js';
 import { addOpenQuestion, removeOpenQuestion, soleOpenQuestion } from './questions.js';
-import { acceptsAdapterEvent, acceptsAdapterTurn, clearCompacting, purgeSessionToolState, resolveTurnIdle, setCompacting, settleAdapterIdle } from './turns.js';
+import { acceptsAdapterEvent, acceptsAdapterTurn, beginAgentInitiatedTurn, clearCompacting, purgeSessionToolState, resolveTurnIdle, setCompacting, settleAdapterIdle } from './turns.js';
 import { logger, normalizeTerminalErrorMessage } from './shared.js';
 
 export function wireAdapterEvents(client: RelayClient): void {
@@ -275,6 +275,8 @@ export function wireAdapterEvents(client: RelayClient): void {
     }
     settleAdapterIdle(client, sessionId, event);
   };
+
+  client.adapter.onAgentInitiatedTurn = (sessionId) => beginAgentInitiatedTurn(client, sessionId);
 
   client.adapter.onFlushComplete = (sessionId) => {
     client.eventsWatcher?.resume(sessionId);

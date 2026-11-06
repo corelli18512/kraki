@@ -513,6 +513,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onToolStart = (sid, e) => this.onToolStart?.(sid, e);
     adapter.onToolComplete = (sid, e) => this.onToolComplete?.(sid, e);
     adapter.onIdle = (sid, e) => this.onIdle?.(sid, e);
+    adapter.onAgentInitiatedTurn = (sid) => this.onAgentInitiatedTurn?.(sid);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);
     adapter.onCompaction = (sid, e) => this.onCompaction?.(sid, e);

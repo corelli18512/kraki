@@ -645,7 +645,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func presentLiveSteps() {
-        guard let userSeq = vm.lastUserMessage?.seq else { return }
+        guard let userSeq = vm.liveTraceSeq else { return }
         // Running turn: request now so the trace starts loading while the sheet
         // animates up; the sheet's `.onAppear` also re-pulls on every open so
         // the steps reflect the current tail.

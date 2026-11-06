@@ -10,6 +10,7 @@ import { loadStoredDevice, getUrlParams } from '../lib/transport';
 import { outbox } from '../lib/chat/outbox';
 import { aboveSteer, followSteer } from '../lib/chat/card-steer';
 import { payloadOf, seqOf } from '../lib/chat/spine';
+import { turnStepsRegion } from '../lib/chat/turn-steps';
 import { messageProvider } from '../lib/message-provider';
 import { beginSessionDeletion, captureMessageGeneration } from '../lib/message-persistence-generation';
 
@@ -723,20 +724,23 @@ export const useStore = create<Store>()(persist((set) => ({
       const existing = state.messages.get(sessionId);
       if (!existing) return state;
 
-      const bubbleIdx = existing.findIndex(
-        (msg) => 'seq' in msg && (msg as { seq?: number }).seq === bubbleSeq,
-      );
-      if (bubbleIdx < 0) return state; // bubble not loaded — nothing to attach to
+      // The target is a concluding bubble (steps go BEFORE it), or a running
+      // turn's leading prompt or the seq after the idle it started from (steps
+      // go AFTER that row). A live response may arrive after the turn has
+      // concluded and another has begun. See lib/chat/turn-steps.ts.
+      const region = turnStepsRegion(existing, bubbleSeq);
+      if (!region) return state; // turn not loaded — nothing to attach to
 
       // A final agent_message can briefly become the visible turn anchor before
       // a following turn_status arrives. Its async trace pull may then complete
       // after the terminal pull and re-inject the entire turn a second time.
-      // Once a terminal record exists later in the same user-bounded turn, that
-      // record exclusively owns Steps; discard stale agent-anchor responses.
-      if (existing[bubbleIdx].type === 'agent_message') {
-        for (let i = bubbleIdx + 1; i < existing.length; i++) {
+      // Once a terminal record exists later in the same turn, that record
+      // exclusively owns Steps; discard stale agent-anchor responses. The turn
+      // ends at the next prompt or idle (a later turn's status is not this one's).
+      if (!region.after && existing[region.anchorIndex].type === 'agent_message') {
+        for (let i = region.anchorIndex + 1; i < existing.length; i++) {
           const next = existing[i];
-          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') break;
+          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input' || next.type === 'idle') break;
           if (next.type === 'turn_status' || next.type === 'interrupted_turn') return state;
         }
       }
@@ -746,42 +750,12 @@ export const useStore = create<Store>()(persist((set) => ({
         t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
         t === 'permission' || (replaceErrors && t === 'error');
 
-      // The target is either a concluding bubble (steps go BEFORE it) or the
-      // leading user_message used by a live pull (steps go AFTER it). That live
-      // response may arrive after the turn has concluded and another has begun.
-      const inProgress = existing[bubbleIdx].type === 'user_message'
-        && existing[bubbleIdx].payload.delivery !== 'steer';
-
-      // Trace region (exclusive index bounds) whose live/previous entries are
-      // dropped so a re-pull replaces rather than duplicates.
-      let regionStart: number;
-      let regionEnd: number;
-      if (inProgress) {
-        regionStart = bubbleIdx;
-        regionEnd = existing.length;
-        for (let i = bubbleIdx + 1; i < existing.length; i++) {
-          const next = existing[i];
-          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') {
-            regionEnd = i; // never replace another prompt's trace, even on a late live response
-            break;
-          }
-        }
-      } else {
-        let turnStartIdx = -1;
-        for (let i = bubbleIdx - 1; i >= 0; i--) {
-          const candidate = existing[i];
-          if (candidate.type === 'user_message' && (candidate.payload as { delivery?: string }).delivery !== 'steer') {
-            turnStartIdx = i;
-            break;
-          }
-        }
-        regionStart = turnStartIdx;      // steps live after the prior user_message
-        regionEnd = bubbleIdx;           // …up to (before) the concluding bubble
-      }
-
+      // Drop the slot's live/previous entries so a re-pull replaces rather
+      // than duplicates.
+      const anchor = existing[region.anchorIndex];
       const kept: ChatMessage[] = [];
       for (let i = 0; i < existing.length; i++) {
-        const inRegion = i > regionStart && i < regionEnd;
+        const inRegion = i > region.start && i < region.end;
         if (inRegion && isTrace(existing[i].type)) continue;
         kept.push(existing[i]);
       }
@@ -794,18 +768,15 @@ export const useStore = create<Store>()(persist((set) => ({
 
       // Assign fractional seqs so the entries sort into the turn's trace slot in
       // recorded order and survive any later seq-sort (prependMessages /
-      // resolvePendingInput). Concluded turns place them in (bubbleSeq-1,
-      // bubbleSeq); in-progress turns place them in (bubbleSeq, bubbleSeq+1).
-      const base = inProgress ? bubbleSeq : bubbleSeq - 1;
+      // resolvePendingInput): (base, base + 1), just after the running turn's
+      // prompt or idle, or just before the concluding bubble.
       const stamped = entries.map((e, i) => ({
         ...(e as ChatMessage),
-        seq: base + (i + 1) / (entries.length + 1),
+        seq: region.base + (i + 1) / (entries.length + 1),
       })) as ChatMessage[];
 
-      const bubblePos = kept.findIndex(
-        (msg) => 'seq' in msg && (msg as { seq?: number }).seq === bubbleSeq,
-      );
-      const insertAt = inProgress ? bubblePos + 1 : bubblePos;
+      const anchorPos = kept.indexOf(anchor);
+      const insertAt = region.after ? anchorPos + 1 : anchorPos;
       const result = [...kept.slice(0, insertAt), ...stamped, ...kept.slice(insertAt)];
 
       const map = new Map(state.messages);

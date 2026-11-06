@@ -342,7 +342,7 @@ struct MacChatView: View {
                 documentWidth: geometry.size.width,
                 messages: viewModel.displayMessages(spineRevision: windowRevision),
                 liveCard: liveCardForList(viewModel),
-                liveTraceSeq: viewModel.lastUserMessage?.seq ?? 0,
+                liveTraceSeq: viewModel.liveTraceSeq ?? 0,
                 liveSteps: viewModel.lastUserStepsHint,
                 sessionMode: currentMode,
                 entryGeneration: entryGeneration,
