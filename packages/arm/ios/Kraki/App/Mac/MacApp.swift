@@ -313,6 +313,15 @@ final class MacLaunchCoordinator {
 }
 
 @main
+enum MacMain {
+    static func main() {
+        // A child launched to restore the sound if Kraki dies mid-dictation
+        // (MacOutputVolumeDucker): never becomes an app.
+        OutputVolumeWatchdog.runIfRequested()
+        MacApp.main()
+    }
+}
+
 struct MacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
 
