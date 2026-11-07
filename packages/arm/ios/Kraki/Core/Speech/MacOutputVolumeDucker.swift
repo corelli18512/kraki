@@ -112,7 +112,7 @@ protocol OutputVolumeWatchdogLauncher {
 struct ProcessOutputVolumeWatchdogLauncher: OutputVolumeWatchdogLauncher {
     func launch(journal: URL, state: OutputVolumeState) throws -> () -> Void {
         guard let executable = Bundle.main.executableURL else {
-            throw NSError(domain: "Kraki.VoiceVolume", code: 1,
+            throw NSError(domain: "chat.kraki.voice-volume", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no executable for the watchdog"])
         }
         let process = Process()
@@ -230,7 +230,7 @@ final class MacOutputVolumeDucker {
                 try backend.setVolume(device, target)
                 let observed = try backend.volume(device)
                 guard abs(observed - target) <= OutputVolumeDucking.tolerance else {
-                    throw NSError(domain: "Kraki.VoiceVolume", code: 2,
+                    throw NSError(domain: "chat.kraki.voice-volume", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "device rejected the volume"])
                 }
                 // Compare later against what the device actually holds
