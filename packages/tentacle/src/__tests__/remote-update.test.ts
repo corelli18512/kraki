@@ -257,3 +257,14 @@ describe('cleanup during an update', () => {
     expect(existsSync(`${target}.old`)).toBe(false);
   });
 });
+
+describe('macAppRunningIn', () => {
+  const app = '/Applications/Kraki.app';
+  it('ignores the voice-volume watchdog child, sees the app itself', async () => {
+    const { macAppRunningIn } = await import('../remote-update.js');
+    const watchdogOnly = `/usr/sbin/coreaudiod\n${app}/Contents/MacOS/Kraki --voice-volume-watchdog /tmp/j t 123 1800\n`;
+    expect(macAppRunningIn(watchdogOnly, app)).toBe(false);
+    expect(macAppRunningIn(`${watchdogOnly}${app}/Contents/MacOS/Kraki\n`, app)).toBe(true);
+    expect(macAppRunningIn(`/Applications/Kraki Dev.app/Contents/MacOS/Kraki Dev\n`, app)).toBe(false);
+  });
+});

@@ -201,6 +201,17 @@ final class MacOutputVolumeDucker {
                 return
             }
             let original = try backend.volume(device)
+            // A journal left by a Kraki that died (its recovery couldn't run
+            // yet) holds the user's real level: never overwrite it with the
+            // still-lowered one. Leave the volume alone until it is recovered.
+            if let stale = journal.read(), stale.token != state?.token {
+                KLog.diag("🎙️ [voice] output volume left alone: an unrecovered level is pending")
+                if !outputVolumeOwnerIsAlive(stale.ownerPID) {
+                    let result = OutputVolumeDucking.recover(stale, backend: backend, journal: journal)
+                    KLog.diag("🎙️ [voice] pending output volume recovery: \(result)")
+                }
+                return
+            }
             guard let target = OutputVolumeDucking.target(original: original) else { return }
             let newState = OutputVolumeState(
                 deviceID: device, originalVolume: Double(original), duckedVolume: Double(target),
@@ -214,12 +225,21 @@ final class MacOutputVolumeDucker {
                 journal.remove()
                 throw error
             }
+            var applied = newState
             do {
                 try backend.setVolume(device, target)
                 let observed = try backend.volume(device)
                 guard abs(observed - target) <= OutputVolumeDucking.tolerance else {
                     throw NSError(domain: "Kraki.VoiceVolume", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "device rejected the volume"])
+                }
+                // Compare later against what the device actually holds
+                // (quantized), so a one-step change by the user is noticed.
+                if observed != target {
+                    applied = OutputVolumeState(
+                        deviceID: device, originalVolume: newState.originalVolume, duckedVolume: Double(observed),
+                        ownerPID: newState.ownerPID, token: newState.token, startedAt: newState.startedAt)
+                    try journal.write(applied)
                 }
             } catch {
                 // Put back whatever we may have changed before giving up.
@@ -228,7 +248,7 @@ final class MacOutputVolumeDucker {
                 stop()
                 throw error
             }
-            state = newState
+            state = applied
             stopWatchdog = stop
             KLog.diag(String(format: "🎙️ [voice] output volume %.0f%% → %.0f%%", original * 100, target * 100))
         } catch {
@@ -279,8 +299,10 @@ final class MacOutputVolumeDucker {
 /// waits for the owner to exit (or the ceiling), then restores the volume.
 enum OutputVolumeWatchdog {
     static func runIfRequested(_ arguments: [String] = CommandLine.arguments) {
-        guard arguments.count >= 6, arguments[1] == OutputVolumeDucking.watchdogArgument else { return }
-        guard let owner = Int32(arguments[4]), let maxSeconds = TimeInterval(arguments[5]) else { exit(64) }
+        guard arguments.count >= 2, arguments[1] == OutputVolumeDucking.watchdogArgument else { return }
+        // Malformed: exit, never fall through to launching the app.
+        guard arguments.count >= 6, let owner = Int32(arguments[4]),
+              let maxSeconds = TimeInterval(arguments[5]) else { exit(64) }
         let journal = OutputVolumeJournal(url: URL(fileURLWithPath: arguments[2]))
         let token = arguments[3]
         let backend = CoreAudioOutputVolume()

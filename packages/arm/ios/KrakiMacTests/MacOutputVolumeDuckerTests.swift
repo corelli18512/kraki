@@ -181,4 +181,38 @@ final class MacOutputVolumeDuckerTests: XCTestCase {
         while ducker.isLowered, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
         XCTAssertEqual(device.volumeValue, 0.8, accuracy: 0.0001, "retry restored it")
     }
+
+    /// Review of #642: a crash journal whose recovery couldn't run yet must
+    /// survive the next recording (it holds the user's real level).
+    func testAnUnrecoveredCrashLevelIsNeverOverwrittenByANewRecording() throws {
+        device.volumeValue = 0.2 // left lowered by a Kraki that died
+        try journal.write(OutputVolumeState(deviceID: 42, originalVolume: 0.8, duckedVolume: 0.2,
+                                            ownerPID: 999_999, token: "crashed", startedAt: 0))
+        let ducker = makeDucker()
+        device.failReads = true
+        ducker.recoverAbandonedState()
+        ducker.drain()
+        XCTAssertEqual(journal.read()?.token, "crashed")
+        device.failReads = false
+        ducker.scheduleLowering(after: 0)
+        ducker.drain(); ducker.drain()
+        XCTAssertFalse(ducker.isLowered, "no new lowering on top of an unrecovered one")
+        XCTAssertEqual(device.volumeValue, 0.8, accuracy: 0.0001, "the pending level was recovered instead")
+        XCTAssertNil(journal.read())
+    }
+
+    /// Two restores (capture stopped, then recording ended) write once and
+    /// keep a change the user made in between.
+    func testASecondRestoreIsANoOp() {
+        let ducker = makeDucker()
+        lower(ducker)
+        ducker.restore(reason: "capture stopped")
+        ducker.drain()
+        device.volumeValue = 0.33
+        ducker.restore(reason: "recording ended")
+        ducker.drain()
+        XCTAssertEqual(device.volumeValue, 0.33, accuracy: 0.0001)
+        XCTAssertEqual(device.writes.filter { abs($0 - 0.8) < 0.0001 }.count, 1)
+    }
 }
+

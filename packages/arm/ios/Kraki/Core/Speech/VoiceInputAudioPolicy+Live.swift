@@ -81,7 +81,6 @@ struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
     }
 }
 
-
 /// Default: nothing to do when the microphone stops (iOS releases the audio
 /// session, which ends ducking, when the recording is cleaned up).
 extension VoiceInputAudioPolicy {
@@ -92,6 +91,9 @@ extension LiveVoiceInputAudioPolicy {
     /// Mac: other sounds come back as soon as the microphone stops, not
     /// after the transcript is corrected.
     func captureEnded() {
+        #if DEBUG
+        guard NativeTestRuntime.allowsLiveAudio else { return }
+        #endif
         #if os(macOS)
         MacOutputVolumeDucker.shared.restore(reason: "capture stopped")
         #endif
