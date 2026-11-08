@@ -1,4 +1,6 @@
 name: Release
+# Dogfood runs name their tag, so prerelease.yml can follow its own run.
+run-name: ${{ inputs.mode == 'prerelease' && format('Release {0} {1}', inputs.tag, inputs.prerelease_version) || 'Release' }}
 
 on:
   push:
