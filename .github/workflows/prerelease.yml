@@ -95,9 +95,12 @@ jobs:
     name: Dogfood ${{ matrix.component }}
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Waits for the release build: a failed build must fail this job, not
+    # hide behind "started" (the CLI dogfood silently stopped updating for a
+    # week in Nov 2026 while every run here was green).
+    timeout-minutes: 120
     permissions:
-      # Start release.yml.
+      # Start release.yml and follow it.
       actions: write
     strategy:
       fail-fast: false
@@ -126,15 +129,35 @@ jobs:
           set -euo pipefail
           # release.yml runs on main and refuses any commit other than SHA,
           # so its provenance names exactly the commit CI tested.
+          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$DOGFOOD_BRANCH" \
             -f mode=prerelease -f target="$TARGET" -f tag="$TAG" \
             -f prerelease_sha="$SHA" -f prerelease_version="$VERSION" -f prerelease_base="$BASE" \
             -f prerelease_bundle_build="$BUNDLE_BUILD" -f prerelease_tentacle_version="$TENTACLE_VERSION"
+          # Find the run just dispatched: release.yml's run-name carries the
+          # tag and version.
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 10
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml --event workflow_dispatch \
+              --created ">=$since" --limit 20 --json databaseId,displayTitle \
+              --jq "[.[] | select(.displayTitle == \"Release $TAG $VERSION\")][0].databaseId // empty")
+            [ -n "$run_id" ] && break
+          done
+          url="https://github.com/$GITHUB_REPOSITORY/actions/runs/${run_id:-?}"
           {
             echo "### $TAG $VERSION"
-            echo "Release build started from \`$SHA\` (changes since \`$BASE\`):"
-            echo "https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml?query=branch%3A$DOGFOOD_BRANCH"
+            echo "Release build from \`$SHA\` (changes since \`$BASE\`): $url"
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$run_id" ]; then
+            echo "::error::Could not find the release.yml run for $TARGET"; exit 1
+          fi
+          if ! gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 60 > /dev/null; then
+            echo "::error::Dogfood $TAG release build failed: $url"
+            echo "**Failed**" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Published." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Nothing to dogfood
         if: needs.plan.outputs[format('{0}_build', matrix.component)] != 'true'
