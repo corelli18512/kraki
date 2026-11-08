@@ -672,6 +672,12 @@ describe('startDaemon()', () => {
     vi.useFakeTimers();
     const { child, listeners } = makeFakeChild(100);
     mockSpawn.mockReturnValue(child);
+    // The exited child's PID is gone. Never probe the real PID 100: on CI
+    // runners it can be a root-owned system process (EPERM → "unknown"),
+    // which made this test keep the PID and fail (macos-26, Nov 2026).
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
 
     const startPromise = startDaemon(fakeConfig);
     listeners.get('exit')?.(1, null);
@@ -679,6 +685,7 @@ describe('startDaemon()', () => {
     await expect(startPromise).rejects.toThrow(getDaemonBootstrapLogPath());
     expect(mockSaveDaemonPid).not.toHaveBeenCalled();
     expect(child.unref).not.toHaveBeenCalled();
+    killSpy.mockRestore();
   });
 });
 
