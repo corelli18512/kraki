@@ -60,6 +60,14 @@ describe('Sidebar desktop rail', () => {
     fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: '' } });
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
   });
+  it('the app menu button shows the Kraki logo (light and dark), hidden from assistive tech', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    const button = screen.getByRole('button', { name: 'App menu' });
+    const logos = [...button.querySelectorAll('img')];
+    expect(logos.map((img) => img.getAttribute('src'))).toEqual(['/logo.png', '/logo-dark.png']);
+    expect(logos.every((img) => img.getAttribute('alt') === '' && img.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(button.querySelector('svg')).toBeNull();
+  });
   it('reclaims the footer and retains navigation/settings entry points in one toolbar menu', () => {
     const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(container.querySelector('.ksb-footer')).toBeNull();
