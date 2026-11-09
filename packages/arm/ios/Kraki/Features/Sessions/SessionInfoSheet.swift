@@ -240,10 +240,9 @@ struct SessionInfoSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader(String(localized: "Device"))
 
-                // Tapping the device row exits the chat view entirely
-                // and lands on the device detail panel in the Devices
-                // tab — same UX as picking the device from the
-                // Devices tab itself. Dismisses the sheet AND triggers
+                // Tapping the device row switches to the Devices tab and
+                // opens the device; the chat stays on the Sessions tab
+                // (K-306). Dismisses the sheet AND triggers
                 // cross-tab navigation via `DeviceStore.navigateToDeviceId`
                 // which `MainTabView` watches.
                 Button {

@@ -2773,6 +2773,16 @@
         }
       }
     },
+    "Copy Error" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制错误信息"
+          }
+        }
+      }
+    },
     "Copy kraki connect command" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3213,6 +3223,16 @@
         }
       }
     },
+    "Couldn't stop the agent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止 Agent。"
+          }
+        }
+      }
+    },
     "Couldn't stop the command-line Kraki." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3229,6 +3249,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法停止命令行版 Kraki。%@"
+          }
+        }
+      }
+    },
+    "Couldn't stop: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止：%@"
           }
         }
       }

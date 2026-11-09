@@ -255,10 +255,11 @@ final class SessionStore {
     /// In memory only, like the drafts. Set through `setStagedImage`.
     var stagedImages: [String: StagedComposerImage] = [:]
     var navigateToSession: String?
-    /// Set with `navigateToSession` when the target replaces a still-visible
-    /// pending placeholder (create/fork/import resolved). The navigation layer
-    /// then swaps the top route in place instead of pop-to-root + push.
-    var navigationReplacesPlaceholder = false
+    /// Set with `navigateToSession` to the id of a still-pending placeholder
+    /// route the target replaces (create/fork/import resolved). The navigation
+    /// layer swaps that route in place, wherever it sits in the stack (a slow
+    /// fork's placeholder is above its source chat), instead of resetting it.
+    var navigationReplacesPlaceholder: String?
     /// Set with `navigateToSession` to push the target on top of the current
     /// page (a fork opened from its source) instead of resetting the stack.
     var navigationPushesOnTop = false
@@ -1168,7 +1169,7 @@ final class SessionStore {
         draftRevisions.removeAll()
         stagedImages.removeAll()
         navigateToSession = nil
-        navigationReplacesPlaceholder = false
+        navigationReplacesPlaceholder = nil
         navigationPushesOnTop = false
         sessionListRevealId = nil
         loadingSessions.removeAll()

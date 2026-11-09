@@ -84,8 +84,25 @@ struct NewSessionSheet: View {
         return detail.supportedReasoningEfforts
     }
 
+    /// The chosen computer would receive a create now. Like the chat
+    /// composer, a sub-second reconnect does not count as unreachable.
+    private var selectedDeviceReachable: Bool {
+        deviceStore.devices[selectedDeviceId]?.online == true && !appState.showsReconnecting
+    }
+
+    /// Start needs a reachable computer: a create sent to an offline one only
+    /// times out ("Request timed out") and may still be created later.
     private var canSubmit: Bool {
         !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
+            && selectedDeviceReachable
+    }
+
+    /// Changes when a computer comes online or goes offline.
+    private var onlineTentacleIds: [String] { onlineTentacles.map(\.id) }
+
+    /// Changes when the chosen computer's agents or their models arrive.
+    private var agentsSignature: [String] {
+        agentsList.map { "\($0.id):\(($0.models ?? []).joined(separator: ","))" }
     }
 
     // MARK: - Body
@@ -142,6 +159,13 @@ struct NewSessionSheet: View {
         .presentationDragIndicator(.hidden)
         .presentationBackground(.clear)
         .onAppear { selectDefaults() }
+        // Computers and their agents can arrive while the sheet is open (the
+        // first computer joins, a greeting lands after the computer was
+        // picked): fill in what is still unset, as reopening the sheet would.
+        .onChange(of: onlineTentacleIds) { _, _ in
+            if selectedDeviceId.isEmpty { selectDefaults() }
+        }
+        .onChange(of: agentsSignature) { _, _ in onDeviceChanged() }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
@@ -236,7 +260,7 @@ struct NewSessionSheet: View {
 
             Divider().padding(.leading, 16)
 
-            if agentsList.isEmpty {
+            if agentsList.isEmpty || !selectedDeviceReachable {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Agent").foregroundStyle(Color.primary)
@@ -273,6 +297,8 @@ struct NewSessionSheet: View {
     }
 
     private var agentStatusText: String {
+        if appState.showsReconnecting { return String(localized: "Connecting…") }
+        if deviceStore.devices[selectedDeviceId]?.online != true { return String(localized: "Device offline") }
         switch deviceStore.agentAvailability(for: selectedDeviceId) {
         case .ready, .connecting: return String(localized: "Connecting…")
         case .offline: return String(localized: "Device offline")
