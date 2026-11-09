@@ -1,6 +1,7 @@
 {
   "archive": {
     "loading": "Loading…",
+    "offline": "Archived sessions load when their computer is online.",
     "after": "Archive After",
     "never": "Never",
     "detail": "Sessions without new messages for this long are archived. Pinned sessions are never archived.",

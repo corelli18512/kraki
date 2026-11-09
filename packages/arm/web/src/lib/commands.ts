@@ -225,11 +225,51 @@ export function renameSession(
   });
 }
 
+/** Longest a pin request waits for its `session_pinned` echo; after that a
+ *  lost echo no longer hides pin changes made on other devices. */
+export const PIN_ECHO_TIMEOUT_MS = 10_000;
+
+/** Pin requests sent from this app whose echoes have not all come back. The
+ *  Tentacle echoes every request in order, so under latency rapid toggles
+ *  bring back superseded states that would make the row jump (K-207). */
+const pendingPins = new Map<string, { echoes: number; pinned: boolean; sentAt: number }>();
+
+function livePendingPin(sessionId: string) {
+  const entry = pendingPins.get(sessionId);
+  if (entry && Date.now() - entry.sentAt > PIN_ECHO_TIMEOUT_MS) {
+    pendingPins.delete(sessionId);
+    return undefined;
+  }
+  return entry;
+}
+
+/** The pin state this app last requested while echoes are outstanding. */
+export function pendingPin(sessionId: string): boolean | undefined {
+  return livePendingPin(sessionId)?.pinned;
+}
+
+/** A `session_pinned` arrived: false while it is the echo of a superseded
+ *  request from this app (the last echo, or any other change, applies). */
+export function settlePinEcho(sessionId: string): boolean {
+  const entry = livePendingPin(sessionId);
+  if (!entry) return true;
+  entry.echoes -= 1;
+  if (entry.echoes > 0) return false;
+  pendingPins.delete(sessionId);
+  return true;
+}
+
+export function resetPendingPins(): void {
+  pendingPins.clear();
+}
+
 export function pinSession(
   sessionId: string,
   pinned: boolean,
   send: (msg: Record<string, unknown>) => void,
 ): void {
+  const pending = livePendingPin(sessionId);
+  pendingPins.set(sessionId, { echoes: (pending?.echoes ?? 0) + 1, pinned, sentAt: Date.now() });
   // Optimistically update local store
   const store = getStore();
   const next = new Set(store.pinnedSessions);

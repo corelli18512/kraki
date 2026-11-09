@@ -91,7 +91,8 @@
     "holdUsage": "Hold {{shortcut}} to peek at account usage",
     "shortcutFooterFloating": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window; over other apps it floats. “Account Usage” in the tray opens it any time.",
     "shortcutFooterTray": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the tray opens it any time.",
-    "shortcutFooterSidebar": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time."
+    "shortcutFooterSidebar": "Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time.",
+    "shortcutFooterSidebarMac": "Click the shortcut to choose another key: F1–F20, or a combination with Control, Option or Command. With Kraki in front the panel opens inside its window. “Account Usage” in the sidebar opens it any time."
   },
   "title": "Settings",
   "voice": {
@@ -235,5 +236,8 @@
     "settingsHint": "You can change this anytime in Settings › Privacy.",
     "decline": "Don't Share",
     "ok": "OK"
+  },
+  "dogfood": {
+    "switchFailed": "Couldn’t switch in this browser"
   }
 }

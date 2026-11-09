@@ -95,3 +95,52 @@ describe('forkSession', () => {
     expect(state.forkSources.has(requestId)).toBe(false);
   });
 });
+
+describe('rapid pin toggles under latency (K-207)', () => {
+  const echo = (sessionId: string, pinned: boolean) => handleDataMessage({
+    type: 'session_pinned', deviceId: 'dev-tentacle', seq: 1, timestamp: new Date().toISOString(), sessionId, payload: { pinned },
+  } as unknown as InnerMessage, { cmdState: new commands.CommandState() });
+  const pinnedNow = () => useStore.getState().pinnedSessions.has('sess-p');
+
+  beforeEach(() => {
+    commands.resetPendingPins();
+    useStore.getState().upsertSession({ id: 'sess-p', deviceId: 'dev-tentacle', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0 });
+  });
+
+  it('ignores the echoes of superseded pin requests', () => {
+    const send = vi.fn();
+    commands.pinSession('sess-p', true, send);
+    commands.pinSession('sess-p', false, send);
+    commands.pinSession('sess-p', true, send);
+    expect(pinnedNow()).toBe(true);
+    echo('sess-p', true);
+    expect(pinnedNow()).toBe(true);
+    echo('sess-p', false); // stale: would make the row jump out of Pinned
+    expect(pinnedNow()).toBe(true);
+    echo('sess-p', true);
+    expect(pinnedNow()).toBe(true);
+    // Settled: a pin change from another device applies again.
+    echo('sess-p', false);
+    expect(pinnedNow()).toBe(false);
+  });
+
+  it('reports the requested pin as pending until its echo arrives', () => {
+    commands.pinSession('sess-p', true, vi.fn());
+    expect(commands.pendingPin('sess-p')).toBe(true);
+    echo('sess-p', true);
+    expect(commands.pendingPin('sess-p')).toBeUndefined();
+  });
+
+  it('applies echoes again after a lost echo times out', () => {
+    vi.useFakeTimers();
+    try {
+      commands.pinSession('sess-p', true, vi.fn());
+      vi.advanceTimersByTime(commands.PIN_ECHO_TIMEOUT_MS + 1);
+      expect(commands.pendingPin('sess-p')).toBeUndefined();
+      echo('sess-p', false);
+      expect(pinnedNow()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

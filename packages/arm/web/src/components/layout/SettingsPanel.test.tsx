@@ -30,9 +30,9 @@ const open = () => render(<SettingsPanel open onClose={vi.fn()} />);
 const tab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
 
 describe('SettingsPanel native preferences parity', () => {
-  it('has seven tabs and only one pane; General matches appearance/archive wording', () => {
+  it('has six tabs in a Mac/Linux browser and only one pane; General matches appearance/archive wording', () => {
     open();
-    expect(screen.getAllByRole('tab').map((el) => el.textContent)).toEqual(['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About']);
+    expect(screen.getAllByRole('tab').map((el) => el.textContent)).toEqual(['General', 'Account', 'Voice Input', 'Notifications', 'Devices', 'About']);
     expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
     expect(screen.getByText('Brand palette preview')).toBeInTheDocument();
     expect(screen.queryByText('Relay server')).not.toBeInTheDocument();
@@ -64,6 +64,22 @@ describe('SettingsPanel native preferences parity', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Press a shortcut…' }), { key: 'F8' });
     expect(useUsageShortcut.getState()).toMatchObject({ shortcut: 'F8', recording: false });
     expect(screen.getByRole('button', { name: 'F8' })).not.toHaveClass('is-recording');
+  });
+  it('focuses the recorder on click so Safari delivers the keys (K-226)', () => {
+    open();
+    const recorder = screen.getByRole('button', { name: 'F6' });
+    // Like Safari, a synthetic click does not focus a button by itself.
+    fireEvent.click(recorder);
+    expect(recorder).toHaveFocus();
+  });
+  it('shows the Command key as Cmd in a Mac browser, not Super (K-226)', () => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15');
+    useUsageShortcut.setState({ shortcut: 'Super+Shift+J' });
+    open();
+    expect(screen.getByRole('button', { name: 'Cmd+Shift+J' })).toBeInTheDocument();
+    expect(screen.getByText('Hold Cmd+Shift+J to peek at account usage')).toBeInTheDocument();
+    expect(screen.getByText(/combination with Control, Option or Command/)).toBeInTheDocument();
+    ua.mockRestore();
   });
   it('clears the active recorder indication on blur and Escape without saving', () => {
     open();
@@ -139,7 +155,59 @@ describe('SettingsPanel native preferences parity', () => {
     expect(container.querySelectorAll('.kp-device')).toHaveLength(3);
     tab('About');
     const rows = [...container.querySelectorAll('.kp-diagnostic')];
-    expect(rows.slice(2, 4).map((row) => row.textContent)).toEqual(['ALPHAKraki 0.38.7 · offline', 'ZULUKraki 0.38.8']);
+    expect(rows.slice(1, 3).map((row) => row.textContent)).toEqual(['ALPHAKraki 0.38.7 · offline', 'ZULUKraki 0.38.8']);
+  });
+  it('About: no Background Service row in a browser, no "Kraki —" for an offline computer (K-233)', () => {
+    useStore.setState({ devices: new Map([
+      ['a', { id: 'a', name: 'Alpha', role: 'tentacle', online: false }],
+      ['z', { id: 'z', name: 'Zulu', role: 'tentacle', online: true }],
+    ]) });
+    const { container } = open(); tab('About');
+    const rows = [...container.querySelectorAll('.kp-diagnostic')].map((row) => row.textContent);
+    expect(rows.some((row) => row?.startsWith('BACKGROUND SERVICE'))).toBe(false);
+    expect(rows).toContain('ALPHAKraki · offline');
+    expect(rows).toContain('ZULUKraki —');
+  });
+  it('reopens on General, not the last tab (K-233)', () => {
+    const view = render(<SettingsPanel open onClose={vi.fn()} />);
+    tab('About');
+    view.rerender(<SettingsPanel open={false} onClose={vi.fn()} />);
+    view.rerender(<SettingsPanel open onClose={vi.fn()} />);
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+  });
+  it.each([
+    ['iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1', false],
+    ['Linux', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36', false],
+    ['Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36', true],
+  ])('shows the This PC tab with its Windows hint only in a Windows browser: %s (K-228)', (_name, userAgent, shown) => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+    open();
+    expect(!!screen.queryByRole('tab', { name: 'This PC' })).toBe(shown);
+    ua.mockRestore();
+  });
+  it.each([
+    ['iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1', false],
+    ['Android phone', 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36', false],
+    ['Mac', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', true],
+  ])('shows the keyboard-only usage shortcut only where there is a keyboard: %s (K-228)', (_name, userAgent, shown) => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+    open();
+    expect(!!screen.queryByRole('switch', { name: 'Peek at account usage' })).toBe(shown);
+    expect(!!screen.queryByText('Shortcut')).toBe(shown);
+    ua.mockRestore();
+  });
+  it('the Dogfood row says when the switch is impossible instead of "Switching…" forever (K-229)', async () => {
+    const { applyAccountChannel } = await import('../../lib/auth');
+    // A browser that refuses the channel cookie.
+    Object.defineProperty(document, 'cookie', { configurable: true, get: () => '', set: () => {} });
+    try {
+      applyAccountChannel({ internal: true });
+      useStore.setState({ user: { id: 'u1', login: 'tester', provider: 'open', preferences: { internal: true } } });
+      open();
+      expect(screen.getByTestId('release-channel')).toHaveTextContent('Couldn’t switch in this browser');
+    } finally {
+      delete (document as unknown as { cookie?: string }).cookie;
+    }
   });
   it('provides empty vocabulary and disables dependent controls when correction is off', () => {
     open(); tab('Voice Input');

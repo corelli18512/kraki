@@ -275,10 +275,15 @@ describe('release channel follows the account (internal = dogfood)', () => {
   });
 
   it('a cookie that does not stick never reloads', async () => {
-    const { applyAccountChannel } = await import('./auth');
+    const { applyAccountChannel, channelSwitchFailed } = await import('./auth');
     installJar('', { sticks: false });
     applyAccountChannel({ internal: true });
     expect(reload).not.toHaveBeenCalled();
+    // Settings tells the user instead of "Switching…" forever (K-229).
+    expect(channelSwitchFailed()).toBe(true);
+    installJar('kraki_channel=beta');
+    applyAccountChannel({ internal: true });
+    expect(channelSwitchFailed()).toBe(false);
   });
 
   it('a server that ignores the cookie cannot cause a reload loop', async () => {
