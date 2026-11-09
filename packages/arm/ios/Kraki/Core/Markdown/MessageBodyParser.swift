@@ -104,11 +104,27 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             if fragment[i] == "_", i > fragment.startIndex, isWordChar(fragment[fragment.index(before: i)]) { return false }
             return true
         }
+        /// Ranges of complete code spans: emphasis never closes inside one.
+        let codeSpans: [Range<String.Index>] = {
+            var spans: [Range<String.Index>] = []
+            var cursor = fragment.startIndex
+            while let open = fragment[cursor...].firstIndex(of: "`") {
+                let afterOpen = fragment.index(after: open)
+                guard let close = fragment[afterOpen...].firstIndex(of: "`") else { break }
+                spans.append(open..<fragment.index(after: close))
+                cursor = fragment.index(after: close)
+            }
+            return spans
+        }()
         func closer(for marker: String, from start: String.Index) -> String.Index? {
             var search = start
             while search < fragment.endIndex,
                   let found = fragment.range(of: marker, range: search..<fragment.endIndex) {
                 let close = found.lowerBound
+                if let span = codeSpans.first(where: { $0.contains(close) }) {
+                    search = span.upperBound
+                    continue
+                }
                 let afterClose = found.upperBound
                 let precededBySpace = close > start && fragment[fragment.index(before: close)].isWhitespace
                 let followedByWord = marker.hasPrefix("_") && afterClose < fragment.endIndex && isWordChar(fragment[afterClose])
@@ -116,6 +132,12 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                 search = fragment.index(after: close)
             }
             return nil
+        }
+        /// Length of the run of `fragment[i]` starting at `i`.
+        func delimiterRun(at i: String.Index) -> Int {
+            var end = i
+            while end < fragment.endIndex, fragment[end] == fragment[i] { end = fragment.index(after: end) }
+            return fragment.distance(from: i, to: end)
         }
 
         func flushPlain(until end: String.Index) {
@@ -151,7 +173,7 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             // link label the label already is the link.
             if link == nil, fragment[index] == "<",
                let close = fragment[next...].firstIndex(of: ">"),
-               let url = autolinkURL(String(fragment[next..<close])) {
+               let url = autolinkURL(String(fragment[next..<close])) ?? mailAutolinkURL(String(fragment[next..<close])) {
                 flushPlain(until: index)
                 append(String(fragment[next..<close]), overrideLink: url)
                 index = fragment.index(after: close)
@@ -167,6 +189,26 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                     flushPlain(until: index)
                     append(String(fragment[index..<end]), overrideLink: url)
                     index = end
+                    plainStart = index
+                    continue
+                }
+            }
+
+            if fragment[index] == "*" || fragment[index] == "_" {
+                let run = delimiterRun(at: index)
+                let afterRun = fragment.index(index, offsetBy: run)
+                // A delimiter run followed by a space or the end opens
+                // nothing ("a *** b"): it is text, kept whole.
+                if afterRun == fragment.endIndex || fragment[afterRun].isWhitespace {
+                    index = afterRun
+                    continue
+                }
+                // ***strong emphasis***
+                if run == 3, canOpen(at: index, length: 3),
+                   let close = closer(for: String(repeating: String(fragment[index]), count: 3), from: afterRun) {
+                    flushPlain(until: index)
+                    appendNested(String(fragment[afterRun..<close]), bold: true, italic: true)
+                    index = fragment.index(close, offsetBy: 3)
                     plainStart = index
                     continue
                 }
@@ -207,18 +249,26 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                 continue
             }
 
-            if fragment[index] == "[",
-               let labelEnd = fragment[next...].firstIndex(of: "]"),
+            // ![alt](url): chat bubbles do not inline remote images; the alt
+            // text links to the image instead of leaking a "!".
+            let isImage = fragment[index] == "!" && next < fragment.endIndex && fragment[next] == "["
+            let labelOpen = isImage ? next : index
+            let labelStart = fragment.index(after: labelOpen)
+            if fragment[labelOpen] == "[", labelStart <= fragment.endIndex,
+               let labelEnd = fragment[labelStart...].firstIndex(of: "]"),
                fragment.index(after: labelEnd) < fragment.endIndex,
                fragment[fragment.index(after: labelEnd)] == "(" {
                 let destinationStart = fragment.index(labelEnd, offsetBy: 2)
-                if let destinationEnd = fragment[destinationStart...].firstIndex(of: ")"),
-                   let destination = URL(string: String(fragment[destinationStart..<destinationEnd])) {
+                if let destinationEnd = linkDestinationEnd(in: fragment, from: destinationStart),
+                   let destination = URL(string: String(fragment[destinationStart..<destinationEnd])
+                        .trimmingCharacters(in: .whitespaces)) {
                     flushPlain(until: index)
                     // Agent text is untrusted: only web and mail links become
                     // tappable. Any other scheme (file:, app handlers, …) keeps
                     // its label as plain text.
-                    appendNested(String(fragment[next..<labelEnd]), link: isSafeLinkURL(destination) ? destination : nil)
+                    var label = String(fragment[labelStart..<labelEnd])
+                    if isImage, label.isEmpty { label = destination.absoluteString }
+                    appendNested(label, link: isSafeLinkURL(destination) ? destination : nil)
                     index = fragment.index(after: destinationEnd)
                     plainStart = index
                     continue
@@ -240,6 +290,40 @@ func isSafeLinkURL(_ url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased() else { return false }
     if scheme == "mailto" { return true }
     return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
+}
+
+/// The `)` closing a link destination that starts at `start`: nested
+/// balanced parentheses belong to the URL (`…/Foo_(bar))`).
+func linkDestinationEnd(in text: String, from start: String.Index) -> String.Index? {
+    var depth = 0
+    var index = start
+    while index < text.endIndex {
+        let character = text[index]
+        if character == "\\", text.index(after: index) < text.endIndex {
+            index = text.index(index, offsetBy: 2)
+            continue
+        }
+        if character == "(" { depth += 1 }
+        if character == ")" {
+            if depth == 0 { return index }
+            depth -= 1
+        }
+        index = text.index(after: index)
+    }
+    return nil
+}
+
+/// `<mailto:a@b.c>` or `<a@b.c>` (CommonMark email autolink).
+func mailAutolinkURL(_ text: String) -> URL? {
+    guard !text.contains(where: \.isWhitespace) else { return nil }
+    let address = text.lowercased().hasPrefix("mailto:") ? String(text.dropFirst(7)) : text
+    let parts = address.split(separator: "@", omittingEmptySubsequences: false)
+    // A domain is letters, digits, `.` and `-` (not `git@github.com:org/repo.git`).
+    guard parts.count == 2, !parts[0].isEmpty, parts[1].contains("."),
+          !parts[1].hasPrefix("."), !parts[1].hasSuffix("."),
+          parts[1].unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "." || $0 == "-") })
+    else { return nil }
+    return URL(string: "mailto:" + address)
 }
 
 /// A URL only when it is a complete http(s) address (no spaces).
@@ -443,6 +527,37 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
     /// indented ("  ```"); their content carries the same indent, which is
     /// stripped so the block renders like a top-level one.
     var codeIndent = 0
+    /// The opening fence (``` or ~~~, possibly longer). Only a fence of the
+    /// same character and at least this length closes the block.
+    var codeFence = ""
+    /// The block was opened inside a blockquote ("> ```"): its lines carry
+    /// the quote marker, and the block ends with the quote.
+    var codeInQuote = false
+
+    /// A fence line: up to 8 spaces, then 3+ backticks or tildes.
+    func fence(in line: String) -> (indent: Int, marker: String, info: String)? {
+        let indent = line.prefix(while: { $0 == " " }).count
+        guard indent <= 8 else { return nil }
+        let rest = line.dropFirst(indent)
+        guard let first = rest.first, first == "`" || first == "~" else { return nil }
+        let marker = rest.prefix(while: { $0 == first })
+        guard marker.count >= 3 else { return nil }
+        let info = String(rest.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
+        // A backtick fence's info string cannot contain a backtick (CommonMark).
+        if first == "`", info.contains("`") { return nil }
+        return (indent, String(marker), info)
+    }
+    /// Quote content without its markers: "> a", ">a", "> > a" and ">> a"
+    /// all give "a" (nested quotes render as one quote level).
+    func quoteContent(_ line: String) -> String? {
+        guard line.hasPrefix(">") else { return nil }
+        var rest = Substring(line)
+        while rest.hasPrefix(">") {
+            rest = rest.dropFirst()
+            if rest.hasPrefix(" ") { rest = rest.dropFirst() }
+        }
+        return String(rest)
+    }
 
     func flushInline() {
         if !inlineBuffer.isEmpty {
@@ -457,21 +572,36 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
         }
     }
 
+    func closeCodeBlock() {
+        segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
+        codeBuffer.removeAll()
+        codeLanguage = nil
+        inCodeBlock = false
+        codeIndent = 0
+        codeFence = ""
+        codeInQuote = false
+    }
+
     let lines = text.components(separatedBy: "\n")
     var i = 0
     while i < lines.count {
-        let line = lines[i]
+        var line = lines[i]
 
-        let fenceIndent = line.prefix(while: { $0 == " " }).count
-        let isFence = fenceIndent <= 8 && line.dropFirst(fenceIndent).hasPrefix("```")
+        if inCodeBlock, codeInQuote {
+            // The quote ended (a line without ">"): so does its code block.
+            guard let content = quoteContent(line) else {
+                closeCodeBlock()
+                continue
+            }
+            line = content
+        }
+
+        let lineFence = fence(in: line)
 
         if inCodeBlock {
-            if isFence {
-                segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
-                codeBuffer.removeAll()
-                codeLanguage = nil
-                inCodeBlock = false
-                codeIndent = 0
+            if let lineFence, lineFence.info.isEmpty, lineFence.marker.first == codeFence.first,
+               lineFence.marker.count >= codeFence.count {
+                closeCodeBlock()
             } else {
                 let strip = min(codeIndent, line.prefix(while: { $0 == " " }).count)
                 codeBuffer.append(String(line.dropFirst(strip)))
@@ -480,13 +610,27 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
             continue
         }
 
-        if isFence {
+        if let lineFence {
             flushInline()
             flushQuote()
-            let lang = String(line.dropFirst(fenceIndent + 3)).trimmingCharacters(in: .whitespaces)
-            codeLanguage = lang.isEmpty ? nil : lang
+            codeLanguage = lineFence.info.isEmpty ? nil : lineFence.info
             inCodeBlock = true
-            codeIndent = fenceIndent
+            codeIndent = lineFence.indent
+            codeFence = lineFence.marker
+            i += 1
+            continue
+        }
+
+        // A fence inside a quote ("> ```"): the code renders as a code block
+        // instead of leaking its fence lines into the quote text.
+        if let content = quoteContent(line), let quotedFence = fence(in: content) {
+            flushInline()
+            flushQuote()
+            codeLanguage = quotedFence.info.isEmpty ? nil : quotedFence.info
+            inCodeBlock = true
+            codeIndent = quotedFence.indent
+            codeFence = quotedFence.marker
+            codeInQuote = true
             i += 1
             continue
         }
@@ -526,10 +670,9 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
             }
         }
 
-        // Blockquote: line starts with "> " or is exactly ">".
-        if line.hasPrefix("> ") || line == ">" {
+        // Blockquote: line starts with ">" (nested markers are dropped).
+        if let content = quoteContent(line) {
             flushInline()
-            let content = line == ">" ? "" : String(line.dropFirst(2))
             quoteBuffer.append(content)
             i += 1
             continue
@@ -549,7 +692,7 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
     }
 
     if inCodeBlock {
-        segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
+        closeCodeBlock()
     }
     flushQuote()
     flushInline()
@@ -567,7 +710,7 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
 func looksLikeTableRow(_ line: String) -> Bool {
     guard line.contains("|") else { return false }
     let trimmed = line.trimmingCharacters(in: .whitespaces)
-    if trimmed.hasPrefix("```") || trimmed.hasPrefix("> ") || trimmed == ">" {
+    if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") || trimmed.hasPrefix(">") {
         return false
     }
     return true
