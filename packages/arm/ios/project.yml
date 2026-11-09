@@ -264,6 +264,7 @@ targets:
       - path: KrakiTests/ComposerGeometryProbeTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
+      - path: KrakiTests/ComposerVoiceCopyAndLayoutTests.swift
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift

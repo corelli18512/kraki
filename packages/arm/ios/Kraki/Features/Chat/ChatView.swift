@@ -23,6 +23,8 @@ struct ChatView: View {
     @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
     /// Height the floating composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
+    /// Measured height of the offline notice while it is shown.
+    @State private var offlineNoticeHeight: CGFloat = 0
 
     // MARK: - View-model passthroughs
 
@@ -47,8 +49,18 @@ struct ChatView: View {
                 bubbleBottomPadding: TKMetrics.outerV
             ),
             composerVisible: true,
-            compacting: viewModel?.isCompacting == true
+            compacting: viewModel?.isCompacting == true,
+            offlineNoticeHeight: offlineNotice == nil ? 0 : offlineNoticeHeight
         )
+    }
+
+    /// "<computer> is offline — …" while the session's computer is offline
+    /// (messages queue until it reconnects).
+    private var offlineNotice: String? {
+        guard let deviceId = session?.deviceId else { return nil }
+        let device = appState.deviceStore.devices[deviceId]
+        guard device?.online != true else { return nil }
+        return IOSComposerOfflineNotice.text(deviceName: device?.name ?? session?.deviceName)
     }
     // MARK: - Body
 
@@ -281,6 +293,11 @@ struct ChatView: View {
                 .background(.thinMaterial, in: Capsule())
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Compacting context")
+            }
+            if let offlineNotice {
+                IOSComposerOfflineNotice(text: offlineNotice)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { offlineNoticeHeight = $0 }
+                    .transition(.opacity)
             }
             // Pure floating liquid-glass capsule. The capsule itself owns
             // its glass background (see `inputBoxGlassBackground` in

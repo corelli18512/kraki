@@ -3063,6 +3063,16 @@
         }
       }
     },
+    "Couldn't load this attachment" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载此附件"
+          }
+        }
+      }
+    },
     "Couldn’t load this report" : {
       "localizations" : {
         "zh-Hans" : {
