@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSessionStatus, countPendingQuestions } from './session-status';
+import { attentionCount, getSessionStatus, countPendingQuestions } from './session-status';
 import type { SessionSummary } from '@kraki/protocol';
 import type { SessionCard } from '../types/store';
 
@@ -27,6 +27,18 @@ describe('countPendingQuestions', () => {
     expect(countPendingQuestions('s1', m)).toBe(1);
     expect(countPendingQuestions('s2', m)).toBe(0);
     expect(countPendingQuestions('s3', m)).toBe(0);
+  });
+});
+
+describe('attentionCount (tab title, K-220)', () => {
+  it('adds Sessions waiting on an approval or answer to the unread count, each once', () => {
+    const ids = ['s1', 's2', 's3', 's4'];
+    const previews = new Map([['s2', { type: 'permission' }], ['s3', { type: 'question' }], ['s4', { type: 'agent' }]]);
+    expect(attentionCount(new Map(), ids, new Map(), new Map())).toBe(0);
+    // A live permission card (s1) and the previews (s2, s3).
+    expect(attentionCount(new Map(), ids, cardMap([{ sessionId: 's1' }]), previews)).toBe(3);
+    // Unread and waiting counts once; a decided permission does not wait.
+    expect(attentionCount(new Map([['s2', 1], ['s4', 2]]), ids, cardMap([{ sessionId: 's1', decided: true }]), previews)).toBe(4);
   });
 });
 

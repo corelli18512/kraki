@@ -164,10 +164,20 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     };
   }, []);
 
-  // Native Steps opens at the newest trace edge and follows live additions.
+  // Native Steps opens at the newest trace edge and follows live additions,
+  // unless the reader has scrolled up to read (K-223).
+  const following = useRef(true);
+  useLayoutEffect(() => { following.current = true; }, [path.length]);
   useLayoutEffect(() => {
-    if (body.current && path.length === 0) body.current.scrollTop = body.current.scrollHeight;
+    if (body.current && path.length === 0 && following.current) body.current.scrollTop = body.current.scrollHeight;
   }, [steps, path.length]);
+
+  // LIVE only while the opened turn is still the running one (K-223).
+  const turnRunning = useStore((s) => {
+    const state = s.sessions.get(sessionId)?.state;
+    return (state === 'active' || state === 'compacting')
+      && (openedSeq < 0 || latestTurnStartSeq(s.messages.get(sessionId)) === openedSeq);
+  });
 
   const title = current ? (subagentOf(current)?.name ?? t('stepsModal.subagent')) : t('stepsModal.steps');
   return (
@@ -180,10 +190,13 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
             </button>
           )}
           <h3>{title}</h3>
-          {live && <span className="ksheet-live">{t('stepsModal.live')}</span>}
+          {live && turnRunning && <span className="ksheet-live">{t('stepsModal.live')}</span>}
           <button type="button" onClick={onClose} className="ksheet-close" aria-label={t('stepsModal.close')}><CircleX aria-hidden /></button>
         </div>
-        <div ref={body} className="ksheet-body" key={path.join('/')}>
+        <div ref={body} className="ksheet-body" key={path.join('/')} onScroll={(e) => {
+          const el = e.currentTarget;
+          following.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+        }}>
           {steps.length === 0 ? loaded ? (
             <div className="ksheet-empty">
               <CircleCheck aria-hidden />
