@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decidePairingLink, isOfficialRelay, shouldAutoOpenStore } from './pairing-link';
+import { decidePairingLink, isOfficialRelay } from './pairing-link';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1';
 const ANDROID = 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36';
@@ -18,17 +18,6 @@ describe('pairing link (release review A10 / D5)', () => {
   it('offers the app on iPhone without spending the token', () => {
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1', IPHONE)).toEqual({ kind: 'offer-app' });
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1&web=1', IPHONE)).toEqual({ kind: 'proceed' });
-  });
-
-  it('opens the App Store once per code, so coming back does not loop', () => {
-    const data = new Map<string, string>();
-    const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v); } };
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_1')).toBe(true);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_1')).toBe(false);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_2')).toBe(true);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat')).toBe(false);
-    const blocked = { getItem: () => null, setItem: () => { throw new Error('blocked'); } };
-    expect(shouldAutoOpenStore(blocked, '?token=pt_3')).toBe(false);
   });
 
   it('treats iPadOS (desktop user agent with touch) as iOS', () => {

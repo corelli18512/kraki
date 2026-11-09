@@ -69,3 +69,31 @@ describe('Markdown — native transcript rendering', () => {
     expect(getComputedStyle(container.querySelector('pre')!).whiteSpace).toBe('pre');
   });
 });
+
+describe('Markdown — remote images (K-219)', () => {
+  it('does not fetch a remote image; it shows a link with the alt text instead', () => {
+    const { container } = render(<Markdown text={'See ![build status](https://tracker.example/pixel.png?u=1) now'} />);
+    expect(container.querySelector('img')).toBeNull();
+    const link = screen.getByRole('link', { name: 'build status' });
+    expect(link).toHaveAttribute('href', 'https://tracker.example/pixel.png?u=1');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('does not fetch a remote image inside a table cell', () => {
+    const { container } = render(<Markdown text={'| a |\n|---|\n| ![x](https://tracker.example/t.gif) |'} />);
+    expect(container.querySelector('img[src^="https:"]')).toBeNull();
+  });
+
+  it('a linked image (a badge) is the label of its one link, not a nested link', () => {
+    const { container } = render(<Markdown text={'[![ci](https://a.example/b.png)](https://c.example)'} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'ci' })).toHaveAttribute('href', 'https://c.example');
+  });
+
+  it('an image without a web address shows its alt text only', () => {
+    const { container } = render(<Markdown text={'![diagram](./local.png)'} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container).toHaveTextContent('diagram');
+  });
+});

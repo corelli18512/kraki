@@ -28,4 +28,24 @@ describe('pairing-link localized interstitial', () => {
     expect(root.querySelector('#kraki-store')).toHaveAttribute('href', 'https://apps.apple.com/example');
     expect(root.querySelector('#kraki-web')).toHaveTextContent('在浏览器中继续');
   });
+
+  it('K-241: never leaves for the App Store by itself; the store link is a normal tap', () => {
+    vi.stubEnv('VITE_IOS_APP_STORE_URL', 'https://apps.apple.com/example');
+    const assign = vi.fn();
+    const replace = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, search: '?relay=wss://relay.kraki.chat&token=pt_store', pathname: '/', assign, replace } });
+    try {
+      const root = document.createElement('div');
+      expect(renderPairingInterstitial({ kind: 'offer-app' }, root)).toBe(true);
+      renderPairingInterstitial({ kind: 'offer-app' }, root);
+      expect(assign).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      const store = root.querySelector<HTMLAnchorElement>('#kraki-store')!;
+      expect(store).toHaveAttribute('href', 'https://apps.apple.com/example');
+      expect(root.querySelector('#kraki-web')).not.toBeNull();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+  });
 });

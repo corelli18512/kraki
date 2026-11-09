@@ -232,6 +232,7 @@
   },
   "session": {
     "starting": "Starting session…",
+    "loading": "Loading session…",
     "notFound": "Session not found",
     "back": "← Back to sessions",
     "connecting": "Connecting…",
