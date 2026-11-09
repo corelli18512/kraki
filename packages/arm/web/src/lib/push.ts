@@ -5,9 +5,27 @@
  * subscription to the relay via register_push_token.
  */
 
+import { resolveLanguage } from '../i18n';
 import { createLogger } from './logger';
 
 const logger = createLogger('push');
+
+/** The service worker script, told the app's language so its notification
+ *  texts match the UI (it cannot read the app's settings). */
+export function serviceWorkerUrl(lang: string = resolveLanguage()): string {
+  return `/sw.js?lang=${encodeURIComponent(lang)}`;
+}
+
+/** Install the service worker at launch so the app opens offline (K-112),
+ *  and so it learns the current UI language. Production web only: the
+ *  desktop shell serves its own files, the dev server changes every save,
+ *  and automated browsers keep request mocking deterministic without it. */
+export function registerServiceWorker(env: { prod: boolean; lang?: string } = { prod: import.meta.env.PROD }): void {
+  if (!env.prod || window.krakiDesktop || !('serviceWorker' in navigator) || navigator.webdriver) return;
+  navigator.serviceWorker.register(serviceWorkerUrl(env.lang)).catch((err: unknown) => {
+    logger.warn('Service worker registration failed', { error: (err as Error)?.message });
+  });
+}
 
 /** Check if push notifications are supported in this browser. */
 export function isPushSupported(): boolean {
@@ -56,7 +74,7 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<string | 
 
   try {
     // Register service worker
-    const registration = await navigator.serviceWorker.register('/sw.js');
+    const registration = await navigator.serviceWorker.register(serviceWorkerUrl());
     await navigator.serviceWorker.ready;
 
     // Convert VAPID key from base64url to Uint8Array

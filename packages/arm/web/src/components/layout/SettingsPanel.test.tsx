@@ -200,3 +200,19 @@ describe('SettingsPanel native preferences parity', () => {
     } finally { active.mockRestore(); }
   });
 });
+
+describe('K-199: the Dogfood section is localized', () => {
+  it('shows zh-Hans texts for an internal account', async () => {
+    const i18next = (await import('i18next')).default;
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      useStore.setState({ user: { id: 'u1', login: 'tester', provider: 'open', preferences: { internal: true } } });
+      open();
+      expect(screen.getByText('内部账户：你会最先收到每个新版本。')).toBeInTheDocument();
+      expect(screen.queryByText('Builds')).not.toBeInTheDocument();
+      expect(screen.getByTestId('release-channel').textContent).toMatch(/^(内测|正在切换…)$/);
+    } finally {
+      await i18next.changeLanguage('en');
+    }
+  });
+});

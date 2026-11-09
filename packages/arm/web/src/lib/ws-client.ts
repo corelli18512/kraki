@@ -24,6 +24,7 @@ import { ArmPulse } from './arm-pulse';
 import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
 import { diag } from './diag';
 import { traceEvent } from './trace';
+import { serverErrorText } from './server-errors';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
 import { AttachmentPullQueue } from './attachment-pull-queue';
@@ -290,6 +291,12 @@ export class KrakiWSClient {
   }
 
   disconnect() {
+    this.endConnection();
+    this.transport.disconnect();
+  }
+
+  /** Everything `disconnect` ends on this side, leaving the transport alone. */
+  private endConnection(): void {
     this.identityEpoch++;
     this.encryptedQueue = [];
     this.inboundCrypto.clear();
@@ -304,7 +311,6 @@ export class KrakiWSClient {
     this.routeChanges = 0;
     this.clearReplayTracking();
     this.endConnectionScope();
-    this.transport.disconnect();
   }
 
   onMessage(handler: MessageHandler) {
@@ -1001,7 +1007,18 @@ export class KrakiWSClient {
 
   private applySessionList(msg: SessionListMessage): void {
     const store = getStore();
-    const tentacleSessions = msg.payload?.sessions ?? [];
+    const listed: unknown = msg.payload?.sessions;
+    // A malformed list must not empty the sidebar (K-093): without an array
+    // there is nothing authoritative to apply, and an entry without an id
+    // cannot prove that a session is gone.
+    if (!Array.isArray(listed) || typeof msg.deviceId !== 'string') {
+      logger.warn('Ignoring malformed session_list', { deviceId: msg.deviceId });
+      return;
+    }
+    const tentacleSessions = listed.filter((s): s is SessionListMessage['payload']['sessions'][number] =>
+      !!s && typeof s === 'object' && typeof (s as { id?: unknown }).id === 'string' && (s as { id: string }).id !== '');
+    const complete = tentacleSessions.length === listed.length;
+    if (!complete) logger.warn('session_list has malformed entries', { dropped: listed.length - tentacleSessions.length });
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
@@ -1015,7 +1032,7 @@ export class KrakiWSClient {
     }
 
     // Remove local sessions from this tentacle that are no longer in the list
-    for (const [sid, session] of store.sessions) {
+    for (const [sid, session] of complete ? store.sessions : []) {
       if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
         diag.replies.missedEnd(sid);
         store.removeSession(sid);
@@ -1405,6 +1422,7 @@ export class KrakiWSClient {
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
+          reconnectLater: () => { this.endConnection(); this.transport.retryLater(); },
           redirectToRelay: (url: string) => { this.endConnectionScope(); this.transport.redirectToRelay(url); },
           currentRelay: this.transport.url,
         });
@@ -1445,13 +1463,13 @@ export class KrakiWSClient {
         const serverErr = msg as ServerErrorMessage;
         // A server error while a deletion is pending is its answer.
         const del = useAccountDeletion.getState();
-        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || t('app:errors.deleteAccount') });
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message ? serverErrorText(serverErr.message) : t('app:errors.deleteAccount') });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
           this.cmdState.clearRequest(ref);
         }
-        getStore().setLastError(serverErr.message);
+        getStore().setLastError(serverErrorText(serverErr.message));
         break;
       }
 

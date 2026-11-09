@@ -464,3 +464,28 @@ describe('live card: resolved permission', () => {
     expect(useStore.getState().cards.get('s2')?.action).toBeNull();
   });
 });
+
+describe('K-005: session titles are text or absent', () => {
+  beforeEach(() => useStore.getState().reset());
+
+  const bad = { id: 's-bad', deviceId: 'dev-1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0 } as const;
+
+  it('upsertSession drops a title that is not text', () => {
+    useStore.getState().upsertSession({ ...bad, title: 42, autoTitle: { x: 1 } } as unknown as SessionSummary);
+    const stored = useStore.getState().sessions.get('s-bad');
+    expect(stored?.title).toBeUndefined();
+    expect(stored?.autoTitle).toBeUndefined();
+  });
+
+  it('a persisted snapshot with a non-text title is cleaned on rehydrate', async () => {
+    localStorage.setItem('kraki-store', JSON.stringify({
+      state: { sessions: { __type: 'Map', entries: [['s-bad', { ...bad, title: 42, autoTitle: 'Auto' }]] } },
+      version: 0,
+    }));
+    await useStore.persist.rehydrate();
+    const stored = useStore.getState().sessions.get('s-bad');
+    expect(stored?.title).toBeUndefined();
+    expect(stored?.autoTitle).toBe('Auto');
+    localStorage.removeItem('kraki-store');
+  });
+});

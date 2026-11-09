@@ -1,9 +1,15 @@
+// Storage the browser refuses is replaced first: later modules read it while
+// loading.
+import './lib/storage-guard';
 // Localization first: bundled resources only (no relay client), so the
 // pairing interstitial below is already in the user's language.
 import './i18n';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 import { renderDesktopAuthCallback } from './lib/desktop-auth-callback';
+import { loadApp, loadWordmarkFont } from './lib/boot-loader';
+
+loadWordmarkFont();
 
 // Pairing QR opened in a browser: on iPhone offer the app first (don't spend
 // the single-use token), and confirm any non-Kraki relay before connecting.
@@ -14,6 +20,6 @@ const rootElement = document.getElementById('root')!;
 if (!renderDesktopAuthCallback(rootElement)) {
   const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints);
   if (!renderPairingInterstitial(pairingDecision, rootElement)) {
-    void import('./boot').then(({ boot }) => boot(rootElement));
+    void loadApp(() => import('./boot'), rootElement);
   }
 }

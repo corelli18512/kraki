@@ -44,6 +44,9 @@ export interface PendingInput {
   /** A staged voice input not yet accepted by transport; safe even without deduplication. */
   needsDispatch?: boolean;
   originalText?: string;
+  /** Attachments too large to keep across a reload: the restored input says
+   *  so and waits for the user instead of going out without them (K-100). */
+  attachmentsDropped?: number;
 }
 
 interface OutboxDeps {
@@ -106,7 +109,9 @@ function restore(): PendingInput[] {
     if (!raw) return [];
     const stored = JSON.parse(raw) as PendingInput[];
     if (!Array.isArray(stored)) return [];
-    const restored = stored.map((e) => (e.state === 'failed' || e.state === 'correcting' ? { ...e, state: 'failed' as const, text: e.originalText ?? e.text } : { ...e, state: 'sending' as const, needsResend: true }));
+    const restored = stored.map((e) => (e.state === 'failed' || e.state === 'correcting' || e.attachmentsDropped
+      ? { ...e, state: 'failed' as const, text: e.originalText ?? e.text, needsResend: undefined, needsDispatch: undefined }
+      : { ...e, state: 'sending' as const, needsResend: true }));
     if (restored.some((e) => e.needsResend)) ensureTicker();
     for (const e of restored) {
       const at = Date.parse(e.timestamp);
@@ -125,7 +130,7 @@ function persist(entries: PendingInput[]): void {
     if (entries.length === 0) { localStorage.removeItem(STORAGE_KEY); return; }
     const slim = entries.map((e) => {
       const size = (e.attachments ?? []).reduce((n, a) => n + (a.type === 'image' ? a.data.length : 0), 0);
-      return size > PERSIST_ATTACHMENT_LIMIT ? { ...e, attachments: undefined } : e;
+      return size > PERSIST_ATTACHMENT_LIMIT ? { ...e, attachments: undefined, attachmentsDropped: e.attachments!.length } : e;
     });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
   } catch {
@@ -344,8 +349,13 @@ export const outbox = {
     diag.sends.retried(clientId, true);
     phase(entry, 'retry');
     if (entry.state === 'correcting') { this.dispatchStaged(clientId, entry.originalText ?? entry.text); return; }
+    // Sent text-only by the user's choice: the "not kept" note no longer
+    // applies, and a later reload must not mark it failed again (K-100).
+    if (entry.attachmentsDropped) {
+      update((entries) => entries.map((e) => (e.clientId === clientId ? { ...e, attachmentsDropped: undefined } : e)));
+    }
     setState(clientId, 'sending');
-    transmit({ ...entry, state: 'sending' });
+    transmit({ ...entry, attachmentsDropped: undefined, state: 'sending' });
   },
 
   /** The Tentacle (re)greeted: inputs it has not echoed may be lost. If it

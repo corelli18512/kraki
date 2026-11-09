@@ -422,6 +422,14 @@
 .kfailed-mark.is-correcting { color: rgba(0, 0, 0, 0.5); }
 .dark .kfailed-mark.is-correcting { color: rgba(255, 255, 255, 0.55); }
 .kfailed-mark svg { width: 14px; height: 14px; }
+/* A restored input whose attachments could not be kept (outbox K-100). */
+.kpending-note {
+  max-width: 280px;
+  margin: 4px 0 0;
+  color: var(--k-text-2);
+  font-size: 12px;
+  text-align: right;
+}
 .kmenu {
   position: absolute;
   bottom: 28px;
