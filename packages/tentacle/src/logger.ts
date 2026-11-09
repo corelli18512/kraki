@@ -23,6 +23,7 @@ export const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 export const LOG_ROTATE_KEEP = 5;
 export const LOG_ROTATE_MAX_AGE_MS = 7 * 24 * 3600_000;
 const ROTATE_CHECK_MS = 60_000;
+const LOG_BUFFER_MAX_BYTES = 1024 * 1024; // per destination; there is one per module
 
 /** Time of the file's first entry (pino's epoch-ms `time`), else its birth
  *  time when the platform records one. */
@@ -90,7 +91,19 @@ export function createLogger(name: string, options: LoggerOptions = {}): pino.Lo
   // Written directly (single-executable builds cannot load a transport
   // worker anyway); normal mode rotates by hand, verbose mode never.
   if (!verbose) rotateLogFile(file);
-  const destination = pino.destination({ dest: file, mkdir: true, sync: options.sync === true });
+  const destination = pino.destination({
+    dest: file,
+    mkdir: true,
+    sync: options.sync === true,
+    // Lines that cannot be written (disk full) wait in memory; bound that.
+    maxLength: LOG_BUFFER_MAX_BYTES,
+  });
+  // A failed write (ENOSPC, the log folder removed) is emitted as 'error'. With
+  // no listener that is thrown: from the logging call itself (sync) or as an
+  // uncaught exception, so a full disk killed the daemon at its first log line
+  // and the supervisor restarted it into the same crash forever (K-122). Drop
+  // the line instead; writing resumes once there is space.
+  destination.on('error', () => { /* dropped: see above */ });
   if (!verbose) {
     const timer = setInterval(() => {
       if (rotateLogFile(file)) destination.reopen();

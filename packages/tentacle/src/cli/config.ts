@@ -9,7 +9,7 @@ import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from '../pai
 import type { AgentId } from '@kraki/protocol';
 import { loadManagedBy } from '../managed.js';
 import { gracefulExit } from './exit.js';
-import { restartManaged, silentStart } from './lifecycle.js';
+import { cmdRestart, restartManaged, silentStart } from './lifecycle.js';
 
 export function cmdConfig(): void {
   const config = loadConfig();
@@ -71,15 +71,25 @@ export function cmdConfigLog(verbosity?: string): void {
 
 export async function cmdConfigReset(): Promise<void> {
   const configPath = getConfigPath();
+  // This computer keeps its identity (device-id) through a reset, so it keeps
+  // its name too: setup fell back to the hostname once the config was gone,
+  // silently renaming it on every phone (K-270).
+  const previousName = loadConfig()?.device.name;
   try {
     unlinkSync(configPath);
     console.log(chalk.dim('Config deleted.'));
   } catch {
     // Config may not exist
   }
-  await runSetup();
+  await runSetup(previousName ? { deviceName: previousName } : {});
   const managed = loadManagedBy();
-  if (managed) await restartManaged(managed);
+  if (managed) {
+    await restartManaged(managed);
+    return;
+  }
+  // A `kraki start` daemon still runs on the old relay and sign-in; restart it
+  // so it uses the new config (K-124). A stopped one stays stopped.
+  if (isDaemonRunning()) await cmdRestart();
 }
 
 export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<void> {

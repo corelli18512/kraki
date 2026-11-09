@@ -584,6 +584,39 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
     }
   } catch (err) {
     logger.error({ err, sessionId, type: msg.type }, 'handleConsumerMessage failed');
+    if (msg.type === 'send_input') {
+      releaseUnstoredInput(client, sessionId, msg.payload.clientId as string | undefined);
+      reportInputNotAccepted(client, sessionId, err);
+    }
+  }
+}
+
+/** An input whose user_message was never stored stays `pending` in the
+ *  ledger: forget that this process admitted it, so the app's resend with the
+ *  same clientId is a fresh attempt, not a duplicate that is only re-echoed
+ *  (K-122). A stored one keeps its admission (at-most-once). */
+function releaseUnstoredInput(client: RelayClient, sessionId: string, clientId: string | undefined): void {
+  if (!clientId) return;
+  const entry = client.sessionManager.getInputLedgerEntry(sessionId, clientId);
+  if (entry && entry.status !== 'pending') return;
+  client.admittedInputs.delete(`${sessionId}\u0000${clientId}`);
+}
+
+/** The app's message could not be taken (a write failed, e.g. the disk is
+ *  full): say so in the chat rather than letting it vanish (K-122). When the
+ *  disk is full the error row cannot be stored either; send it live then. */
+function reportInputNotAccepted(client: RelayClient, sessionId: string, err: unknown): void {
+  const message = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOSPC'
+    ? 'Kraki on this computer could not save your message because its disk is full. Free some space, then send it again.'
+    : 'Kraki on this computer could not take your message. Send it again; if it keeps failing, check `kraki logs` on that computer.';
+  try {
+    client.send({ type: 'error', sessionId, payload: { message } });
+  } catch {
+    try {
+      client.send({ type: 'error', sessionId, payload: { message } }, false, { persist: false });
+    } catch (sendErr) {
+      logger.warn({ err: sendErr, sessionId }, 'could not report the failed input to the app');
+    }
   }
 }
 

@@ -613,9 +613,15 @@ async function reachRelay(relay: string, attempts = 3): Promise<RelayInfo> {
   }
 }
 
+/** What `runSetup` keeps from before. */
+export interface SetupOptions {
+  /** This computer's name from the config being replaced (`kraki config reset`). */
+  deviceName?: string;
+}
+
 /** Keep the device name across re-setup; a new device is named after the host. */
-function deviceName(): string {
-  return loadConfig()?.device.name ?? defaultDeviceName();
+function deviceName(options: SetupOptions): string {
+  return loadConfig()?.device.name ?? options.deviceName ?? defaultDeviceName();
 }
 
 /** Windows' factory names ("DESKTOP-7Q2K9JX", "LAPTOP-…") say nothing on a
@@ -666,14 +672,14 @@ function printDone(lines: { user?: string; relay: string; region?: string; devic
  *      relay for the account's region is resolved silently.
  * A self-hosted relay (KRAKI_RELAY_URL) adds a relay step first.
  */
-export async function runSetup(): Promise<KrakiConfig> {
+export async function runSetup(options: SetupOptions = {}): Promise<KrakiConfig> {
   await printAnimatedBanner();
   await confirmDespiteMacApp();
 
   // Self-hosted relay override — skip login-first routing
   const customRelay = process.env.KRAKI_RELAY_URL;
   if (customRelay) {
-    return runSetupDirect(customRelay);
+    return runSetupDirect(customRelay, options);
   }
 
   const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
@@ -697,7 +703,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     relay = await promptRelayUrl(relay);
   }
 
-  const name = deviceName();
+  const name = deviceName(options);
   const config: KrakiConfig = {
     relay,
     authMethod: 'github_token',
@@ -713,7 +719,7 @@ export async function runSetup(): Promise<KrakiConfig> {
 /**
  * Self-hosted relay (KRAKI_RELAY_URL): relay, this computer, sign in.
  */
-async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
+async function runSetupDirect(defaultRelay: string, options: SetupOptions): Promise<KrakiConfig> {
   const total = 3;
 
   // 1. Relay URL (with retry loop)
@@ -784,7 +790,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     throw new Error('No supported auth method found on this relay');
   }
 
-  const name = deviceName();
+  const name = deviceName(options);
   const config: KrakiConfig = {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],

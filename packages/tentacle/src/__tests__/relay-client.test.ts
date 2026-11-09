@@ -340,6 +340,41 @@ describe('RelayClient auth negotiation', () => {
     expect(sockets).toHaveLength(1);
   });
 
+  it('K-123: does not reconnect after the relay replaced it with another connection of this device id (4009)', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const replaced = vi.fn();
+    const fatal = vi.fn();
+    client.onDeviceReplaced = replaced;
+    client.onFatalError = fatal;
+
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('close', 4009, Buffer.from('replaced'));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Reconnecting would evict the other copy, which would evict this one:
+    // the two traded the connection forever.
+    expect(sockets).toHaveLength(1);
+    expect(replaced).toHaveBeenCalledTimes(1);
+    expect(fatal).not.toHaveBeenCalled();
+    expect(client.getState()).toBe('disconnected');
+
+    // An explicit connect (restart) takes the connection back.
+    client.connect();
+    expect(sockets).toHaveLength(2);
+    client.disconnect();
+  });
+
   it.each(['service_unavailable', 'auth_unavailable'])('reconnects (never goes fatal) on a transient %s auth error', async (code) => {
     const client = new RelayClient(
       createAdapter(),

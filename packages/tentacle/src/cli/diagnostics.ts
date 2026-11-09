@@ -30,10 +30,14 @@ export function cmdStatus(jsonOutput = false): void {
         pid: status.pid,
         // Additive fields for Kraki for Mac's onboarding and ownership logic.
         owner: managed ? managed.by : (cliJob.plistExists ? 'cli' : null),
-        supervisorPid: status.running ? (statusFile?.supervisorPid ?? null) : null,
+        supervisorPid: status.running ? (status.supervisorPid ?? statusFile?.supervisorPid ?? null) : null,
+        // Why a running daemon has no verified PID: 'restarting' (supervisor
+        // between worker restarts), 'unverified-pid', 'untracked-launchd-job'.
+        detail: status.detail ?? null,
         managedLabel: managed?.label ?? null,
         cliLaunchdJob: cliJob,
         relayState: status.running ? (statusFile?.relayState ?? null) : null,
+        relayIssue: status.running ? (statusFile?.relayIssue ?? null) : null,
         daemonVersion: status.running ? (statusFile?.version ?? null) : null,
         fda: status.running ? (statusFile?.fda ?? null) : null,
         fdaCheckedAt: status.running ? (statusFile?.fdaCheckedAt ?? null) : null,
@@ -61,11 +65,22 @@ export function cmdStatus(jsonOutput = false): void {
 
   const managedBy = loadManagedBy();
   const owner = managedBy ? `, managed by ${ownerName(managedBy.by)}` : '';
-  if (status.running) {
+  if (status.detail === 'restarting') {
+    console.log(`  Status:  ${chalk.yellow('restarting')} ${chalk.dim(`(the background worker is (re)starting; supervisor PID ${status.supervisorPid}${owner})`)}`);
+    console.log(chalk.dim('           See `kraki logs`; `kraki stop` stops it.'));
+  } else if (status.detail === 'unverified-pid') {
+    console.log(`  Status:  ${chalk.yellow('unknown')} ${chalk.dim(`(PID ${status.pid} is alive but could not be verified as Kraki${owner})`)}`);
+  } else if (status.detail === 'untracked-launchd-job') {
+    console.log(`  Status:  ${chalk.yellow('launchd job loaded, no verified daemon')} ${chalk.dim(`(it may be failing to start; see \`kraki logs\`${owner})`)}`);
+  } else if (status.running) {
     const relay = statusFile?.relayState;
     const link = relay === 'connected' ? chalk.green(', connected')
       : relay ? chalk.yellow(`, ${relay}`) : '';
     console.log(`  Status:  ${chalk.green('running')}${link} ${chalk.dim(`(PID ${status.pid}${owner})`)}`);
+    if (statusFile?.relayIssue === 'device_replaced') {
+      console.log(chalk.yellow('  Offline: another Kraki connected with this computer\'s identity (a second daemon, or a'));
+      console.log(chalk.yellow('           copy of this Kraki folder on another computer). Stop that copy, then `kraki restart`.'));
+    }
     const daemonVersion = statusFile?.version;
     if (daemonVersion && daemonVersion !== getVersion()) {
       console.log(chalk.yellow(`  Running: ${daemonVersion} (installed ${getVersion()}; run \`kraki restart\` to switch)`));
