@@ -67,6 +67,103 @@ describe('ApnsProvider connection reset (log audit 2026-10-22 d)', () => {
   });
 });
 
+describe('ApnsProvider retries a push lost on our side (K-301)', () => {
+  afterEach(() => silenceLogs());
+
+  /** A session that records request headers; `answer` gets the stream, its
+   *  headers and the timeout callback. */
+  function recordingSession(
+    seen: Array<Record<string, unknown>>,
+    answer: (stream: EventEmitter, timeout: () => void) => void,
+  ): ClientHttp2Session {
+    const session = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    session.destroyed = false;
+    session.closed = false;
+    session.destroy = () => { session.destroyed = true; };
+    session.request = (headers: Record<string, unknown>) => {
+      seen.push(headers);
+      const stream = new EventEmitter() as EventEmitter & Record<string, unknown>;
+      let onTimeout = () => {};
+      stream.setTimeout = (_ms: number, cb: () => void) => { onTimeout = cb; return stream; };
+      stream.close = () => {};
+      stream.end = () => { setImmediate(() => answer(stream, onTimeout)); };
+      return stream;
+    };
+    return session as unknown as ClientHttp2Session;
+  }
+  const ok = (stream: EventEmitter) => { stream.emit('response', { ':status': 200, 'apns-id': 'ok-1' }); stream.emit('end'); };
+  const reject = (reason: string, status = 400) => (stream: EventEmitter) => {
+    stream.emit('response', { ':status': status });
+    stream.emit('data', Buffer.from(JSON.stringify({ reason })));
+    stream.emit('end');
+  };
+  function provider(sessions: ClientHttp2Session[]) {
+    let opened = 0;
+    const p = new ApnsProvider({
+      keyPath: apnsKeyFile(), keyId: 'K', teamId: 'T', bundleId: 'chat.kraki',
+      connect: () => { opened += 1; return sessions.shift()!; },
+    });
+    return { p, opened: () => opened };
+  }
+
+  it('retries a timed-out request on a fresh session with the same collapse id', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { p, opened } = provider([
+      recordingSession(seen, (_s, timeout) => timeout()),
+      recordingSession(seen, ok),
+    ]);
+    expect(await p.send('token-0123456789abcdef', { blob: 'b', key: 'k' })).toEqual({ success: true, id: 'ok-1', retried: true });
+    expect(opened()).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!['apns-collapse-id']).toBeTruthy();
+    expect(seen[1]!['apns-collapse-id']).toBe(seen[0]!['apns-collapse-id']);
+  });
+
+  it('retries when the session was dropped under the request', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const dropped = recordingSession(seen, ok);
+    (dropped as unknown as { request: () => never }).request = () => { throw new Error('The session has been destroyed'); };
+    const { p } = provider([dropped, recordingSession(seen, ok)]);
+    expect(await p.send('token-0123456789abcdef', { blob: 'b', key: 'k' })).toMatchObject({ success: true, retried: true });
+  });
+
+  it('retries ExpiredProviderToken once with a newly signed token', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let calls = 0;
+    const session = recordingSession(seen, (stream) => (calls++ === 0 ? reject('ExpiredProviderToken', 403)(stream) : ok(stream)));
+    const { p } = provider([session]);
+    expect(await p.send('token-0123456789abcdef', { blob: 'b', key: 'k' })).toMatchObject({ success: true, retried: true });
+    expect(seen).toHaveLength(2);
+    expect(seen[1]!.authorization).not.toBe(seen[0]!.authorization);
+  });
+
+  it('concurrent ExpiredProviderToken failures mint one new token, not one each', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let calls = 0;
+    // The first two requests (sent together with the same token) are refused.
+    const session = recordingSession(seen, (stream) => (calls++ < 2 ? reject('ExpiredProviderToken', 403)(stream) : ok(stream)));
+    const { p } = provider([session]);
+    const results = await Promise.all([
+      p.send('token-0123456789abcdef', { blob: 'b', key: 'k' }),
+      p.send('token-fedcba9876543210', { blob: 'b', key: 'k' }),
+    ]);
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(seen).toHaveLength(4);
+    expect(seen[1]!.authorization).toBe(seen[0]!.authorization);
+    expect(new Set(seen.map((h) => h.authorization)).size).toBe(2);
+  });
+
+  it('does not retry a refusal of the device token or payload', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { p } = provider([recordingSession(seen, reject('BadDeviceToken'))]);
+    expect(await p.send('token-0123456789abcdef', { blob: 'b', key: 'k' })).toMatchObject({ success: false, gone: true });
+    const seen2: Array<Record<string, unknown>> = [];
+    const { p: p2 } = provider([recordingSession(seen2, reject('PayloadTooLarge', 413))]);
+    expect(await p2.send('token-0123456789abcdef', { blob: 'b', key: 'k' })).toMatchObject({ success: false, error: 'PayloadTooLarge' });
+    expect(seen.length + seen2.length).toBe(2);
+  });
+});
+
 describe('buildApnsPayload', () => {
   it('requests the notification service extension with sound and an attention badge', () => {
     const payload = JSON.parse(buildApnsPayload({ blob: 'ciphertext', key: 'wrapped-key' }));

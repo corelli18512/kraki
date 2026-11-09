@@ -759,9 +759,19 @@ export class PiAdapter extends AgentAdapter {
       this.pendingModeSignals.delete(sessionId);
       text = `${modeChangeSignal(pendingMode as SessionMode)}\n\n${text}`;
     }
-    const images = (attachments ?? [])
-      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
-      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+    // Images arrive inline (base64) or, from current apps, as a content_ref
+    // into the AttachmentStore (as the other adapters read them).
+    const images: Array<{ type: 'image'; data: string; mimeType: string }> = [];
+    for (const a of attachments ?? []) {
+      if (a.type === 'image') {
+        images.push({ type: 'image', data: a.data, mimeType: a.mimeType });
+      } else if (a.type === 'content_ref' && this.attachmentStore) {
+        const hit = this.attachmentStore.read(sessionId, a.id);
+        const mimeType = hit?.meta.mimeType ?? a.mimeType;
+        if (hit && /^image\//.test(mimeType)) images.push({ type: 'image', data: hit.bytes.toString('base64'), mimeType });
+        else logger.warn({ sessionId, id: a.id, found: !!hit }, 'pi: attachment not sent (not a stored image)');
+      }
+    }
     const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
 
     if (options?.delivery === 'steer') {
