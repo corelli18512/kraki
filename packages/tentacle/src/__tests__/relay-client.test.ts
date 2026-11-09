@@ -1171,7 +1171,7 @@ describe('RelayClient set_session_model', () => {
     expect(modelSet.sessionId).toBe('sess_1');
   });
 
-  it('does not acknowledge a failed model change and rolls persisted metadata back', async () => {
+  it('does not acknowledge a failed model change, rolls metadata back and restates the previous model (K-010)', async () => {
     const { adapter, sm } = buildConnectedClient();
     sm.getMeta.mockReturnValue({
       id: 'sess_1',
@@ -1195,7 +1195,10 @@ describe('RelayClient set_session_model', () => {
     expect(sm.setModel).toHaveBeenNthCalledWith(1, 'sess_1', 'missing/model', undefined);
     expect(sm.setModel).toHaveBeenNthCalledWith(2, 'sess_1', 'old-model', 'low');
     const sent = decodePulseSends(ws.sent);
-    expect(sent.find(m => m.type === 'session_model_set')).toBeUndefined();
+    const modelSets = sent.filter(m => m.type === 'session_model_set');
+    expect(modelSets).toHaveLength(1);
+    expect(modelSets[0].sessionId).toBe('sess_1');
+    expect(modelSets[0].payload).toEqual({ model: 'old-model', reasoningEffort: 'low' });
     expect(sent.find(m => m.type === 'error')?.payload.message).toContain('unknown provider');
   });
 
@@ -1890,15 +1893,17 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('advertises account_usage only when the monitor is enabled', () => {
+  it('advertises account_usage only when the monitor is enabled, account_usage_off otherwise (K-084)', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {
       const first = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
       expect((first?.payload as { features: string[] }).features).not.toContain('account_usage');
+      expect((first?.payload as { features: string[] }).features).toContain('account_usage_off');
       ws.sent.length = 0;
       client.setAccountUsageEnabled(true);
       const again = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
       expect((again?.payload as { features: string[] }).features).toContain('account_usage');
+      expect((again?.payload as { features: string[] }).features).not.toContain('account_usage_off');
     } finally { cleanup(); }
   });
 

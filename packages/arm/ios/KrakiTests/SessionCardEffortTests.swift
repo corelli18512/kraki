@@ -71,4 +71,14 @@ final class SessionCardEffortTests: XCTestCase {
         store.setSessionModel("effort-card", model: "gpt-5", reasoningEffort: nil)
         XCTAssertNil(project(try XCTUnwrap(store.sessions["effort-card"])).effortLabel)
     }
+
+    /// K-176: the model picker rows use the agent's model names, the same
+    /// as Session Info and the session list, not raw ids.
+    func testModelPickerRowsShowTheModelName() {
+        let details = [ModelDetail(id: "claude-opus-4-6", name: "Claude Opus 4.6", supportsReasoningEffort: false)]
+        let store = DeviceStore(persistenceEnabled: false)
+        XCTAssertEqual(ModelPickerCard.rowTitle("claude-opus-4-6", details: details), "Claude Opus 4.6")
+        XCTAssertEqual(ModelPickerCard.rowTitle("unlisted-model", details: details), "unlisted-model")
+        XCTAssertEqual(store.modelDisplayName("unlisted-model", deviceId: "dev", agent: "claude"), "unlisted-model")
+    }
 }

@@ -578,13 +578,15 @@ final class DeviceStore {
     }
 
     /// Online tentacles whose greeting says they predate account usage, so the app
-    /// can name them instead of silently showing nothing for them.
+    /// can name them instead of silently showing nothing for them. One that has
+    /// it turned off says `account_usage_off`: updating would not help (K-084).
     func devicesNeedingUsageUpdate() -> [DeviceSummary] {
         devices.values
             .filter { $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id) }
             .filter { device in
                 guard let features = deviceFeatures[device.id] else { return false }
-                return !features.contains("account_usage") && deviceUsage[device.id] == nil
+                return !features.contains("account_usage") && !features.contains("account_usage_off")
+                    && deviceUsage[device.id] == nil
             }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
