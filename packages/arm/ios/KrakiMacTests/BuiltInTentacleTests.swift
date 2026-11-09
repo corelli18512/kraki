@@ -163,6 +163,9 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertEqual(failure("relay_unreachable", "Cannot reach the Kraki relay (connect ECONNREFUSED 127.0.0.1:443)."), network)
         XCTAssertEqual(failure("network", "Could not reach Kraki (fetch failed)."), network)
         XCTAssertEqual(failure("client_id_unavailable", "x"), network)
+        // K-324: GitHub blocked (China) names GitHub, not Kraki or "fetch failed".
+        XCTAssertEqual(failure("github_unreachable", "Could not reach github.com (ENOTFOUND)."),
+                       .failed(message: "Could not reach GitHub. Check your network connection or proxy, then try again."))
         XCTAssertEqual(failure("expired", "x"), .failed(message: "The GitHub code expired. Try again."))
         XCTAssertEqual(failure("denied", "x"), .failed(message: "GitHub sign-in was cancelled."))
         XCTAssertEqual(failure("bad_callback", "Invalid sign-in callback."), .failed(message: "GitHub sign-in could not be verified. Try again."))

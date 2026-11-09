@@ -10,7 +10,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { basename, join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
@@ -396,6 +396,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const latest = await fetchLatestVersion();
   if (!latest) {
     spinner.fail('Could not check for updates');
+    process.exitCode = 1;
     return;
   }
 
@@ -407,6 +408,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const method = detectInstallMethod();
   if (method !== 'npm' && method !== 'sea') {
     spinner.fail('Cannot determine install method. Update manually.');
+    process.exitCode = 1;
     return;
   }
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
@@ -526,15 +528,78 @@ export async function performUpdate(currentVersion: string): Promise<void> {
 
 // ── npm update ──────────────────────────────────────────
 
-async function updateViaNpm(version: string): Promise<void> {
+/**
+ * The npm prefix that owns a global install of this package:
+ * `<prefix>/lib/node_modules/@kraki/tentacle` (macOS/Linux) or
+ * `<prefix>/node_modules/@kraki/tentacle` (Windows). Null for any other layout.
+ */
+export function npmPrefixForPackageRoot(packageRoot: string): string | null {
+  const scopeDir = dirname(packageRoot);
+  const nodeModules = dirname(scopeDir);
+  if (basename(scopeDir) !== '@kraki' || basename(nodeModules) !== 'node_modules') return null;
+  const parent = dirname(nodeModules);
+  return basename(parent) === 'lib' ? dirname(parent) : parent;
+}
+
+function installedVersion(packageRoot: string): string | null {
+  try {
+    return (JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** npm's error output in one or two lines instead of its whole log (K-274). */
+export function summarizeNpmError(output: string, prefix: string | null): string {
+  if (/\bEACCES\b/.test(output)) {
+    return `npm could not write to ${prefix ?? 'its global folder'} (permission denied). `
+      + `Run \`sudo npm install -g ${NPM_PACKAGE}\`, or let npm install globally without sudo: `
+      + 'https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally';
+  }
+  const lines = output.split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^npm (error|ERR!)/.test(l) && !/A complete log of this run|^npm (error|ERR!)\s*$/.test(l));
+  return lines.slice(0, 2).join(' ') || 'npm install failed';
+}
+
+export interface NpmUpdateDeps {
+  scriptPath: string;
+  exec: (cmd: string) => void;
+}
+
+export async function updateViaNpm(
+  version: string,
+  deps: NpmUpdateDeps = {
+    scriptPath: process.argv[1] ?? '',
+    exec: (cmd) => { execSync(cmd, { stdio: 'pipe', encoding: 'utf8' }); },
+  },
+): Promise<void> {
+  const { scriptPath } = deps;
   // Detect npm vs pnpm
-  const scriptPath = process.argv[1] ?? '';
   const usePnpm = scriptPath.includes('.pnpm') || scriptPath.includes('pnpm');
+  let packageRoot: string | null = null;
+  try { packageRoot = resolve(dirname(realpathSync(scriptPath)), '..'); } catch { /* unknown layout */ }
+  // Update the install that is running: a bare `npm install -g` used npm's
+  // current prefix (another Node version, nvm, a changed npm config) and
+  // reported success while this kraki stayed old (K-274).
+  const prefix = !usePnpm && packageRoot ? npmPrefixForPackageRoot(packageRoot) : null;
   const cmd = usePnpm
     ? `pnpm add -g ${NPM_PACKAGE}@${version}`
-    : `npm install -g ${NPM_PACKAGE}@${version}`;
+    : `npm install -g${prefix ? ` --prefix ${JSON.stringify(prefix)}` : ''} ${NPM_PACKAGE}@${version}`;
 
-  execSync(cmd, { stdio: 'pipe', encoding: 'utf8' });
+  try {
+    deps.exec(cmd);
+  } catch (err) {
+    const e = err as { stderr?: string; stdout?: string; message?: string };
+    throw new Error(summarizeNpmError(`${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`, prefix));
+  }
+
+  // pnpm keeps each version in its own .pnpm/<name>@<version> directory, so
+  // the old package root can stay at the old version after a good update.
+  const now = !usePnpm && packageRoot ? installedVersion(packageRoot) : null;
+  if (!usePnpm && packageRoot && now !== null && now !== version) {
+    throw new Error(`npm installed ${version} somewhere else; this kraki (${packageRoot}) is still ${now}. `
+      + `Update it with the npm that installed it: npm install -g ${NPM_PACKAGE}@${version}`);
+  }
 }
 
 // ── SEA binary update ───────────────────────────────────

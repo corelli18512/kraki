@@ -1,10 +1,10 @@
 import { Trans, useTranslation } from 'react-i18next';
 import { AccountDeletedNotice } from '../components/layout/DeleteAccount';
 import { KrakiLogo } from '../components/KrakiLogo';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
-import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
+import { startOAuthFlow, loadStoredDevice, canReachGitHub } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 import { ScanQrCode } from 'lucide-react';
 import { QrScanner } from '../components/common/QrScanner';
@@ -50,14 +50,27 @@ export function DashboardPage() {
     } catch { /* invalid URL — ignored */ }
   }, []);
 
+  const [githubCheck, setGithubCheck] = useState<'idle' | 'checking' | 'unreachable'>('idle');
+  const signInWithGitHub = useCallback(async (id: string) => {
+    setGithubCheck('checking');
+    if (await canReachGitHub()) {
+      setGithubCheck('idle');
+      await startOAuthFlow(id);
+    } else {
+      setGithubCheck('unreachable');
+    }
+  }, []);
+
+  // Only asks GitHub for the newest DMG when the link is used, not on every
+  // load of the sign-in page (K-324).
   const onMac = isMacBrowser();
-  const [macDmgUrl, setMacDmgUrl] = useState(MAC_RELEASES_PAGE);
-  useEffect(() => {
-    if (!onMac) return;
-    let cancelled = false;
-    void resolveMacDmgUrl().then((url) => { if (!cancelled) setMacDmgUrl(url); });
-    return () => { cancelled = true; };
-  }, [onMac]);
+  const downloadMac = useCallback(async (event: React.MouseEvent<HTMLAnchorElement>) => {
+    // Cmd/Ctrl/Shift/middle click keep the browser's own new-tab handling
+    // of the releases-page href.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    window.location.href = await resolveMacDmgUrl();
+  }, []);
 
   // Kraki for Windows: set up the Kraki built into the app (like Kraki for Mac).
   if (desktop?.builtIn && (status === 'awaiting_login' || !desktopCredentials())) {
@@ -87,12 +100,16 @@ export function DashboardPage() {
 
         {clientId && (
           <button
-            onClick={() => { void startOAuthFlow(clientId); }}
+            onClick={() => { void signInWithGitHub(clientId); }}
+            disabled={githubCheck === 'checking'}
             className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f] dark:bg-[#f0f0f0] dark:text-[#24292f] dark:hover:bg-[#d0d0d0] animate-fade-up"
           >
             <GitHubMark className="h-5 w-5" />
             {t('dashboard.signIn')}
           </button>
+        )}
+        {clientId && githubCheck === 'unreachable' && (
+          <p role="alert" className="mt-3 max-w-sm text-xs text-red-500">{t('dashboard.githubUnreachable')}</p>
         )}
 
         {oauthAvailable && (
@@ -126,7 +143,8 @@ export function DashboardPage() {
 
         {onMac && (
           <a
-            href={macDmgUrl}
+            href={MAC_RELEASES_PAGE}
+            onClick={(event) => { void downloadMac(event); }}
             className="mt-6 text-xs text-text-muted underline-offset-2 hover:text-text-primary hover:underline animate-fade-up-d3"
           >
             {t('dashboard.downloadMac')}

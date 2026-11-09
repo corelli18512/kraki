@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   KrakiTransport,
+  canReachGitHub,
   OAUTH_STATE_KEY,
   OAUTH_VERIFIER_KEY,
   OAUTH_REDIRECT_KEY,
@@ -137,5 +138,28 @@ describe('transport oauth state handling', () => {
     // file hosted on the web domain. If you change one, change the
     // other.
     expect(OAUTH_CALLBACK_PATH).toBe('/auth/callback');
+  });
+});
+
+describe('canReachGitHub (K-324)', () => {
+  // Resolves only when aborted: a blackholed github.com.
+  const hanging = ((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  })) as unknown as typeof fetch;
+
+  it('gives up on a github.com that never answers', async () => {
+    await expect(canReachGitHub(hanging, 10)).resolves.toBe(false);
+  });
+
+  it('does not need AbortSignal.timeout, which Safari before 16 lacks', async () => {
+    const timeout = AbortSignal.timeout;
+    Object.defineProperty(AbortSignal, 'timeout', { value: undefined, configurable: true, writable: true });
+    try {
+      const answers = (async () => ({ ok: false, type: 'opaque' })) as unknown as typeof fetch;
+      await expect(canReachGitHub(answers)).resolves.toBe(true);
+      await expect(canReachGitHub(hanging, 10)).resolves.toBe(false);
+    } finally {
+      Object.defineProperty(AbortSignal, 'timeout', { value: timeout, configurable: true, writable: true });
+    }
   });
 });

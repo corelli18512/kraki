@@ -136,6 +136,12 @@ vi.mock("../pair.js", () => ({
   renderQrToTerminal: vi.fn().mockResolvedValue("[QR CODE]"),
 }));
 
+const mockUnsupportedProxy = vi.fn<() => string | null>(() => null);
+vi.mock("../proxy.js", async () => ({
+  ...await vi.importActual<typeof import("../proxy.js")>("../proxy.js"),
+  unsupportedProxy: () => mockUnsupportedProxy(),
+}));
+
 import { runSetup, relayAuthToken } from "../setup.js";
 
 let originalFetch: typeof globalThis.fetch;
@@ -248,6 +254,21 @@ describe("runSetup — GitHub device code", () => {
   });
 });
 
+describe("runSetup — GitHub unreachable (K-324)", () => {
+  it("names github.com and the proxy setting instead of a bare 'fetch failed'", async () => {
+    mockSavedToken.mockReturnValueOnce(null);
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/config')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ githubClientId: 'cid' }) });
+      if (url.includes('github.com')) return Promise.reject(new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), { code: 'ENOTFOUND' }) }));
+      return Promise.reject(new Error(url));
+    }) as typeof fetch;
+
+    const failure = await runSetup().catch((err: Error) => err);
+    expect((failure as Error).message).toContain('Could not reach github.com (ENOTFOUND)');
+    expect((failure as Error).message).toContain('HTTPS_PROXY');
+  });
+});
+
 describe("runSetup — coding agents", () => {
   beforeEach(() => mockOfficialApi());
 
@@ -305,9 +326,24 @@ describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
     mockInput.mockResolvedValueOnce("ws://my-vps:4000");       // relay URL
     mockSelect.mockResolvedValueOnce("apikey");                // auth method
 
+    mockPassword.mockResolvedValueOnce(" relay-api-key ");      // API key
+
     const result = await runSetup();
     expect(result.relay).toBe("ws://my-vps:4000");
     expect(result.authMethod).toBe("apikey");
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+
+  it("asks for the API key on an API-key relay and saves it for the daemon (K-126)", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://my-vps:4000";
+    mockRelayMethods = ['apikey', 'challenge'];
+    mockInput.mockResolvedValueOnce("ws://my-vps:4000");
+    mockPassword.mockResolvedValueOnce(" relay-api-key ");
+
+    const result = await runSetup();
+    expect(result.authMethod).toBe("apikey");
+    expect(mockPassword).toHaveBeenCalledOnce();
+    expect(mockSaveChannelKey).toHaveBeenCalledWith("relay-api-key");
     mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
   });
 
@@ -369,6 +405,46 @@ describe("relayAuthToken — open (self-hosted) relay", () => {
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
     mockChannelKey.mockReturnValueOnce("");
     await expect(relayAuthToken(openConfig, false)).resolves.toBe("dev");
+  });
+});
+
+describe("runSetup — self-hosted GitHub relay without a client id (K-278)", () => {
+  it("blames the relay's configuration, not the network", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://lab:4600";
+    mockRelayMethods = ['github_token', 'challenge']; // auth_info without githubClientId
+    mockSavedToken.mockReturnValueOnce(null);
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
+    const failure = await runSetup().catch((err: Error) => err);
+    expect((failure as Error).message).toContain('GITHUB_CLIENT_ID');
+    expect((failure as Error).message).not.toContain('Could not reach Kraki');
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+});
+
+describe("runSetup — unsupported proxy (K-328)", () => {
+  it("warns before signing in when the network uses a PAC or SOCKS proxy", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://lab:4600";
+    mockRelayMethods = ['open'];
+    mockUnsupportedProxy.mockReturnValueOnce("automatic proxy configuration (PAC)");
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
+    await runSetup();
+    const logged = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.flat().join("\n");
+    expect(logged).toContain("automatic proxy configuration (PAC), which Kraki cannot use");
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+});
+
+describe("relayAuthToken — API-key relay (K-126)", () => {
+  const apikeyConfig = { relay: "ws://localhost:4000", authMethod: "apikey" } as Parameters<typeof relayAuthToken>[0];
+
+  it("pairs with the saved API key", async () => {
+    mockChannelKey.mockReturnValueOnce("relay-api-key");
+    await expect(relayAuthToken(apikeyConfig, false)).resolves.toBe("relay-api-key");
+  });
+
+  it("says how to enter a missing key instead of sending no token", async () => {
+    mockChannelKey.mockReturnValueOnce(null);
+    await expect(relayAuthToken(apikeyConfig, false)).rejects.toThrow(/API key/);
   });
 });
 

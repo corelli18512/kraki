@@ -437,6 +437,10 @@ export async function probeFdaDetailed(): Promise<FdaProbeResult> {
   return blocked ? { status: 'denied', blockedPath: blocked.rel, code: blocked.code } : { status: 'missing' };
 }
 
+/** `kraki fda` flag for the bundle instance probeFdaAsApp starts: probe
+ *  in-process instead of launching the bundle again. */
+export const FDA_IN_PROCESS_FLAG = '--in-process';
+
 /**
  * Poll Full Disk Access at regular intervals until granted or the signal
  * is aborted. Never triggers a system dialog — uses the same multi-path
@@ -457,7 +461,7 @@ export async function probeFdaAsApp(): Promise<FdaStatus> {
   if (!app) return probeFda();
   const out = join(tmpdir(), `kraki-fda-${process.pid}-${Date.now()}.json`);
   try {
-    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json'], {
+    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json', FDA_IN_PROCESS_FLAG], {
       stdio: 'ignore',
       timeout: 15_000,
     });

@@ -72,6 +72,23 @@ Run `kraki agents` any time to recheck your agents.
 
 > 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications, full-screen mode, and instant access without opening a browser.
 
+### Uninstall the command-line version
+
+```bash
+kraki stop        # stops Kraki and removes its login item (launchd job / Windows Run entry)
+```
+
+Then remove what the installer put on the computer:
+
+- **macOS:** `rm -rf ~/.local/share/kraki/Kraki.app ~/.local/bin/kraki ~/Library/LaunchAgents/cloud.corelli.kraki.plist` (`kraki stop` removes the login item only while Kraki is running)
+- **Linux:** `rm ~/.local/bin/kraki` (`/usr/local/bin/kraki` for a global install)
+- **Windows:** `Remove-Item -Recurse "$env:LOCALAPPDATA\Kraki"`, and remove that folder from your user `Path`
+- **npm:** `npm uninstall -g @kraki/tentacle`
+
+On macOS and Linux the installer may have added `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`, `~/.bash_profile` or `~/.bashrc`; delete that line if nothing else uses it.
+
+Kraki's data (sessions, sign-in, this computer's identity) stays in `~/.kraki` (Windows: `%USERPROFILE%\.kraki`); delete that folder to remove it too. "Delete all Kraki data…" in `kraki` moves it to the Trash on macOS and to `~/.kraki.deleted-<date>` elsewhere, so it can be recovered; delete that folder to free the space. Your agents' own files are never touched.
+
 ### Self-host your own relay
 
 See [self-hosting guide](./docs/self-hosting.md) for relay setup, GitHub login, and push notification configuration.
