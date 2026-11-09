@@ -79,9 +79,20 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertEqual(resolve(marker: true, cliDaemon: true, cli: true), .builtIn)
     }
 
-    func testExternalPreferenceNeedsAnExternalCLI() {
+    /// Removing the chosen CLI does not silently switch to the built-in
+    /// tentacle: Settings shows "kraki not found" with install/locate (K-262).
+    func testExplicitExternalChoiceSurvivesAMissingCLI() {
         XCTAssertEqual(resolve(preference: "external", cli: true), .external)
-        XCTAssertEqual(resolve(preference: "external", cli: false), .builtIn)
+        XCTAssertEqual(resolve(preference: "external", cli: false), .external)
+    }
+
+    /// Older versions ran "external, no CLI" on the built-in tentacle, which
+    /// wrote the ownership marker (choosing the CLI clears it): such a Mac
+    /// stays online after the update instead of going offline.
+    func testExternalChoiceAlreadyOnTheBuiltInFallbackStaysOnIt() {
+        XCTAssertEqual(resolve(preference: "external", marker: true, cli: false), .builtIn)
+        XCTAssertEqual(resolve(preference: "external", marker: true, cli: true), .external)
+        XCTAssertEqual(resolve(preference: "external", marker: false, cli: false), .external)
     }
 
     func testBuildsWithoutHelperAlwaysUseTheExternalCLI() {

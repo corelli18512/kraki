@@ -15,6 +15,7 @@ struct TentaclePane: View {
 
     @AppStorage("tentacle.autostart") private var autostart: Bool = false
     @State private var switching = false
+    @State private var locateError: String?
 
     var body: some View {
         Form {
@@ -98,6 +99,16 @@ struct TentaclePane: View {
         }
         .pickerStyle(.radioGroup)
         .disabled(switching || (tentacleCLI.externalCLI == nil && tentacleCLI.mode == .builtIn))
+        // A CLI installed while Kraki runs (in Terminal) becomes choosable.
+        .task { await refreshExternalCLIIfBuiltIn() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshExternalCLIIfBuiltIn() }
+        }
+        if tentacleCLI.externalCLI == nil && tentacleCLI.mode == .builtIn {
+            Text("To run agents with the kraki command-line tool instead, install it first.")
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
+        }
 
         if tentacleCLI.mode == .builtIn {
             Toggle("Run agents on this Mac", isOn: Binding(
@@ -126,6 +137,11 @@ struct TentaclePane: View {
         }
     }
 
+    private func refreshExternalCLIIfBuiltIn() async {
+        guard tentacleCLI.mode == .builtIn, !switching else { return }
+        await tentacleCLI.refreshExternalCLI()
+    }
+
     // MARK: - Install section (external CLI)
 
     @ViewBuilder
@@ -151,7 +167,12 @@ struct TentaclePane: View {
                             .fill(Color.surfaceTertiary)
                     )
                 Button("Locate kraki manually…") {
-                    Task { await locateManually() }
+                    Task { locateError = await tentacleCLI.locateCLIManually() }
+                }
+                if let locateError {
+                    Text(locateError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
         case .available(let path, let version):
@@ -265,21 +286,6 @@ struct TentaclePane: View {
         .task { agentAccessibility = await BuiltInTentacle.agentAccessibility(prompt: false) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { agentAccessibility = await BuiltInTentacle.agentAccessibility(prompt: false) }
-        }
-    }
-
-    // MARK: - Actions
-
-    private func locateManually() async {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.title = String(localized: "Locate kraki executable")
-        panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
-        if panel.runModal() == .OK, let url = panel.url {
-            tentacleCLI.setBinaryPathOverride(url.path)
-            await tentacleCLI.refreshInstallState()
         }
     }
 }
