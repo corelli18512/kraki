@@ -7,8 +7,8 @@ import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, DeviceRenamedMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, reassembledPayloadNamesSender, type SessionMode } from '@kraki/protocol';
-import { createAppKeyStore } from './e2e';
-import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
+import { clearDeviceKeys, createAppKeyStore } from './e2e';
+import { KrakiTransport, loadStoredDevice, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
@@ -63,6 +63,11 @@ function localHighestSeq(sessionId: string): number {
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
+  private windowListenersInstalled = false;
+  /** The Head of this connection takes `app_visibility` (K-032). */
+  private headTakesAppVisibility = false;
+  /** What this connection last told the Head; the Head starts at visible. */
+  private reportedVisible = true;
   private inboundCrypto = new OrderedCrypto();
   private outboundCrypto = new OrderedCrypto();
   private identityEpoch = 0;
@@ -170,6 +175,49 @@ export class KrakiWSClient {
     window.history.replaceState({}, '', '/');
   }
 
+  /** Sign-out: drop this browser's keys, on disk and in memory. Nothing for
+   *  the signed-out device can be decrypted any more (a late push preview,
+   *  K-006), and the next sign-in pairs with new keys. `onDisk: false` when
+   *  another tab signed out: it already deleted them, and may have paired
+   *  again with new ones since. */
+  forgetDeviceKeys(onDisk = true): void {
+    if (onDisk) void clearDeviceKeys().catch((err) => logger.warn('Could not delete device keys', err));
+    this.encryption = new EncryptionHandler(createAppKeyStore());
+  }
+
+  /** Another tab of this browser signed out (K-318): follow it, instead of
+   *  reconnecting later with the signed-out identity and saving it again. */
+  private signedOutElsewhere(): void {
+    if (!this.transport.storedDeviceId) return;
+    if (loadStoredDevice()?.deviceId) {
+      // The other tab already paired again: start over with that identity.
+      logger.info('Paired again in another tab');
+      window.location.reload();
+      return;
+    }
+    logger.info('Signed out in another tab');
+    diag.phase('logout');
+    const savedClientId = getStore().githubClientId;
+    this.transport.storedDeviceId = undefined;
+    this.disconnect();
+    this.forgetDeviceKeys(false);
+    voice.resetVoice();
+    getStore().reset();
+    setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
+  }
+
+  /** Tell the Head whether the user is looking at this tab (visible and
+   *  focused), like iOS `sendAppVisibility`. A hidden or unfocused tab gets
+   *  Web Push; the one on screen does not, so every push it gets is shown
+   *  (Safari revokes a subscription that receives silent pushes). */
+  private reportAppVisibility(force = false): void {
+    if (!this.headTakesAppVisibility) return;
+    const visible = document.visibilityState === 'visible' && document.hasFocus();
+    if (!force && visible === this.reportedVisible) return;
+    this.reportedVisible = visible;
+    this.transport.sendRaw({ type: 'app_visibility', visible });
+  }
+
   /** Connect with the account of the Kraki built into the desktop app. */
   connectWithDesktopCredentials(): boolean {
     setDesktopSignedOut(false);
@@ -263,7 +311,9 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
+        onSignedOutElsewhere: () => this.signedOutElsewhere(),
         onClose: () => {
+          this.headTakesAppVisibility = false;
           this.connectionEpoch++;
           this.headEpoch++;
           this.encryptedQueue = [];
@@ -280,6 +330,18 @@ export class KrakiWSClient {
   }
 
   connect() {
+    if (!this.windowListenersInstalled && typeof window !== 'undefined') {
+      this.windowListenersInstalled = true;
+      // `storage` fires in the other tabs of this browser: removing the
+      // stored device (or clearing storage) is a sign-out there.
+      window.addEventListener('storage', (event) => {
+        if ((event.key === STORAGE_KEY || event.key === null) && !localStorage.getItem(STORAGE_KEY)) this.signedOutElsewhere();
+      });
+      const report = () => this.reportAppVisibility();
+      document.addEventListener('visibilitychange', report);
+      window.addEventListener('focus', report);
+      window.addEventListener('blur', report);
+    }
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
@@ -986,8 +1048,12 @@ export class KrakiWSClient {
   registerPushToken(payload: { provider: string; token: string }): void {
     this.sendToHead({ type: 'register_push_token', payload });
   }
-  unregisterPushToken(payload: { provider: string }): void {
-    this.sendToHead({ type: 'unregister_push_token', payload });
+  /** `connectionScoped`: only on the current connection, never resent on a
+   *  later one (sign-out: the next connection may be another account). */
+  unregisterPushToken(payload: { provider: string }, opts?: { connectionScoped?: boolean }): void {
+    const msg = { type: 'unregister_push_token', payload };
+    if (opts?.connectionScoped) this.pulse.send(JSON.stringify(msg), HEAD_PULSE_TARGET, false, { connectionScoped: true });
+    else this.sendToHead(msg);
   }
 
   /**
@@ -1378,6 +1444,12 @@ export class KrakiWSClient {
         this.startPulseTick();
         this.foregroundActivity.start();
         if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
+        // A browser tab notifies only through Web Push. While the user is not
+        // looking at the tab, the Head must push to it although it is
+        // connected (K-032).
+        this.headTakesAppVisibility = !desktop && msg.features?.includes('app_visibility') === true;
+        this.reportedVisible = true;
+        this.reportAppVisibility(true);
         this.attachmentPulls.resume();
         this.localLink?.start();
         this.localLink?.poke();

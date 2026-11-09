@@ -104,6 +104,25 @@ const initialState = {
 
 type PersistedStore = Pick<Store, 'sessions' | 'devices' | 'unreadCount' | 'pinnedSessions' | 'sessionModes' | 'sessionPreviews' | 'drafts'>;
 
+const PERSISTED_MAPS = ['sessions', 'devices', 'unreadCount', 'sessionModes', 'sessionPreviews', 'drafts'] as const;
+
+/** Rehydrate only what this build persists (partialize below). Older builds
+ *  stored more (the first one kept `messages` and `lastSeq` here, now in
+ *  IndexedDB): merging those would show obsolete history (K-232). A value of
+ *  the wrong shape keeps the default instead of breaking the app. */
+export function mergePersistedStore(persisted: unknown, current: Store): Store {
+  if (!persisted || typeof persisted !== 'object') return current;
+  const saved = persisted as Record<string, unknown>;
+  const next: Partial<PersistedStore> = {};
+  for (const key of PERSISTED_MAPS) {
+    if (saved[key] instanceof Map) (next as Record<string, unknown>)[key] = saved[key];
+  }
+  const pinned = saved.pinnedSessions;
+  if (pinned instanceof Set) next.pinnedSessions = pinned as Set<string>;
+  else if (Array.isArray(pinned)) next.pinnedSessions = new Set(pinned.filter((id): id is string => typeof id === 'string'));
+  return { ...current, ...next };
+}
+
 let persistedSessionsSource: Store['sessions'] | undefined;
 let persistedSessionsValue: Store['sessions'] = new Map();
 /** Compacting is runtime-only. Persist the underlying working fallback so a
@@ -838,6 +857,7 @@ export const useStore = create<Store>()(persist((set) => ({
     replacer,
     reviver,
   })),
+  merge: mergePersistedStore,
   partialize: (state) => ({
     sessions: persistedSessions(state.sessions),
     devices: state.devices,

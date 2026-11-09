@@ -82,6 +82,31 @@ function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
   });
 }
 
+function idbDelete(db: IDBDatabase, keys: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    for (const key of keys) tx.objectStore(STORE_NAME).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/** In flight while sign-out deletes the stored keys: a key store started
+ *  meanwhile must not load the old keys back. */
+let keysClearing: Promise<void> | null = null;
+
+/** Sign-out: delete this browser's key pairs, so nothing addressed to the
+ *  signed-out device (a late push preview) can be decrypted any more, and the
+ *  next sign-in pairs with new keys. Entries are deleted rather than the
+ *  database: an open connection (another tab) would block deleting it. */
+export function clearDeviceKeys(): Promise<void> {
+  keysClearing = (async () => {
+    const db = await openDB();
+    try { await idbDelete(db, [SIGN_KEY_ID, ENCRYPT_KEY_ID, KEY_ID]); } finally { db.close(); }
+  })();
+  return keysClearing;
+}
+
 // ── Base64 helpers (stack-safe for large buffers) ───────
 // String.fromCharCode(...array) blows the call stack for arrays > ~65K bytes.
 // These helpers iterate instead of spreading.
@@ -132,6 +157,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
   private ready = false;
 
   async init(): Promise<void> {
+    if (keysClearing) await keysClearing.catch(() => {});
     const db = await openDB();
 
     // Migrate legacy key: old code stored a single key as 'device-key'

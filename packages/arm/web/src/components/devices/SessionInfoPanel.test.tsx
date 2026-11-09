@@ -28,6 +28,11 @@ describe('SessionInfoPanel native sheet parity', () => {
     expect(writeText).toHaveBeenCalledWith('complete-session-id');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Session ID copied' })).toBeInTheDocument());
   });
+  it('K-215: shows "couldn\'t copy" when the Clipboard API is missing (http self-host)', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    open(); fireEvent.click(screen.getByRole('button', { name: 'Copy Session ID' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  });
   it('shows thinking without opening a picker and applies it and model changes immediately', () => {
     open();
     fireEvent.click(screen.getByRole('radio', { name: 'High' }));

@@ -25,7 +25,9 @@ export function isOfficialRelay(relay: string): boolean {
     if (configured) {
       try { if (new URL(configured).host === url.host) return true; } catch { /* ignore */ }
     }
-    return OFFICIAL_RELAY_HOST.test(url.hostname);
+    // Kraki's relays are only reached over TLS (as on iOS): a plain ws://
+    // link naming them is not one of ours and is confirmed like any other.
+    return url.protocol === 'wss:' && OFFICIAL_RELAY_HOST.test(url.hostname);
   } catch {
     return false;
   }
@@ -43,20 +45,34 @@ export type PairingLinkDecision =
   | { kind: 'offer-app' }
   | { kind: 'confirm-relay'; host: string };
 
+/** The relay the user confirmed with Connect, kept in this tab's
+ *  sessionStorage: the link itself cannot carry the consent, or a crafted
+ *  link would simply include it. */
+export const CONFIRMED_RELAY_KEY = 'kraki.confirmedRelay';
+
+/** `hasStoredDevice`: this browser is already signed in. A link without a
+ *  token then cannot move it to another relay (the relay client keeps the
+ *  stored one), so there is nothing to confirm. Without a sign-in, a
+ *  token-less `?relay=` still points sign-in at that server and is confirmed.
+ *  `confirmedRelay`: the relay the user confirmed in this tab
+ *  (CONFIRMED_RELAY_KEY). */
 export function decidePairingLink(
   search: string,
   userAgent: string,
   maxTouchPoints = 0,
+  hasStoredDevice = false,
+  confirmedRelay: string | null = null,
 ): PairingLinkDecision {
   const params = new URLSearchParams(search);
   const token = params.get('token');
-  if (!token) return { kind: 'none' };
   const relay = params.get('relay');
-  if (relay && !isOfficialRelay(relay) && params.get('confirmRelay') !== '1') {
+  if (!token && (!relay || hasStoredDevice)) return { kind: 'none' };
+  if (relay && !isOfficialRelay(relay) && confirmedRelay !== relay) {
     let host = relay;
     try { host = new URL(relay).host; } catch { /* show raw */ }
     return { kind: 'confirm-relay', host };
   }
+  if (!token) return { kind: 'none' };
   if (isIOSBrowser(userAgent, maxTouchPoints) && params.get('web') !== '1') return { kind: 'offer-app' };
   return { kind: 'proceed' };
 }
@@ -87,7 +103,13 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
       <button id="kraki-cancel" style="${BUTTON};background:transparent;color:#888">${t('common:action.cancel')}</button>
     </div>`;
     root.querySelector('b')!.textContent = decision.host;
-    root.querySelector('#kraki-confirm')!.addEventListener('click', () => window.location.replace(withParam('confirmRelay', '1')));
+    root.querySelector('#kraki-confirm')!.addEventListener('click', () => {
+      const relay = new URLSearchParams(window.location.search).get('relay');
+      try {
+        if (relay) window.sessionStorage.setItem(CONFIRMED_RELAY_KEY, relay);
+      } catch { /* storage blocked: the page asks again */ }
+      window.location.reload();
+    });
     root.querySelector('#kraki-cancel')!.addEventListener('click', () => window.location.replace(strip()));
     return true;
   }

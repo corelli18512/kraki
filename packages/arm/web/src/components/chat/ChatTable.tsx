@@ -19,6 +19,7 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 import type { Element, ElementContent, Root } from 'hast';
 import { Search, X } from 'lucide-react';
 import { isImeComposing } from '../../lib/ime';
+import { copyText } from '../../lib/clipboard';
 
 export const PREVIEW_ROW_LIMIT = 8;
 
@@ -235,8 +236,7 @@ function TableWindow({ model, components, onClose }: { model: TableModel; compon
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !window.getSelection()?.toString()) {
         e.preventDefault();
-        void navigator.clipboard.writeText(toTSV(model, order));
-        setCopied('TSV');
+        void copyText(toTSV(model, order)).then(() => setCopied('TSV'), () => {});
       }
     };
     window.addEventListener('keydown', key, true);
@@ -245,9 +245,10 @@ function TableWindow({ model, components, onClose }: { model: TableModel; compon
 
   const onSort = (column: number) => setSort((s) => (s?.column !== column ? { column, ascending: true } : s.ascending ? { column, ascending: false } : null));
   const copy = (kind: 'Markdown' | 'TSV') => {
-    void navigator.clipboard.writeText(kind === 'Markdown' ? toMarkdown(model, order) : toTSV(model, order));
-    setCopied(kind);
-    setTimeout(() => setCopied(null), 1500);
+    void copyText(kind === 'Markdown' ? toMarkdown(model, order) : toTSV(model, order)).then(() => {
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1500);
+    }, () => {});
   };
 
   return createPortal(

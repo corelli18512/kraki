@@ -60,6 +60,14 @@ export function loadStoredDevice(): StoredDevice | null {
   } catch { return null; }
 }
 
+/** loadStoredDevice without the log line, for the check on every connect. */
+function readStoredDevice(): StoredDevice | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 export function saveStoredDevice(device: StoredDevice): void {
   logger.info('saveStoredDevice:', device);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
@@ -69,6 +77,9 @@ export interface TransportCallbacks {
   onOpen: () => Promise<void>;
   onParsedMessage: (msg: Message) => void;
   onClose?: () => void;
+  /** This tab was about to reconnect, but the stored device is gone or
+   *  another one: this browser was signed out in another tab. */
+  onSignedOutElsewhere?: () => void;
 }
 
 export const OAUTH_STATE_KEY = 'kraki_oauth_state';
@@ -256,7 +267,13 @@ export class KrakiTransport {
 
     // The desktop app connects to the relay its built-in Kraki was set up with.
     const desktopRelay = typeof window !== 'undefined' ? desktopCredentials()?.relay : undefined;
-    this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
+    // A link's ?relay= is followed only together with a pairing token (that
+    // pairing was confirmed by main.tsx), or before this browser is signed
+    // in. Without that, a crafted link would move a signed-in browser to
+    // another server, which gets its device id and challenge signatures.
+    const linkRelay = params.relay && (params.token || !stored?.deviceId) ? params.relay : undefined;
+    if (params.relay && !linkRelay) logger.warn('Ignoring ?relay= without a pairing token: this browser is signed in', { host: relayHost(params.relay) });
+    this._url = url ?? linkRelay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;
@@ -296,7 +313,26 @@ export class KrakiTransport {
     }
   }
 
+  /** This tab still holds a device identity that is no longer the stored
+   *  one: another tab signed out (or paired again) meanwhile, maybe while
+   *  this tab missed the `storage` event (frozen, in bfcache). Connecting
+   *  would sign the old identity in again and save it (K-318). */
+  private identitySignedOutElsewhere(): boolean {
+    if (!this.storedDeviceId || this.pairingToken || this.githubCode) return false;
+    return readStoredDevice()?.deviceId !== this.storedDeviceId;
+  }
+
   connect() {
+    if (this.identitySignedOutElsewhere()) {
+      logger.info('Not connecting: signed out in another tab');
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+      this.callbacks.onSignedOutElsewhere?.();
+      return;
+    }
     if (this.storedDeviceId || this.pairingToken || this.githubCode) {
       getStore().setStatus('connecting');
     }
