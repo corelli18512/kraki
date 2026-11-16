@@ -47,6 +47,9 @@ describe('Windows titlebar CSS source contracts (not native hit-testing proof)',
   it('keeps only blank regions draggable, protects overlay controls and reserves no-session/report space', () => {
     expect(css).toContain('-webkit-app-region: drag');
     expect(css).toContain('-webkit-app-region: no-drag');
+    // The sidebar's top row moves the window too (blank parts), its search field stays usable.
+    expect(css).toContain('html[data-windows-titlebar] .ksb-top { -webkit-app-region: drag; }');
+    expect(css).toContain(':is(.ksb-search, .ksb-menu-dismiss) { -webkit-app-region: no-drag; }');
     expect(css).toContain('[role="menu"], [role="dialog"], [role="alertdialog"]');
     expect(css).toContain(':is([role="dialog"], [role="alertdialog"]).fixed');
     expect(css).toContain('.app-viewport > main:not(:has(.khead.is-windows))');
@@ -60,5 +63,15 @@ describe('Windows titlebar CSS source contracts (not native hit-testing proof)',
     expect(css).toContain('border-radius: 4px;');
     expect(css).toContain('background: transparent;');
     expect(css).toContain('box-shadow: none;');
+  });
+});
+
+describe('Windows chat header matches the Mac top fade', () => {
+  const css = readFileSync('src/components/desktop/windows-titlebar.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  it('keeps the shared blurred ::before fade on the wide header instead of an opaque bar', () => {
+    expect(css).not.toContain('.khead.is-windows::before { display: none; }');
+    const wide = css.match(/html\[data-windows-titlebar\] \.khead\.is-windows \{[^}]*\}/)?.[0] ?? '';
+    expect(wide).toContain('background: transparent;');
+    expect(wide).not.toContain('var(--k-bg)');
   });
 });
