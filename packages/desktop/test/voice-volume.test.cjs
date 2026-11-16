@@ -5,7 +5,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const {
-  VOICE_VOLUME, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, runWatchdog,
+  VOICE_VOLUME, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, launchWatchdogProcess, runWatchdog,
 } = require('../src/voice-volume.cjs');
 
 /** Timers the test advances by hand. */
@@ -391,4 +391,29 @@ test('watchdog that cannot reach the endpoint leaves the journal for the next la
   endpoint.failReads = Infinity;
   assert.equal(await runWatchdog({ journalFile: journal.file, token: 'tok', ownerPid: 1, maxSeconds: 60, backend: () => endpoint, isAlive: () => false, sleep: async () => {} }), 1);
   assert.ok(journal.read());
+});
+
+async function until(check, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+test('the watchdog process (voice-volume-watchdog.cjs) exits once the journal is gone, and stop() ends it; a failed spawn throws', async (t) => {
+  const { journal } = watchdogEnv(t);
+  const state = { ...journal.read(), ownerPid: process.pid };
+  journal.write(state);
+  // Node stands in for Kraki.exe (ELECTRON_RUN_AS_NODE is set either way).
+  const first = launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(processIsAlive(first.pid), true, 'waits while the owner lives');
+  journal.remove();
+  await until(() => !processIsAlive(first.pid));
+  journal.write(state);
+  const second = launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
+  second();
+  await until(() => !processIsAlive(second.pid));
+  assert.throws(() => launchWatchdogProcess(journal.file, state, { execPath: path.join(path.dirname(journal.file), 'missing.exe') }), /did not start/);
 });

@@ -270,6 +270,22 @@ class VoiceVolumeDucker {
 }
 
 /**
+ * Start the watchdog (voice-volume-watchdog.cjs) as a detached process of
+ * `execPath` run as Node (Kraki.exe with ELECTRON_RUN_AS_NODE). Returns stop().
+ */
+function launchWatchdogProcess(journalFile, state, { execPath = process.execPath, onError = () => {} } = {}) {
+  const { spawn } = require('node:child_process');
+  const child = spawn(execPath, [
+    path.join(__dirname, 'voice-volume-watchdog.cjs'), journalFile, state.token, String(state.ownerPid),
+    String(VOICE_VOLUME.watchdogMaxSeconds),
+  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detached: true, stdio: 'ignore', windowsHide: true });
+  child.on('error', onError);
+  if (!child.pid) throw new Error('the volume watchdog did not start');
+  child.unref();
+  return Object.assign(() => { try { child.kill(); } catch { /* gone */ } }, { pid: child.pid });
+}
+
+/**
  * The watchdog: waits for the owner to exit (or the ceiling), then restores
  * the volume. Exits once Kraki restored it itself (journal gone or replaced).
  * @returns {Promise<number>} the exit code
@@ -294,4 +310,4 @@ async function runWatchdog({ journalFile, token, ownerPid, maxSeconds, backend, 
   }
 }
 
-module.exports = { VOICE_VOLUME, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, runWatchdog };
+module.exports = { VOICE_VOLUME, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, launchWatchdogProcess, runWatchdog };

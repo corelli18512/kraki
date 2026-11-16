@@ -464,18 +464,6 @@ function voiceVolumeLog(line) {
   try { if (statSync(file).size > 256 * 1024) writeFileSync(file, ''); } catch { /* none yet */ }
   try { appendFileSync(file, `${new Date().toISOString()} ${line}\n`); } catch { /* ignore */ }
 }
-/** The watchdog: this executable as Node, restoring the volume if Kraki dies. */
-function launchVolumeWatchdog(journalFile, state) {
-  const { spawn } = require('node:child_process');
-  const child = spawn(process.execPath, [
-    path.join(__dirname, 'voice-volume-watchdog.cjs'), journalFile, state.token, String(state.ownerPid),
-    String(voiceVolume.VOICE_VOLUME.watchdogMaxSeconds),
-  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', (error) => voiceVolumeLog(`output volume watchdog failed: ${error.message}`));
-  if (!child.pid) throw new Error('the volume watchdog did not start');
-  child.unref();
-  return () => { try { child.kill(); } catch { /* gone */ } };
-}
 function startVoiceVolume() {
   if (process.platform !== 'win32') return;
   let audio = null;
@@ -490,7 +478,9 @@ function startVoiceVolume() {
       isMuted: (id) => core().isMuted(id),
     },
     journal: new voiceVolume.VolumeJournal(path.join(app.getPath('userData'), voiceVolume.VOICE_VOLUME.journalName)),
-    launchWatchdog: launchVolumeWatchdog,
+    launchWatchdog: (journalFile, state) => voiceVolume.launchWatchdogProcess(journalFile, state, {
+      onError: (error) => voiceVolumeLog(`output volume watchdog failed: ${error.message}`),
+    }),
     isEnabled: () => pref(VOICE_VOLUME_PREF) !== false,
     log: voiceVolumeLog,
   });
