@@ -37,6 +37,7 @@ function loadMain({ userData = '/nonexistent/kraki-security-test', displays = []
         send: () => {},
       },
       emit: (name, ...args) => { for (const fn of wcListeners[name] ?? []) fn(...args); },
+      emitWindow: (name, ...args) => { for (const fn of listeners[name] ?? []) fn(...args); },
     };
     windows.push(w);
     return w;
@@ -233,5 +234,39 @@ test('restored window bounds go to the display holding most of the window and fi
       { x: 0, y: 0, width: 1280, height: 680, maximized: false });
     // Its display is gone: Electron's default placement.
     assert.equal(restore({ x: 5000, y: 100, width: 1200, height: 800 }, [left, right]), null);
+  } finally { rmSync(userData, { recursive: true }); }
+});
+
+test('voice volume: only the main window drives the ducker; reload, crash and close give the volume back', () => {
+  const userData = mkdtempSync(path.join(tmpdir(), 'kraki-voice-volume-'));
+  try {
+    const env = loadMain({ userData });
+    assert.equal(vm.runInContext('voiceDucker', env.context), null, 'no ducker off Windows');
+    const calls = [];
+    env.context.__ducker = new Proxy({}, { get: (_t, prop) => (...args) => { calls.push([String(prop), ...args]); } });
+    vm.runInContext('voiceDucker = __ducker', env.context);
+    const handler = env.handlers.get('kraki:voice-volume').fn;
+    const main = { sender: env.main.webContents, senderFrame: env.main.webContents.mainFrame };
+    for (const what of ['cue-started', 'cue-finished', 'capture-started', 'capture-stopped', 'evil']) handler(main, what);
+    handler({ sender: {}, senderFrame: { url: 'app://kraki/' } }, 'capture-started');
+    assert.deepEqual(calls, [['cueStarted'], ['cueFinished'], ['scheduleLowering'], ['restore', 'capture stopped']]);
+    calls.length = 0;
+    env.main.emit('did-navigate');
+    env.main.emit('render-process-gone');
+    vm.runInContext('quitting = true', env.context);
+    env.main.emitWindow('close', { preventDefault() {} });
+    assert.deepEqual(calls, [['restore', 'page loaded'], ['restore', 'page gone'], ['restore', 'window closed']]);
+  } finally { rmSync(userData, { recursive: true }); }
+});
+
+test('voice volume setting: on by default, persisted in prefs', async () => {
+  const userData = mkdtempSync(path.join(tmpdir(), 'kraki-voice-volume-'));
+  try {
+    const env = loadMain({ userData });
+    const event = { sender: env.main.webContents, senderFrame: env.main.webContents.mainFrame };
+    assert.deepEqual({ ...await env.handlers.get('kraki:voice-volume-state').fn(event) }, { enabled: true });
+    assert.deepEqual({ ...await env.handlers.get('kraki:voice-volume-enabled').fn(event, false) }, { ok: true });
+    assert.deepEqual({ ...await env.handlers.get('kraki:voice-volume-state').fn(event) }, { enabled: false });
+    assert.equal(JSON.parse(readFileSync(path.join(userData, 'prefs.json'), 'utf8')).voiceLowerOtherSounds, false);
   } finally { rmSync(userData, { recursive: true }); }
 });

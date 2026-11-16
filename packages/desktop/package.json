@@ -38,7 +38,9 @@
       "build/tray-offline.png",
       "build/tray-attention.png",
       "build/tray-problem.png",
-      "build/tray/*.ico"
+      "build/tray/*.ico",
+      "!node_modules/koffi/{src,doc,lib,vendor}/**",
+      "!node_modules/koffi/build/koffi/{darwin_*,freebsd_*,linux_*,musl_*,openbsd_*,win32_ia32}/**"
     ],
     "asar": true,
     "protocols": [
@@ -88,5 +90,8 @@
         ]
       }
     ]
+  },
+  "dependencies": {
+    "koffi": "2.16.4"
   }
 }

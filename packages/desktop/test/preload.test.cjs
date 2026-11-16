@@ -4,19 +4,21 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function runPreload(origin) {
+function runPreload(origin, platform = 'win32') {
   let exposed;
   const sync = [];
+  const sent = [];
+  const invoked = [];
   const listeners = new Map();
   vm.runInNewContext(readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), {
-    process: { platform: 'win32', argv: ['--kraki-builtin=1'] },
+    process: { platform, argv: ['--kraki-builtin=1'] },
     location: origin === undefined ? undefined : { origin },
     require: () => ({
       contextBridge: { exposeInMainWorld: (name, value) => { exposed = { name, value }; } },
-      ipcRenderer: { send: () => {}, invoke: async () => {}, on: (channel, fn) => { listeners.set(channel, fn); }, removeListener: (channel) => { listeners.delete(channel); }, sendSync: (channel) => { sync.push(channel); return {}; } },
+      ipcRenderer: { send: (...args) => { sent.push(args); }, invoke: async (...args) => { invoked.push(args); }, on: (channel, fn) => { listeners.set(channel, fn); }, removeListener: (channel) => { listeners.delete(channel); }, sendSync: (channel) => { sync.push(channel); return {}; } },
     }),
   });
-  return { exposed, sync, listeners };
+  return { exposed, sync, listeners, sent, invoked };
 }
 
 test('the bridge is exposed to app pages', () => {
@@ -42,4 +44,16 @@ test('power events reach the page only as suspend or resume, and unsubscribe', (
   assert.deepEqual(got, ['suspend', 'resume']);
   stop();
   assert.equal(listeners.has('kraki:power'), false);
+});
+
+test('voice volume (lower other sounds while recording) is a Windows-only bridge of fixed messages', async () => {
+  const { exposed, sent, invoked } = runPreload('app://kraki');
+  const v = exposed.value.voiceVolume;
+  v.cueStarted(); v.cueFinished(); v.captureStarted(); v.captureStopped();
+  assert.deepEqual(sent, ['cue-started', 'cue-finished', 'capture-started', 'capture-stopped'].map((m) => ['kraki:voice-volume', m]));
+  await v.state();
+  await v.setEnabled('yes');
+  assert.deepEqual(invoked, [['kraki:voice-volume-state'], ['kraki:voice-volume-enabled', true]]);
+  assert.equal(runPreload('app://kraki', 'linux').exposed.value.voiceVolume, undefined);
+  assert.equal(runPreload('app://kraki', 'darwin').exposed.value.voiceVolume, undefined);
 });
