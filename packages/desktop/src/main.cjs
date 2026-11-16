@@ -485,13 +485,16 @@ function startVoiceVolume() {
     log: voiceVolumeLog,
   });
   voiceDucker.recoverAbandonedState();
+  // A headset that was away at launch may be back: retry a pending journal.
+  for (const event of ['resume', 'unlock-screen']) powerMonitor.on(event, () => voiceDucker?.recoverAbandonedState());
 }
 // The main window's recording: start cue and microphone capture.
 appIpc.on('kraki:voice-volume', (event, what) => {
   if (!voiceDucker || !win || event.sender !== win.webContents) return;
   if (what === 'cue-started') voiceDucker.cueStarted();
   else if (what === 'cue-finished') voiceDucker.cueFinished();
-  else if (what === 'capture-started') voiceDucker.scheduleLowering();
+  // Hidden in the tray (closed during the cue): no recording UI, no lowering.
+  else if (what === 'capture-started') { if (win.isVisible()) voiceDucker.scheduleLowering(); }
   else if (what === 'capture-stopped') voiceDucker.restore('capture stopped');
 });
 appIpc.handle('kraki:voice-volume-state', () => ({ enabled: pref(VOICE_VOLUME_PREF) !== false }));

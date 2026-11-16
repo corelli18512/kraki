@@ -17,6 +17,7 @@ function loadMain({ userData = '/nonexistent/kraki-security-test', displays = []
   const external = [];
   const opened = [];
   const notes = [];
+  const powerListeners = {};
   function BrowserWindow(options) {
     const listeners = {};
     const wcListeners = {};
@@ -29,7 +30,7 @@ function loadMain({ userData = '/nonexistent/kraki-security-test', displays = []
       loadURL: (u) => { w.loaded.push(u); return Promise.resolve(); },
       isDestroyed: () => w.closed,
       close: () => { if (w.closed) return; w.closed = true; for (const fn of listeners.closed ?? []) fn(); },
-      maximize: () => {}, setTitle: () => {}, isFocused: () => true, flashFrame: () => {},
+      maximize: () => {}, setTitle: () => {}, isFocused: () => true, flashFrame: () => {}, isVisible: () => w.visible !== false,
       webContents: {
         mainFrame: { url: 'app://kraki/' },
         on: (name, fn) => { (wcListeners[name] ??= []).push(fn); },
@@ -60,6 +61,7 @@ function loadMain({ userData = '/nonexistent/kraki-security-test', displays = []
     nativeTheme: { shouldUseDarkColors: false },
     net: { fetch: async () => { notes.push('fetch'); return { status: 200, text: async () => '' }; } },
     protocol: { registerSchemesAsPrivileged: () => {} },
+    powerMonitor: { on: (name, fn) => { (powerListeners[name] ??= []).push(fn); } },
     screen: {
       getAllDisplays: () => displays,
       // Electron: the display with the largest overlap (nearest if none).
@@ -89,7 +91,7 @@ function loadMain({ userData = '/nonexistent/kraki-security-test', displays = []
   vm.runInContext(readFileSync(mainPath, 'utf8'), context);
   const loadBounds = vm.runInContext('loadBounds', context);
   vm.runInContext('loadBounds = () => null; createWindow()', context);
-  return { loadBounds, context, handlers, windows, external, opened, notes, main: windows[0] };
+  return { loadBounds, context, handlers, windows, external, opened, notes, powerListeners, main: windows[0] };
 }
 
 /** A built-in Kraki that records every use. */
@@ -251,6 +253,10 @@ test('voice volume: only the main window drives the ducker; reload, crash and cl
     handler({ sender: {}, senderFrame: { url: 'app://kraki/' } }, 'capture-started');
     assert.deepEqual(calls, [['cueStarted'], ['cueFinished'], ['scheduleLowering'], ['restore', 'capture stopped']]);
     calls.length = 0;
+    env.main.visible = false; // closed to the tray during the cue
+    handler(main, 'capture-started');
+    assert.deepEqual(calls, [], 'no lowering while the window is hidden');
+    env.main.visible = true;
     env.main.emit('did-navigate');
     env.main.emit('render-process-gone');
     vm.runInContext('quitting = true', env.context);
@@ -268,5 +274,20 @@ test('voice volume setting: on by default, persisted in prefs', async () => {
     assert.deepEqual({ ...await env.handlers.get('kraki:voice-volume-enabled').fn(event, false) }, { ok: true });
     assert.deepEqual({ ...await env.handlers.get('kraki:voice-volume-state').fn(event) }, { enabled: false });
     assert.equal(JSON.parse(readFileSync(path.join(userData, 'prefs.json'), 'utf8')).voiceLowerOtherSounds, false);
+  } finally { rmSync(userData, { recursive: true }); }
+});
+
+test('voice volume on Windows: launch recovery runs, and again on resume and unlock-screen', () => {
+  const userData = mkdtempSync(path.join(tmpdir(), 'kraki-voice-volume-'));
+  try {
+    const env = loadMain({ userData });
+    env.context.process.platform = 'win32';
+    vm.runInContext('startVoiceVolume()', env.context);
+    const ducker = vm.runInContext('voiceDucker', env.context);
+    assert.ok(ducker, 'created on Windows');
+    let recoveries = 0;
+    ducker.recoverAbandonedState = () => { recoveries++; };
+    for (const name of ['resume', 'unlock-screen']) for (const fn of env.powerListeners[name] ?? []) fn();
+    assert.equal(recoveries, 2);
   } finally { rmSync(userData, { recursive: true }); }
 });
