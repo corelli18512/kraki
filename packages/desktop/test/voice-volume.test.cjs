@@ -401,19 +401,155 @@ async function until(check, ms = 5000) {
   }
 }
 
-test('the watchdog process (voice-volume-watchdog.cjs) exits once the journal is gone, and stop() ends it; a failed spawn throws', async (t) => {
+test('the watchdog process (voice-volume-watchdog.cjs) reports ready, exits once the journal is gone, and stop() ends it', async (t) => {
   const { journal } = watchdogEnv(t);
   const state = { ...journal.read(), ownerPid: process.pid };
   journal.write(state);
   // Node stands in for Kraki.exe (ELECTRON_RUN_AS_NODE is set either way).
-  const first = launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(processIsAlive(first.pid), true, 'waits while the owner lives');
+  const first = await launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
+  assert.equal(processIsAlive(first.pid), true, 'armed and waiting while the owner lives');
   journal.remove();
   await until(() => !processIsAlive(first.pid));
   journal.write(state);
-  const second = launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
+  const second = await launchWatchdogProcess(journal.file, state, { execPath: process.execPath });
   second();
   await until(() => !processIsAlive(second.pid));
-  assert.throws(() => launchWatchdogProcess(journal.file, state, { execPath: path.join(path.dirname(journal.file), 'missing.exe') }), /did not start/);
+});
+
+test('watchdog handshake: no `ready` in time (e.g. RunAsNode off: a GUI instance), an early exit or a failed spawn is "not launched", and the child is killed', async (t) => {
+  const { journal } = watchdogEnv(t);
+  const state = journal.read();
+  const dir = path.dirname(journal.file);
+  const silent = path.join(dir, 'silent.cjs');
+  writeFileSync(silent, `require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, 'silent.pid'))}, String(process.pid)); setInterval(() => {}, 1000);`);
+  const started = Date.now();
+  await assert.rejects(launchWatchdogProcess(journal.file, state, { execPath: process.execPath, script: silent, readyTimeoutMs: 400 }), /did not report ready/);
+  assert.ok(Date.now() - started < 3000);
+  await until(() => existsSync(path.join(dir, 'silent.pid')));
+  const silentPid = Number(require('node:fs').readFileSync(path.join(dir, 'silent.pid'), 'utf8'));
+  await until(() => !processIsAlive(silentPid));
+
+  const quits = path.join(dir, 'quits.cjs');
+  writeFileSync(quits, 'process.exit(3)');
+  await assert.rejects(launchWatchdogProcess(journal.file, state, { execPath: process.execPath, script: quits }), /exited before it was ready \(code 3\)/);
+
+  const early = path.join(dir, 'not-ready.cjs');
+  writeFileSync(early, "process.stdout.write('starting\\n'); setTimeout(() => process.exit(0), 50)");
+  await assert.rejects(launchWatchdogProcess(journal.file, state, { execPath: process.execPath, script: early }), /exited before it was ready/);
+
+  await assert.rejects(launchWatchdogProcess(journal.file, state, { execPath: path.join(dir, 'missing.exe') }), /did not start|ENOENT/);
+});
+
+/** A watchdog that reports ready when the test says so. */
+function deferredWatchdog() {
+  const w = { stopped: false };
+  w.promise = new Promise((resolve, reject) => { w.ready = () => resolve(() => { w.stopped = true; }); w.fail = reject; });
+  return w;
+}
+const flush = () => new Promise((r) => setImmediate(r));
+
+test('lowering waits for the watchdog to be armed', async (t) => {
+  const w = deferredWatchdog();
+  const env = setup(t, { launch: () => w.promise });
+  record(env);
+  assert.equal(env.endpoint.level, 0.8, 'not lowered before `ready`');
+  assert.ok(env.journal.read(), 'journaled before the watchdog starts');
+  w.ready();
+  await flush();
+  assert.ok(Math.abs(env.endpoint.level - 0.2) < 1e-9);
+  env.ducker.restore('capture stopped');
+  assert.equal(env.endpoint.level, 0.8);
+  assert.equal(w.stopped, true);
+});
+
+test('a watchdog that is not launched (no ready / early exit): nothing lowered, journal removed', async (t) => {
+  const w = deferredWatchdog();
+  const env = setup(t, { launch: () => w.promise });
+  record(env);
+  w.fail(new Error('the volume watchdog did not report ready'));
+  await flush();
+  assert.deepEqual(env.endpoint.sets, []);
+  assert.equal(env.journal.exists(), false);
+  assert.equal(env.ducker.isLowered, false);
+  assert.match(env.logs.join('\n'), /not lowered: the volume watchdog did not report ready/);
+  record(env);
+  assert.ok(env.journal.read(), 'the next recording tries again');
+});
+
+test('released, or the level changed, while the watchdog was starting: never lowered, watchdog stopped', async (t) => {
+  const released = deferredWatchdog();
+  const a = setup(t, { launch: () => released.promise });
+  record(a);
+  a.ducker.restore('capture stopped');
+  released.ready();
+  await flush();
+  assert.deepEqual(a.endpoint.sets, []);
+  assert.equal(released.stopped, true);
+  assert.equal(a.journal.exists(), false);
+
+  const changed = deferredWatchdog();
+  const b = setup(t, { launch: () => changed.promise });
+  record(b);
+  b.endpoint.level = 0.6;
+  changed.ready();
+  await flush();
+  assert.deepEqual(b.endpoint.sets, []);
+  assert.equal(b.endpoint.level, 0.6);
+  assert.equal(changed.stopped, true);
+  assert.equal(b.journal.exists(), false);
+});
+
+/** A live process that is not Kraki (a pid Windows reused). */
+function livePid(t) {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+  t.after(() => child.kill('SIGKILL'));
+  return child.pid;
+}
+
+test('a journal whose owner pid now belongs to another live process is still recovered (single-instance: it is not Kraki)', (t) => {
+  const reused = livePid(t);
+  const env = setup(t, { endpoint: new FakeEndpoint({ volume: 0.2 }) });
+  env.journal.write({ deviceId: env.endpoint.id, originalVolume: 0.7, duckedVolume: 0.2, ownerPid: reused, token: 'old', startedAt: 1 });
+  env.ducker.recoverAbandonedState();
+  assert.equal(env.endpoint.level, 0.7);
+  assert.equal(env.journal.exists(), false);
+
+  const pending = setup(t, { endpoint: new FakeEndpoint({ volume: 0.2 }) });
+  pending.journal.write({ deviceId: pending.endpoint.id, originalVolume: 0.7, duckedVolume: 0.2, ownerPid: reused, token: 'old', startedAt: 1 });
+  record(pending);
+  assert.equal(pending.endpoint.level, 0.7, 'recovered when the next recording starts, not left pending');
+  assert.equal(pending.watchdogs.length, 0);
+
+  // The old watchdog restoring at the same time is harmless: the second restore sees the user level.
+  const race = setup(t, { endpoint: new FakeEndpoint({ volume: 0.2 }) });
+  const stale = { deviceId: race.endpoint.id, originalVolume: 0.7, duckedVolume: 0.2, ownerPid: reused, token: 'old', startedAt: 1 };
+  race.journal.write(stale);
+  race.ducker.recoverAbandonedState();
+  race.journal.write(stale);
+  assert.equal(recoverVolume(stale, race.endpoint, race.journal), 'userChanged');
+  assert.equal(race.endpoint.level, 0.7);
+});
+
+test('launch recovery of an endpoint that is not back yet is retried every 250 ms for 30 s, and again on resume/unlock', (t) => {
+  const endpoint = new FakeEndpoint({ volume: 0.2 });
+  const env = setup(t, { endpoint });
+  env.journal.write({ deviceId: endpoint.id, originalVolume: 0.7, duckedVolume: 0.2, ownerPid: 99999999, token: 'old', startedAt: 1 });
+  endpoint.failReads = 5;
+  env.ducker.recoverAbandonedState();
+  assert.equal(endpoint.level, 0.2);
+  env.timers.advance(VOICE_VOLUME.restoreRetryMs * 5);
+  assert.equal(endpoint.level, 0.7);
+  assert.equal(env.journal.exists(), false);
+
+  const away = setup(t, { endpoint: new FakeEndpoint({ volume: 0.2 }) });
+  away.journal.write({ deviceId: away.endpoint.id, originalVolume: 0.7, duckedVolume: 0.2, ownerPid: 99999999, token: 'old', startedAt: 1 });
+  away.endpoint.failReads = Infinity;
+  away.ducker.recoverAbandonedState();
+  away.timers.advance(VOICE_VOLUME.restoreRetryMs * (VOICE_VOLUME.restoreRetryAttempts + 5));
+  assert.equal(away.timers.queue.length, 0, 'gives up after 120 attempts');
+  assert.ok(away.journal.read(), 'journal kept');
+  away.endpoint.failReads = 0;
+  away.ducker.recoverAbandonedState(); // powerMonitor resume / unlock-screen
+  assert.equal(away.endpoint.level, 0.7);
+  assert.equal(away.journal.exists(), false);
 });

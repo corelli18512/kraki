@@ -31,6 +31,8 @@ const VOICE_VOLUME = Object.freeze({
   cueDelayMs: 250,
   /** Lowering waits for the start cue to finish, at most this long. */
   cueFinishTimeoutMs: 2000,
+  /** The watchdog must report `ready` within this, or lowering is skipped. */
+  watchdogReadyMs: 1500,
   /** Watchdog ceiling: give the volume back even if Kraki never says so. */
   watchdogMaxSeconds: 30 * 60,
   /** An endpoint switch can briefly fail a restore: retry for 30 s. */
@@ -80,6 +82,9 @@ class VolumeJournal {
   }
 
   remove() { try { fs.rmSync(this.file, { force: true }); } catch { /* gone */ } }
+
+  /** Remove it only while it still records `token` (not a newer lowering's). */
+  removeIf(token) { if (this.read()?.token === token) this.remove(); }
 }
 
 function processIsAlive(pid) {
@@ -125,15 +130,32 @@ class VoiceVolumeDucker {
     /** Lowering is due but waits for the cue to finish. */
     this.lowerAfterCue = false;
     this.restoreRetry = null;
+    /** The token of a lowering waiting for its watchdog to report `ready`. */
+    this.arming = null;
+    this.recoveryRetry = null;
   }
 
   get isLowered() { return this.state !== null; }
 
-  /** Launch: a journal left by a Kraki that died mid-recording. */
+  /**
+   * Launch (and system resume / unlock): a journal left by a Kraki that died
+   * mid-recording. The single-instance lock means any other owner pid is a
+   * previous, dead Kraki (its pid may already belong to another process). An
+   * endpoint that is not back yet (a headset) is retried for 30 s.
+   */
   recoverAbandonedState() {
+    this.clear('recoveryRetry');
+    this.recoverAttempt(1);
+  }
+
+  recoverAttempt(attempt) {
     const stale = this.journal.read();
-    if (this.state || !stale || processIsAlive(stale.ownerPid)) return;
-    this.log(`output volume recovery after abnormal exit: ${recoverVolume(stale, this.backend, this.journal)}`);
+    if (this.state || this.arming || !stale || stale.ownerPid === this.pid) return;
+    const result = recoverVolume(stale, this.backend, this.journal);
+    if (result !== 'retry') { this.log(`output volume recovery after abnormal exit: ${result}`); return; }
+    if (attempt === 1) this.log('output volume recovery after abnormal exit: endpoint unavailable, retrying');
+    if (attempt >= VOICE_VOLUME.restoreRetryAttempts) { this.log('output volume recovery gave up; retried on resume, unlock or next launch'); return; }
+    this.recoveryRetry = this.timers.setTimeout(() => { this.recoveryRetry = null; this.recoverAttempt(attempt + 1); }, VOICE_VOLUME.restoreRetryMs);
   }
 
   /** The start cue began playing: lowering must not cut into it. */
@@ -159,7 +181,7 @@ class VoiceVolumeDucker {
   scheduleLowering(delayMs = VOICE_VOLUME.cueDelayMs) {
     this.clear('pendingLower');
     this.lowerAfterCue = false;
-    if (!this.isEnabled() || this.state) return;
+    if (!this.isEnabled() || this.state || this.arming) return;
     this.pendingLower = this.timers.setTimeout(() => {
       this.pendingLower = null;
       if (this.cuePlaying) this.lowerAfterCue = true;
@@ -171,6 +193,7 @@ class VoiceVolumeDucker {
   restore(reason) {
     this.clear('pendingLower');
     this.lowerAfterCue = false;
+    if (this.arming) { this.log(`output volume lowering cancelled reason=${reason}`); this.arming = null; }
     const current = this.state;
     if (!current) return;
     const result = recoverVolume(current, this.backend, this.journal);
@@ -181,7 +204,7 @@ class VoiceVolumeDucker {
 
   lower() {
     this.pendingLower = null;
-    if (!this.isEnabled() || this.state) return;
+    if (!this.isEnabled() || this.state || this.arming) return;
     this.clear('restoreRetry');
     let device;
     let original;
@@ -202,38 +225,60 @@ class VoiceVolumeDucker {
     const stale = this.journal.read();
     if (stale) {
       this.log('output volume left alone: an unrecovered level is pending');
-      if (!processIsAlive(stale.ownerPid)) this.log(`pending output volume recovery: ${recoverVolume(stale, this.backend, this.journal)}`);
+      if (stale.ownerPid !== this.pid) this.log(`pending output volume recovery: ${recoverVolume(stale, this.backend, this.journal)}`);
       return;
     }
     const target = duckTarget(original);
     if (target === null) return;
     const state = { deviceId: device, originalVolume: original, duckedVolume: target, ownerPid: this.pid, token: this.newToken(), startedAt: Date.now() };
-    let stop;
+    let launched;
     try {
       this.journal.write(state);
-      try { stop = this.launchWatchdog(this.journal.file, state); }
+      try { launched = this.launchWatchdog(this.journal.file, state); }
       catch (error) { this.journal.remove(); throw error; }
     } catch (error) {
       this.log(`output volume not lowered: ${error?.message ?? error}`);
       return;
     }
+    // Lower only once the watchdog is armed (it reports `ready`).
+    this.arming = state.token;
+    const armed = (stop) => this.applyLowering(state, original, stop);
+    const failed = (error) => {
+      if (this.arming === state.token) this.arming = null;
+      this.journal.removeIf(state.token);
+      this.log(`output volume not lowered: ${error?.message ?? error}`);
+    };
+    if (typeof launched?.then === 'function') launched.then(armed, failed);
+    else armed(launched);
+  }
+
+  applyLowering(state, original, stop) {
+    const abandon = (why) => { this.journal.removeIf(state.token); stop(); if (why) this.log(`output volume not lowered: ${why}`); };
+    // Released (or another lowering) while the watchdog was starting.
+    if (this.arming !== state.token) { abandon(); return; }
+    this.arming = null;
+    if (!this.isEnabled()) { abandon(); return; }
+    const device = state.deviceId;
     let applied = state;
     try {
-      this.backend.setVolume(device, target);
+      // The user may have changed the level while the watchdog started.
+      if (this.backend.isMuted(device) || Math.abs(this.backend.volume(device) - original) > VOICE_VOLUME.tolerance) {
+        abandon('the level changed meanwhile');
+        return;
+      }
+      this.backend.setVolume(device, state.duckedVolume);
       const observed = this.backend.volume(device);
-      if (Math.abs(observed - target) > VOICE_VOLUME.tolerance) throw new Error('endpoint rejected the volume');
+      if (Math.abs(observed - state.duckedVolume) > VOICE_VOLUME.tolerance) throw new Error('endpoint rejected the volume');
       // Compare later against what the endpoint actually holds (quantized),
       // so a one-step change by the user is noticed.
-      if (observed !== target) {
+      if (observed !== state.duckedVolume) {
         applied = { ...state, duckedVolume: observed };
         this.journal.write(applied);
       }
     } catch (error) {
       // Put back whatever we may have changed before giving up.
       try { this.backend.setVolume(device, original); } catch { /* best effort */ }
-      this.journal.remove();
-      stop();
-      this.log(`output volume not lowered: ${error?.message ?? error}`);
+      abandon(error?.message ?? String(error));
       return;
     }
     this.state = applied;
@@ -269,20 +314,50 @@ class VoiceVolumeDucker {
   }
 }
 
+/** The watchdog's "armed" line on stdout. */
+const WATCHDOG_READY = 'ready';
+
 /**
  * Start the watchdog (voice-volume-watchdog.cjs) as a detached process of
- * `execPath` run as Node (Kraki.exe with ELECTRON_RUN_AS_NODE). Returns stop().
+ * `execPath` run as Node (Kraki.exe with ELECTRON_RUN_AS_NODE; the RunAsNode
+ * fuse must stay enabled, scripts/release/verify-desktop.mjs checks it).
+ * Resolves with stop() once it prints `ready`; no `ready` within
+ * `readyTimeoutMs`, or an early exit, means it did not start (it is killed).
  */
-function launchWatchdogProcess(journalFile, state, { execPath = process.execPath, onError = () => {} } = {}) {
+function launchWatchdogProcess(journalFile, state, {
+  execPath = process.execPath, script = path.join(__dirname, 'voice-volume-watchdog.cjs'), onError = () => {}, readyTimeoutMs = VOICE_VOLUME.watchdogReadyMs,
+} = {}) {
   const { spawn } = require('node:child_process');
   const child = spawn(execPath, [
-    path.join(__dirname, 'voice-volume-watchdog.cjs'), journalFile, state.token, String(state.ownerPid),
+    script, journalFile, state.token, String(state.ownerPid),
     String(VOICE_VOLUME.watchdogMaxSeconds),
-  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', onError);
-  if (!child.pid) throw new Error('the volume watchdog did not start');
-  child.unref();
-  return Object.assign(() => { try { child.kill(); } catch { /* gone */ } }, { pid: child.pid });
+  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detached: true, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  // Never kill() a child that did not spawn: Node would signal pid 0 (our own process group).
+  const stop = Object.assign(() => { if (child.pid) try { child.kill(); } catch { /* gone */ } }, { pid: child.pid });
+  return new Promise((resolve, reject) => {
+    let output = '';
+    let settled = false;
+    const settle = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.removeAllListeners('data');
+      child.stdout?.destroy();
+      child.removeListener('exit', exited);
+      if (error) { stop(); reject(error); return; }
+      child.unref();
+      resolve(stop);
+    };
+    const exited = (code) => settle(new Error(`the volume watchdog exited before it was ready (code ${code})`));
+    const timer = setTimeout(() => settle(new Error('the volume watchdog did not report ready')), readyTimeoutMs);
+    child.on('error', (error) => { onError(error); settle(error); });
+    child.on('exit', exited);
+    child.stdout?.on('data', (chunk) => {
+      output += chunk;
+      if (output.split(/\r?\n/).includes(WATCHDOG_READY)) settle();
+    });
+    if (!child.pid) settle(new Error('the volume watchdog did not start'));
+  });
 }
 
 /**
@@ -310,4 +385,4 @@ async function runWatchdog({ journalFile, token, ownerPid, maxSeconds, backend, 
   }
 }
 
-module.exports = { VOICE_VOLUME, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, launchWatchdogProcess, runWatchdog };
+module.exports = { VOICE_VOLUME, WATCHDOG_READY, duckTarget, VolumeJournal, processIsAlive, recoverVolume, VoiceVolumeDucker, launchWatchdogProcess, runWatchdog };
