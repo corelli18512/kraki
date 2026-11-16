@@ -58,6 +58,15 @@ function fakeCoreAudio({ level = 0.6, muted = 0, state = 1, defaultHr = 0, devic
   return { backend: createWindowsAudioBackend({ koffi, ole32 }), log, get level() { return level; }, set muted(v) { muted = v; } };
 }
 
+test('vtable slots are the SDK header order (literal, not the constants under test)', () => {
+  assert.deepEqual({ ...SLOT }, {
+    release: 2,
+    enumeratorGetDefaultAudioEndpoint: 4, enumeratorGetDevice: 5,
+    deviceActivate: 3, deviceGetId: 5, deviceGetState: 6,
+    volumeSetMasterScalar: 7, volumeGetMasterScalar: 9, volumeGetMute: 15,
+  });
+});
+
 test('GUIDs are laid out as Windows does', () => {
   assert.deepEqual(guid('5CDF2C82-841E-4546-9722-0CF74078229A'), { Data1: 0x5CDF2C82, Data2: 0x841E, Data3: 0x4546, Data4: [0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A] });
 });
