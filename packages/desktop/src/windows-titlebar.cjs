@@ -3,7 +3,8 @@
 const HEIGHT = 44;
 
 function overlayStyle(dark) {
-  return { color: dark ? '#020617' : '#ffffff', symbolColor: dark ? '#cbd5e1' : '#596d84', height: HEIGHT };
+  // Transparent so the page's top fade shows behind the caption buttons, as on Mac.
+  return { color: 'rgba(0, 0, 0, 0)', symbolColor: dark ? '#cbd5e1' : '#596d84', height: HEIGHT };
 }
 
 function windowOptions(platform, dark) {
