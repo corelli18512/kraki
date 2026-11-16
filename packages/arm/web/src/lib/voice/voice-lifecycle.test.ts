@@ -285,6 +285,16 @@ describe('Kraki for Windows lowers other sounds while the microphone records', (
     else resetVoice();
     expect(calls).toEqual(['cueStarted', 'cueFinished', 'captureStarted', 'captureStopped']);
   });
+  it('a cue still playing when the microphone opens (1 s cap) reports its real end; the shell bounds it otherwise', async () => {
+    const calls = shell();
+    StartCue.mode = 'never';
+    const starting = start();
+    await vi.advanceTimersByTimeAsync(1000);
+    await starting;
+    expect(calls).toEqual(['cueStarted', 'captureStarted']);
+    StartCue.played[0].listeners.get('ended')?.();
+    expect(calls).toEqual(['cueStarted', 'captureStarted', 'cueFinished']);
+  });
   it('a refused cue still reports its end, so lowering is not held back', async () => {
     const calls = shell();
     StartCue.mode = 'rejects';

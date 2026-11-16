@@ -182,26 +182,28 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
  *  (Settings › Voice Input); absent in browsers and on other systems. */
 const outputVolume = () => (typeof window === 'undefined' ? undefined : window.krakiDesktop?.voiceVolume);
 
-/** The cue lasts 0.2 s; a cue that never reports its end stops holding the microphone back after this. */
+/** The cue lasts 0.2 s; one that never reports its end holds the microphone back at most this long. */
 const START_CUE_MAX_WAIT_MS = 1000;
 
 /**
  * The Mac/iOS start cue (VoiceStartCue, 0.2 s), played when dictation starts —
  * inside the click, so autoplay policies allow it. Resolves once it has played
- * (or could not): the microphone opens only then, so the cue is not recorded.
+ * (or could not, or after START_CUE_MAX_WAIT_MS): the microphone opens only
+ * then, so the cue is not recorded. Kraki for Windows hears when the cue
+ * really ends (it bounds a cue that never reports its end itself).
  */
 function playStartCue(): Promise<void> {
   const volume = outputVolume();
   return new Promise((resolve) => {
-    let done = false;
+    let heard = false;
+    const timer = setTimeout(resolve, START_CUE_MAX_WAIT_MS);
     const finish = () => {
-      if (done) return;
-      done = true;
       clearTimeout(timer);
-      volume?.cueFinished();
       resolve();
+      if (heard) return;
+      heard = true;
+      volume?.cueFinished();
     };
-    const timer = setTimeout(finish, START_CUE_MAX_WAIT_MS);
     // Other sounds are lowered only after the cue has been heard.
     volume?.cueStarted();
     try {
