@@ -40,7 +40,8 @@
       "build/tray-problem.png",
       "build/tray/*.ico",
       "!node_modules/koffi/{src,doc,lib,vendor}/**",
-      "!node_modules/koffi/build/koffi/{darwin_*,freebsd_*,linux_*,musl_*,openbsd_*,win32_ia32}/**"
+      "!node_modules/koffi/build/koffi/{darwin_*,freebsd_*,linux_*,musl_*,openbsd_*,win32_ia32}/**",
+      "!node_modules/koffi/build/koffi/*/koffi.{exp,lib}"
     ],
     "asar": true,
     "protocols": [
