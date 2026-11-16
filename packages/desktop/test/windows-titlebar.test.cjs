@@ -9,7 +9,7 @@ const { windowOptions, registerTitleBarTheme } = require('../src/windows-titleba
 test('only Windows opts into native caption overlay, without removing the native frame', () => {
   assert.deepEqual(windowOptions('win32', false), {
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#ffffff', symbolColor: '#596d84', height: 44 },
+    titleBarOverlay: { color: 'rgba(0, 0, 0, 0)', symbolColor: '#596d84', height: 44 },
   });
   assert.equal(windowOptions('win32', true).titleBarOverlay.symbolColor, '#cbd5e1');
   for (const platform of ['linux', 'darwin']) assert.deepEqual(windowOptions(platform, false), {});
