@@ -21,6 +21,7 @@ import { applyOps, cleanWord, wordLine } from './words';
 import type { VoiceContext } from './context';
 import { diag } from '../diag';
 import { VoiceTracker } from '../diag/experience';
+import startCueUrl from './voice-start-d1.wav';
 
 class VoiceFailure extends Error {
   constructor(message: string, readonly metricCause: string) { super(message); }
@@ -176,6 +177,58 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
   return { stop: () => { try { node.disconnect(); src.disconnect(); } catch { /* gone */ } stream.getTracks().forEach((t) => t.stop()); void ctx.close(); } };
 }
 
+// ── Start cue and other sounds ───────────────────────────
+/** Kraki for Windows lowers other sounds while the microphone records
+ *  (Settings › Voice Input); absent in browsers and on other systems. */
+const outputVolume = () => (typeof window === 'undefined' ? undefined : window.krakiDesktop?.voiceVolume);
+
+/** The cue lasts 0.2 s; a cue that never reports its end stops holding the microphone back after this. */
+const START_CUE_MAX_WAIT_MS = 1000;
+
+/**
+ * The Mac/iOS start cue (VoiceStartCue, 0.2 s), played when dictation starts —
+ * inside the click, so autoplay policies allow it. Resolves once it has played
+ * (or could not): the microphone opens only then, so the cue is not recorded.
+ */
+function playStartCue(): Promise<void> {
+  const volume = outputVolume();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      volume?.cueFinished();
+      resolve();
+    };
+    const timer = setTimeout(finish, START_CUE_MAX_WAIT_MS);
+    // Other sounds are lowered only after the cue has been heard.
+    volume?.cueStarted();
+    try {
+      const cue = new Audio(startCueUrl);
+      cue.addEventListener('ended', finish, { once: true });
+      cue.addEventListener('error', finish, { once: true });
+      cue.play().catch(finish);
+    } catch {
+      finish();
+    }
+  });
+}
+
+/** While `capture` records, Kraki for Windows lowers other sounds; stopping it gives them back. */
+function lowerOtherSoundsWhile(capture: Capture): Capture {
+  const volume = outputVolume();
+  if (!volume) return capture;
+  volume.captureStarted();
+  let stopped = false;
+  return {
+    stop: () => {
+      capture.stop();
+      if (!stopped) { stopped = true; volume.captureStopped(); }
+    },
+  };
+}
+
 // ── One recording ────────────────────────────────────────
 interface Recording {
   ws: WebSocket;
@@ -234,6 +287,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.offline') }); return true;
   }
   useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
+  const cue = playStartCue();
   const recordingId = uuid();
   let ws: WebSocket;
   try {
@@ -316,15 +370,20 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     ]);
     if (rec !== r) return true;
     send({ type: 'authorize', uid: transport?.userId() ?? undefined, deviceId: transport?.deviceId() ?? undefined, authorization: l });
+    // The microphone opens once the start cue has played, so it is not recorded.
+    await cue;
+    // Cancelled, or already finished (Send/Edit while connecting): no microphone.
+    if (rec !== r || r.finishMode) return true;
     diag.voices.stateChanged('requestingPermission');
-    r.capture = await openMicrophone((pcm, level) => {
+    const capture = await openMicrophone((pcm, level) => {
       if (rec !== r || r.finishMode) return;
       const lv = useVoice.getState().levels;
       useVoice.setState({ levels: [...lv.slice(-7), level] });
       if (r.ready) ws.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
       else if (r.pending.reduce((n, p) => n + p.byteLength, 0) < 384_000) r.pending.push(pcm);
     }).catch((e: Error) => { throw e instanceof VoiceFailure ? e : new VoiceFailure(e.message, 'audio_session'); });
-    if (rec !== r) { r.capture.stop(); return true; }
+    if (rec !== r || r.finishMode) { capture.stop(); return true; }
+    r.capture = lowerOtherSoundsWhile(capture);
     diag.voices.stateChanged('recording');
     if (useVoice.getState().phase === 'connecting') useVoice.setState({ phase: 'recording' });
   } catch (e) {

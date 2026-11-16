@@ -105,6 +105,40 @@ function NewWordRow({ onCommit, onDiscard }: { onCommit: (term: string, heard: s
   );
 }
 
+/** Kraki for Windows only (Kraki for Mac's toggle): the shell owns the setting. */
+function LowerOtherSoundsSection() {
+  const { t } = useTranslation('settings');
+  const bridge = window.krakiDesktop?.voiceVolume;
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void bridge?.state().then((s) => { if (live) setEnabled(s.enabled); }, () => { if (live) setEnabled(true); });
+    return () => { live = false; };
+  }, [bridge]);
+  if (!bridge) return null;
+  return (
+    <SettingsSection footer={t('voice.lowerOtherSoundsFooter')}>
+      <SettingsRow label={t('voice.lowerOtherSounds')}>
+        <SettingsSwitch
+          label={t('voice.lowerOtherSounds')}
+          testId="voice-lower-other-sounds"
+          on={enabled ?? true}
+          disabled={enabled === null}
+          onChange={(v) => {
+            setEnabled(v);
+            void bridge.setEnabled(v).then((r) => {
+              setError(r.ok ? null : r.error ?? null);
+              if (!r.ok) setEnabled(!v);
+            });
+          }}
+        />
+      </SettingsRow>
+      {error && <p role="alert" className="text-xs text-red-500">{error}</p>}
+    </SettingsSection>
+  );
+}
+
 let nextDraftId = 0;
 
 export function VoiceSettings() {
@@ -209,6 +243,7 @@ export function VoiceSettings() {
         )}
         {pending && <p className="kp-foot">{t('voice.syncing')}</p>}
       </SettingsSection>
+      <LowerOtherSoundsSection />
     </div>
   );
 }

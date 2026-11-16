@@ -1,5 +1,5 @@
-import { beforeEach, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { VoiceSettings } from './VoiceSettings';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
 
@@ -35,4 +35,42 @@ it('Enter that confirms an IME candidate in a new word does not add it yet', () 
   expect(useVoice.getState().words).toEqual([]);
   fireEvent.keyDown(word, { key: 'Enter' });
   expect(useVoice.getState().words.map((w) => w.term)).toEqual(['数据库']);
+});
+
+describe('Lower Other Sounds While Recording (Kraki for Windows)', () => {
+  afterEach(() => { delete window.krakiDesktop; });
+  function bridge(enabled: boolean, ok = true) {
+    const voiceVolume = {
+      cueStarted: vi.fn(), cueFinished: vi.fn(), captureStarted: vi.fn(), captureStopped: vi.fn(),
+      state: vi.fn(async () => ({ enabled })),
+      setEnabled: vi.fn(async () => (ok ? { ok: true } : { ok: false, error: 'Could not save.' })),
+    };
+    window.krakiDesktop = { voiceVolume } as unknown as typeof window.krakiDesktop;
+    return voiceVolume;
+  }
+  it('is absent in the browser and on other desktop systems', () => {
+    render(<VoiceSettings />);
+    expect(screen.queryByText('Lower Other Sounds While Recording')).toBeNull();
+  });
+  it('shows the shell setting (on by default) last, with the Mac footer, and saves changes', async () => {
+    const voiceVolume = bridge(true);
+    render(<VoiceSettings />);
+    const toggle = screen.getByRole('switch', { name: 'Lower Other Sounds While Recording' });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.getByText(/Turns this PC's sound down while you speak/)).toBeInTheDocument();
+    const sections = screen.getByTestId('settings-voice').querySelectorAll('section');
+    expect(sections[sections.length - 1]).toContainElement(toggle);
+    fireEvent.click(toggle);
+    expect(voiceVolume.setEnabled).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+  });
+  it('shows a saved off state and reverts when the shell refuses', async () => {
+    bridge(false, false);
+    render(<VoiceSettings />);
+    const toggle = screen.getByRole('switch', { name: 'Lower Other Sounds While Recording' });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not save.'));
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+  });
 });
