@@ -71,9 +71,8 @@ html[data-windows-titlebar] .khead.is-windows {
   -webkit-app-region: drag;
   user-select: none;
 }
-html[data-windows-titlebar] .khead.is-windows.is-narrow { height: 64px; width: min(100%, 100vw); }
+html[data-windows-titlebar] .khead.is-windows.is-narrow { height: 64px; width: min(100%, 100vw); background: var(--k-bg); }
 html[data-windows-titlebar] .khead.is-windows.is-narrow::before { display: none; }
-html[data-windows-titlebar] .khead.is-windows.is-narrow { background: var(--k-bg); }
 /* The sidebar's top row is caption space too: blank parts move the window, like
    the Mac toolbar. Its controls (and an open menu's click-away layer) stay clickable. */
 html[data-windows-titlebar] .ksb-top { -webkit-app-region: drag; }
