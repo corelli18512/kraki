@@ -45,8 +45,12 @@ enum OutputVolumeDucking {
     static let minimumDrop: Float32 = 0.02
     /// "Still at the level we set" (devices quantize volume steps).
     static let tolerance: Float32 = 0.015
-    /// Let the full-volume start cue play before lowering output.
+    /// Lower no sooner than this after recording starts.
     static let cueDelay: TimeInterval = 0.25
+    /// The start cue is heard until the output device has played it, well
+    /// after NSSound.play() returns (a 0.2 s cue finished ~0.9 s later on a
+    /// Studio Display): lowering waits for the cue to finish, at most this long.
+    static let cueFinishTimeout: TimeInterval = 2.0
     /// Watchdog ceiling: give the volume back even if Kraki never says so.
     static let watchdogMaxSeconds: TimeInterval = 30 * 60
     static let watchdogArgument = "--voice-volume-watchdog"
@@ -138,6 +142,11 @@ final class MacOutputVolumeDucker {
     private var state: OutputVolumeState?
     private var stopWatchdog: (() -> Void)?
     private var pendingBegin: DispatchWorkItem?
+    /// The start cue is still being heard: lowering waits for it.
+    private var cuePlaying = false
+    private var cueTimeout: DispatchWorkItem?
+    /// Lowering is due but waits for the cue to finish.
+    private var lowerAfterCue = false
     private var restoreRetry: DispatchWorkItem?
 
     init(backend: OutputVolumeBackend = CoreAudioOutputVolume(),
@@ -161,14 +170,42 @@ final class MacOutputVolumeDucker {
         }
     }
 
-    /// Recording starts: lower the volume after the start cue.
+    /// The start cue began playing: lowering must not cut into it.
+    func cueStarted(timeout: TimeInterval = OutputVolumeDucking.cueFinishTimeout) {
+        queue.async { [self] in
+            cuePlaying = true
+            cueTimeout?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.endCue() }
+            cueTimeout = work
+            queue.asyncAfter(deadline: .now() + timeout, execute: work)
+        }
+    }
+
+    /// The start cue finished (or could not play).
+    func cueFinished() {
+        queue.async { [self] in endCue() }
+    }
+
+    private func endCue() {
+        cueTimeout?.cancel()
+        cueTimeout = nil
+        cuePlaying = false
+        if lowerAfterCue {
+            lowerAfterCue = false
+            lower()
+        }
+    }
+
+    /// Recording starts: lower the volume once the start cue has been heard.
     func scheduleLowering(after delay: TimeInterval = OutputVolumeDucking.cueDelay) {
         queue.async { [self] in
             pendingBegin?.cancel()
+            lowerAfterCue = false
             guard isEnabled(), state == nil else { return }
             let work = DispatchWorkItem { [weak self] in
-                self?.pendingBegin = nil
-                self?.lower()
+                guard let self else { return }
+                self.pendingBegin = nil
+                if self.cuePlaying { self.lowerAfterCue = true } else { self.lower() }
             }
             pendingBegin = work
             queue.asyncAfter(deadline: .now() + delay, execute: work)
@@ -259,6 +296,7 @@ final class MacOutputVolumeDucker {
     private func restoreNow(reason: String) {
         pendingBegin?.cancel()
         pendingBegin = nil
+        lowerAfterCue = false
         guard let current = state else { return }
         switch OutputVolumeDucking.recover(current, backend: backend, journal: journal) {
         case .restored, .userChanged:

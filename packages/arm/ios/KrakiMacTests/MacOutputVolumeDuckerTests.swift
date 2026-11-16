@@ -113,6 +113,62 @@ final class MacOutputVolumeDuckerTests: XCTestCase {
         XCTAssertEqual(watchdog.launched, 0)
     }
 
+    /// The start cue is heard until the output device has played it (~0.9 s
+    /// on a Studio Display for a 0.2 s cue), well after the 0.25 s delay: the
+    /// cue itself must not be lowered.
+    func testLoweringWaitsForTheStartCueToFinish() {
+        let ducker = makeDucker()
+        ducker.cueStarted(timeout: 5)
+        ducker.scheduleLowering(after: 0)
+        ducker.drain()
+        ducker.drain()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        ducker.drain()
+        XCTAssertTrue(device.writes.isEmpty, "the cue is still playing: volume untouched")
+        XCTAssertFalse(ducker.isLowered)
+        ducker.cueFinished()
+        ducker.drain()
+        XCTAssertEqual(device.volumeValue, 0.20, accuracy: 0.0001, "lowered once the cue finished")
+        XCTAssertTrue(ducker.isLowered)
+        ducker.restore(reason: "test")
+        ducker.drain()
+        XCTAssertEqual(device.volumeValue, 0.8, accuracy: 0.0001)
+    }
+
+    func testACueThatNeverReportsFinishingStillLowersAfterTheTimeout() {
+        let ducker = makeDucker()
+        ducker.cueStarted(timeout: 0.2)
+        ducker.scheduleLowering(after: 0)
+        ducker.drain()
+        ducker.drain()
+        XCTAssertTrue(device.writes.isEmpty)
+        let deadline = Date().addingTimeInterval(2)
+        while !ducker.isLowered, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertEqual(device.volumeValue, 0.20, accuracy: 0.0001)
+    }
+
+    func testReleasedWhileTheCueStillPlaysNeverLowers() {
+        let ducker = makeDucker()
+        ducker.cueStarted(timeout: 5)
+        ducker.scheduleLowering(after: 0)
+        ducker.drain()
+        ducker.drain()
+        ducker.restore(reason: "quick tap")
+        ducker.drain()
+        ducker.cueFinished()
+        ducker.drain()
+        XCTAssertTrue(device.writes.isEmpty)
+        XCTAssertEqual(watchdog.launched, 0)
+    }
+
+    func testCueFinishingBeforeTheDelayLowersAtTheDelay() {
+        let ducker = makeDucker()
+        ducker.cueStarted(timeout: 5)
+        ducker.cueFinished()
+        lower(ducker)
+        XCTAssertEqual(device.volumeValue, 0.20, accuracy: 0.0001)
+    }
+
     func testSkipsDisabledMutedReadOnlyOrQuietDevices() {
         enabled = false
         lower(makeDucker())
