@@ -124,7 +124,15 @@ final class TKBodyTextView: UITextView {
         guard let attributedText, range.length > 0, NSMaxRange(range) <= attributedText.length else {
             return super.copy(sender)
         }
-        UIPasteboard.general.string = (attributedText.string as NSString).substring(with: range)
+        UIPasteboard.general.string = Self.copiedText((attributedText.string as NSString).substring(with: range))
+    }
+
+    /// A selection as copied: without the renderer's zero-width break
+    /// opportunities, nor a table's attachment placeholder (U+FFFC), like
+    /// `TKMarkdown.plainText`.
+    static func copiedText(_ selected: String) -> String {
+        selected
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
             .replacingOccurrences(of: "\u{200B}", with: "")
     }
 

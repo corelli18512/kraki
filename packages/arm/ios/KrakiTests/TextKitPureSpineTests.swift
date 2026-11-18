@@ -535,6 +535,11 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(TKMarkdown.plainText(rendered)?.contains("\u{200B}") ?? true)
     }
 
+    /// ios-chat #10: Select Text over a table copies no attachment placeholder.
+    func testSelectTextCopyDropsBreakOpportunitiesAndTablePlaceholders() {
+        XCTAssertEqual(TKBodyTextView.copiedText("Before\n\u{FFFC}\nlong\u{200B}token"), "Before\n\nlongtoken")
+    }
+
     func testCodeForegroundAlwaysMeetsMacEditorContrastContract() {
         let samples = [
             ("text", "plain output with no syntax tokens"),
