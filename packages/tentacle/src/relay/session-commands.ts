@@ -1,7 +1,7 @@
 /** Session commands: create, fork, import local sessions, delete, archive, auto-titles. */
 
 import { toWireSessionMode } from '@kraki/protocol';
-import { accessSync, constants as fsConstants, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ProducerMessage, ConsumerMessage } from '@kraki/protocol';
@@ -17,8 +17,10 @@ import { logger, AUTO_ARCHIVE_SWEEP_MS } from './shared.js';
  *  agent could not start in is refused here, naming the folder, instead of
  *  failing the first send with the agent's own spawn error. */
 export function resolveSessionFolder(cwd: string | undefined): string {
-  const requested = cwd?.trim() ?? '';
-  if (!requested) return homedir();
+  const trimmed = cwd?.trim() ?? '';
+  if (!trimmed) return homedir();
+  // A real folder whose name starts or ends with a space is used as is.
+  const requested = cwd !== undefined && cwd !== trimmed && isAbsolute(cwd) && existsSync(cwd) ? cwd : trimmed;
   const folder = requested === '~' ? homedir()
     : /^~[\\/]/.test(requested) ? join(homedir(), requested.slice(2))
     : requested;

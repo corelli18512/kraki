@@ -46,6 +46,16 @@ describe('create_session folder (K-134)', () => {
     expect(t.error()).toBeUndefined();
   });
 
+  it('keeps a real folder whose name ends with a space, and trims pasted whitespace otherwise', async () => {
+    const spaced = join(dir, 'project ');
+    mkdirSync(spaced);
+    const t = build();
+    await t.create(spaced);
+    await t.create(`  ${dir}\n`);
+    expect(t.createSession.mock.calls.map((c) => (c as unknown as [{ cwd: string }])[0].cwd)).toEqual([spaced, dir]);
+    expect(t.error()).toBeUndefined();
+  });
+
   it('works in home without a folder, and expands ~', async () => {
     const t = build();
     await t.create();
