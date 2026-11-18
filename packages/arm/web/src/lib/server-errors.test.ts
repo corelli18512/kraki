@@ -12,6 +12,10 @@ describe('K-218: relay and attachment errors are shown localized, never raw', ()
     expect(serverErrorText('unicast target is not reachable')).toBe("That computer can't be reached right now. Check that it is online.");
     expect(serverErrorText('multicast contains a forbidden target')).toBe("The server couldn't complete that. Try again.");
     expect(serverErrorText(undefined)).toBe("The server couldn't complete that. Try again.");
+    // U5: the relay's other actionable errors keep their meaning.
+    expect(serverErrorText('Could not remove the device. Try again later.')).toBe("Couldn't remove the device. Try again later.");
+    expect(serverErrorText('Only the Kraki app can delete the account')).toBe('Only the Kraki app can delete the account.');
+    expect(serverErrorText('Invalid push token: unsupported Web Push subscription')).toBe("The relay didn't accept push notifications from this browser.");
     await i18next.changeLanguage('zh-Hans');
     expect(serverErrorText('Device not found')).toBe('该设备已不在此账户中。');
     expect(serverErrorText('toString')).toBe('服务器无法完成此操作。请重试。');
