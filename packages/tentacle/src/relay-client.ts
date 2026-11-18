@@ -1639,10 +1639,11 @@ export class RelayClient {
       }
     }
     this.trustRejectedNoticeAt.set(key, now);
+    // A session error reaches every app: name the sender, not "this device".
     const message = reason === 'from_future'
-      ? 'This computer refused the request because this device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
+      ? 'This computer refused the request because the sending device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
       : reason === 'stale'
-        ? 'This computer refused the request because it was signed too long ago, or this device\'s clock is behind, or this computer recently reset its security state. Check the date and time; if they are right, wait a few minutes and try again.'
+        ? 'This computer refused the request because it was signed too long ago, or the sending device\'s clock is behind, or this computer recently reset its security state. Check the date and time; if they are right, wait a few minutes and try again.'
         : 'This computer could not record the request securely, so it was not run. Check that Kraki on the computer can write to its data folder, then try again.';
     logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
     if (sessionId) {

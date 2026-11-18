@@ -354,6 +354,9 @@ describe('device trust — a paired app is told when its signed request is refus
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({ sessionId: 's1', deviceId: TENTACLE, __signed: true });
     expect(errors[0]!.payload.message).toMatch(/clock is ahead/);
+    // Every app shows it: it names the sending device, not "this device" (U1).
+    expect(errors[0]!.payload.message).toContain("the sending device's clock");
+    expect(errors[0]!.payload.message).not.toContain('this device');
     // A session error like any other: a spine seq, persisted, so every app
     // (iOS/Mac drop seq-less session messages) shows it and keeps it.
     expect(errors[0]!.seq).toBeGreaterThan(0);
