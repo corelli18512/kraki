@@ -166,7 +166,7 @@ export function MessageBubble({ children, className, style, onShowSteps }: {
             </button>
           )}
           {context.code && (
-            <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(context.code); close(true); }}>
+            <button type="button" role="menuitem" onClick={() => { void copyText(context.code).catch(() => {}); close(true); }}>
               {t('message.copyCode')}
             </button>
           )}

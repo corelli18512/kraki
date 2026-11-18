@@ -31,6 +31,14 @@ describe('MessageBubble — native context actions', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('Copy Code still closes the menu without the Clipboard API (plain-http relay, B9)', () => {
+    const { bubble } = setup(undefined, 'Run this:\n\n```sh\npnpm test\n```');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    fireEvent.contextMenu(bubble.querySelector('pre')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Code' }));
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('preserves a selection and copies only it', () => {
     const { bubble, writeText } = setup();
     const range = document.createRange();
