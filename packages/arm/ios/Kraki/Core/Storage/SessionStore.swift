@@ -1245,6 +1245,7 @@ final class SessionStore {
         sessionPreviews.removeAll()
         drafts.removeAll()
         draftsOfRemovedSessions.removeAll()
+        pendingAutoArchiveDays.removeAll()
         draftRevisions.removeAll()
         stagedImages.removeAll()
         navigateToSession = nil

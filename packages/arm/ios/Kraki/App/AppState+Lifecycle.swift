@@ -459,6 +459,9 @@ extension AppState {
     /// unsent drafts: this can follow from the relay's list alone, with no
     /// user action, so typed text is kept.
     func forgetSessions(onDevice deviceId: String) {
+        // An Archive After value waiting for this computer would never be
+        // confirmed, and would show "Varies" (ios-shell-2 #6).
+        sessionStore.pendingAutoArchiveDays.removeValue(forKey: deviceId)
         let ids = sessionStore.sessions.values.filter { $0.deviceId == deviceId }.map(\.id)
         for id in ids {
             sessionStore.removeSession(id, keepingComposer: true)

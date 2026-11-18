@@ -141,8 +141,10 @@ final class DeviceRenameTests: XCTestCase {
         unread.lastSeq = 3
         app.sessionStore.sessions = ["s1": unread, "s2": session("s2", on: "o", named: "other")]
         XCTAssertEqual(app.sessionStore.unreadSessionIDs, ["s1"])
+        app.sessionStore.pendingAutoArchiveDays["t"] = 30
 
         app.messageRouter?.handleRawMessage(try json(["type": "device_removed", "deviceId": "t"]))
+        XCTAssertNil(app.sessionStore.pendingAutoArchiveDays["t"], "never confirmed: no \"Varies\" for a removed computer")
 
         XCTAssertNil(app.deviceStore.devices["t"])
         XCTAssertNil(app.sessionStore.sessions["s1"])

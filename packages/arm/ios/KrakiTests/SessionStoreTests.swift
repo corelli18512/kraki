@@ -865,6 +865,15 @@ extension SessionStoreTests {
         XCTAssertEqual(store.listedDrafts.count, 2)
     }
 
+    /// ios-shell-2 #6: an unconfirmed Archive After value does not outlive
+    /// the account.
+    func testResetForgetsPendingArchiveAfter() {
+        store.pendingAutoArchiveDays["dev-1"] = 30
+        store.reset()
+        XCTAssertEqual(store.pendingAutoArchiveDays, [:])
+        XCTAssertEqual(store.autoArchiveDays, 14)
+    }
+
     // MARK: - Open session removed (K-039)
 
     /// K-039 / B4: a removed session (here, from another device, or missing
