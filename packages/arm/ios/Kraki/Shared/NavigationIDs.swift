@@ -45,4 +45,10 @@ enum SessionNavigationRoute {
         }
         return Result(path: [SessionNavID(id: target)], inPlace: false)
     }
+
+    /// The stack without the pages of removed Sessions: a deleted fork
+    /// returns to its source chat, not to the list.
+    static func removing(_ removed: Set<String>, from path: [SessionNavID]) -> [SessionNavID] {
+        path.filter { !removed.contains($0.id) }
+    }
 }

@@ -125,8 +125,8 @@ struct SessionDetailView: View {
                 markReadIfFocused()
             }
         }
-        // Deleted while open: SessionStore bumps `popToSessionListSignal`
-        // and MainTabView returns to the session list.
+        // Deleted while open: SessionStore bumps `sessionRemovalSignal` and
+        // MainTabView closes this page.
     }
 
     // MARK: - Session Content

@@ -849,23 +849,25 @@ extension SessionStoreTests {
 
     // MARK: - Open session removed (K-039)
 
-    /// K-039: a session deleted while it is open (here, from another device,
-    /// or missing from its computer's session list) returns to the list.
-    func testDeletingTheOpenSessionSignalsReturnToTheSessionList() {
+    /// K-039 / B4: a removed session (here, from another device, or missing
+    /// from its computer's session list) is announced whether or not it is
+    /// the open chat: its page may sit under a fork or in a hidden tab.
+    func testRemovingASessionAnnouncesItsIdForItsPagesToClose() {
         store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
         store.upsertSession(makeDigest(id: "other"), deviceId: "dev-1", deviceName: "MB")
-        store.activeSessionId = "open"
-        let before = store.popToSessionListSignal
+        store.activeSessionId = nil // its tab is not on screen
+        let before = store.sessionRemovalSignal
 
         store.removeSession("other")
-        XCTAssertEqual(store.popToSessionListSignal, before, "another session's delete keeps the chat open")
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 1, "session_deleted")
+        XCTAssertEqual(store.lastRemovedSessionIDs, ["other"])
 
-        store.removeSession("open")
-        XCTAssertEqual(store.popToSessionListSignal, before &+ 1, "session_deleted for the open chat")
+        store.removeSession("never-listed")
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 1, "nothing was removed")
 
-        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
         store.reconcileSessionList([makeDigest(id: "kept")], deviceId: "dev-1", deviceName: "MB")
         XCTAssertNil(store.sessions["open"])
-        XCTAssertEqual(store.popToSessionListSignal, before &+ 2, "dropped from its computer's session list")
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 2, "dropped from its computer's session list")
+        XCTAssertEqual(store.lastRemovedSessionIDs, ["open"])
     }
 }

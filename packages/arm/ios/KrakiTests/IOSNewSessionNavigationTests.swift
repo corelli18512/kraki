@@ -292,6 +292,14 @@ final class SessionNavigationRouteTests: XCTestCase {
         XCTAssertFalse(route.inPlace)
     }
 
+    /// U6: a fork deleted elsewhere closes only its own page.
+    func testRemovedSessionsLeaveTheStackButOthersStay() {
+        let path = [SessionNavID(id: "src"), SessionNavID(id: "fork")]
+        XCTAssertEqual(ids(SessionNavigationRoute.removing(["fork"], from: path)), ["src"])
+        XCTAssertEqual(ids(SessionNavigationRoute.removing(["src"], from: path)), ["fork"])
+        XCTAssertEqual(ids(SessionNavigationRoute.removing(["unrelated"], from: path)), ["src", "fork"])
+    }
+
     func testOtherNavigationResetsTheStack() {
         let route = SessionNavigationRoute.open(
             "b", in: [SessionNavID(id: "a"), SessionNavID(id: "c")],

@@ -69,11 +69,19 @@ struct MainTabView: View {
             consumePendingDeviceNavigation()
         }
         .onChange(of: appState.sessionStore.popToSessionListSignal) { _, _ in
-            // A session was deleted while the user was viewing it.
+            // The user deleted the open session from its Info sheet.
             // Pop the chat detail so they land on the session list
             // instead of a "Session not found" placeholder.
             selectedTab = 0
             sessionPath = []
+        }
+        .onChange(of: appState.sessionStore.sessionRemovalSignal) { _, _ in
+            // Sessions deleted elsewhere or dropped by their computer: close
+            // only their pages, also in a tab that is not on screen. A
+            // deleted fork returns to its source chat.
+            let path = SessionNavigationRoute.removing(
+                appState.sessionStore.lastRemovedSessionIDs, from: sessionPath)
+            if path != sessionPath { sessionPath = path }
         }
         #if DEBUG
         .task(id: allowsInitialNavigation) {

@@ -304,14 +304,25 @@ final class SessionStore {
     /// Newest session_list timestamp per computer. Device trust resets it
     /// on a computer's first signed list (an unsigned one may be forged).
     var lastSessionListSnapshotAt: [String: Date] = [:]
-    /// Bumped when a session is deleted while it's being viewed — from
-    /// this device, another device (`session_deleted`) or a computer's
-    /// session list that no longer contains it.
+    /// Bumped when the user deletes the open session from its Info sheet.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the
     /// "Session not found" placeholder. Counter (not boolean) so two
     /// rapid deletes don't share the same value and get coalesced.
     var popToSessionListSignal: Int = 0
+    /// Sessions removed by the latest removal (`session_deleted`, a delete
+    /// from this device, or a computer's session list that no longer has
+    /// them), announced by `sessionRemovalSignal`. `MainTabView` drops their
+    /// pages from the Sessions stack, wherever they are: under a fork, or in
+    /// a tab that is not on screen (B4/U6). Counter, like the signal above.
+    private(set) var lastRemovedSessionIDs: Set<String> = []
+    private(set) var sessionRemovalSignal: Int = 0
+
+    private func announceRemoval(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        lastRemovedSessionIDs = ids
+        sessionRemovalSignal &+= 1
+    }
 
     /// Navigation order must use the same parsed timestamp policy as the
     /// visible session lists. The previous implementation compared preview
@@ -862,9 +873,7 @@ final class SessionStore {
             return false
         }
 
-        if let active = activeSessionId, removedIDs.contains(active) {
-            popToSessionListSignal &+= 1
-        }
+        announceRemoval(removedIDs)
         for id in removedIDs {
             unconfirmedTitles.removeValue(forKey: id)
             nextSessions.removeValue(forKey: id)
@@ -958,10 +967,8 @@ final class SessionStore {
         if sessionListRevealId == id {
             sessionListRevealId = nil
         }
-        // Deleted while open (here or on another device): leave the chat.
-        if activeSessionId == id, sessions[id] != nil {
-            popToSessionListSignal &+= 1
-        }
+        // Deleted (here or on another device): close its pages.
+        if sessions[id] != nil { announceRemoval([id]) }
         sessions.removeValue(forKey: id)
         unconfirmedTitles.removeValue(forKey: id)
         pinnedSessions.remove(id)
