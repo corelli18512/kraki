@@ -186,6 +186,9 @@ extension MacChatScrollView {
     /// re-evaluated once it settles.
     func updateJumpButtonVisibility(animated: Bool) {
         guard !isDeallocating else { return }
+        #if DEBUG
+        automationLastControlsAnimated = nil
+        #endif
         // A navigation/scroll can settle without another document layout.
         scheduleUnderfilledHistoryCheck()
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
@@ -226,14 +229,20 @@ extension MacChatScrollView {
         jumpButtonVisibilityGenerations[key] = generation
         button.layer?.removeAllAnimations()
         material.layer?.removeAllAnimations()
-        if shouldShow {
+        if shouldShow, button.isHidden || material.isHidden {
+            // Start a hidden control from transparent so it fades in.
+            button.alphaValue = 0
+            material.alphaValue = 0
             button.isHidden = false
             material.isHidden = false
         }
-        let changes = {
-            button.alphaValue = shouldShow ? 1 : 0
-            // Glass stays fully opaque-in-alpha; it appears via isHidden.
-            if !Self.isGlass(material) { material.alphaValue = shouldShow ? 1 : 0 }
+        // Through animator(): a plain alphaValue set inside an animation group
+        // does not animate a layer-backed view. The glass fades with its
+        // chevron (Liquid Glass stays translucent while faded through alpha).
+        let changes = { (animate: Bool) in
+            let target: CGFloat = shouldShow ? 1 : 0
+            (animate ? button.animator() : button).alphaValue = target
+            (animate ? material.animator() : material).alphaValue = target
         }
         let completion = { [weak self, weak button, weak material] in
             guard let self, let button, let material,
@@ -247,10 +256,10 @@ extension MacChatScrollView {
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
-                changes()
+                changes(true)
             } completionHandler: { completion() }
         } else {
-            changes()
+            changes(false)
             completion()
         }
     }
