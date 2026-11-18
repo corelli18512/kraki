@@ -63,6 +63,12 @@ enum MacComposerMetrics {
         return true
     }
     static var minimumTextHeight: CGFloat { capsuleHeight - textVerticalPadding * 2 }
+    /// Two-row dictation (Cancel above Edit): the box's top lines up with the
+    /// top of the round control stacked above the send circle, as on iPhone
+    /// (IOSComposerMetrics.recordingMinHeight). Send is centred on the one-line row.
+    static var stackedRecordingHeight: CGFloat {
+        (capsuleHeight - control) / 2 + control + stackGap + control
+    }
     /// Distance from the chat bottom to the bottom of the ↓ jump control.
     static var jumpControlBottom: CGFloat {
         bottomPadding + (capsuleHeight - control) / 2 + control + stackGap

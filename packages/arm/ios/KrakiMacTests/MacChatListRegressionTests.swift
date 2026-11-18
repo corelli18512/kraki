@@ -157,4 +157,29 @@ final class MacChatListRegressionTests: MacChatListTestCase {
             XCTAssertEqual(cell.content?.body?.string, "Unchanged body.")
         }
     }
+
+    /// ↑/↓ changes noticed by non-scroll paths (loading state, composer
+    /// growth, bottom inset) used to snap with no fade once the list was on
+    /// screen. Every evaluation on a presented list animates.
+    func testJumpControlsAnimateOnEveryPathOnceTheListIsOnScreen() async throws {
+        let fx = try await fixture(total: 60)
+        await settle(fx)
+        XCTAssertTrue(fx.sv.hasPresentedFirstFrame)
+        fx.sv.setLoading(older: false, newer: false, fetchingOlder: false, fetchingNewer: false)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, true, "loading-state path")
+        fx.sv.setComposerOverlay(fx.sv.chatDocumentView.composerOverlay + 40)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, true, "composer-growth path")
+        // The fade itself runs (a plain alpha set inside a group never did),
+        // on the chevron and on its glass.
+        let button = fx.sv.jumpButton, material = fx.sv.jumpMaterial
+        let shown = fx.sv.jumpButtonVisibilityTargets[ObjectIdentifier(button)] == true
+        fx.sv.setJumpButtonVisibility(button, material: material, shouldShow: !shown, animated: true)
+        XCTAssertTrue(button.layer?.animationKeys()?.contains("opacity") == true, "chevron fades")
+        XCTAssertTrue(material.layer?.animationKeys()?.contains("opacity") == true, "glass fades with it")
+        XCTAssertFalse(button.isHidden)
+        fx.sv.alphaValue = 0
+        fx.sv.updateJumpButtonVisibility(animated: false)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, false, "a hidden list still snaps")
+        fx.sv.alphaValue = 1
+    }
 }
