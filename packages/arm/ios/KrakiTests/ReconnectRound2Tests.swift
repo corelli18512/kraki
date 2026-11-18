@@ -186,6 +186,30 @@ final class ReconnectRound2Tests: XCTestCase {
         XCTAssertEqual(app.connectionStatus, .awaitingLogin)
     }
 
+    /// U7: a GitHub sign-in sent on to its account's region keeps
+    /// "Signing you in…" while the app reconnects there, instead of showing
+    /// the sign-in buttons again; a failure there brings them back.
+    func testRegionRedirectKeepsTheSignInInFlight() throws {
+        let (app, root) = try makeApp()
+        defer { app.disconnect(); try? FileManager.default.removeItem(at: root) }
+        app.relayURL = "ws://127.0.0.1:9"
+        app.setupNetworking(outboxURL: root.appendingPathComponent("outbox.json"))
+        let auth = try XCTUnwrap(app.authManager)
+        auth.debugIsolatedIdentity = true
+        auth.debugSetStoredDeviceId(nil)
+        app.connectionStatus = .authenticating
+        auth.handleAuthError(message: ["code": "wrong_region", "redirect": "ws://127.0.0.1:9", "deviceId": "dev_region"])
+        XCTAssertTrue(app.isRegionRedirectInFlight)
+        for status in [ConnectionStatus.connecting, .authenticating] {
+            XCTAssertTrue(LoginView.showsStatusPanel(oauthInFlight: false, pairingInFlight: false, status: status,
+                                                     regionRedirectInFlight: app.isRegionRedirectInFlight))
+        }
+        app.onAuthFailed(error: "refused")
+        XCTAssertFalse(app.isRegionRedirectInFlight)
+        XCTAssertFalse(LoginView.showsStatusPanel(oauthInFlight: false, pairingInFlight: false, status: .connecting,
+                                                  regionRedirectInFlight: app.isRegionRedirectInFlight))
+    }
+
     /// K-185: Scan QR is usable while `auth_info` is pending. A late
     /// `auth_info_response` must not drop the pairing in flight back to the
     /// sign-in screen.

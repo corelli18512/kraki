@@ -468,6 +468,7 @@ extension AppState {
 
     func onAuthFailed(error: String) {
         self.pairingInFlightSince = nil
+        self.isRegionRedirectInFlight = false
         self.lastError = error
         self.connectionStatus = .awaitingLogin
     }

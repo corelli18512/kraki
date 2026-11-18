@@ -469,6 +469,7 @@ final class AuthManager {
         } else {
             storedDeviceId = deviceId
             pendingRegionDeviceId = nil
+            appState.isRegionRedirectInFlight = false
             #if DEBUG
             let persistIdentity = !debugIsolatedIdentity
             #else
@@ -581,6 +582,7 @@ final class AuthManager {
             if let newDeviceId = message["deviceId"] as? String, !newDeviceId.isEmpty {
                 pendingRegionDeviceId = newDeviceId
             }
+            appState.isRegionRedirectInFlight = true
             appState.redirectToRelay(redirect)
             return
         }
@@ -672,6 +674,7 @@ final class AuthManager {
     func clearStoredCredentials() {
         storedDeviceId = nil
         pendingRegionDeviceId = nil
+        appState?.isRegionRedirectInFlight = false
         #if os(macOS)
         cliGitHubToken = nil
         #endif

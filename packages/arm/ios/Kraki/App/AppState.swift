@@ -484,6 +484,12 @@ final class AppState {
     /// is materialising.
     var isOAuthInFlight: Bool = false
 
+    /// The relay sent this sign-in to the account's own region
+    /// (`wrong_region`) and the app is reconnecting there. The sign-in is
+    /// still in flight: the login screen keeps "Signing you in…" instead of
+    /// offering its actions again (U7). Cleared on `auth_ok` or a failure.
+    var isRegionRedirectInFlight: Bool = false
+
     /// The open socket only asked the relay which sign-in methods it offers
     /// (`auth_info`); nobody is being signed in yet. The sign-in screen keeps
     /// its actions (Scan QR Code) instead of saying "Signing you in…".

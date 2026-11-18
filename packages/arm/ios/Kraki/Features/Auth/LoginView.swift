@@ -161,17 +161,20 @@ struct LoginView: View {
         Self.showsStatusPanel(oauthInFlight: appState.isOAuthInFlight,
                               pairingInFlight: appState.pairingInFlightSince != nil,
                               status: appState.connectionStatus,
-                              isAwaitingAuthInfo: appState.isAwaitingAuthInfo)
+                              isAwaitingAuthInfo: appState.isAwaitingAuthInfo,
+                              regionRedirectInFlight: appState.isRegionRedirectInFlight)
     }
 
     /// Only a sign-in the user started replaces the actions with "Signing
     /// you in…". The background connection that only fetches the sign-in
     /// options keeps them: while the relay is unreachable (`.connecting`
     /// with nothing started, K-035) or slow to answer `auth_info` (K-185),
-    /// "Scan QR Code" must stay available.
+    /// "Scan QR Code" must stay available. A sign-in sent on to its region
+    /// is still the user's: it keeps the panel while it reconnects (U7).
     static func showsStatusPanel(oauthInFlight: Bool, pairingInFlight: Bool, status: ConnectionStatus,
-                                 isAwaitingAuthInfo: Bool = false) -> Bool {
+                                 isAwaitingAuthInfo: Bool = false, regionRedirectInFlight: Bool = false) -> Bool {
         if oauthInFlight || pairingInFlight { return true }
+        if regionRedirectInFlight, status == .connecting || status == .authenticating { return true }
         return status == .authenticating && !isAwaitingAuthInfo
     }
 
