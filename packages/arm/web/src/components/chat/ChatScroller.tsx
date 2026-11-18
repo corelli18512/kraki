@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { unreadLanding } from '../../lib/chat/unread-entry';
+import { hasFinePointer } from '../../lib/mobile-input';
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode,
 } from 'react';
@@ -92,6 +93,9 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   ref: React.Ref<ChatScrollerHandle>,
 ) {
   const { t } = useTranslation('chat');
+  // Keyboard scrolling needs a focusable scroller, but on a touch screen a tap
+  // on message text would focus it and close the keyboard while typing (U3).
+  const focusable = useRef(hasFinePointer()).current;
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -510,7 +514,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   return (
     // Focusable so the keyboard can scroll it (WebKit cannot focus a plain scroller).
     <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}
-      tabIndex={0} role="region" aria-label={t('history.conversation')}>
+      tabIndex={focusable ? 0 : undefined} role="region" aria-label={t('history.conversation')}>
       <div className="kchat-scroll-content" style={{ paddingTop: topInset, paddingBottom: bottomInset }}>
         {header}
         <div ref={content} className="kchat-scroll-rows">
