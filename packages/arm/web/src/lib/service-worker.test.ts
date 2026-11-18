@@ -23,7 +23,14 @@ function worker(windows: Win[], preview: Record<string, unknown> | null) {
   const self = {
     addEventListener: (type: string, fn: (event: unknown) => void) => { handlers[type] = fn; },
     location: { href: `${SCOPE}sw.js?lang=en`, origin: new URL(SCOPE).origin },
-    registration: { scope: SCOPE, showNotification: vi.fn(async (_title: string, _options: Record<string, unknown>) => {}) },
+    registration: {
+      scope: SCOPE,
+      shown: [] as Array<{ tag?: string; close: ReturnType<typeof vi.fn> }>,
+      showNotification: vi.fn(async (_title: string, options: Record<string, unknown>) => {
+        self.registration.shown.push({ tag: options.tag as string | undefined, close: vi.fn() });
+      }),
+      getNotifications: vi.fn(async ({ tag }: { tag?: string } = {}) => self.registration.shown.filter((n) => !tag || n.tag === tag)),
+    },
     clients: { matchAll: vi.fn(async () => windows), openWindow: vi.fn(async (_url: string) => null) },
   };
   runInNewContext(source, { self, URL, console, PREVIEW: preview });
@@ -40,10 +47,13 @@ function worker(windows: Win[], preview: Record<string, unknown> | null) {
 }
 
 describe('service worker push (K-032)', () => {
-  it('leaves out the Session the user is looking at', async () => {
+  it('for the Session the user is looking at, shows a silent notification and closes it (B15)', async () => {
     const w = worker([win('/session/s1')], { nid: 'n1', type: 'question', summary: 'Proceed?', sessionId: 's1' });
     await w.push();
-    expect(w.self.registration.showNotification).not.toHaveBeenCalled();
+    // Safari revokes a subscription whose pushes show nothing.
+    expect(w.self.registration.showNotification).toHaveBeenCalledOnce();
+    expect(w.self.registration.showNotification.mock.calls[0][1]).toMatchObject({ silent: true });
+    expect(w.self.registration.shown[0].close).toHaveBeenCalled();
   });
 
   it('notifies for another Session while a tab is focused', async () => {

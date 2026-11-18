@@ -129,7 +129,8 @@ async function sessionOnScreen() {
 // A connected tab tells the Head whether the user is looking at it
 // (ws-client.ts reportAppVisibility), so pushes arrive while it is hidden or
 // unfocused. A push that races the tab coming back to the Session it is
-// about is left out.
+// about is shown silently and closed at once: a push that shows nothing can
+// make Safari revoke the subscription.
 self.addEventListener('push', (event) => {
   const handlePush = async () => {
     let title = 'Kraki';
@@ -157,7 +158,13 @@ self.addEventListener('push', (event) => {
       }
     }
 
-    if (data.sessionId && await sessionOnScreen() === data.sessionId) return;
+    if (data.sessionId && await sessionOnScreen() === data.sessionId) {
+      const tag = 'kraki-on-screen';
+      await self.registration.showNotification(title, { body, icon: '/icon-192.png', data, tag, silent: true });
+      const shown = await self.registration.getNotifications({ tag });
+      for (const notification of shown) notification.close();
+      return;
+    }
 
     // One notification per preview: a shared tag made a reply replace a
     // pending question. The preview id still collapses the same preview
