@@ -801,12 +801,19 @@ describe('CLI setup --headless', () => {
     expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'github_token' }));
   });
 
-  for (const relay of ['https://relay.example', 'wss://', 'wss://relay example', 'ws:// ']) {
+  for (const relay of ['ftp://relay.example', 'wss://', 'wss://relay example', 'ws:// ', 'https://']) {
     it(`rejects --relay "${relay}" without saving a config (K-272)`, async () => {
       await runCli(['setup', '--headless', '--relay', relay]);
       const json = JSON.parse(stdoutOutput.join('').trim());
       expect(json).toMatchObject({ ok: false, code: 'bad_relay' });
       expect(mockSaveConfig).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const [given, saved] of [['https://relay.example/ws', 'wss://relay.example/ws'], ['HTTP://127.0.0.1:4000', 'ws://127.0.0.1:4000']]) {
+    it(`saves --relay "${given}" as ${saved}, as it connected before (B5)`, async () => {
+      await runCli(['setup', '--headless', '--relay', given]);
+      expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ relay: saved }));
     });
   }
 

@@ -225,8 +225,11 @@ export async function cmdSetupHeadless(args: string[]): Promise<void> {
   if (!relayArg) {
     return fail('missing_relay', '--relay is required');
   }
-  // Same rule as the setup wizard: a bare host means wss://.
-  const relay = /^[a-z][a-z0-9+.-]*:\/\//i.test(relayArg) ? relayArg : `wss://${relayArg}`;
+  // Same rule as the setup wizard: a bare host means wss://. http(s):// is
+  // what the ws library connected to before this was checked: save it as ws(s)://.
+  const relay = /^https?:\/\//i.test(relayArg)
+    ? relayArg.replace(/^http/i, 'ws')
+    : /^[a-z][a-z0-9+.-]*:\/\//i.test(relayArg) ? relayArg : `wss://${relayArg}`;
   if (!isRelayUrl(relay)) {
     return fail('bad_relay', `--relay must be a ws:// or wss:// URL (got "${relayArg}")`);
   }
