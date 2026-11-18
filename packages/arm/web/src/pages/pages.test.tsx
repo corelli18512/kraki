@@ -224,6 +224,22 @@ describe('SessionPage', () => {
     expect(screen.getByText('session list')).toBeInTheDocument();
   });
 
+  it('a failed or expired import goes back to the list, not to "Session not found" (U4)', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().addPendingSession('s1');
+    render(
+      <MemoryRouter initialEntries={['/session/s1']}>
+        <Routes>
+          <Route path="/" element={<p>session list</p>} />
+          <Route path="/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText('session list')).not.toBeInTheDocument();
+    act(() => { useStore.getState().removePendingSession('s1'); });
+    expect(screen.getByText('session list')).toBeInTheDocument();
+  });
+
   it('K-089: offline, the wait for a session link has a way back to the list', async () => {
     useStore.getState().setStatus('disconnected');
     render(

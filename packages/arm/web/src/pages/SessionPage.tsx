@@ -97,10 +97,11 @@ export function SessionPage() {
 
   // Navigate home when the session open here is deleted (removed from the
   // store while viewing), not when a link names a session that is not loaded
-  // yet: that one arrives with the computer's session list. Signed out, the
-  // sign-in lives on the home page.
+  // yet: that one arrives with the computer's session list. A create or import
+  // still starting counts as shown: if it fails or expires, its page goes away
+  // too. Signed out, the sign-in lives on the home page.
   const shownSession = useRef<string | null>(null);
-  if (sessionId && session) shownSession.current = sessionId;
+  if (sessionId && (session || isPending)) shownSession.current = sessionId;
   useEffect(() => {
     if (!sessionId || session || isPending) return;
     if (shownSession.current === sessionId || status === 'awaiting_login') navigate('/', { replace: true });
