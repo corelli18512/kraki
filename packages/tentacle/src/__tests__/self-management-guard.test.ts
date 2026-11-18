@@ -55,6 +55,9 @@ describe('isKrakiSelfManagementCommand', () => {
     'ps aux | grep kraki | head',
     'npx kraki status',
     'echo "kill $(pgrep -f kraki)" >> notes.md',
+    // Bundled -c of a non-shell is a flag, not a script (tentacle-cli #12).
+    'grep -rc "kraki stop" docs/',
+    "grep -ic 'kraki update' CHANGELOG.md",
   ])('allows %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(false);
   });

@@ -19,7 +19,8 @@ export const SELF_MANAGEMENT_MATCHER_SOURCE = String.raw`function krakiIsSelfMan
   if (typeof command !== "string") return false;
   // Also inside backticks and "sh -c '...'": those run it too. Plain
   // quotes don't count (commit messages mention commands).
-  var start = "(?:^|[;&|\\n(\\x60]|\\$\\(|-[A-Za-z]*c\\s+[\"'])\\s*";
+  // Bundled flags ("-lc") only after a shell name: "grep -rc 'kraki stop'" counts lines.
+  var start = "(?:^|[;&|\\n(\\x60]|\\$\\(|(?:-c|\\b(?:sh|bash|zsh|dash|ksh)\\s+-[A-Za-z]+c)\\s+[\"'])\\s*";
   var prefix = "(?:(?:sudo|env|nohup|time|exec|command|npx|bunx|pnpm\\s+(?:exec|dlx)|yarn\\s+(?:exec|dlx))\\s+(?:-\\S+\\s+)*|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
   var kraki = "(?:(?:\\S*[\\\\/])?kraki(?:\\.exe)?|@kraki\\/tentacle(?:@\\S*)?)\\s+(?:stop|restart|update)\\b";
   if (new RegExp(start + prefix + kraki, "i").test(command)) return true;
