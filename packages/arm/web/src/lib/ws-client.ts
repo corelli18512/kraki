@@ -1080,8 +1080,12 @@ export class KrakiWSClient {
    *  (`server_error`), or `unconfirmed` (see `PushRegistrationResult`). */
   registerPushToken(payload: { provider: string; token: string }): Promise<PushRegistrationResult> {
     this.settlePushRegistration('unconfirmed');
-    // Offline, the send would queue and land after Settings gave up on it.
-    if (getStore().status !== 'connected') return Promise.resolve('unconfirmed');
+    // Offline: queue it (pulse delivers it on reconnect) but don't wait for
+    // the answer; Settings keeps the subscription and reports it unconfirmed.
+    if (getStore().status !== 'connected') {
+      this.sendToHead({ type: 'register_push_token', payload });
+      return Promise.resolve('unconfirmed');
+    }
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.settlePushRegistration('unconfirmed'), PUSH_REGISTRATION_TIMEOUT_MS);
       this.pushRegistration = { provider: payload.provider, resolve, timer };

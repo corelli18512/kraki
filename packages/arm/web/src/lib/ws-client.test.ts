@@ -1521,8 +1521,11 @@ describe('KrakiWSClient', () => {
       vi.useFakeTimers();
       try {
         const client = new KrakiWSClient('ws://localhost:9999');
-        // Offline: nothing is sent (it would queue and land after Settings gave up).
+        // Offline (B3): queued for the reconnect, and not waited for.
+        const queued = vi.spyOn((client as unknown as { pulse: { send: (...a: unknown[]) => unknown } }).pulse, 'send');
         await expect(client.registerPushToken({ provider: 'web_push', token: 'tok' })).resolves.toBe('unconfirmed');
+        expect(queued.mock.calls.map((c) => JSON.parse(c[0] as string).type)).toEqual(['register_push_token']);
+        queued.mockRestore();
         await connectAndAuth(client);
         const sent = lastWsInstance.sentMessages.length;
         const answer = client.registerPushToken({ provider: 'web_push', token: 'tok' });
