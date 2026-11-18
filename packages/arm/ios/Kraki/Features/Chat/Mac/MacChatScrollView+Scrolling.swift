@@ -394,7 +394,7 @@ extension MacChatScrollView {
         (jumpButtonVisibilityTargets[ObjectIdentifier(latestStartButton)] == true,
          jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true)
     }
-    var automationUnseenDotVisible: Bool { !unseenDot.isHidden }
+    var automationUnseenDotVisible: Bool { unseenDotShown }
     var automationUpTargetKey: String? { previousReplyTarget() }
     var automationControlFrames: (up: NSRect, down: NSRect, dot: NSRect) {
         (latestStartButton.frame, jumpButton.frame, unseenDot.frame)
