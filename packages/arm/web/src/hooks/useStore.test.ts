@@ -202,6 +202,17 @@ describe('useStore', () => {
       expect(useStore.getState().drafts.get('sess-1')).toBe('half-typed reply');
     });
 
+    it('keeps a removed computer\'s drafts in storage, not only in memory (B8)', async () => {
+      useStore.getState().setDevices([mockDevice, mockDevice2]);
+      useStore.getState().upsertSession(mockSession);
+      useStore.getState().setDraft('sess-1', 'half-typed reply');
+      await Promise.resolve();
+      useStore.getState().setDevices([mockDevice2]);
+      await Promise.resolve();
+      const stored = JSON.parse(localStorage.getItem('kraki-store')!).state.drafts.entries;
+      expect(stored).toEqual([['sess-1', 'half-typed reply']]);
+    });
+
     it('renameDevice renames the device and relabels its sessions', () => {
       useStore.getState().setDevices([mockDevice, mockDevice2]);
       useStore.getState().upsertSession({ id: 's1', deviceId: 'dev-1', deviceName: mockDevice.name, agent: 'copilot', state: 'idle', messageCount: 0 });

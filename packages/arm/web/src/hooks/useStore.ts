@@ -260,7 +260,10 @@ function forgetDeviceSessions(get: () => Store, set: (partial: Partial<Store>) =
     if (draft !== undefined) kept.set(session.id, draft);
     get().removeSession(session.id);
   }
-  if (kept.size > 0) set({ drafts: new Map([...get().drafts, ...kept]) });
+  if (kept.size === 0) return;
+  // removeSession marked each draft deleted for the next write; keep them on disk too.
+  for (const [id, text] of kept) draftEdits.set(id, text);
+  set({ drafts: new Map([...get().drafts, ...kept]) });
 }
 
 export const useStore = create<Store>()(persist((set, get) => ({
