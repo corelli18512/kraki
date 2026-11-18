@@ -233,6 +233,10 @@ export class KrakiWSClient {
     setDesktopSignedOut(false);
     const creds = desktopCredentials();
     if (!creds) return false;
+    // Signing in again after this window signed out: the identity it held is
+    // gone from storage, so this is not the "signed out in another tab" case
+    // `connect()` refuses (K-318). Sign in as whatever is stored now.
+    this.transport.storedDeviceId = loadStoredDevice()?.deviceId;
     getStore().setStatus('connecting');
     this.endConnectionScope();
     this.transport.redirectToRelay(creds.relay);
