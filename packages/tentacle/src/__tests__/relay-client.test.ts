@@ -218,6 +218,7 @@ function createSessionManager(): Record<string, unknown> {
     getContext: vi.fn(() => null),
     getMeta: vi.fn(() => null),
     getInputLedger: vi.fn(() => []),
+    peekInputLedger: vi.fn(() => []),
     getInputLedgerEntry: vi.fn(() => null),
     findUserMessageSeqByClientId: vi.fn(() => null),
     recordInputLedger: vi.fn(),
