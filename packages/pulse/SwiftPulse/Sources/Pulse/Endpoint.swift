@@ -144,6 +144,10 @@ public final class Endpoint {
     /// Largest inbound sequence gap a RESET may announce. Far beyond any real
     /// outbox loss; anything larger is treated as corrupt or hostile.
     static let maxResetJump: UInt64 = 1 << 24
+    /// Bound on where a fresh stream (nothing delivered yet) may start: a
+    /// peer restarted from a snapshot continues from its restored seq, far
+    /// beyond `maxResetJump`, but never past 2^53. Mirrors the TS endpoint.
+    static let maxFreshStreamOldest: UInt64 = 1 << 53
 
     public init(
         epoch: String,
@@ -428,11 +432,12 @@ public final class Endpoint {
         }
         // `oldest` is untrusted: a huge jump would make every later frame
         // look like a duplicate (a silent black hole). A real gap is bounded
-        // by what a peer can have dropped. Not before anything was delivered
-        // in this stream (cursor 0): a peer that restarted with a restored
-        // send seq legitimately starts far ahead, and its HELLO, adopted
-        // first, already zeroed the cursor. Mirrors the TS endpoint.
-        guard recvCursor == 0 || oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
+        // by what a peer can have dropped. Before anything was delivered in
+        // this stream (cursor 0) a peer that restarted with a restored send
+        // seq legitimately starts far ahead: its HELLO, adopted first,
+        // already zeroed the cursor. Only an absurd start is refused then.
+        let maxJump = recvCursor == 0 ? Self.maxFreshStreamOldest : Self.maxResetJump
+        guard oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= maxJump else {
             return []
         }
         peerEpoch = epoch

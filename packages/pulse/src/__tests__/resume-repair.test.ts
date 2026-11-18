@@ -226,6 +226,18 @@ describe('K-298: RESET hardening', () => {
     expect(deliveredB).toEqual(['x1', 'x2']);
   });
 
+  it('before anything was delivered, refuses only an absurd start (B11)', () => {
+    const a = new Endpoint({ epoch: 'a:1' });
+    const b = new Endpoint({ epoch: 'b:1' });
+    const { toB } = link(a, b);
+    toB(a.onConnected(0));
+    b.onConnected(0);
+    expect(b.onBytes(encodeFrame({ t: 'reset', epoch: 'a:1', oldest: 1n << 60n }), 1)).toEqual([]);
+    expect(b.onBytes(encodeFrame({ t: 'reset', epoch: 'a:1', oldest: (1n << 24n) + 1000n }), 1)).toEqual([
+      { t: 'reset-inbound', fromSeq: (1n << 24n) + 1000n, peerEpoch: 'a:1' },
+    ]);
+  });
+
   it('still honours a large but plausible gap and a new-epoch RESET anywhere', () => {
     const { b } = connected();
     expect(b.onBytes(encodeFrame({ t: 'reset', epoch: 'a:1', oldest: 1_000_002n }), 1)).toEqual([
