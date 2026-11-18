@@ -810,11 +810,13 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         recover(reason: "peer_closed", code: closeCode.rawValue)
     }
 
-    /// A relay never answers the upgrade with an HTTP redirect; a captive
-    /// portal does (302 to its login page). Following it left every attempt
-    /// hanging on the portal page until the connect timeout (10 s, doubling
-    /// to 30 s), so recovery after leaving the portal took ~30 s. Refusing
-    /// fails the attempt at once and keeps the fast retry cadence. (Region
+    /// A captive portal answers the upgrade with a redirect to its login
+    /// page on another host (302). Following it left every attempt hanging
+    /// on the portal page until the connect timeout (10 s, doubling to 30 s),
+    /// so recovery after leaving the portal took ~30 s. Refusing a cross-host
+    /// redirect fails the attempt at once and keeps the fast retry cadence.
+    /// A redirect on the relay's own host (a self-hosted relay's reverse
+    /// proxy adding a trailing slash) is followed, as before (B17). (Region
     /// moves are protocol-level `wrong_region`, never HTTP redirects.)
     func urlSession(
         _ session: URLSession,
@@ -823,8 +825,18 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
+        if Self.followsRedirect(from: task.originalRequest?.url ?? response.url, to: request.url) {
+            completionHandler(request)
+            return
+        }
         KLog.d("⚠️ Refusing HTTP \(response.statusCode) redirect of the relay upgrade to \(request.url?.host ?? "?")")
         completionHandler(nil)
+    }
+
+    /// Only a redirect that stays on the relay's host.
+    static func followsRedirect(from original: URL?, to target: URL?) -> Bool {
+        guard let from = original?.host?.lowercased(), let to = target?.host?.lowercased() else { return false }
+        return from == to
     }
 
     func urlSession(

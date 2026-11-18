@@ -208,13 +208,14 @@ final class RelayTransportRecoveryTests: XCTestCase {
     }
 
     /// K-196: a captive portal answers the upgrade with a redirect to its
-    /// login page, which never completes a WebSocket handshake. The attempt
-    /// must fail at once, not hang until the 10-30 s connect timeout.
+    /// login page (on another host), which never completes a WebSocket
+    /// handshake. The attempt must fail at once, not hang until the 10-30 s
+    /// connect timeout.
     func testCaptivePortalRedirectFailsTheAttemptAtOnce() throws {
         let portal = try RawTCPServer(port: 6094) { _, _ in nil } // accepts, never answers
         defer { portal.stop() }
         let gateway = try RawTCPServer(port: 6093) { _, _ in
-            Data("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:6094/portal\r\nContent-Length: 0\r\n\r\n".utf8)
+            Data("HTTP/1.1 302 Found\r\nLocation: http://localhost:6094/portal\r\nContent-Length: 0\r\n\r\n".utf8)
         }
         defer { gateway.stop() }
         let socket = WebSocketClient(relayURL: "ws://127.0.0.1:6093")
@@ -223,6 +224,27 @@ final class RelayTransportRecoveryTests: XCTestCase {
         XCTAssertTrue(waitUntil(4) { !socket.recoveryReasons.isEmpty }, "the attempt hung")
         XCTAssertEqual(socket.recoveryReasons.first, "transport_error")
         XCTAssertEqual(socket.consecutiveConnectTimeouts, 0)
+    }
+
+    /// B17: a self-hosted relay's reverse proxy may redirect the upgrade on
+    /// its own host (a trailing slash): that one is followed.
+    func testSameHostRedirectIsFollowed() throws {
+        XCTAssertTrue(WebSocketClient.followsRedirect(from: URL(string: "wss://relay.example/ws"),
+                                                      to: URL(string: "https://Relay.example/ws/")))
+        XCTAssertFalse(WebSocketClient.followsRedirect(from: URL(string: "wss://relay.example/ws"),
+                                                       to: URL(string: "http://portal.example/login")))
+        XCTAssertFalse(WebSocketClient.followsRedirect(from: nil, to: URL(string: "http://relay.example/")))
+
+        let relay = try RawTCPServer(port: 6096) { _, data in
+            guard let text = String(data: data, encoding: .utf8) else { return nil }
+            if text.hasPrefix("GET /ws/ ") { return RawTCPServer.upgradeReply(data) }
+            return Data("HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.1:6096/ws/\r\nContent-Length: 0\r\n\r\n".utf8)
+        }
+        defer { relay.stop() }
+        let socket = WebSocketClient(relayURL: "ws://127.0.0.1:6096/ws")
+        defer { socket.disconnect() }
+        socket.connect()
+        XCTAssertTrue(waitUntil(5) { socket.state == .connected }, "reasons: \(socket.recoveryReasons)")
     }
 
     /// K-184: plain ws:// to a host name is refused by App Transport
