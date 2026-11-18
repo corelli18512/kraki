@@ -166,6 +166,23 @@ describe('Stop while the agent never acknowledges the first Stop (K-221)', () =>
     expect(sm.getMeta(sessionId)?.state).toBe('idle');
   });
 
+  it('a Stop closed as unanswered gets no "Failed to abort" row when the abort later fails', async () => {
+    const { adapter, sm, cb, input, stop } = build();
+    const { sessionId } = sm.createSession('pi');
+    input(sessionId, 'hi', 'cid-1');
+    await vi.waitFor(() => expect(adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    cb('onMessageDelta')(sessionId, { content: 'working' });
+    let fail!: (err: Error) => void;
+    (adapter.abortSession as Fn).mockImplementation(() => new Promise<void>((_, reject) => { fail = reject; }));
+    vi.useFakeTimers();
+    stop(sessionId);
+    vi.advanceTimersByTime(ABORT_HUNG_MS);
+    vi.useRealTimers();
+    fail(new Error('agent gone'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rows(sm, sessionId).map((r) => r.type)).toEqual(['user_message', 'turn_status', 'idle']);
+  });
+
   it('a quick double tap still waits for the agent', async () => {
     const { adapter, sm, input, stop } = build();
     const { sessionId } = sm.createSession('pi');

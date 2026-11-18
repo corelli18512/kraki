@@ -537,6 +537,8 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .then(settleAbort)
           .catch((err) => {
             logger.error({ err, sessionId }, 'abortSession failed');
+            // Already closed as "Stopped" (unanswered Stop): no error row after it.
+            if (abortSettled) return;
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
           })
           .finally(() => {
