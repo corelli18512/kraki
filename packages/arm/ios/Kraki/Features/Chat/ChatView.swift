@@ -154,6 +154,7 @@ struct ChatView: View {
             if !waitingForLatest, isNewEmptySession, let session {
                 switch ChatEntryLoading.emptyChatNote(
                     knownLastSeq: max(session.lastSeq, viewModel?.sessionLastSeq ?? 0),
+                    persistedHead: appState.messageStore.persistedHead(session.id),
                     deviceOnline: isDeviceOnline
                 ) {
                 case .newSession:

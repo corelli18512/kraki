@@ -68,8 +68,11 @@ enum ChatEntryLoading {
 
     /// What an empty chat explains. A session with history is never
     /// presented as brand new just because this device has none of it.
-    static func emptyChatNote(knownLastSeq: Int, deviceOnline: Bool) -> EmptyChatNote? {
-        if knownLastSeq <= 0 { return .newSession }
+    /// Decided by whether this device is missing rows, not by whether the
+    /// session has any: a new session's `session_created` is itself a
+    /// history row (seq 1) that draws nothing.
+    static func emptyChatNote(knownLastSeq: Int, persistedHead: Int, deviceOnline: Bool) -> EmptyChatNote? {
+        if knownLastSeq <= max(persistedHead, 0) { return .newSession }
         return deviceOnline ? nil : .historyOnOfflineComputer
     }
 }

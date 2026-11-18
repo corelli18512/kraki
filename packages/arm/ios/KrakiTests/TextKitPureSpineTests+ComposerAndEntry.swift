@@ -29,10 +29,19 @@ extension TextKitPureSpineTests {
                                                      expectedLastSeq: 40, persistedHead: 0))
         XCTAssertFalse(ChatEntryLoading.isCatchingUp(connected: true, deviceOnline: true,
                                                      expectedLastSeq: 40, persistedHead: 40))
-        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 0, deviceOnline: true), .newSession)
-        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 0, deviceOnline: false), .newSession)
-        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, deviceOnline: false), .historyOnOfflineComputer)
-        XCTAssertNil(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, deviceOnline: true),
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 0, persistedHead: 0, deviceOnline: true), .newSession)
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 0, persistedHead: 0, deviceOnline: false), .newSession)
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, persistedHead: 0, deviceOnline: false), .historyOnOfflineComputer)
+        XCTAssertNil(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, persistedHead: 0, deviceOnline: true),
                      "history on an online computer is loading, not a new session")
+    }
+
+    /// B2: a brand-new session already has one history row, its
+    /// `session_created` (seq 1), which draws nothing. Holding it, this device
+    /// has the whole conversation: the intro shows, online or offline.
+    func testNewSessionWithOnlyItsCreatedRowShowsTheIntro() {
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 1, persistedHead: 1, deviceOnline: true), .newSession)
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 1, persistedHead: 1, deviceOnline: false), .newSession)
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, persistedHead: 1, deviceOnline: false), .historyOnOfflineComputer)
     }
 }
