@@ -54,6 +54,8 @@ struct MacVoiceSurfaceLayout: Layout {
     struct Geometry {
         let stacked: Bool
         let height: CGFloat
+        /// The live waveform behind the text column, at the box's full height.
+        let waveform: CGRect
         let transcript: CGRect
         let cancel: CGRect
         let edit: CGRect
@@ -78,6 +80,7 @@ struct MacVoiceSurfaceLayout: Layout {
         let cancelX = stacked ? width - cancelWidth : textWidth + gap
         let placedEditWidth = stacked ? cancelWidth : editWidth
         return Geometry(stacked: stacked, height: height,
+                        waveform: CGRect(x: 0, y: padding, width: textWidth, height: height - padding * 2),
                         // Top-aligned at its own height: the extra height of the stacked
                         // box (matched to the control column) stays below the text.
                         transcript: CGRect(x: 0, y: padding, width: textWidth, height: textHeight),
@@ -93,9 +96,9 @@ struct MacVoiceSurfaceLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 3 else { return }
+        guard subviews.count == 4 else { return }
         let layout = geometry(width: bounds.width)
-        for (view, frame) in zip(subviews, [layout.transcript, layout.cancel, layout.edit]) {
+        for (view, frame) in zip(subviews, [layout.waveform, layout.transcript, layout.cancel, layout.edit]) {
             view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
                        anchor: .topLeading, proposal: ProposedViewSize(frame.size))
         }
@@ -115,7 +118,10 @@ struct MacComposerVoiceSurface: View {
 
     var body: some View {
         MacVoiceSurfaceLayout(pieces: displayedPieces) {
-            MacComposerVoiceTranscriptOnly(controller: controller, preview: preview)
+            // Behind the text and as tall as the box, also when it is taller
+            // than the text (two-row dictation matches the control column).
+            MacVoiceWaveformBand(levels: controller.levels)
+            MacComposerVoiceTranscriptOnly(controller: controller, preview: preview, showsWaveform: false)
             actions
         }
         .padding(.leading, 4)
@@ -178,6 +184,26 @@ struct MacComposerVoiceSurface: View {
 /// The recording transcript over its live waveform, without the actions:
 /// the chat surface adds Cancel / Edit beside it; the new-session composer
 /// puts them in its bottom row instead.
+/// The quiet live waveform drawn behind dictated text, faded at both ends.
+struct MacVoiceWaveformBand: View {
+    let levels: [Float]
+
+    var body: some View {
+        MacVoiceBackgroundWaveform(levels: levels)
+            .mask {
+                LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .white, location: 0.12),
+                    .init(color: .white, location: 0.88),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .leading, endPoint: .trailing)
+            }
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 struct MacComposerVoiceTranscriptOnly: View {
     let controller: KrakiVoiceInputController
     let preview: (prefix: String, spoken: String, suffix: String)
@@ -196,20 +222,7 @@ struct MacComposerVoiceTranscriptOnly: View {
             }
     }
 
-    private var waveform: some View {
-                MacVoiceBackgroundWaveform(levels: controller.levels)
-                    .mask {
-                        LinearGradient(stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .white, location: 0.12),
-                            .init(color: .white, location: 0.88),
-                            .init(color: .clear, location: 1)
-                        ], startPoint: .leading, endPoint: .trailing)
-                    }
-                    .clipped()
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-    }
+    private var waveform: some View { MacVoiceWaveformBand(levels: controller.levels) }
 
     private var revision: String {
         "\(preview.prefix)-\(preview.spoken)-\(preview.suffix)-\(controller.state)"

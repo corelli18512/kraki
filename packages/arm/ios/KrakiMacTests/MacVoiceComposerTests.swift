@@ -585,6 +585,9 @@ extension MacVoiceComposerTests {
             let jumpTop = MacComposerMetrics.jumpControlBottom + MacChatScrollView.jumpControlSize
             XCTAssertEqual(boxTop, jumpTop, accuracy: 0.01, text)
             XCTAssertGreaterThanOrEqual(g.cancel.minY, 0); XCTAssertLessThanOrEqual(g.edit.maxY, g.height)
+            // The waveform spans the box (less padding), not just the text.
+            XCTAssertEqual(g.waveform.height, g.height - MacComposerMetrics.textVerticalPadding * 2, accuracy: 0.01)
+            XCTAssertGreaterThanOrEqual(g.waveform.height, g.transcript.height)
         }
         let one = MacVoiceSurfaceLayout(pieces: [(text: "Short", opacity: 1.0)]).geometry(width: 600)
         XCTAssertFalse(one.stacked)

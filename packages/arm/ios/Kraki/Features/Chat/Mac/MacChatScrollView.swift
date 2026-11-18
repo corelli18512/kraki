@@ -255,6 +255,8 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     static let unseenDotSize: CGFloat = 11
     let unseenDot = NSView()
+    var unseenDotShown = false
+    var unseenDotGeneration = 0
 
     var onJumpToLatest: (() -> Void)?
     var onRequestLatestTail: (() -> Void)?

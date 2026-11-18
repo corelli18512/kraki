@@ -163,9 +163,30 @@ extension MacChatScrollView {
         return min(maximumY, max(minimumY, desired))
     }
 
+    /// The red dot fades in and out with ↓ instead of popping.
     func syncUnseenDot() {
-        unseenDot.isHidden = unseenReplies == 0
-            || jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != true
+        let show = unseenReplies > 0 && jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true
+        guard show != unseenDotShown else { return }
+        unseenDotShown = show
+        unseenDotGeneration &+= 1
+        let generation = unseenDotGeneration
+        unseenDot.layer?.removeAllAnimations()
+        guard hasPresentedFirstFrame else {
+            unseenDot.alphaValue = show ? 1 : 0
+            unseenDot.isHidden = !show
+            return
+        }
+        if show, unseenDot.isHidden {
+            unseenDot.alphaValue = 0
+            unseenDot.isHidden = false
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
+            unseenDot.animator().alphaValue = show ? 1 : 0
+        } completionHandler: { [weak self] in
+            guard let self, !show, self.unseenDotGeneration == generation else { return }
+            self.unseenDot.isHidden = true
+        }
     }
 
     func noteAppendedReplies(_ count: Int, readerWasAtBottom: Bool) {
