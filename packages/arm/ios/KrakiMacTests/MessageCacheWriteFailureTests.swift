@@ -21,7 +21,12 @@ final class MessageCacheWriteFailureTests: XCTestCase {
     /// Runs SQL on the cache file through a second connection.
     private func exec(_ sql: String, on url: URL) throws {
         var handle: OpaquePointer?
-        guard sqlite3_open(url.path, &handle) == SQLITE_OK else { throw XCTSkip("cannot open the cache file") }
+        guard sqlite3_open(url.path, &handle) == SQLITE_OK else {
+            // A failure, not a skip: a skip would hide the scenario not running.
+            struct CannotOpenCache: Error {}
+            XCTFail("cannot open the cache file")
+            throw CannotOpenCache()
+        }
         defer { sqlite3_close(handle) }
         XCTAssertEqual(sqlite3_exec(handle, sql, nil, nil, nil), SQLITE_OK, String(cString: sqlite3_errmsg(handle)))
     }
