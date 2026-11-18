@@ -117,6 +117,19 @@ for (const installerPath of installerPaths) {
       expect(readFileSync(profile, 'utf8')).toBe('export PATH="$HOME/.local/bin:$PATH"\n');
     });
 
+    it('says setup did not finish only when it was cancelled (B16)', () => {
+      const cancelled = run('setup_cli() { return 130; }\nrun_setup');
+      expect(cancelled.status).toBe(1);
+      expect(cancelled.stdout).toContain('Setup did not finish');
+      const refused = run('setup_cli() { return 1; }\nrun_setup');
+      expect(refused.status).toBe(1);
+      expect(refused.stdout).toContain('Kraki was not started. See the message above.');
+      expect(refused.stdout).not.toContain('Setup did not finish');
+      const done = run('setup_cli() { return 0; }\nrun_setup; echo continued');
+      expect(done.status).toBe(0);
+      expect(done.stdout.trim()).toBe('continued');
+    });
+
     describe('start_daemon (K-358)', () => {
       // Each `status` call prints the next line of `statuses` (the last one
       // repeats); `restartExit` is the stubbed `kraki restart` exit code.

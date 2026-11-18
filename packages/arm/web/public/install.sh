@@ -370,6 +370,29 @@ confirm_despite_mac_app() {
   esac
 }
 
+# ── Setup ────────────────────────────────────────────────
+
+setup_cli() {
+  KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
+}
+
+# Any failure: don't start Kraki. Setup cancelled (Ctrl+C / Esc) exits 130 in
+# install mode; any other failure (such as a running Kraki this one can't
+# manage) already printed its reason.
+run_setup() {
+  setup_status=0
+  setup_cli || setup_status=$?
+  [ "$setup_status" = 0 ] && return 0
+  echo ""
+  if [ "$setup_status" = 130 ]; then
+    echo "  Setup did not finish, so Kraki was not started. Run kraki to set it up."
+  else
+    echo "  Kraki was not started. See the message above."
+  fi
+  echo ""
+  exit 1
+}
+
 # ── Main ─────────────────────────────────────────────────
 
 main() {
@@ -399,13 +422,7 @@ main() {
   # subsequent `kraki start` uses the same background-only daemon manager,
   # manager, readiness handshake, Launch Services validation, and error path as
   # `kraki start` / `kraki restart`.
-  # Setup cancelled (Ctrl+C / Esc exits non-zero in install mode): don't start.
-  if ! KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty; then
-    echo ""
-    echo "  Setup did not finish, so Kraki was not started. Run kraki to set it up."
-    echo ""
-    exit 1
-  fi
+  run_setup
 
   echo "  Starting Kraki daemon..."
   start_daemon
