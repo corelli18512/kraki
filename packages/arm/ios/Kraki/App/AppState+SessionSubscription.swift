@@ -163,8 +163,10 @@ extension AppState: SessionSubscriptionHost {
         )
     }
 
+    /// Logged only: the chat itself shows that it can't load, and the text
+    /// is internal or the computer's raw wording, not something to toast (U8).
     func reportSessionSubscriptionError(_ message: String) {
-        lastError = message
+        KLog.d("⚠️ session subscription: \(message)")
     }
 
     func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool {

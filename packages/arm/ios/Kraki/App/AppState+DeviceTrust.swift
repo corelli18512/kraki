@@ -136,6 +136,36 @@ enum RelayAuthErrorText {
     }
 }
 
+/// User-facing copy for a relay `server_error`. Its `message` is English
+/// developer text with no code: the ones a person can act on get the app's
+/// localized copy, anything else a generic line (U8). Mirrors the web app's
+/// `KNOWN_SERVER_ERRORS`.
+enum RelayServerErrorText {
+    static func describe(_ message: String?) -> String {
+        // Matched lowercased: these are the relay's protocol strings, not UI.
+        switch message?.lowercased() {
+        case "device not found":
+            return String(localized: "That device is no longer on this account.")
+        case "cannot remove an online device":
+            return String(localized: "This device is online. Disconnect it before removing it.")
+        case "device name is too long":
+            return String(localized: "That name is too long.")
+        case "could not rename the device. try again later.":
+            return String(localized: "Couldn't rename the device. Try again later.")
+        case "could not remove the device. try again later.":
+            return String(localized: "Couldn't remove the device. Try again later.")
+        case "pairing is disabled on this relay":
+            return String(localized: "This server doesn't accept new pairings.")
+        case "pairing is temporarily unavailable":
+            return String(localized: "Pairing is temporarily unavailable. Try again later.")
+        case "unicast target is not reachable":
+            return String(localized: "That computer can't be reached right now. Check that it is online.")
+        default:
+            return String(localized: "The server couldn't complete that. Try again.")
+        }
+    }
+}
+
 enum PairingFeedback: Equatable, Identifiable {
     case pairing(name: String)
     case paired(name: String)

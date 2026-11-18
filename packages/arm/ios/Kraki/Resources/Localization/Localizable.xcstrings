@@ -224,6 +224,26 @@
         }
       }
     },
+    "Couldn't remove the device. Try again later." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法移除设备。请稍后重试。"
+          }
+        }
+      }
+    },
+    "Couldn't rename the device. Try again later." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法重命名设备。请稍后重试。"
+          }
+        }
+      }
+    },
     "Draft" : {
       "localizations" : {
         "zh-Hans" : {
@@ -240,6 +260,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法加载步骤"
+          }
+        }
+      }
+    },
+    "Pairing is temporarily unavailable. Try again later." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对暂时不可用。请稍后重试。"
           }
         }
       }
@@ -300,12 +330,62 @@
         }
       }
     },
+    "That computer can't be reached right now. Check that it is online." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法连接到这台电脑。请确认它在线。"
+          }
+        }
+      }
+    },
+    "That device is no longer on this account." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该设备已不在此账户中。"
+          }
+        }
+      }
+    },
+    "That name is too long." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称过长。"
+          }
+        }
+      }
+    },
     "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "中继服务器报告了 %@ 的新加密密钥。Kraki 会继续使用原先信任的密钥加密。如果你在该电脑上重新安装了 Kraki，在你于该电脑上运行 `kraki connect` 并扫描新二维码之前，它无法读取新消息。如果没有，照常使用即可。"
+          }
+        }
+      }
+    },
+    "The server couldn't complete that. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器无法完成此操作。请重试。"
+          }
+        }
+      }
+    },
+    "This device is online. Disconnect it before removing it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备在线。请先断开连接再移除。"
           }
         }
       }

@@ -180,8 +180,9 @@ final class MessageRouter {
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
             let message = json["message"] as? String ?? String(localized: "Unknown server error")
+            KLog.d("⚠️ server_error: \(message)")
             if appState?.accountDeletionFailedIfPending(message) != true {
-                appState?.lastError = message
+                appState?.lastError = RelayServerErrorText.describe(json["message"] as? String)
             }
 
         case "account_deleted":
