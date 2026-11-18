@@ -428,8 +428,11 @@ public final class Endpoint {
         }
         // `oldest` is untrusted: a huge jump would make every later frame
         // look like a duplicate (a silent black hole). A real gap is bounded
-        // by what a peer can have dropped.
-        guard oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
+        // by what a peer can have dropped. Not before anything was delivered
+        // in this stream (cursor 0): a peer that restarted with a restored
+        // send seq legitimately starts far ahead, and its HELLO, adopted
+        // first, already zeroed the cursor. Mirrors the TS endpoint.
+        guard recvCursor == 0 || oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
             return []
         }
         peerEpoch = epoch

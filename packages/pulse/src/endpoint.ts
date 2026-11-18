@@ -527,7 +527,10 @@ export class Endpoint {
     // Within one stream `oldest` is untrusted: a huge jump would make every
     // later frame look like a duplicate (a silent black hole). A real gap is
     // bounded by what a peer can have dropped. Mirrors SwiftPulse.
-    if (f.oldest - 1n > this.recvCursor && f.oldest - 1n - this.recvCursor > MAX_RESET_JUMP) {
+    // Not before anything was delivered in this stream (cursor 0): a peer that
+    // restarted with a restored `sendSeq` legitimately starts far ahead, and
+    // its HELLO, adopted first, already zeroed the cursor (B11).
+    if (this.recvCursor !== 0n && f.oldest - 1n > this.recvCursor && f.oldest - 1n - this.recvCursor > MAX_RESET_JUMP) {
       return [];
     }
     this.peerEpoch = f.epoch;
