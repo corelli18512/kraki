@@ -268,6 +268,15 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertFalse(windowShown.startWithoutWindow)
     }
 
+    /// U11: minimising the window or hiding Kraki (⌘H) right after a normal
+    /// launch leaves no visible window, but must not drop the Dock icon.
+    func testHidingOrMinimisingRightAfterLaunchKeepsTheDockIcon() {
+        let hidden = MacLaunchCoordinator.afterLaunchSettled(bootstrapStarted: true, visibleWindows: 0,
+                                                             userHidOrMinimized: true)
+        XCTAssertFalse(hidden.dropDockIcon)
+        XCTAssertFalse(hidden.startWithoutWindow)
+    }
+
     /// Quitting right after launch, while launch was still bringing this Mac
     /// online, left the service registered and the Mac online with no app
     /// (K-118). The quit marks the manager so that startBuiltIn and

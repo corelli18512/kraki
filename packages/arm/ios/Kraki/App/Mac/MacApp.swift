@@ -72,11 +72,13 @@ final class MacLaunchCoordinator {
     /// What a launch without the login-item event still has to do once the
     /// window had its chance: with no visible window the Dock icon goes
     /// (also when the window's startup already ran), and startup runs from
-    /// the menu bar if nothing started it.
+    /// the menu bar if nothing started it. A window the user minimised, or
+    /// Kraki hidden (⌘H), is not visible but still wants the Dock icon (U11).
     nonisolated static func afterLaunchSettled(
-        bootstrapStarted: Bool, visibleWindows: Int
+        bootstrapStarted: Bool, visibleWindows: Int, userHidOrMinimized: Bool = false
     ) -> (dropDockIcon: Bool, startWithoutWindow: Bool) {
-        (visibleWindows == 0, needsWindowlessStart(bootstrapStarted: bootstrapStarted, visibleWindows: visibleWindows))
+        (visibleWindows == 0 && !userHidOrMinimized,
+         needsWindowlessStart(bootstrapStarted: bootstrapStarted, visibleWindows: visibleWindows))
     }
 
     func bootstrap(
@@ -747,7 +749,8 @@ struct MacApp: App {
                         // ran, but no close notification ever drops the Dock icon.
                         let settled = MacLaunchCoordinator.afterLaunchSettled(
                             bootstrapStarted: launchCoordinator.bootstrapStarted,
-                            visibleWindows: MacPresenceController.appWindows().count
+                            visibleWindows: MacPresenceController.appWindows().count,
+                            userHidOrMinimized: NSApp.isHidden || NSApp.windows.contains { $0.isMiniaturized }
                         )
                         if settled.dropDockIcon { MacPresenceController.shared.updateActivationPolicy() }
                         guard settled.startWithoutWindow else { return }
