@@ -72,12 +72,15 @@ struct MacVoiceSurfaceLayout: Layout {
             MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
         )
         let actionsHeight = stacked ? buttonHeight * 2 + 4 : buttonHeight
-        let height = max(textHeight + padding * 2, actionsHeight + 6)
+        let height = max(textHeight + padding * 2, actionsHeight + 6,
+                         stacked ? MacComposerMetrics.stackedRecordingHeight : 0)
         let actionTop = (height - actionsHeight) / 2
         let cancelX = stacked ? width - cancelWidth : textWidth + gap
         let placedEditWidth = stacked ? cancelWidth : editWidth
         return Geometry(stacked: stacked, height: height,
-                        transcript: CGRect(x: 0, y: padding, width: textWidth, height: height - padding * 2),
+                        // Top-aligned at its own height: the extra height of the stacked
+                        // box (matched to the control column) stays below the text.
+                        transcript: CGRect(x: 0, y: padding, width: textWidth, height: textHeight),
                         cancel: CGRect(x: cancelX, y: actionTop, width: cancelWidth, height: buttonHeight),
                         edit: CGRect(x: width - placedEditWidth,
                                      y: stacked ? actionTop + buttonHeight + 4 : actionTop,

@@ -152,6 +152,10 @@ final class MacChatScrollView: MacSmoothScrollView {
     let latestStartButton = NSButton()
     var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
+    #if DEBUG
+    /// Whether the last ↑/↓ visibility evaluation animated (regression tests).
+    var automationLastControlsAnimated: Bool?
+    #endif
     /// ↑ lands a reply start where the first message rests at the top.
     let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).

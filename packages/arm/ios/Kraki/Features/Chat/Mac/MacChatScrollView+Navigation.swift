@@ -200,9 +200,16 @@ extension MacChatScrollView {
         let showUp = hasContent
             && !(isAtConversationBottom && chatDocumentView.latestItemIsUser)
             && (previousReplyTarget() != nil || !diagnosticAtOldest)
-        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
-        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
-        placeLatestStart(raised: showTail, animated: animated)
+        // Once the list is on screen every show/hide/raise animates, whichever
+        // path noticed the change (composer growth, loading, arriving content,
+        // a navigation's safety timeout). Only a hidden list snaps.
+        let animate = animated || hasPresentedFirstFrame
+        #if DEBUG
+        automationLastControlsAnimated = animate
+        #endif
+        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animate)
+        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animate)
+        placeLatestStart(raised: showTail, animated: animate)
         syncUnseenDot()
     }
 

@@ -143,7 +143,12 @@ import CryptoKit
             let top = MacComposerMetrics.bottomPadding + height - viewport.maxY
             let bottom = viewport.minY - MacComposerMetrics.bottomPadding
             XCTAssertEqual(top, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
-            XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding + extraRow, accuracy: 0.5, name)
+            if voice && height > MacComposerMetrics.capsuleHeight {
+                // Stacked dictation is as tall as the control column; spare height sits below the text.
+                XCTAssertGreaterThanOrEqual(bottom, MacComposerMetrics.textVerticalPadding - 0.5, name)
+            } else {
+                XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding + extraRow, accuracy: 0.5, name)
+            }
             let visible = drawn.intersection(viewport)
             let topText = MacComposerMetrics.bottomPadding + height - visible.maxY
             let bottomText = visible.minY - MacComposerMetrics.bottomPadding
@@ -176,7 +181,8 @@ import CryptoKit
         XCTAssertTrue(app.iosVoiceComposer.isRecording)
         for (name, text, height) in samples {
             app.iosVoiceComposer.receive(text, id: try XCTUnwrap(app.iosVoiceComposer.operation).id)
-            try measure("voice-" + name, voice: true, expectedHeight: name == "two" ? 70 : height)
+            try measure("voice-" + name, voice: true,
+                        expectedHeight: name == "one" ? height : MacComposerMetrics.stackedRecordingHeight)
         }
         try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
             .write(to: URL(fileURLWithPath: "/tmp/kraki-voice-parity-evidence/padding-fixed.json"))
@@ -197,7 +203,10 @@ import CryptoKit
                 let viewport = scroll.convert(scroll.bounds, to: nil)
                 let cancel = try controlFrame("voice-cancel"), edit = try controlFrame("voice-to-text")
                 let image = try controlFrame("chat-attach-image")
-                XCTAssertEqual(image.midY, viewport.midY, accuracy: 0.5)
+                // The image slot is centred on the whole box (one row: the transcript's row).
+                let box = name == "one" ? MacComposerMetrics.capsuleHeight : MacComposerMetrics.stackedRecordingHeight
+                XCTAssertEqual(image.midY, MacComposerMetrics.bottomPadding + box / 2, accuracy: 0.5)
+                if name == "one" { XCTAssertEqual(image.midY, viewport.midY, accuracy: 0.5) }
                 if name == "one" {
                     XCTAssertEqual(cancel.midY, edit.midY, accuracy: 0.5)
                     XCTAssertLessThan(cancel.maxX, edit.minX)
@@ -231,25 +240,6 @@ import CryptoKit
                        "typed multiline image lives in the bottom toolbar, not centered beside text")
         XCTAssertLessThanOrEqual(image.maxY, scroll.convert(scroll.bounds, to: nil).minY)
         try capture("polish-typed-multiline")
-    }
-
-    func testWrapDecisionIsStableWhenStackingFreesAWholeLine() {
-        let speech = "A sentence close to the single-row wrapping boundary."
-        let pieces = [(text: speech, opacity: 1.0)]
-        for width in stride(from: CGFloat(210), through: 700, by: 5) {
-            let layout = MacVoiceSurfaceLayout(pieces: pieces)
-            let a = layout.geometry(width: width), b = layout.geometry(width: width)
-            XCTAssertEqual(a.stacked, b.stacked)
-            XCTAssertEqual(a.transcript, b.transcript)
-            XCTAssertEqual(a.height, b.height)
-            if a.stacked {
-                XCTAssertEqual(a.cancel.width, a.edit.width)
-                XCTAssertEqual(a.cancel.minX, a.edit.minX)
-                XCTAssertEqual(a.cancel.maxX, a.edit.maxX)
-                XCTAssertEqual(a.cancel.midX, a.edit.midX)
-                XCTAssertLessThan(a.cancel.maxY, a.edit.minY)
-            }
-        }
     }
 
     func testEditProgressTintAndNativeSelectionTakeover() throws { try assertEditTakeover(markedIME: false) }
@@ -579,5 +569,44 @@ extension MacVoiceComposerTests {
         XCTAssertEqual(digest, "d16a5be4e7390c40225bd3024462212dfa26cd24a07080014f14c6794b6a3f9e")
         let sound = try XCTUnwrap(NSSound(data: data))
         XCTAssertEqual(sound.duration, 0.202, accuracy: 0.005)
+    }
+}
+
+/// Pure voice-surface geometry (no window).
+extension MacVoiceComposerTests {
+    /// Two-row dictation is exactly as tall as the send circle plus the ↓/↑
+    /// control above it, so the box's top lines up with that control's top.
+    func testStackedRecordingTopLinesUpWithTheJumpControl() {
+        let speech = String(repeating: "Dictation long enough to wrap onto a second line. ", count: 3)
+        for text in ["First line\nSecond line", speech, "1\n2\n3\n4\n5\n6"] {
+            let g = MacVoiceSurfaceLayout(pieces: [(text: text, opacity: 1.0)]).geometry(width: 600)
+            XCTAssertTrue(g.stacked, text)
+            let boxTop = MacComposerMetrics.bottomPadding + g.height
+            let jumpTop = MacComposerMetrics.jumpControlBottom + MacChatScrollView.jumpControlSize
+            XCTAssertEqual(boxTop, jumpTop, accuracy: 0.01, text)
+            XCTAssertGreaterThanOrEqual(g.cancel.minY, 0); XCTAssertLessThanOrEqual(g.edit.maxY, g.height)
+        }
+        let one = MacVoiceSurfaceLayout(pieces: [(text: "Short", opacity: 1.0)]).geometry(width: 600)
+        XCTAssertFalse(one.stacked)
+        XCTAssertEqual(one.height, MacComposerMetrics.capsuleHeight, accuracy: 0.01, "one row still matches send")
+    }
+
+    func testWrapDecisionIsStableWhenStackingFreesAWholeLine() {
+        let speech = "A sentence close to the single-row wrapping boundary."
+        let pieces = [(text: speech, opacity: 1.0)]
+        for width in stride(from: CGFloat(210), through: 700, by: 5) {
+            let layout = MacVoiceSurfaceLayout(pieces: pieces)
+            let a = layout.geometry(width: width), b = layout.geometry(width: width)
+            XCTAssertEqual(a.stacked, b.stacked)
+            XCTAssertEqual(a.transcript, b.transcript)
+            XCTAssertEqual(a.height, b.height)
+            if a.stacked {
+                XCTAssertEqual(a.cancel.width, a.edit.width)
+                XCTAssertEqual(a.cancel.minX, a.edit.minX)
+                XCTAssertEqual(a.cancel.maxX, a.edit.maxX)
+                XCTAssertEqual(a.cancel.midX, a.edit.midX)
+                XCTAssertLessThan(a.cancel.maxY, a.edit.minY)
+            }
+        }
     }
 }

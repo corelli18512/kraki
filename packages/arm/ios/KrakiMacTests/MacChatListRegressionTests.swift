@@ -157,4 +157,21 @@ final class MacChatListRegressionTests: MacChatListTestCase {
             XCTAssertEqual(cell.content?.body?.string, "Unchanged body.")
         }
     }
+
+    /// ↑/↓ changes noticed by non-scroll paths (loading state, composer
+    /// growth, bottom inset) used to snap with no fade once the list was on
+    /// screen. Every evaluation on a presented list animates.
+    func testJumpControlsAnimateOnEveryPathOnceTheListIsOnScreen() async throws {
+        let fx = try await fixture(total: 60)
+        await settle(fx)
+        XCTAssertTrue(fx.sv.hasPresentedFirstFrame)
+        fx.sv.setLoading(older: false, newer: false, fetchingOlder: false, fetchingNewer: false)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, true, "loading-state path")
+        fx.sv.setComposerOverlay(fx.sv.chatDocumentView.composerOverlay + 40)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, true, "composer-growth path")
+        fx.sv.alphaValue = 0
+        fx.sv.updateJumpButtonVisibility(animated: false)
+        XCTAssertEqual(fx.sv.automationLastControlsAnimated, false, "a hidden list still snaps")
+        fx.sv.alphaValue = 1
+    }
 }
