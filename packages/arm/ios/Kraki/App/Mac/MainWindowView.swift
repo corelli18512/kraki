@@ -369,21 +369,6 @@ struct MainWindowView: View {
         #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
         .performanceNotice()
         #endif
-        .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in
-            if MacMainWindowColumns.toggleMakesRoom(requested: sidebarVisible, shown: columns.showsSidebar) {
-                makeRoomRequest += 1
-            } else {
-                withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .macToggleInspector)) { _ in
-            if MacMainWindowColumns.toggleMakesRoom(requested: inspectorShown, shown: columns.showsInspector) {
-                makeRoomRequest += 1
-            } else {
-                inspectorShown.toggle()
-            }
-        }
-        .focusedSceneValue(\.macInspectorVisible, columns.showsInspector)
         .onReceive(NotificationCenter.default.publisher(for: .macOpenPairing)) { _ in
             pairingPresented = true
         }
@@ -587,6 +572,26 @@ struct MainWindowView: View {
                 makeRoomRequest: makeRoomRequest
             )
         )
+        .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in toggleSidebar() }
+        .onReceive(NotificationCenter.default.publisher(for: .macToggleInspector)) { _ in toggleInspector() }
+        .focusedSceneValue(\.macInspectorVisible, columns.showsInspector)
+    }
+
+    /// A column folded away for width is shown by making room (U10).
+    private func toggleSidebar() {
+        if MacMainWindowColumns.toggleMakesRoom(requested: sidebarVisible, shown: columns.showsSidebar) {
+            makeRoomRequest += 1
+        } else {
+            withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
+        }
+    }
+
+    private func toggleInspector() {
+        if MacMainWindowColumns.toggleMakesRoom(requested: inspectorShown, shown: columns.showsInspector) {
+            makeRoomRequest += 1
+        } else {
+            inspectorShown.toggle()
+        }
     }
 
     /// Shown while the window is not signed in (first sign-in or reconnect).
