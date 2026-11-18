@@ -311,7 +311,10 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
     // aside if this sign-in is another account.
     if (existing && !loadAccountDataOwner()) {
       const saved = source === 'saved' ? null : loadGitHubToken();
-      const previous = existing.account?.login ?? (saved ? await githubUser(deps, saved) : null);
+      // Best effort: the new sign-in already succeeded, so GitHub dropping
+      // out here must not fail it (the daemon then keeps the data in place).
+      const previous = existing.account?.login
+        ?? (saved ? await githubUser(deps, saved).catch(() => null) : null);
       if (previous) adoptAccountDataOwner(previous);
     }
     const deviceName = getArg(args, '--device-name')

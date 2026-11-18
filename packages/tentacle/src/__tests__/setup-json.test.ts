@@ -243,6 +243,27 @@ describe('kraki setup --json', () => {
     expect(config.account).toEqual({ login: 'bob' });
     expect(JSON.parse(readFileSync(join(home, 'account.json'), 'utf8'))).toEqual({ login: 'alice' });
   });
+
+  it('K-028: GitHub dropping out while naming the previous account does not fail the sign-in (B7)', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      relay: 'wss://old', authMethod: 'github_token', device: { name: 'Mac', id: 'dev_accountA' },
+    }));
+    writeFileSync(join(home, 'github-token'), 'gho_alice\n');
+    const { deps, events } = makeDeps({
+      'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
+      'https://github.com/login/device/code': () => json({ device_code: 'dc', user_code: 'X', verification_uri: 'u', expires_in: 900 }),
+      'https://github.com/login/oauth/access_token': () => json({ access_token: 'gho_bob' }),
+      'https://api.github.com/user': (init) => {
+        const auth = (init?.headers as Record<string, string>).Authorization;
+        if (auth.endsWith('gho_alice')) throw new TypeError('fetch failed');
+        return json({ login: 'bob' });
+      },
+    });
+
+    expect(await runSetupJsonWith(['--force-login'], deps)).toBe(0);
+    expect(events.at(-1)).toMatchObject({ event: 'done', username: 'bob' });
+    expect(existsSync(join(home, 'account.json'))).toBe(false);
+  });
 });
 
 describe('kraki setup --json --oauth (browser sign-in)', () => {
