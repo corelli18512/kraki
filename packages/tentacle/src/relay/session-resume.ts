@@ -80,10 +80,11 @@ export function closeTurnLostInRestart(client: RelayClient, sessionId: string, w
   // yet is in the same position as a prompt with no outcome.
   const agentTurnWithoutRows = wasActive && (meta?.agentTurnStartSeqs?.at(-1) ?? 0) > lastSeq;
   if (!agentTurnWithoutRows && lastSeq <= 0) return;
-  // Decide from the small cached ledger first: reading the spine builds the
+  // Decide from the small ledger file first: reading the spine builds the
   // session's seq index (a full scan of messages.jsonl), which startup must
-  // not do for every idle or disconnected session.
-  const undispatched = agentTurnWithoutRows ? undefined : client.sessionManager.getInputLedger(sessionId)
+  // not do for every idle or disconnected session. Peek: caching it (and its
+  // uncompacted client index) for every session would hold all of them.
+  const undispatched = agentTurnWithoutRows ? undefined : client.sessionManager.peekInputLedger(sessionId)
     .find((entry) => entry.userSeq === lastSeq && entry.status === 'persisted');
   if (!agentTurnWithoutRows) {
     if (!wasActive && !undispatched) return;

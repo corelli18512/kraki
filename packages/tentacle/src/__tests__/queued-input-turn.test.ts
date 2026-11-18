@@ -198,6 +198,23 @@ describe('a daemon crash after echoing an input, before dispatching it (K-138)',
     await resumeDisconnectedSessions(next.client);
     expect(read).not.toHaveBeenCalled();
   });
+
+  it('does not load and keep every session\'s ledger and client index at startup (B10)', async () => {
+    const first = build();
+    const { sessionId } = first.sm.createSession('claude');
+    first.input(sessionId, 'A', 'cid-a');
+    await vi.waitFor(() => expect(first.adapter.sendMessage as Fn).toHaveBeenCalledTimes(1));
+    first.cb('onMessage')(sessionId, { content: 'done' });
+    first.cb('onIdle')(sessionId);
+    first.sm.markDisconnected(sessionId);
+
+    const sm = new SessionManager(dir);
+    const next = build(sm);
+    await resumeDisconnectedSessions(next.client);
+    const ledger = (sm as unknown as { inputLedger: { inputLedgerCache: Map<string, unknown>; inputClientIndexCache: Map<string, unknown> } }).inputLedger;
+    expect(ledger.inputLedgerCache.has(sessionId)).toBe(false);
+    expect(ledger.inputClientIndexCache.has(sessionId)).toBe(false);
+  });
 });
 
 describe('an answer typed in the composer (2-36)', () => {
