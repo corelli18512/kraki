@@ -342,4 +342,9 @@ extension TextKitPureSpineTests {
         cell.layoutIfNeeded()
         XCTAssertTrue(view.layer.needsDisplay(), "an appearance change redraws the dynamic quote surface")
     }
+
+    /// ios-chat #10: Select Text over a table copies no attachment placeholder.
+    func testSelectTextCopyDropsBreakOpportunitiesAndTablePlaceholders() {
+        XCTAssertEqual(TKBodyTextView.copiedText("Before\n\u{FFFC}\nlong\u{200B}token"), "Before\n\nlongtoken")
+    }
 }

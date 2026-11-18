@@ -986,15 +986,13 @@ final class SessionStore {
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
-        if keepingComposer {
-            if drafts[id] != nil {
-                draftsOfRemovedSessions.insert(id)
-                scheduleDraftsSave()
-            }
-        } else {
+        if !keepingComposer {
             drafts.removeValue(forKey: id)
             stagedImages.removeValue(forKey: id)
             draftsOfRemovedSessions.remove(id)
+        } else if drafts[id] != nil {
+            draftsOfRemovedSessions.insert(id)
+            scheduleDraftsSave()
         }
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
