@@ -847,6 +847,24 @@ extension SessionStoreTests {
         XCTAssertEqual(SessionStore().drafts, [:], "sign-out leaves no draft on disk")
     }
 
+    /// U9: a removed computer's drafts stay in memory for its return, but
+    /// are neither saved nor counted as unsent drafts the user can't see.
+    func testDraftsOfARemovedComputerAreKeptInMemoryOnly() {
+        store.upsertSession(makeDigest(id: "gone"), deviceId: "dev-1", deviceName: "MB")
+        store.upsertSession(makeDigest(id: "kept"), deviceId: "dev-2", deviceName: "PC")
+        store.setDraft("gone", "for a removed computer")
+        store.setDraft("kept", "still here")
+        store.removeSession("gone", keepingComposer: true)
+        store.flushCache()
+        XCTAssertEqual(store.drafts["gone"], "for a removed computer")
+        XCTAssertEqual(store.listedDrafts, ["kept": "still here"])
+        XCTAssertEqual(SessionStore().drafts, ["kept": "still here"])
+
+        // The computer is back: its draft counts and is saved again.
+        store.upsertSession(makeDigest(id: "gone"), deviceId: "dev-1", deviceName: "MB")
+        XCTAssertEqual(store.listedDrafts.count, 2)
+    }
+
     // MARK: - Open session removed (K-039)
 
     /// K-039 / B4: a removed session (here, from another device, or missing

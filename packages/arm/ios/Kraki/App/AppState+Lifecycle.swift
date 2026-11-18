@@ -129,10 +129,11 @@ extension AppState {
         )
     }
 
-    /// Composer drafts with text in them. Signing out (or a device
-    /// revocation) discards them with the rest of the account's state.
+    /// Composer drafts with text in them, of Sessions the user can see.
+    /// Signing out (or a device revocation) discards them with the rest of
+    /// the account's state.
     var unsentDraftCount: Int {
-        sessionStore.drafts.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        sessionStore.listedDrafts.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
     }
 
     static func logoutLossNotice(unsent: Int, drafts: Int, working: Int) -> [String] {

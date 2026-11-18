@@ -276,6 +276,15 @@ final class SessionStore {
     var drafts: [String: String] = [:] {
         didSet { if drafts != oldValue { scheduleDraftsSave() } }
     }
+    /// Sessions whose drafts were kept when their computer was removed
+    /// (`removeSession(keepingComposer:)`). Until the Session is listed
+    /// again its draft stays in memory only and is not counted as unsent.
+    private var draftsOfRemovedSessions: Set<String> = []
+    /// Drafts of Sessions on the list: what is saved, and what logging out
+    /// would discard.
+    var listedDrafts: [String: String] {
+        drafts.filter { !draftsOfRemovedSessions.contains($0.key) || sessions[$0.key] != nil }
+    }
     /// Fences async voice updates, including edit-then-restore-to-the-same-text.
     private(set) var draftRevisions: [String: UInt64] = [:]
     /// The image staged in a Session's composer, kept beside its draft so it
@@ -501,6 +510,7 @@ final class SessionStore {
     private func flushDrafts() {
         draftsSaveTask?.cancel()
         draftsSaveTask = nil
+        let drafts = listedDrafts
         if drafts.isEmpty {
             try? FileManager.default.removeItem(at: Self.draftsURL)
         } else if let data = try? JSONEncoder().encode(drafts) {
@@ -961,8 +971,9 @@ final class SessionStore {
     }
 
     /// `keepingComposer` keeps the Session's unsent draft and staged image
-    /// (in memory only): used when a removed computer takes its sessions off
-    /// the list, so the text is back if the computer returns (K-317).
+    /// in memory only (not saved, not counted at logout): used when a removed
+    /// computer takes its sessions off the list, so the text is back if the
+    /// computer returns in this run (K-317).
     func removeSession(_ id: String, keepingComposer: Bool = false) {
         if sessionListRevealId == id {
             sessionListRevealId = nil
@@ -975,9 +986,15 @@ final class SessionStore {
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
-        if !keepingComposer {
+        if keepingComposer {
+            if drafts[id] != nil {
+                draftsOfRemovedSessions.insert(id)
+                scheduleDraftsSave()
+            }
+        } else {
             drafts.removeValue(forKey: id)
             stagedImages.removeValue(forKey: id)
+            draftsOfRemovedSessions.remove(id)
         }
         autoReadSuppressedSessions.remove(id)
         scheduleSave()
@@ -1227,6 +1244,7 @@ final class SessionStore {
         sessionUsage.removeAll()
         sessionPreviews.removeAll()
         drafts.removeAll()
+        draftsOfRemovedSessions.removeAll()
         draftRevisions.removeAll()
         stagedImages.removeAll()
         navigateToSession = nil
