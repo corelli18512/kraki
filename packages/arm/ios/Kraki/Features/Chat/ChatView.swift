@@ -155,7 +155,8 @@ struct ChatView: View {
                 switch ChatEntryLoading.emptyChatNote(
                     knownLastSeq: max(session.lastSeq, viewModel?.sessionLastSeq ?? 0),
                     persistedHead: appState.messageStore.persistedHead(session.id),
-                    deviceOnline: isDeviceOnline
+                    deviceOnline: isDeviceOnline,
+                    presenceKnown: appState.hasCompletedInitialConnect
                 ) {
                 case .newSession:
                     NewSessionIntro(

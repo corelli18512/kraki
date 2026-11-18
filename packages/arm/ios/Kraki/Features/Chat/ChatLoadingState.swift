@@ -71,9 +71,13 @@ enum ChatEntryLoading {
     /// Decided by whether this device is missing rows, not by whether the
     /// session has any: a new session's `session_created` is itself a
     /// history row (seq 1) that draws nothing.
-    static func emptyChatNote(knownLastSeq: Int, persistedHead: Int, deviceOnline: Bool) -> EmptyChatNote? {
+    /// Before the first connect nothing is known about presence (every
+    /// computer reads offline): no offline note then, like the composer's
+    /// offline notice (`presenceKnown`).
+    static func emptyChatNote(knownLastSeq: Int, persistedHead: Int, deviceOnline: Bool,
+                              presenceKnown: Bool = true) -> EmptyChatNote? {
         if knownLastSeq <= max(persistedHead, 0) { return .newSession }
-        return deviceOnline ? nil : .historyOnOfflineComputer
+        return deviceOnline || !presenceKnown ? nil : .historyOnOfflineComputer
     }
 }
 

@@ -44,4 +44,14 @@ extension TextKitPureSpineTests {
         XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 1, persistedHead: 1, deviceOnline: false), .newSession)
         XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, persistedHead: 1, deviceOnline: false), .historyOnOfflineComputer)
     }
+
+    /// ios-chat #3: on a cold launch, before the first connect, every
+    /// computer reads offline. The empty chat does not claim it is, like the
+    /// composer's offline notice.
+    func testEmptyChatDoesNotSayOfflineBeforeTheFirstConnect() {
+        XCTAssertNil(ChatEntryLoading.emptyChatNote(knownLastSeq: 40, persistedHead: 0, deviceOnline: false,
+                                                    presenceKnown: false))
+        XCTAssertEqual(ChatEntryLoading.emptyChatNote(knownLastSeq: 1, persistedHead: 1, deviceOnline: false,
+                                                      presenceKnown: false), .newSession)
+    }
 }
