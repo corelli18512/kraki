@@ -12,6 +12,9 @@ struct MacCommands: Commands {
     let tentacleCLI: TentacleCLIManager
 
     @AppStorage("mac.inspectorShown") private var inspectorShown: Bool = false
+    /// Whether the main window shows the Inspector now: asked for, and wide
+    /// enough (MacMainWindowColumns). Nil without a main window.
+    @FocusedValue(\.macInspectorVisible) private var inspectorVisible: Bool?
     @Environment(\.openWindow) private var openWindow
 
     /// True when a session is currently selected in the main window.
@@ -78,8 +81,14 @@ struct MacCommands: Commands {
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
 
-            Button(inspectorShown ? String(localized: "Hide Inspector") : String(localized: "Show Inspector")) {
-                inspectorShown.toggle()
+            Button((inspectorVisible ?? inspectorShown) ? String(localized: "Hide Inspector") : String(localized: "Show Inspector")) {
+                // The main window decides: an Inspector folded away for
+                // width is shown by making room, not turned off.
+                if inspectorVisible == nil {
+                    inspectorShown.toggle()
+                } else {
+                    NotificationCenter.default.post(name: .macToggleInspector, object: nil)
+                }
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
 
@@ -397,6 +406,19 @@ extension TentacleCLIManager {
     }
 }
 
+// MARK: - Focused values
+
+struct MacInspectorVisibleKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+extension FocusedValues {
+    var macInspectorVisible: Bool? {
+        get { self[MacInspectorVisibleKey.self] }
+        set { self[MacInspectorVisibleKey.self] = newValue }
+    }
+}
+
 // MARK: - Notifications
 
 extension Notification.Name {
@@ -405,6 +427,7 @@ extension Notification.Name {
     static let macFocusNewSessionComposer = Notification.Name("mac.focusNewSessionComposer")
     static let macOpenSessionInfo = Notification.Name("mac.openSessionInfo")
     static let macToggleSidebar   = Notification.Name("mac.toggleSidebar")
+    static let macToggleInspector = Notification.Name("mac.toggleInspector")
     static let macNavigateSession  = Notification.Name("mac.navigateSession")
     static let macDeleteSession   = Notification.Name("mac.deleteSession")
     static let macArchiveSession  = Notification.Name("mac.archiveSession")

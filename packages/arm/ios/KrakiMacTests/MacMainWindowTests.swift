@@ -198,6 +198,30 @@ final class MacMainWindowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(window.frame.width, needed - 1, "zoom 1.6 keeps the sidebar and a readable chat")
     }
 
+    /// U10: View › Show Inspector on an Inspector that is on but folded
+    /// away for width makes room for it, instead of turning it off.
+    func testToggleOnAColumnFoldedAwayForWidthMakesRoom() throws {
+        XCTAssertTrue(MacMainWindowColumns.toggleMakesRoom(requested: true, shown: false))
+        XCTAssertFalse(MacMainWindowColumns.toggleMakesRoom(requested: true, shown: true))
+        XCTAssertFalse(MacMainWindowColumns.toggleMakesRoom(requested: false, shown: false))
+
+        let window = mount(selected: "s1", width: 1100)
+        UserDefaults.standard.set(true, forKey: "mac.inspectorShown")
+        drain(400)
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.minY, width: 820, height: 700), display: true)
+        drain(500)
+        NotificationCenter.default.post(name: .macToggleInspector, object: nil)
+        drain(500)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "mac.inspectorShown"), "the press does not turn it off")
+        XCTAssertGreaterThanOrEqual(window.frame.width,
+                                    MacMainWindowColumns.requiredWidth(sidebarRequested: true, inspectorRequested: true) - 0.5,
+                                    "the window makes room for the Inspector")
+        // Shown now: the next press hides it.
+        NotificationCenter.default.post(name: .macToggleInspector, object: nil)
+        drain(300)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: "mac.inspectorShown"))
+    }
+
     func testAWindowSizedByHandIsNotGrownBack() throws {
         let window = mount(selected: "s1", width: 1100)
         UserDefaults.standard.set(true, forKey: "mac.inspectorShown")

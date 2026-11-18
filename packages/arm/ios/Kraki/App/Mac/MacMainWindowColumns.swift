@@ -33,6 +33,13 @@ struct MacMainWindowColumns: Equatable {
         return Self(showsSidebar: showsSidebar, showsInspector: showsInspector)
     }
 
+    /// A toggle press on a column that is asked for but folded away for lack
+    /// of width makes room for it (grows the window) instead of turning it
+    /// off: the press then shows it, as the menu says (U10).
+    static func toggleMakesRoom(requested: Bool, shown: Bool) -> Bool {
+        requested && !shown
+    }
+
     /// Layout width the requested columns need beside a readable chat column.
     static func requiredWidth(sidebarRequested: Bool, inspectorRequested: Bool) -> CGFloat {
         minimumChatWidth
@@ -47,6 +54,9 @@ struct MacMainWindowColumns: Equatable {
 struct MacWindowWidthFitter: NSViewRepresentable {
     let requiredWidth: CGFloat
     let layoutWidth: CGFloat
+    /// Bumped by a toggle press on a column folded away for width
+    /// (`toggleMakesRoom`): grow the window even though nothing new was asked for.
+    var makeRoomRequest = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -54,15 +64,17 @@ struct MacWindowWidthFitter: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         let coordinator = context.coordinator
-        let (requiredWidth, layoutWidth) = (requiredWidth, layoutWidth)
+        let (requiredWidth, layoutWidth, makeRoom) = (requiredWidth, layoutWidth, makeRoomRequest)
         guard nsView.window == nil else {
-            coordinator.update(window: nsView.window, requiredWidth: requiredWidth, layoutWidth: layoutWidth)
+            coordinator.update(window: nsView.window, requiredWidth: requiredWidth, layoutWidth: layoutWidth,
+                               makeRoomRequest: makeRoom)
             return
         }
         // Not in the window yet on the first pass: record the starting point
         // once it is, so the next column request is compared against it.
         DispatchQueue.main.async { [weak nsView] in
-            coordinator.update(window: nsView?.window, requiredWidth: requiredWidth, layoutWidth: layoutWidth)
+            coordinator.update(window: nsView?.window, requiredWidth: requiredWidth, layoutWidth: layoutWidth,
+                               makeRoomRequest: makeRoom)
         }
     }
 
@@ -71,8 +83,9 @@ struct MacWindowWidthFitter: NSViewRepresentable {
         private var lastRequiredWidth: CGFloat?
         private var lastScale: CGFloat?
         private var lastFrameWidth: CGFloat?
+        private var lastMakeRoomRequest: Int?
 
-        func update(window: NSWindow?, requiredWidth: CGFloat, layoutWidth: CGFloat) {
+        func update(window: NSWindow?, requiredWidth: CGFloat, layoutWidth: CGFloat, makeRoomRequest: Int = 0) {
             guard let window, layoutWidth > 0, !window.styleMask.contains(.fullScreen),
                   !window.inLiveResize else { return }
             // Real points per layout point: the UI zoom step (WindowZoomModifier).
@@ -82,6 +95,7 @@ struct MacWindowWidthFitter: NSViewRepresentable {
                 lastRequiredWidth = requiredWidth
                 lastScale = scale
                 lastFrameWidth = window.frame.width
+                lastMakeRoomRequest = makeRoomRequest
             }
             // Only react to a column being asked for or to a zoom change,
             // never to the window being resized (by hand, tiling or the zoom
@@ -90,7 +104,8 @@ struct MacWindowWidthFitter: NSViewRepresentable {
             // must not be read as a zoom step.
             guard let lastRequiredWidth, let lastScale, let lastFrameWidth else { return }
             let zoomChanged = abs(scale - lastScale) > 0.001 && abs(window.frame.width - lastFrameWidth) < 0.5
-            guard requiredWidth > lastRequiredWidth || zoomChanged else { return }
+            let roomAskedFor = lastMakeRoomRequest != nil && makeRoomRequest != lastMakeRoomRequest
+            guard requiredWidth > lastRequiredWidth || zoomChanged || roomAskedFor else { return }
             let needed = (requiredWidth * scale).rounded(.up)
             guard window.frame.width + 0.5 < needed else { return }
             var frame = window.frame

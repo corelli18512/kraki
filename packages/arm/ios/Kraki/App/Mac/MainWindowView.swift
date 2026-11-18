@@ -258,6 +258,8 @@ struct MainWindowView: View {
     @State private var htmlArtifactSessions = MacHTMLArtifactSessionCache()
     /// The window's width in layout points (see MacMainWindowColumns).
     @State private var layoutWidth: CGFloat = 0
+    /// See MacWindowWidthFitter.makeRoomRequest.
+    @State private var makeRoomRequest = 0
 
     private let desktopRailHeight: CGFloat = 40
 
@@ -368,8 +370,20 @@ struct MainWindowView: View {
         .performanceNotice()
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in
-            withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
+            if MacMainWindowColumns.toggleMakesRoom(requested: sidebarVisible, shown: columns.showsSidebar) {
+                makeRoomRequest += 1
+            } else {
+                withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
+            }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .macToggleInspector)) { _ in
+            if MacMainWindowColumns.toggleMakesRoom(requested: inspectorShown, shown: columns.showsInspector) {
+                makeRoomRequest += 1
+            } else {
+                inspectorShown.toggle()
+            }
+        }
+        .focusedSceneValue(\.macInspectorVisible, columns.showsInspector)
         .onReceive(NotificationCenter.default.publisher(for: .macOpenPairing)) { _ in
             pairingPresented = true
         }
@@ -569,7 +583,8 @@ struct MainWindowView: View {
                     sidebarRequested: sidebarVisible,
                     inspectorRequested: inspectorShown
                 ),
-                layoutWidth: layoutWidth
+                layoutWidth: layoutWidth,
+                makeRoomRequest: makeRoomRequest
             )
         )
     }
