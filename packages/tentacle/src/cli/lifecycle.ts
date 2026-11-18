@@ -396,7 +396,12 @@ export async function silentStart(config: KrakiConfig): Promise<void> {
   }
 
   const pid = await startDaemon(config);
-  if (await waitForDaemonConnection() === 'signed-out') {
+  // Up to 15 s with a slow relay: show that something is happening.
+  const { ora } = await import('../spinner.js');
+  const connecting = ora({ text: 'Connecting to the relay…', indent: 2 }).start();
+  const connection = await waitForDaemonConnection();
+  connecting.stop();
+  if (connection === 'signed-out') {
     console.log('');
     console.log(chalk.yellow('  This computer was signed out: its Kraki account was deleted.'));
     console.log(chalk.dim('  Run `kraki` to set Kraki up again.'));

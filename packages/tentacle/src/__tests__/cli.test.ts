@@ -114,6 +114,12 @@ vi.mock('../setup.js', () => ({
   githubLogin: (...args: unknown[]) => mockGithubLogin(...args),
 }));
 
+const mockOra = vi.hoisted(() => vi.fn());
+vi.mock('../spinner.js', async () => {
+  const actual = await vi.importActual<typeof import('../spinner.js')>('../spinner.js');
+  return { ora: (...args: Parameters<typeof actual.ora>) => { mockOra(...args); return actual.ora(...args); } };
+});
+
 vi.mock('../account-switch.js', () => ({
   loadAccountDataOwner: (...args: unknown[]) => mockLoadAccountDataOwner(...args),
   adoptAccountDataOwner: (...args: unknown[]) => mockAdoptAccountDataOwner(...args),
@@ -418,6 +424,16 @@ describe('CLI start after the account was deleted (K-277)', () => {
     expect(consoleOutput.join('\n')).toContain('account was deleted');
     expect(process.exitCode).toBe(1);
     process.exitCode = 0;
+  });
+});
+
+describe('CLI start while the relay is slow (U2)', () => {
+  it('shows a spinner while it waits for the relay connection', async () => {
+    mockLoadConfig.mockReturnValue({ relay: 'wss://relay.test', authMethod: 'github_token', device: { name: 'laptop' } });
+    mockIsDaemonRunning.mockReturnValue(false);
+    mockStartDaemon.mockResolvedValue(1234);
+    await runCli(['start']);
+    expect(mockOra).toHaveBeenCalledWith(expect.objectContaining({ text: 'Connecting to the relay…' }));
   });
 });
 
