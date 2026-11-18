@@ -25,7 +25,10 @@ export const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 export const LOG_ROTATE_KEEP = 5;
 export const LOG_ROTATE_MAX_AGE_MS = 7 * 24 * 3600_000;
 const ROTATE_CHECK_MS = 60_000;
-const LOG_BUFFER_MAX_BYTES = 1024 * 1024; // per destination; there is one per module
+// Per destination (one per module). sonic-boom drops any write past it, even
+// with a healthy disk (a single long line, or a burst behind a slow write), so
+// it only bounds a backlog that cannot drain (disk full).
+const LOG_BUFFER_MAX_BYTES = 64 * 1024 * 1024;
 
 /** Time of the file's first entry (pino's epoch-ms `time`), else its birth
  *  time when the platform records one. */

@@ -75,6 +75,17 @@ describe('createLogger()', () => {
     expect(existsSync(join(process.env.KRAKI_HOME!, 'logs', 'prod-test.log'))).toBe(true);
   });
 
+  it('keeps a log line over 1 MiB when the disk is fine (B6)', async () => {
+    process.env.NODE_ENV = 'production';
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    ({ createLogger } = await import('../logger.js'));
+    const logger = createLogger('long-line', { sync: true });
+    const long = 'x'.repeat(2 * 1024 * 1024);
+    logger.info({ long }, 'long line');
+    expect(readFileSync(join(process.env.KRAKI_HOME!, 'logs', 'long-line.log'), 'utf8')).toContain(long);
+  });
+
   it('K-122: a full disk drops log lines instead of throwing (the daemon crash-looped on ENOSPC)', async () => {
     process.env.NODE_ENV = 'production';
     const fs = (await import('node:fs')).default;
