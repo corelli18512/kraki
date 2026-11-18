@@ -178,6 +178,17 @@ export abstract class AgentAdapter {
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
+  /** The agent started a run on its own while no Kraki turn is open — no
+   *  prompt, steer or follow-up from Kraki is pending (e.g. Pi woken by a
+   *  background-subagent completion after its turn already settled). Asks
+   *  RelayClient to open a new turn for it: on success RelayClient allocates a
+   *  fresh turn id, assigns it through `setTurnIdentity` before returning it,
+   *  and marks the session active; the adapter then runs the turn like a
+   *  prompted one (reply or steps, then exactly one idle with that id).
+   *  Returns undefined when RelayClient cannot open a turn now (its current
+   *  turn has not settled, or input is being dispatched); the run's events
+   *  then keep the previous turn id and are dropped as late, as before. */
+  onAgentInitiatedTurn: ((sessionId: string) => string | undefined) | null = null;
   /** Set before a send is handed to an adapter. Terminal callbacks must echo
    *  this identity so RelayClient can reject late events from an older turn. */
   setTurnIdentity(_sessionId: string, _turnId: string): void { /* no-op by default */ }

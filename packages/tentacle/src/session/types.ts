@@ -89,6 +89,11 @@ export interface SessionMeta {
    *  steps can be pulled by its concluding bubble seq. Mid-turn spine
    *  messages (permission/question) do NOT move it. */
   currentTurnStartSeq?: number;
+  /** Turn starts with no user_message: a turn the agent started itself (e.g.
+   *  Pi woken by a background run after its turn settled). Each is the spine
+   *  seq the turn's first row takes (lastSeq + 1 when it began); trace
+   *  entries of that turn are tagged with it. See beginAgentTurn. */
+  agentTurnStartSeqs?: number[];
 }
 
 export interface RunRecord {

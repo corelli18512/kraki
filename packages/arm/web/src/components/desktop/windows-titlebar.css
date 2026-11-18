@@ -64,13 +64,19 @@ html[data-windows-titlebar] .khead.is-windows {
   justify-content: flex-start;
   gap: 0;
   padding: 7px calc(var(--windows-caption-width) + clamp(6px, var(--windows-header-spacing), 32px)) 0 clamp(2px, var(--windows-header-spacing), 14px);
-  background: var(--k-bg);
+  /* Same blurred top fade as the Mac toolbar (.khead.is-wide::before), drawn
+     under the transparent native caption buttons. */
+  background: transparent;
   pointer-events: auto;
   -webkit-app-region: drag;
   user-select: none;
 }
-html[data-windows-titlebar] .khead.is-windows.is-narrow { height: 64px; width: min(100%, 100vw); }
-html[data-windows-titlebar] .khead.is-windows::before { display: none; }
+html[data-windows-titlebar] .khead.is-windows.is-narrow { height: 64px; width: min(100%, 100vw); background: var(--k-bg); }
+html[data-windows-titlebar] .khead.is-windows.is-narrow::before { display: none; }
+/* The sidebar's top row is caption space too: blank parts move the window, like
+   the Mac toolbar. Its controls (and an open menu's click-away layer) stay clickable. */
+html[data-windows-titlebar] .ksb-top { -webkit-app-region: drag; }
+html[data-windows-titlebar] :is(.ksb-search, .ksb-menu-dismiss) { -webkit-app-region: no-drag; }
 html[data-windows-titlebar] .khead.is-windows :is(.khead-title, .khead-capsule, .khead-round) {
   height: 30px;
   border: 0;

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
+import { BotMessageSquare, Download, Gauge, MonitorCloud, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
 import { shortcutLabel, useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
@@ -203,7 +203,7 @@ export function Sidebar() {
       <div className="ksb is-wide">
         <div className="ksb-top">
           <div className="ksb-app-menu-wrap">
-            <button ref={appMenuButton} type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-haspopup="menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
+            <button ref={appMenuButton} type="button" className="ksb-icon" aria-label={t('sidebar.appMenu')} aria-haspopup="menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><KrakiLogo className="ksb-app-logo" decorative /></button>
             {appMenu && <>
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
               <div ref={appMenuRef} className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={onMenuKeyDown}>

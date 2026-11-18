@@ -459,8 +459,17 @@ export async function runApplier(args: string[]): Promise<void> {
 
 // Kraki for Mac: the signed app is the unit of update.
 
+/** The app's own `--voice-volume-watchdog` child (it restores the sound
+ *  output if Kraki dies mid-dictation) is not "the app running". */
+export function macAppRunningIn(psOutput: string, appPath: string): boolean {
+  return psOutput.split('\n').some((line) =>
+    line.includes(`${appPath}/Contents/MacOS/`) && !line.includes('--voice-volume-watchdog'));
+}
+
 function macAppRunning(appPath: string): boolean {
-  return spawnSync('pgrep', ['-f', `${appPath}/Contents/MacOS/`]).status === 0;
+  const ps = spawnSync('ps', ['-axo', 'command='], { encoding: 'utf8' });
+  if (ps.status !== 0) return spawnSync('pgrep', ['-f', `${appPath}/Contents/MacOS/`]).status === 0;
+  return macAppRunningIn(ps.stdout, appPath);
 }
 
 function kickstartHelper(): void {

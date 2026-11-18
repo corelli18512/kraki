@@ -83,6 +83,8 @@
 }
 .ksb-icon:hover { background: var(--s-fill); color: var(--s-text); }
 .ksb-icon svg { width: 13px; height: 13px; }
+/* The app menu button shows the Kraki logo, not a generic menu glyph. */
+.ksb-icon .ksb-app-logo { width: 20px; height: 20px; object-fit: contain; pointer-events: none; }
 .ksb-plus-wrap { position: relative; }
 .ksb-plus-menu, .ksr-menu {
   position: absolute;

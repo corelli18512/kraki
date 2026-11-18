@@ -145,6 +145,7 @@ struct MacChatComposer: View {
         guard let data = NSDataAsset(name: "VoiceStartCue")?.data else { return nil }
         let sound = NSSound(data: data)
         sound?.volume = 1.0
+        sound?.delegate = VoiceStartCueObserver.shared
         return sound
     }()
 
@@ -652,7 +653,11 @@ struct MacChatComposer: View {
             return
         }
         sound.stop()
+        // Other sounds are lowered for the recording only after the cue has
+        // been heard, so the cue itself plays at full volume.
+        MacOutputVolumeDucker.shared.cueStarted()
         let played = sound.play()
+        if !played { MacOutputVolumeDucker.shared.cueFinished() }
         KLog.diag("🎙️ [voice] start cue played=\(played)")
         // A missing/unplayable cue must not become an unrelated warning beep.
     }
@@ -945,4 +950,11 @@ private struct MacPrimaryGlassCircle: View {
     }
 }
 
+/// Tells the volume ducker when the start cue has finished playing.
+final class VoiceStartCueObserver: NSObject, NSSoundDelegate {
+    static let shared = VoiceStartCueObserver()
+    func sound(_ sound: NSSound, didFinishPlaying flag: Bool) {
+        MacOutputVolumeDucker.shared.cueFinished()
+    }
+}
 #endif

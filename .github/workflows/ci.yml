@@ -378,7 +378,7 @@ jobs:
     name: macOS Daemon Launch
     needs: scope
     if: needs.scope.outputs.binary == 'true'
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 25
 
     steps:
