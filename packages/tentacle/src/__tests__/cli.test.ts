@@ -981,6 +981,17 @@ describe('CLI config reset', () => {
     expect(mockStartDaemon).toHaveBeenCalledWith(fresh);
   });
 
+  it('does not look failed when the running daemon cannot be restarted (tentacle-cli #11)', async () => {
+    mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
+    mockLoadConfig.mockReturnValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: null, detail: 'untracked-launchd-job' });
+    await runCli(['config', 'reset']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('Setup saved');
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
   it('leaves a stopped daemon stopped', async () => {
     mockRunSetup.mockResolvedValue({ relay: 'wss://new', authMethod: 'github_token', device: { name: 'n' } });
     mockIsDaemonRunning.mockReturnValue(false);

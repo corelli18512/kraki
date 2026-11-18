@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { unlinkSync } from 'node:fs';
 import { loadConfig, saveConfig, getConfigPath, getLogVerbosity, type KrakiConfig } from '../config.js';
-import { isDaemonRunning } from '../daemon.js';
+import { daemonStartRefusal, getDaemonStatus, isDaemonRunning } from '../daemon.js';
 import { runSetup } from '../setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from '../pair.js';
 import type { AgentId } from '@kraki/protocol';
@@ -91,8 +91,17 @@ export async function cmdConfigReset(): Promise<void> {
     return;
   }
   // A `kraki start` daemon still runs on the old relay and sign-in; restart it
-  // so it uses the new config (K-124). A stopped one stays stopped.
-  if (isDaemonRunning()) await cmdRestart();
+  // so it uses the new config (K-124). A stopped one stays stopped. One this
+  // command cannot manage (unknown PID, launchd job without a verified
+  // daemon) is left alone: the new setup is saved either way.
+  if (!isDaemonRunning()) return;
+  const refusal = daemonStartRefusal(getDaemonStatus());
+  if (refusal) {
+    console.log(chalk.yellow('  Setup saved, but the running Kraki could not be restarted to use it.'));
+    console.log(chalk.dim(`  ${refusal}`));
+    return;
+  }
+  await cmdRestart();
 }
 
 export async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<void> {
