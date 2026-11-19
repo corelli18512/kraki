@@ -69,6 +69,7 @@ describe('pi length (output-limit) stop', () => {
     expect(message).toMatch(/output limit/i);
     expect(message).toContain('42666');
     expect(message).toMatch(/revoked/);
+    expect(message).not.toMatch(/Context overflow recovery failed/);
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -116,5 +117,19 @@ describe('pi length (output-limit) stop', () => {
 
     expect(onError).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'all good' });
+  });
+
+  it('a failed threshold compaction after truncation is not reported as a retry failure', () => {
+    const { emit, onError } = makeAdapter();
+    emit(truncated(128000));
+    emit({ type: 'agent_end', willRetry: false });
+    emit({ type: 'compaction_start', reason: 'threshold' });
+    emit({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false, errorMessage: 'Auto-compaction failed: 500' });
+    emit({ type: 'agent_settled' });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const message = onError.mock.calls[0][1].message as string;
+    expect(message).toMatch(/output limit/i);
+    expect(message).not.toMatch(/Automatic retry failed|Auto-compaction/);
   });
 });

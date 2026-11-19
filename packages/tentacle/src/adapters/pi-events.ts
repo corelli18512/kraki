@@ -44,7 +44,7 @@ const LENGTH_STOP_PREFIX = 'The model hit its output limit';
  *  `previous` keeps an already-built message (with its token count) when a
  *  recovery failure is appended. */
 export function lengthStopMessage(outputTokens?: number, previous?: string): string {
-  if (previous?.startsWith(LENGTH_STOP_PREFIX)) return previous.replace(/ Recovery failed: .*$/s, '');
+  if (previous?.startsWith(LENGTH_STOP_PREFIX)) return previous.replace(/ Automatic retry failed: .*$/s, '');
   const count = typeof outputTokens === 'number' && outputTokens > 0 ? ` (${outputTokens} tokens)` : '';
   return `${LENGTH_STOP_PREFIX}${count} before finishing its reply. Send "continue" to resume, or lower the thinking level.`;
 }
@@ -90,8 +90,11 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       }, 'pi compaction ended');
       if (s) s.compactionStartedAt = undefined;
       // A failed recovery for a truncated run explains why the turn fails.
-      if (s && errorMessage && !s.turn.isSettled && s.lastStopReason === 'length' && s.turn.pendingError) {
-        s.turn.setError(`${lengthStopMessage(undefined, s.turn.pendingError)} Recovery failed: ${errorMessage}`);
+      // Only overflow compaction is Pi's recovery for a truncated run; a failed
+      // threshold compaction is unrelated maintenance.
+      if (s && errorMessage && e.reason === 'overflow' && !s.turn.isSettled && s.lastStopReason === 'length' && s.turn.pendingError) {
+        const cause = errorMessage.replace(/^Context overflow recovery failed:\s*/i, '');
+        s.turn.setError(`${lengthStopMessage(undefined, s.turn.pendingError)} Automatic retry failed: ${cause}`);
       }
       adapter.setCompacting(sessionId, false, {
         reason: adapter.normalizeCompactionReason(e.reason),
