@@ -588,6 +588,8 @@ final class CommandSender {
     func failRefusedInput(sessionId: String, clientId: String, reason: String) -> Bool {
         guard let state = outbox[sessionId]?[clientId].map(pendingState), state == .sending || state == .unconfirmed else { return false }
         confirmationTasks.removeValue(forKey: clientId)?.cancel()
+        needsResend.remove(clientId)
+        undispatched.remove(clientId)
         setPendingState(sessionId, clientId: clientId, .failed, cause: "refused_by_computer", refusedReason: reason)
         return true
     }

@@ -94,6 +94,31 @@ final class ComputerRefusedInputTests: XCTestCase {
         XCTAssertEqual(zh.localizedString(forKey: "Not delivered. %@ Click to retry or delete", value: nil, table: nil), "未送达。%@ 点按重试或删除")
     }
 
+    /// Triage review P2-3: a refusal also forgets that the message was still
+    /// owed a (re)send, as on web: a Retry then sends exactly one copy.
+    func testRetryAfterARefusalSendsOneCopy() throws {
+        let app = makeApp()
+        var accept = false
+        var copies = 0
+        app.testOutboundMessageHandler = { message, _, _ in
+            guard message["type"] as? String == "send_input" else { return true }
+            guard accept else { return false }
+            copies += 1
+            return true
+        }
+        let sender = try XCTUnwrap(app.commandSender)
+        sender.confirmationTimeout = .seconds(2)
+        // Transport could not take it: it is owed a send when the path is up.
+        XCTAssertTrue(sender.sendInput(sessionId: "s", text: "hello"))
+        let id = try XCTUnwrap(sender.pendingInputs("s").first?.clientId)
+        try refuse(app, ["clientId": id, "code": "trust_rejected_stale"])
+        XCTAssertEqual(states(sender)[id], .failed)
+        accept = true
+        XCTAssertTrue(sender.retryPending(sessionId: "s", clientId: id))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        XCTAssertEqual(copies, 1)
+    }
+
     /// Triage review P2-5: a create or fork the computer refused (device
     /// trust) fails its placeholder in the app's words, not the computer's
     /// English. Other failures keep the computer's text.
