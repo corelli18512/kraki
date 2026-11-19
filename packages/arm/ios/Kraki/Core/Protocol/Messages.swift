@@ -91,6 +91,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         let id: String
         let text: String
         let choices: [String]
+        /// Several choices may be given (typed, separated by commas).
+        var multiSelect = false
     }
 
     var questionSpec: QuestionSpec? {
@@ -98,8 +100,12 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
               let q = payload["question"]?.dictValue,
               let id = q["id"]?.stringValue else { return nil }
         let choices = q["choices"]?.arrayValue?.compactMap(\.stringValue) ?? []
-        return QuestionSpec(id: id, text: q["text"]?.stringValue ?? "", choices: choices)
+        return QuestionSpec(id: id, text: q["text"]?.stringValue ?? "", choices: choices,
+                            multiSelect: q["multiSelect"]?.boolValue == true && !choices.isEmpty)
     }
+
+    /// Shown under a multi-select question (the computer sends only the flag).
+    static let multiSelectHint = String(localized: "You can choose more than one: type them separated by commas.")
 
     /// `user_message.payload.answerTo` / pending input: answers that question.
     var answerTo: String? { payload["answerTo"]?.stringValue }
@@ -124,9 +130,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// Body text + action slot of a spine row drawn as a frozen card (the
     /// same view as the live card), on iOS and Mac alike:
     /// - a terminal status: its draft + the outcome ("User aborted");
-    /// - a question: the lead-in prose and the **bold** question (identical
-    ///   in every state), plus the choices while it is open, or the outcome
-    ///   of the turn that ended while it was asked.
+    /// - a question: the lead-in prose, the **bold** question and the
+    ///   multi-select hint (identical in every state), plus the choices while
+    ///   it is open, or the outcome of the turn that ended while it was asked.
     /// Nil for every other row.
     var frozenCard: MessageStore.SessionCard? {
         if let spec = questionSpec {
@@ -135,6 +141,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
             let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
                 .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
             if !bold.isEmpty { parts.append(bold) }
+            if spec.multiSelect { parts.append(Self.multiSelectHint) }
             let action: ChatMessage?
             if questionPresentation?.state == .open {
                 action = actionMessage("question", [

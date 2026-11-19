@@ -11801,6 +11801,16 @@
         }
       }
     },
+    "You can choose more than one: type them separated by commas." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以选择多个：输入时用逗号分隔。"
+          }
+        }
+      }
+    },
     "You'll need to scan a pairing QR or sign in again to reconnect." : {
       "localizations" : {
         "zh-Hans" : {

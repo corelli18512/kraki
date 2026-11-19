@@ -164,11 +164,11 @@ describe('Claude AskUserQuestion answers key', () => {
   });
 });
 
-describe('Claude AskUserQuestion multiSelect (K-172)', () => {
+describe('Claude AskUserQuestion multiSelect (K-172, triage #14)', () => {
   const ask = (multiSelect: boolean | undefined) => {
     const adapter = new ClaudeAdapter();
-    const emitted: Array<{ question: string; choices?: string[] }> = [];
-    adapter.onQuestionRequest = (_s, q) => { emitted.push({ question: q.question, choices: q.choices }); };
+    const emitted: Array<{ question: string; choices?: string[]; multiSelect?: boolean }> = [];
+    adapter.onQuestionRequest = (_s, q) => { emitted.push({ question: q.question, choices: q.choices, multiSelect: q.multiSelect }); };
     const pendingQuestions = new Map();
     emitQuestionCard(adapter, 's1', () => {}, [{
       question: 'Which databases?', header: 'DB',
@@ -178,15 +178,16 @@ describe('Claude AskUserQuestion multiSelect (K-172)', () => {
     return emitted[0];
   };
 
-  it('tells the human that several options may be chosen', () => {
+  it('flags a multi-select question; the apps word the hint in their own language', () => {
     const card = ask(true);
     expect(card.choices).toEqual(['Postgres', 'SQLite']);
-    expect(card.question).toMatch(/^Which databases\?\n\n/);
-    expect(card.question).toMatch(/more than one/i);
+    expect(card.multiSelect).toBe(true);
+    // No English hint baked into the question text.
+    expect(card.question).toBe('Which databases?');
   });
 
-  it('leaves a single-choice question unchanged', () => {
-    expect(ask(false).question).toBe('Which databases?');
-    expect(ask(undefined).question).toBe('Which databases?');
+  it('leaves a single-choice question unflagged', () => {
+    expect(ask(false)).toEqual({ question: 'Which databases?', choices: ['Postgres', 'SQLite'], multiSelect: undefined });
+    expect(ask(undefined).multiSelect).toBeUndefined();
   });
 });

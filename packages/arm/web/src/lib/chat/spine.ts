@@ -52,15 +52,17 @@ export interface QuestionSpec {
   id: string;
   text: string;
   choices: string[];
+  /** Several choices may be given (typed, separated by commas). */
+  multiSelect: boolean;
 }
 
 /** `agent_message.payload.question`: the agent asked the human. */
 export function questionSpecOf(message: ChatMessage): QuestionSpec | undefined {
   if (message.type !== 'agent_message') return undefined;
-  const q = payloadOf(message).question as { id?: unknown; text?: unknown; choices?: unknown } | undefined;
+  const q = payloadOf(message).question as { id?: unknown; text?: unknown; choices?: unknown; multiSelect?: unknown } | undefined;
   if (!q || typeof q.id !== 'string') return undefined;
   const choices = Array.isArray(q.choices) ? q.choices.filter((c): c is string => typeof c === 'string') : [];
-  return { id: q.id, text: str(q.text) ?? '', choices };
+  return { id: q.id, text: str(q.text) ?? '', choices, multiSelect: q.multiSelect === true && choices.length > 0 };
 }
 
 export type QuestionState = 'open' | 'answered' | 'unanswered' | 'undetermined';
@@ -362,8 +364,9 @@ export interface FrozenCard {
 
 /** Body text + action slot of a row drawn as a frozen card (the same bubble
  *  as the live card): a terminal status (its draft + outcome), or a question
- *  (lead-in and **bold** question — identical in every state — plus choices
- *  while open, or the outcome of the turn that ended while it was asked). */
+ *  (lead-in, **bold** question and the multi-select hint — identical in every
+ *  state — plus choices while open, or the outcome of the turn that ended
+ *  while it was asked). */
 export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
   const { message } = item;
   const spec = questionSpecOf(message);
@@ -373,6 +376,7 @@ export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
     if (lead) parts.push(lead);
     const bold = spec.text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => `**${l}**`).join('\n');
     if (bold) parts.push(bold);
+    if (spec.multiSelect) parts.push(t('chat:question.multiSelectHint'));
     let action: CardAction | undefined;
     if (item.question?.state === 'open') action = { type: 'question', id: spec.id, choices: spec.choices };
     else if (item.question?.outcome) action = { ...item.question.outcome };

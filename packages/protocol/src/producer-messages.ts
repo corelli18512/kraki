@@ -73,6 +73,10 @@ export interface AgentMessage extends BaseEnvelope {
       id: string;
       text: string;
       choices?: string[];
+      /** The agent accepts several of the choices. Choices stay single-tap
+       *  shortcuts; apps add a hint (in the app's language) that several can
+       *  be typed, separated by commas. Older apps show no hint. */
+      multiSelect?: boolean;
     };
   };
 }

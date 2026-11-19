@@ -153,6 +153,7 @@ export function wireAdapterEvents(client: RelayClient): void {
           id: event.id,
           text: event.question,
           ...(event.choices?.length ? { choices: event.choices } : {}),
+          ...(event.multiSelect && event.choices?.length ? { multiSelect: true } : {}),
         },
       },
     };

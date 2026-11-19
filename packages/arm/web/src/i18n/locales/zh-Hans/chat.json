@@ -70,6 +70,9 @@
     "processLost": "Agent 进程已丢失",
     "attachmentsNotKept": "附件太大，页面重新加载后未能保留。请重新添加附件，或重试以仅发送文字。"
   },
+  "question": {
+    "multiSelectHint": "可以选择多个：输入时用逗号分隔。"
+  },
   "header": {
     "modePicker": "会话模式选择器",
     "back": "返回",

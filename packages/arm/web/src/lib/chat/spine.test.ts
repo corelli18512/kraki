@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { i18next } from '../../i18n';
 import type { ChatMessage } from '../../types/store';
 import { frozenCardOf, openQuestions, presentQuestions, rowKey, seqOf, spineRows } from './spine';
 
@@ -53,6 +54,24 @@ describe('questions on the spine', () => {
     expect(answered.text).toBe(open.text);
     expect(open.action).toEqual({ type: 'question', id: 'q1', choices: ['\u5220', '\u7559'] });
     expect(answered.action).toBeUndefined();
+  });
+
+  it('a multi-select question shows the hint in the app language, in every state (triage #14)', async () => {
+    const multi = (choices: string[]) => m('agent_message', 1, {
+      content: '', question: { id: 'q1', text: 'Which databases?', choices, multiSelect: true },
+    });
+    const open = frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'open' } })!;
+    expect(open.text).toBe('**Which databases?**\n\nYou can choose more than one: type them separated by commas.');
+    expect(frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'answered' } })!.text).toBe(open.text);
+    // Nothing to pick from: no hint.
+    expect(frozenCardOf({ message: multi([]), question: { state: 'open' } })!.text).toBe('**Which databases?**');
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      expect(frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'open' } })!.text)
+        .toBe('**Which databases?**\n\n\u53EF\u4EE5\u9009\u62E9\u591A\u4E2A\uFF1A\u8F93\u5165\u65F6\u7528\u9017\u53F7\u5206\u9694\u3002');
+    } finally {
+      await i18next.changeLanguage('en');
+    }
   });
 
   it('abort while asking draws Stopped inside the question, no separate row', () => {

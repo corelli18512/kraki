@@ -517,6 +517,32 @@ final class ProducerMessageDecoderTests: XCTestCase {
         XCTAssertNil(msg?.questionPresentation, "presentation is client-derived, never decoded")
     }
 
+    /// Triage #14: the computer flags a multi-select question; the app words
+    /// the hint (localized), the same in every state.
+    func testMultiSelectQuestionShowsTheAppsHint() throws {
+        let data = makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "",
+            "question": ["id": "q-1", "text": "Which databases?", "choices": ["Postgres", "SQLite"], "multiSelect": true],
+        ])
+        var msg = try XCTUnwrap(ProducerMessageDecoder.decode(data))
+        XCTAssertEqual(msg.questionSpec?.multiSelect, true)
+        msg.questionPresentation = QuestionPresentation(state: .open)
+        let open = try XCTUnwrap(msg.frozenCard)
+        XCTAssertEqual(open.text, "**Which databases?**\n\nYou can choose more than one: type them separated by commas.")
+        msg.questionPresentation = QuestionPresentation(state: .answered)
+        XCTAssertEqual(msg.frozenCard?.text, open.text)
+
+        // Not flagged (older computers) or nothing to pick from: no hint.
+        let single = ProducerMessageDecoder.decode(makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "", "question": ["id": "q-2", "text": "Which one?", "choices": ["A", "B"]],
+        ]))
+        XCTAssertEqual(single?.frozenCard?.text, "**Which one?**")
+        let free = ProducerMessageDecoder.decode(makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "", "question": ["id": "q-3", "text": "Anything else?", "multiSelect": true],
+        ]))
+        XCTAssertEqual(free?.frozenCard?.text, "**Anything else?**")
+    }
+
     func testQuestionPresentationIsNeverEncoded() throws {
         var msg = ChatMessage(type: "agent_message", seq: 3, sessionId: "s", deviceId: nil, timestamp: nil,
                               payload: ["question": AnyCodable(["id": "q", "text": "?"])])
