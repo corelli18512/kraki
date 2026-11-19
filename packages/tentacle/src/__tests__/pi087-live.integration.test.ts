@@ -132,8 +132,13 @@ run('Pi 0.87 live RPC compatibility', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('executes actual installed 1.5.x and discovers models/thinking levels', async () => {
-    expect(execFileSync(cli!, ['--version'], { encoding: 'utf8' }).trim()).toMatch(/^1\.5\./);
+  it('executes the actual installed Pi and discovers models/thinking levels', async () => {
+    // Version-neutral: Kraki runs the user's own Pi. Pin a version only when
+    // the caller asks for one (PI_LIVE_EXPECT_VERSION).
+    const version = execFileSync(cli!, ['--version'], { encoding: 'utf8' }).trim();
+    const want = process.env.PI_LIVE_EXPECT_VERSION;
+    if (want) expect(version).toBe(want);
+    else expect(version).toMatch(/^\d+\.\d+\.\d+/);
     expect(await adapter.listModels()).toContain('audit/model-a');
     const detail = (await adapter.listModelDetails()).find(m => m.id === 'audit/model-a');
     expect(detail?.supportedReasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
