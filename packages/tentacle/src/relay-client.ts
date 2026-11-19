@@ -1617,7 +1617,9 @@ export class RelayClient {
    * - A command on a session known here: an `error` on that session through
    *   send(), like every other session error (spine seq, persisted, every app).
    *   A refused `send_input` carries its clientId: the sender shows that
-   *   message as not delivered (a bare `error` is never a chat row).
+   *   message as not delivered (a bare `error` is never a chat row). When the
+   *   row cannot be stored (the disk is full, which is also why the replay
+   *   store could not be written) it is sent live only.
    * - A sessionless command with a requestId: a full `error` envelope
    *   (`sessionId: ''`, seq, timestamp, deviceId) to the sender only, so its
    *   placeholder fails.
@@ -1657,7 +1659,17 @@ export class RelayClient {
         : 'trust_rejected_unrecorded';
     logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
     if (sessionId) {
-      this.send({ type: 'error', sessionId, payload: { message, code, ...(clientId && { clientId }) } });
+      // send() stamps the object it is given: a fresh one per attempt.
+      const notice = (): Partial<ProducerMessage> => ({ type: 'error', sessionId, payload: { message, code, ...(clientId && { clientId }) } });
+      try {
+        this.send(notice());
+      } catch {
+        try {
+          this.send(notice(), false, { persist: false });
+        } catch (err) {
+          logger.warn({ err, appId, sessionId }, 'Could not tell the app its request was refused (device trust)');
+        }
+      }
       return;
     }
     this.sendReliableUnicastTo(appId, this.consumerKeys.get(appId) ?? NO_RSA_KEY, {

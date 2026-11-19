@@ -380,6 +380,27 @@ describe('device trust — a paired app is told when its signed request is refus
     ]);
   });
 
+  it('on a full disk the sender of a refused message still hears it, live: the replay store and the spine cannot be written (triage review P1-1)', async () => {
+    const { env, phone } = paired();
+    // The replay store cannot be written: its file is now a directory, so
+    // replacing it fails like a full disk does (refused as replay_store_unwritable).
+    const replay = readdirSync(home, { recursive: true }).map(String).find((f) => f.endsWith('replay.json'))!;
+    rmSync(join(home, replay));
+    mkdirSync(join(home, replay, 'blocked'), { recursive: true });
+    // Nor can the error row be stored.
+    appendMessage(env).mockImplementation(() => {
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    env.sent.length = 0;
+    env.deliver(appSend(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi', clientId: 'c1' } }), phone.id);
+    await flush();
+    expect(sendInputCalls(env)).toHaveLength(0);
+    const errors = errorsFor(env, phone) as Array<{ sessionId?: string; seq?: number; payload: { clientId?: string; code?: string } }>;
+    expect(errors).toHaveLength(1);
+    // Live only (seq 0): apps show it without storing it as history.
+    expect(errors[0]).toMatchObject({ sessionId: 's1', seq: 0, payload: { clientId: 'c1', code: 'trust_rejected_unrecorded' } });
+  });
+
   it('a refused command on a session this computer does not have is not answered', async () => {
     const { env, phone } = paired();
     (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);
