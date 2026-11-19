@@ -20,6 +20,9 @@ export interface KrakiConfig {
   relay: string;
   authMethod: AuthMethod['method'];
   device: { name: string; id?: string };
+  /** The GitHub account setup signed in with. The daemon moves another
+   *  account's identity and sessions aside before it starts (account-switch.ts). */
+  account?: { login: string };
   /**
    * Explicit agent allow-list. When omitted (or empty), the daemon
    * auto-detects every installed agent at startup (legacy behaviour).

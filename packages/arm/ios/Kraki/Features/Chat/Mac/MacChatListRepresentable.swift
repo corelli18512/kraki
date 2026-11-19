@@ -382,7 +382,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             items.insert(MacChatItem(
                 seq: liveTraceSeq,
                 key: "__live__",
-                signature: liveCardSignature(liveCard),
+                signature: Self.liveCardSignature(liveCard, sessionId: sessionId),
                 estimatedHeight: estimatedHeight(forText: liveCard.text, hasAction: liveCard.action != nil),
                 visibleCharacterCount: liveCard.text.utf8.count,
                 isReply: true,
@@ -451,9 +451,9 @@ struct MacChatListRepresentable: NSViewRepresentable {
         var hasher = Hasher()
         hasher.combine(message.id)
         hasher.combine(message.type)
-        combineVisibleText(message.content, into: &hasher)
-        combineVisibleText(message.interruptedDraft, into: &hasher)
-        combineVisibleText(message.result, into: &hasher)
+        Self.combineVisibleText(message.content, into: &hasher)
+        Self.combineVisibleText(message.interruptedDraft, into: &hasher)
+        Self.combineVisibleText(message.result, into: &hasher)
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
@@ -474,8 +474,13 @@ struct MacChatListRepresentable: NSViewRepresentable {
         return String(hasher.finalize())
     }
 
-    private func liveCardSignature(_ card: MessageStore.SessionCard) -> String {
+    /// Every session's draft row has the key `__live__`, and the CoreText
+    /// layout and height caches are shared by all sessions: the session is
+    /// part of the signature, or another session's draft of the same length
+    /// and ending is drawn here.
+    static func liveCardSignature(_ card: MessageStore.SessionCard, sessionId: String) -> String {
         var hasher = Hasher()
+        hasher.combine(sessionId)
         combineVisibleText(card.text, into: &hasher)
         if let action = card.action {
             hasher.combine(action.type)
@@ -506,7 +511,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
     /// Hash bounded UTF-8 metadata only. Persisted message ids are stable, so
     /// there is no reason for a SwiftUI update to perform grapheme-cluster
     /// traversal or allocate a new suffix String for a large message body.
-    private func combineVisibleText(_ text: String?, into hasher: inout Hasher) {
+    private static func combineVisibleText(_ text: String?, into hasher: inout Hasher) {
         guard let text else {
             hasher.combine(0)
             return

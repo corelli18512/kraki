@@ -363,3 +363,55 @@ describe('outbox and sign-out', () => {
     expect(localStorage.getItem('kraki-outbox-v1')).toBeNull();
   });
 });
+
+describe('K-100: attachments too large to keep across a reload', () => {
+  let sent: Record<string, unknown>[];
+  beforeEach(() => {
+    sent = [];
+    outbox.reset();
+    outbox.configure({
+      send: async (msg) => { sent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      acceptsResend: () => true,
+    });
+  });
+  afterEach(() => outbox.reset());
+
+  const bigImage = { type: 'image' as const, mimeType: 'image/png', data: 'x'.repeat(1_100_000) };
+
+  it('a restored input that lost its image is never sent text-only on its own', () => {
+    outbox.send('s', 'look at this', { attachments: [bigImage] });
+    expect((sent[0].payload as { attachments?: unknown[] }).attachments).toHaveLength(1);
+    sent = [];
+    outbox.reloadForTesting();
+    const [restored] = outbox.forSession('s');
+    expect(restored).toMatchObject({ state: 'failed', attachmentsDropped: 1, text: 'look at this' });
+    expect(restored.attachments).toBeUndefined();
+    expect(restored.needsResend).toBeUndefined();
+    checkDeadlines(Date.now());
+    checkDeadlines(Date.now() + 1_000);
+    expect(sent).toEqual([]);
+  });
+
+  it('after the user retries it text-only, the note is gone and another reload does not fail it again', () => {
+    outbox.send('s', 'look at this', { attachments: [bigImage] });
+    outbox.reloadForTesting();
+    const [restored] = outbox.forSession('s');
+    sent = [];
+    outbox.retry(restored.clientId);
+    expect(sent).toHaveLength(1);
+    expect(outbox.forSession('s')[0].attachmentsDropped).toBeUndefined();
+    outbox.reloadForTesting();
+    expect(outbox.forSession('s')[0].state).not.toBe('failed');
+  });
+
+  it('a small image survives the reload and is resent with it', () => {
+    const small = { type: 'image' as const, mimeType: 'image/png', data: 'x'.repeat(1_000) };
+    outbox.send('s', 'small', { attachments: [small] });
+    sent = [];
+    outbox.reloadForTesting();
+    expect(outbox.forSession('s')[0]).toMatchObject({ state: 'sending', needsResend: true });
+    checkDeadlines(Date.now());
+    expect((sent[0].payload as { attachments?: unknown[] }).attachments).toHaveLength(1);
+  });
+});

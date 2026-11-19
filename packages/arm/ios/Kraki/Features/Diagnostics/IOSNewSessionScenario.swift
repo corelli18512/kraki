@@ -73,6 +73,7 @@ enum IOSNewSessionScenario {
                 app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 12, deviceId: deviceID)
             }
             if ProcessInfo.processInfo.environment["KRAKI_SCENARIO_SECOND_COMPUTER"] == "1" { addSecondComputer(app) }
+            if ProcessInfo.processInfo.environment["KRAKI_SCENARIO_ARCHIVED"] == "1" { addArchivedSessions(app) }
             app.connectionStatus = .connected
             app.hasCompletedInitialConnect = true
             let tentacle = ScriptedTentacle(app: app)
@@ -105,6 +106,16 @@ enum IOSNewSessionScenario {
                 title: title, state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,
                 createdAt: Date().addingTimeInterval(Double(-1_800 * (index + 1))), pinned: false))
             app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 1, deviceId: secondDeviceID)
+        }
+    }
+
+    /// Two archived Sessions under the list's collapsed "Archived (2)" row.
+    private static func addArchivedSessions(_ app: AppState) {
+        app.sessionStore.archiveInfo[deviceID] = ArchiveInfo(count: 2, days: 14)
+        app.sessionStore.archivedSessions[deviceID] = (1...2).map { index in
+            SessionDigest(id: "archived-\(index)", agent: "pi", model: "m", title: "Archived session \(index)",
+                          state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,
+                          createdAt: "2026-01-0\(index)T00:00:00.000Z", lastActivityAt: "2026-01-0\(index)T00:00:00.000Z")
         }
     }
 

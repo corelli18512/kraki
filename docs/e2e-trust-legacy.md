@@ -204,7 +204,10 @@ items, all addressed with regression tests:
   interrupted start can persist "compatible").
 - Replay state v2 `{notBefore, highWater, entries}`: validated on load; lost or
   malformed state rejects everything up to now + max clock lead and persists
-  that floor; clock rollback cannot reopen pruned nonces.
+  that floor; clock rollback cannot reopen pruned nonces. (Since K-141 the
+  state is v3 `{notBefore, entries}`: the floor rises only when a nonce is
+  forgotten, not with a clock high-water mark, so a forward clock jump no
+  longer locks out later messages; v2 still loads.)
 - Signed/HMAC'd fields are delimiter-free (`isWireId`, canonical 16-byte nonce),
   in TS and Swift.
 - Policy has a revision; `set_trust_policy` must name the current one (a

@@ -18,7 +18,7 @@ vi.mock('../lib/message-db', () => ({
   putMessage: async () => {}, putMessages: async () => {}, deleteSessionMessages: async () => {}, getMessagesInRange: async () => [],
 }));
 vi.mock('../components/chat/ChatScroller', () => ({ ChatScroller: () => null }));
-vi.mock('../components/chat/Composer', () => ({ composerIntent: () => 'steer', Composer: () => null }));
+vi.mock('../components/chat/Composer', () => ({ composerIntent: () => 'steer', composerTarget: () => 'conversation', Composer: () => null }));
 vi.mock('../components/devices/SessionInfoPanel', () => ({ SessionInfoPanel: () => null }));
 
 const opens: OpenSummary[] = [];

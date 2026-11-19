@@ -1,6 +1,6 @@
 import { formatNumber } from '../../i18n/format';
 import { useTranslation } from 'react-i18next';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
 export interface ImagePreviewItem { url: string; title: string; blob?: Blob }
@@ -34,6 +34,18 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
   const canvas = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // Two-finger pinch (the canvas is touch-action: none, so the browser's own
+  // pinch never reaches the image) (K-110).
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ spread: number; zoom: number } | null>(null);
+  const spread = () => {
+    const [a, b] = [...touches.current.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const releaseTouch = (event: ReactPointerEvent) => {
+    touches.current.delete(event.pointerId);
+    if (touches.current.size < 2) pinch.current = null;
+  };
   const item = selection.items[index];
   const clampZoom = (value: number) => Math.min(8, Math.max(1, value));
   const clampPan = (x: number, y: number, scale = zoom) => {
@@ -149,6 +161,21 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
         <button type="button" title={t('imageViewer.close')} aria-label={t('imageViewer.close')} onClick={dismiss}><X /></button>
       </div>
       <div ref={canvas} className="kimage-canvas" onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}
+        onPointerDown={(event) => {
+          if (event.pointerType !== 'touch') return;
+          touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (touches.current.size === 2) {
+            pinch.current = { spread: spread(), zoom };
+            drag.current = null;
+          }
+        }}
+        onPointerMove={(event) => {
+          if (!touches.current.has(event.pointerId)) return;
+          touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (pinch.current && pinch.current.spread > 0) changeZoom(pinch.current.zoom * spread() / pinch.current.spread);
+        }}
+        onPointerUp={releaseTouch}
+        onPointerCancel={releaseTouch}
         onWheel={(event) => {
           if (event.ctrlKey || event.altKey || event.deltaMode !== 0) changeZoom(zoom * Math.pow(1.12, Math.max(-4, Math.min(4, -event.deltaY))));
           else if (zoom > 1) setPan((current) => clampPan(current.x - event.deltaX, current.y - event.deltaY));

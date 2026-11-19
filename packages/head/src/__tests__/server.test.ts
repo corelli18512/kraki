@@ -767,6 +767,14 @@ describe('HeadServer (thin relay)', () => {
       expect(res.message).toContain('Unknown message type');
     });
 
+    it('bounds the unknown type it echoes back (K-299)', async () => {
+      head = await createHead();
+      const { ws } = await authConnect(head.port, 'Laptop', 'tentacle');
+      ws.send(JSON.stringify({ type: `x${'y'.repeat(100_000)}` }));
+      const res = await waitForMessageOfType(ws, 'server_error');
+      expect(String(res.message).length).toBeLessThan(100);
+    });
+
     it('should handle unauthenticated close without error', async () => {
       head = await createHead();
       const ws = connect(head.port);

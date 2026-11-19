@@ -13,7 +13,8 @@ import XCTest
 extension DeviceTrustBoundaryTests {
     func testAccountAccessNoticeRetainsRecoveryWithoutAPairingGate() {
         XCTAssertEqual(AccountAccessNotice(state: .needsPairing), .updateComputer)
-        XCTAssertEqual(AccountAccessNotice(state: .failed("revoked")), .checkSavedConnection)
+        XCTAssertEqual(AccountAccessNotice(state: .failed("revoked")), .pairingRevoked)
+        XCTAssertEqual(AccountAccessNotice(state: .failed("bad_proof")), .checkSavedConnection)
         XCTAssertEqual(AccountAccessNotice(state: .stoppedSigning), .checkSavedConnection)
         for state in [ComputerTrustState.paired, .pairing, .notPaired, .unsupported] {
             XCTAssertNil(AccountAccessNotice(state: state))
@@ -35,7 +36,7 @@ extension DeviceTrustBoundaryTests {
     func testRevokedSavedConnectionHasAnAccountAccessRecoveryPath() {
         pin()
         app.handleTrustRevoked(["deviceId": computer])
-        XCTAssertEqual(AccountAccessNotice(state: app.trustState(for: computer)), .checkSavedConnection)
+        XCTAssertEqual(AccountAccessNotice(state: app.trustState(for: computer)), .pairingRevoked)
         XCTAssertNotNil(TentacleTrustStore.shared.pin(computer))
         app.forgetPairing(computer)
         XCTAssertNil(TentacleTrustStore.shared.pin(computer))

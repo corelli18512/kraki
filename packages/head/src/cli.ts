@@ -172,7 +172,7 @@ const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
 // Not HOST: csh/tcsh export it as the machine's hostname.
 const LISTEN_HOST_SETTING = flag('host', process.env.KRAKI_HOST || '');
-const OPEN_SHARED_KEY = flag('open-shared-key', process.env.OPEN_SHARED_KEY || '');
+const OPEN_SHARED_KEY = flag('open-shared-key', process.env.OPEN_SHARED_KEY || '').trim();
 const API_KEY = process.env.API_KEY;
 const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;

@@ -28,11 +28,22 @@ final class MacConnectPhoneStepTests: XCTestCase {
     }
 
     func testShowsOnlyAfterFreshSetupOnceTheAccountIsKnown() {
-        XCTAssertTrue(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: false))
-        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: false, connected: true, devicesKnown: true, hasPhone: false))
-        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: false, devicesKnown: true, hasPhone: false))
-        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: false, hasPhone: false))
-        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: true))
+        XCTAssertTrue(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: false, canMakeCode: true))
+        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: false, connected: true, devicesKnown: true, hasPhone: false, canMakeCode: true))
+        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: false, devicesKnown: true, hasPhone: false, canMakeCode: true))
+        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: false, hasPhone: false, canMakeCode: true))
+        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: true, canMakeCode: true))
+        XCTAssertFalse(MacConnectPhoneStep.shouldShow(pending: true, connected: true, devicesKnown: true, hasPhone: false, canMakeCode: false))
+    }
+
+    /// K-333: the code comes from this Mac's running Kraki; a remote-only Mac
+    /// or a stopped one only ever showed "kraki connect: daemon_not_running".
+    func testNoPhoneStepWhenThisMacCannotMakeACode() {
+        XCTAssertTrue(MacConnectPhoneStep.canMakeCode(role: .runsAgents, daemonState: .running(pid: 1)))
+        XCTAssertTrue(MacConnectPhoneStep.canMakeCode(role: .undecided, daemonState: .running(pid: 1)))
+        XCTAssertFalse(MacConnectPhoneStep.canMakeCode(role: .remoteOnly, daemonState: .running(pid: 1)))
+        XCTAssertFalse(MacConnectPhoneStep.canMakeCode(role: .runsAgents, daemonState: .stopped))
+        XCTAssertFalse(MacConnectPhoneStep.canMakeCode(role: .runsAgents, daemonState: .needsApproval))
     }
 
     private func find(_ identifier: String, in element: AnyObject) -> AnyObject? {
@@ -64,8 +75,10 @@ final class MacConnectPhoneStepTests: XCTestCase {
         app.deviceStore.devices["this-mac-app"] = device("this-mac-app", role: .app, kind: .desktop)
         app.connectionStatus = .connected
 
+        let tentacle = TentacleCLIManager()
+        tentacle.setDaemonStateForTesting(.running(pid: 1))
         let host = NSHostingView(rootView: MacConnectPhoneStep()
-            .environment(app).environment(TentacleCLIManager()).defaultAppStorage(defaults))
+            .environment(app).environment(tentacle).defaultAppStorage(defaults))
         let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 1180, height: 740),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

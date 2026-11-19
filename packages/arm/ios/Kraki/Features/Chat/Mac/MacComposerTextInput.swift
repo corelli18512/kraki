@@ -171,6 +171,10 @@ final class MacComposerTextView: NSTextView {
 
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
+    /// A dropped image (an image file from Finder, or image data). Returns
+    /// whether it was attached. When set, an image is never dropped in as
+    /// its file path; other files and text drop into the text as usual.
+    var onDropImage: ((NSImage) -> Bool)?
     var onTakeOver: (() -> Void)?
     /// This editor gained (true) or gave up (false) first responder: a click,
     /// a move to another field, or a programmatic change.
@@ -202,6 +206,17 @@ final class MacComposerTextView: NSTextView {
 
     /// All of the text is visible once the box has settled.
     var textFitsVisibleHeight: Bool { textHeight <= maximumVisibleHeight + 0.5 }
+
+    /// Plain text that reaches an agent as typed: no rich text, no pasted
+    /// graphics, and no smart quotes or dashes (a shell command with curly
+    /// quotes or an em dash in place of `--` no longer runs).
+    func configurePlainTextEditing() {
+        isRichText = false
+        importsGraphics = false
+        allowsUndo = true
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -401,6 +416,37 @@ final class MacComposerTextView: NSTextView {
         onMarkedTextChange?()
     }
 
+    // MARK: Drop
+
+    private func dropsImage(_ sender: NSDraggingInfo) -> Bool {
+        onDropImage != nil && MacComposerPastePolicy.attachesImage(sender.draggingPasteboard)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropsImage(sender) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropsImage(sender) ? .copy : super.draggingUpdated(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropsImage(sender) || super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let onDropImage, MacComposerPastePolicy.attachesImage(sender.draggingPasteboard) else {
+            return super.performDragOperation(sender)
+        }
+        guard let image = MacComposerPastePolicy.image(from: sender.draggingPasteboard) else { return false }
+        return onDropImage(image)
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        if let sender, dropsImage(sender) { return }
+        super.concludeDragOperation(sender)
+    }
+
     override func paste(_ sender: Any?) {
         onTakeOver?()
         super.paste(sender)
@@ -431,6 +477,9 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
     let onSubmit: () -> Void
     let onSelection: (NSRange) -> Void
     let onTakeOver: () -> Void
+    /// A dropped image (see `MacComposerTextView.onDropImage`); nil drops
+    /// image files in as text.
+    var onDropImage: ((NSImage) -> Bool)? = nil
     /// Taller editors (the new-session composer); nil = one Composer row.
     var minLines: CGFloat? = nil
     var maxLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
@@ -661,6 +710,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onTakeOver = onTakeOver
         textView.onSubmit = onSubmit
+        textView.onDropImage = onDropImage
         textView.onPasteCompleted = { [weak coordinator = context.coordinator] in
             coordinator?.restoreFocusAfterPaste()
         }
@@ -675,9 +725,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             coordinator.reportVisualTextPresence(of: textView, deferred: coordinator.isApplying)
         }
         textView.drawsBackground = false
-        textView.isRichText = false
-        textView.importsGraphics = false
-        textView.allowsUndo = true
+        textView.configurePlainTextEditing()
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -720,6 +768,7 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         guard let textView = scrollView.documentView as? MacComposerTextView else { return }
         textView.onTakeOver = onTakeOver
         textView.onSubmit = onSubmit
+        textView.onDropImage = onDropImage
         textView.onPasteCompleted = { [weak coordinator = context.coordinator] in
             coordinator?.restoreFocusAfterPaste()
         }

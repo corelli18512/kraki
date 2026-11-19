@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AccountUsageMonitor, UsageAuthError, UsageClient, UsageHistory, discoverCredentials, hash, maskEmail,
-  parseClaudeUsage, parseCodexAppServer, parseCodexUsage, retryAt, type FetchLike,
+  codexExecutables, parseClaudeUsage, parseCodexAppServer, parseCodexUsage, retryAt, type FetchLike,
 } from '../account-usage.js';
 
 const dirs: string[] = [];
@@ -16,6 +16,30 @@ const jwt = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toStrin
 function paths(root: string) {
   return { piAuth: join(root, 'pi', 'auth.json'), codexHome: join(root, 'codex'), claudeCredentials: join(root, 'claude', '.credentials.json') };
 }
+
+describe.runIf(process.platform === 'darwin')('codexExecutables (K-287)', () => {
+  it('uses the same desktop-app CLI locations as agent detection', () => {
+    const home = tmp();
+    const bin = join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex-cli', 'bin', 'codex');
+    mkdirSync(join(bin, '..'), { recursive: true });
+    writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+    const list = codexExecutables({}, home);
+    expect(list).toContain(bin);
+    expect(list.at(-1)).toBe('codex');
+  });
+
+  it('skips a Contents/Resources/codex directory', () => {
+    const home = tmp();
+    const dir = join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex');
+    mkdirSync(dir, { recursive: true });
+    const bin = join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex-cli', 'bin', 'codex');
+    mkdirSync(join(bin, '..'), { recursive: true });
+    writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+    const list = codexExecutables({}, home);
+    expect(list).not.toContain(dir);
+    expect(list).toContain(bin);
+  });
+});
 
 describe('discoverCredentials', () => {
   it('reads Pi OAuth (ignoring API keys), Codex auth.json and Claude Code credentials', () => {

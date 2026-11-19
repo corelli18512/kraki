@@ -4,8 +4,16 @@ const STORAGE_KEY = 'kraki-theme';
 
 type Theme = 'light' | 'dark' | 'system';
 
+/** A choice storage could not save: holds for this page (K-201). */
+let chosenTheme: Theme | null = null;
+
 function getStored(): Theme {
-  return (localStorage.getItem(STORAGE_KEY) as Theme) ?? 'system';
+  if (chosenTheme) return chosenTheme;
+  try {
+    return (localStorage.getItem(STORAGE_KEY) as Theme) ?? 'system';
+  } catch {
+    return 'system';
+  }
 }
 
 function resolveTheme(pref: Theme): boolean {
@@ -18,7 +26,7 @@ function resolveTheme(pref: Theme): boolean {
 function applyTheme(dark: boolean) {
   document.documentElement.classList.toggle('dark', dark);
   // Update PWA status bar color to match theme
-  const color = dark ? '#0f172a' : '#ffffff';
+  const color = dark ? '#020617' : '#ffffff'; // = index.html, manifest.json
   document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
     meta.setAttribute('content', color);
   });
@@ -41,7 +49,12 @@ function getSnapshot(): Theme {
 }
 
 export function setTheme(theme: Theme) {
-  localStorage.setItem(STORAGE_KEY, theme);
+  try {
+    localStorage.setItem(STORAGE_KEY, theme);
+    chosenTheme = null;
+  } catch {
+    chosenTheme = theme; // storage full or blocked
+  }
   applyTheme(resolveTheme(theme));
   emitChange();
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decidePairingLink, isOfficialRelay, shouldAutoOpenStore } from './pairing-link';
+import { decidePairingLink, isOfficialRelay } from './pairing-link';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1';
 const ANDROID = 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36';
@@ -15,20 +15,28 @@ describe('pairing link (release review A10 / D5)', () => {
     expect(isOfficialRelay('not a url')).toBe(false);
   });
 
+  it('K-243: requires TLS for Kraki relays (as iOS does)', () => {
+    expect(isOfficialRelay('ws://relay.kraki.chat')).toBe(false);
+    expect(isOfficialRelay('ws://cn.relay.kraki.chat')).toBe(false);
+    expect(decidePairingLink('?relay=ws://relay.kraki.chat&token=pt_1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'relay.kraki.chat' });
+    // Local development relays stay plain ws://.
+    expect(isOfficialRelay('ws://localhost:4000')).toBe(true);
+  });
+
+  it('K-001: asks before a token-less ?relay= points a signed-out browser at another server', () => {
+    expect(decidePairingLink('?relay=wss://evil.example', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+    expect(decidePairingLink('?relay=wss://evil.example', ANDROID, 0, false, 'wss://evil.example')).toEqual({ kind: 'none' });
+    expect(decidePairingLink('?relay=wss://relay.kraki.chat', IPHONE)).toEqual({ kind: 'none' });
+    expect(decidePairingLink('?relay=ws://localhost:4000', ANDROID)).toEqual({ kind: 'none' });
+    // Signed in: the relay client ignores it, so nothing to confirm.
+    expect(decidePairingLink('?relay=wss://evil.example', ANDROID, 0, true)).toEqual({ kind: 'none' });
+    // A pairing link is always confirmed, signed in or not.
+    expect(decidePairingLink('?relay=wss://evil.example&token=pt_1', ANDROID, 0, true)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+  });
+
   it('offers the app on iPhone without spending the token', () => {
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1', IPHONE)).toEqual({ kind: 'offer-app' });
     expect(decidePairingLink('?relay=wss://relay.kraki.chat&token=pt_1&web=1', IPHONE)).toEqual({ kind: 'proceed' });
-  });
-
-  it('opens the App Store once per code, so coming back does not loop', () => {
-    const data = new Map<string, string>();
-    const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v); } };
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_1')).toBe(true);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_1')).toBe(false);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat&token=pt_2')).toBe(true);
-    expect(shouldAutoOpenStore(storage, '?relay=wss://relay.kraki.chat')).toBe(false);
-    const blocked = { getItem: () => null, setItem: () => { throw new Error('blocked'); } };
-    expect(shouldAutoOpenStore(blocked, '?token=pt_3')).toBe(false);
   });
 
   it('treats iPadOS (desktop user agent with touch) as iOS', () => {
@@ -43,7 +51,14 @@ describe('pairing link (release review A10 / D5)', () => {
 
   it('asks before connecting to a non-Kraki relay', () => {
     expect(decidePairingLink('?relay=wss://my.server:4000&token=pt_1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'my.server:4000' });
-    expect(decidePairingLink('?relay=wss://my.server:4000&token=pt_1&confirmRelay=1', ANDROID)).toEqual({ kind: 'proceed' });
+    expect(decidePairingLink('?relay=wss://my.server:4000&token=pt_1', ANDROID, 0, false, 'wss://my.server:4000')).toEqual({ kind: 'proceed' });
+  });
+
+  it('K-001: the link cannot carry the confirmation itself', () => {
+    expect(decidePairingLink('?relay=wss://evil.example&confirmRelay=1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+    expect(decidePairingLink('?relay=wss://evil.example&token=pt_1&confirmRelay=1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
+    // A confirmation of another relay does not count.
+    expect(decidePairingLink('?relay=wss://evil.example&token=pt_1', ANDROID, 0, false, 'wss://my.server:4000')).toEqual({ kind: 'confirm-relay', host: 'evil.example' });
   });
 
   it('does nothing without a token', () => {
@@ -55,11 +70,16 @@ describe('pairing link (release review A10 / D5)', () => {
     // any static import of the app from main.tsx would bypass this gate.
     const main = readFileSync(resolve(__dirname, '../main.tsx'), 'utf8');
     const staticImports = [...main.matchAll(/^import\s.*?from\s+'([^']+)'|^import\s+'([^']+)'/gm)].map(m => m[1] ?? m[2]);
-    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/desktop-auth-callback', './lib/pairing-link']);
+    expect(staticImports.sort()).toEqual(['./i18n', './index.css', './lib/boot-loader', './lib/desktop-auth-callback', './lib/pairing-link', './lib/storage-guard']);
     expect(main).toContain("import('./boot')");
     const gate = readFileSync(resolve(__dirname, 'pairing-link.ts'), 'utf8');
     const gateImports = [...gate.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1]);
     expect(gateImports).toEqual(['../i18n']);
+    const guard = readFileSync(resolve(__dirname, 'storage-guard.ts'), 'utf8');
+    expect([...guard.matchAll(/^import\s/gm)]).toEqual([]);
+    const loader = readFileSync(resolve(__dirname, 'boot-loader.ts'), 'utf8');
+    // storage-guard has no imports at all (checked above).
+    expect([...loader.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n', './storage-guard']);
     const callback = readFileSync(resolve(__dirname, 'desktop-auth-callback.ts'), 'utf8');
     expect([...callback.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map(m => m[1])).toEqual(['../i18n']);
     // Localization loads before the gate, so it must stay app-free: only

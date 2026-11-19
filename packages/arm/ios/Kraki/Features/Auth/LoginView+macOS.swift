@@ -29,6 +29,7 @@ struct MacEntryGateView: View {
     @State private var appeared = false
     @State private var introDone = false
     @State private var pageHeight: CGFloat = 0
+    @State private var commandCopied = false
 
     var body: some View {
         Group {
@@ -207,15 +208,22 @@ struct MacEntryGateView: View {
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString("kraki connect", forType: .string)
+                    commandCopied = true
                 } label: {
-                    Image(systemName: "doc.on.doc")
+                    Image(systemName: commandCopied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11, weight: .semibold))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.textSecondary)
-                .help("Copy command")
+                .foregroundStyle(commandCopied ? Color(hex: 0x34D399) : Color.textSecondary)
+                .help(commandCopied ? String(localized: "Copied") : String(localized: "Copy command"))
                 .accessibilityLabel("Copy kraki connect command")
+                .accessibilityValue(commandCopied ? String(localized: "Copied") : "")
+                .task(id: commandCopied) {
+                    guard commandCopied else { return }
+                    try? await Task.sleep(for: .seconds(1.5))
+                    commandCopied = false
+                }
             }
             .padding(.leading, 13)
             .padding(.trailing, 7)

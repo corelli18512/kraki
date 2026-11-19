@@ -32,3 +32,14 @@ describe('settings.css — dark native focus placement', () => {
     expect(rule(path, '.ds-sheet .ds-button:focus-visible').getPropertyValue('outline-offset')).toBe('2px');
   });
 });
+
+describe('settings.css — long translations (K-233)', () => {
+  it('lets the Theme control grow and wrap instead of overflowing its row', () => {
+    const path = 'src/components/layout/settings.css';
+    const segment = rule(path, '.kp-segment');
+    expect(segment.getPropertyValue('width')).toBe('');
+    expect(segment.getPropertyValue('min-width')).toBe('195px');
+    expect(segment.getPropertyValue('max-width')).toBe('100%');
+    expect(rule(path, '.kp-segment button').getPropertyValue('overflow-wrap')).toBe('anywhere');
+  });
+});

@@ -20,6 +20,8 @@ struct MacChatView: View {
     /// Height the floating Composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
     @State private var showInfo = false
+    /// Session Info was opened by Rename…: it starts with the title being edited.
+    @State private var infoStartsRenaming = false
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
     init(
@@ -189,10 +191,14 @@ struct MacChatView: View {
             // From the menu (current chat) or a session row's Rename… (that one).
             if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
             _ = MacSessionInfoRequest.take(sessionId)
+            infoStartsRenaming = true
             showInfo = true
         }
         .onChange(of: sessionId, initial: true) { _, id in
-            if MacSessionInfoRequest.take(id) { showInfo = true }
+            if MacSessionInfoRequest.take(id) {
+                infoStartsRenaming = true
+                showInfo = true
+            }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
@@ -215,6 +221,7 @@ struct MacChatView: View {
                 stepsTarget = StepsTarget(seq: seq, live: viewModel.card != nil)
                 viewModel.requestSteps(forBubbleSeq: seq)
             case "info":
+                infoStartsRenaming = false
                 showInfo = true
             case "jumpLatest":
                 reanchorNewest(viewModel)
@@ -243,7 +250,7 @@ struct MacChatView: View {
         }
         .sheet(isPresented: $showInfo) {
             if let session {
-                MacSessionInfoSheet(session: session)
+                MacSessionInfoSheet(session: session, startsRenaming: infoStartsRenaming)
                     .environment(appState)
             }
         }
@@ -283,6 +290,7 @@ struct MacChatView: View {
         ZStack {
             if let session, !modePickerExpanded {
                 Button {
+                    infoStartsRenaming = false
                     showInfo = true
                 } label: {
                     Text(showsSyncing ? String(localized: "Syncing…") : session.displayTitle)
@@ -507,9 +515,11 @@ private struct MacSessionInfoSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let session: SessionInfo
+    /// Rename…: open with the title field focused for editing.
+    let startsRenaming: Bool
 
-    @State private var editingTitle = false
-    @State private var titleDraft = ""
+    @State private var editingTitle: Bool
+    @State private var titleDraft: String
     @State private var showDeleteConfirmation = false
     @State private var sessionIDCopied = false
     @State private var sessionIDCopyFeedbackTask: Task<Void, Never>?
@@ -517,8 +527,11 @@ private struct MacSessionInfoSheet: View {
     @State private var reasoningEffort: ReasoningEffort?
     @FocusState private var titleFocused: Bool
 
-    init(session: SessionInfo) {
+    init(session: SessionInfo, startsRenaming: Bool = false) {
         self.session = session
+        self.startsRenaming = startsRenaming
+        _editingTitle = State(initialValue: startsRenaming)
+        _titleDraft = State(initialValue: startsRenaming ? (session.title ?? session.autoTitle ?? "") : "")
         _selectedModel = State(initialValue: session.model ?? "")
         _reasoningEffort = State(initialValue: session.reasoningEffort)
     }
@@ -563,7 +576,12 @@ private struct MacSessionInfoSheet: View {
             HStack {
                 Text("Session Info").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") {
+                    // Done and Esc close the sheet without the title field
+                    // losing focus first: save what was typed.
+                    saveTitleIfEdited()
+                    dismiss()
+                }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 20)
@@ -584,7 +602,10 @@ private struct MacSessionInfoSheet: View {
         }
         .frame(width: 440, height: 580)
         .background(Color.surfacePrimary)
-        .onAppear { syncModelConfiguration() }
+        .onAppear {
+            syncModelConfiguration()
+            if startsRenaming { DispatchQueue.main.async { titleFocused = true } }
+        }
         .onChange(of: liveSession.model) { _, _ in syncModelConfiguration() }
         .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
@@ -620,7 +641,7 @@ private struct MacSessionInfoSheet: View {
                         }
                 } else {
                     Button {
-                        titleDraft = session.title ?? session.autoTitle ?? ""
+                        titleDraft = titleEditOriginal
                         editingTitle = true
                         DispatchQueue.main.async { titleFocused = true }
                     } label: {
@@ -676,25 +697,15 @@ private struct MacSessionInfoSheet: View {
         )
     }
 
-    private func normalizedEffort(
-        for model: String,
-        preferred: ReasoningEffort?
-    ) -> ReasoningEffort? {
-        guard let detail = modelDetails.first(where: { $0.id == model }),
-              detail.supportsReasoningEffort,
-              let efforts = detail.supportedReasoningEfforts,
-              !efforts.isEmpty else { return nil }
-        if let preferred, efforts.contains(preferred) { return preferred }
-        if let defaultEffort = detail.defaultReasoningEffort,
-           efforts.contains(defaultEffort) {
-            return defaultEffort
-        }
-        return efforts.first
+    private func normalizedEffort(for model: String, preferred: ReasoningEffort?) -> ReasoningEffort? {
+        MacSessionInfoRules.effort(for: model, in: modelDetails, preferred: preferred)
     }
 
     private func applyModel(_ model: String) {
         selectedModel = model
-        let effort = normalizedEffort(for: model, preferred: nil)
+        let effort = MacSessionInfoRules.effortAfterModelChange(
+            to: model, in: modelDetails, current: reasoningEffort
+        )
         reasoningEffort = effort
         appState.commandSender?.setSessionModel(
             sessionId: session.id,
@@ -834,11 +845,25 @@ private struct MacSessionInfoSheet: View {
         }
     }
 
+    /// What the title field starts from.
+    private var titleEditOriginal: String {
+        session.title ?? session.autoTitle ?? ""
+    }
+
     private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
-        editingTitle = false
+        saveTitleIfEdited()
         titleFocused = false
+    }
+
+    /// Not editing, or unchanged: no rename, so an auto title does not
+    /// become a fixed one (and clearing a never-set title is a no-op).
+    private func saveTitleIfEdited() {
+        if let title = MacSessionInfoRules.titleToSaveOnClose(
+            editing: editingTitle, draft: titleDraft, session: session
+        ) {
+            appState.commandSender?.renameSession(sessionId: session.id, title: title)
+        }
+        editingTitle = false
     }
 
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {

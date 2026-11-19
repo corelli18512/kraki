@@ -2,7 +2,7 @@
 // APNs push provider — HTTP/2 + JWT
 // ------------------------------------------------------------
 
-import { createSign } from 'node:crypto';
+import { createSign, randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
 import { readFileSync } from 'node:fs';
 import { getLogger } from '../logger.js';
@@ -17,6 +17,13 @@ const JWT_TTL_MS = 50 * 60 * 1000; // Refresh JWT every 50 minutes (APNs require
 export function isConnectionError(error: string | undefined): boolean {
   if (!error) return false;
   return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|GOAWAY|socket hang up/i.test(error);
+}
+
+/** The HTTP/2 session (or this request's stream on it) was dropped before
+ *  APNs answered: the push was not delivered and a fresh session can carry it. */
+export function isSessionDropped(error: string | undefined): boolean {
+  if (!error) return false;
+  return /session has been destroyed|session.*closed|REFUSED_STREAM|stream has been cancel|ERR_HTTP2_(INVALID_SESSION|STREAM_CANCEL|GOAWAY_SESSION|SESSION_ERROR)/i.test(error);
 }
 
 /** APNs reasons meaning this token will never work for this topic again.
@@ -107,28 +114,38 @@ export class ApnsProvider implements PushProvider {
     const logger = getLogger();
     // The session this attempt uses (opened now if there is none yet).
     const sessionBefore = this.getSession(host);
-    const result = await this.attemptSend(host, token, bundleId, body);
+    // Same collapse id on a retry: if the first attempt reached the phone
+    // after all (a timeout), the retry replaces it instead of showing twice.
+    const collapseId = randomUUID();
+    const result = await this.attemptSend(host, token, bundleId, body, collapseId);
+    if (result.success || result.gone) return result;
 
-    // Retry once on connection-level errors (stale session after idle: an
-    // expected event, not a failure unless the retry fails too).
-    // Only destroy if the session hasn't already been replaced by a concurrent retry.
-    if (!result.success && isConnectionError(result.error)) {
+    // Retry once when the push was lost on our side, not refused for the
+    // token: a stale or dropped session (expected after idle, not a failure
+    // unless the retry fails too), a request that timed out, or an expired
+    // signing token (attemptSend already dropped it, so the retry signs anew).
+    const connection = isConnectionError(result.error);
+    const freshSession = connection || isSessionDropped(result.error) || result.error === 'timeout';
+    const providerToken = result.error === 'ExpiredProviderToken';
+    if (!freshSession && !providerToken) return result;
+    if (connection) {
       logger.info('APNs connection error, retrying with fresh session', { error: result.error, tokenSuffix: token.slice(-8) });
-      if (this.sessions.get(host) === sessionBefore) {
-        this.destroySession(host);
-      }
-      const startedAt = performance.now();
-      const retry = await this.attemptSend(host, token, bundleId, body);
-      const ms = Math.round(performance.now() - startedAt);
-      if (retry.success) logger.info('APNs retry succeeded', { tokenSuffix: token.slice(-8), ms, apnsId: retry.id });
-      else logger.warn('APNs retry failed', { tokenSuffix: token.slice(-8), ms, error: retry.error });
-      return { ...retry, retried: true };
+    } else {
+      logger.info('APNs push not delivered, retrying', { error: result.error, tokenSuffix: token.slice(-8) });
     }
-
-    return result;
+    // Only destroy if the session hasn't already been replaced by a concurrent retry.
+    if (freshSession && this.sessions.get(host) === sessionBefore) {
+      this.destroySession(host);
+    }
+    const startedAt = performance.now();
+    const retry = await this.attemptSend(host, token, bundleId, body, collapseId);
+    const ms = Math.round(performance.now() - startedAt);
+    if (retry.success) logger.info('APNs retry succeeded', { tokenSuffix: token.slice(-8), ms, apnsId: retry.id });
+    else logger.warn('APNs retry failed', { tokenSuffix: token.slice(-8), ms, error: retry.error });
+    return { ...retry, retried: true };
   }
 
-  private attemptSend(host: string, token: string, bundleId: string, body: string): Promise<PushResult> {
+  private attemptSend(host: string, token: string, bundleId: string, body: string, collapseId: string): Promise<PushResult> {
     const logger = getLogger();
     const jwt = this.getJwt();
     const session = this.getSession(host);
@@ -140,15 +157,23 @@ export class ApnsProvider implements PushProvider {
         settled = true;
         resolveOnce(result);
       };
-      const req = session.request({
-        ':method': 'POST',
-        ':path': `/3/device/${token}`,
-        'authorization': `bearer ${jwt}`,
-        'apns-topic': bundleId,
-        'apns-push-type': 'alert',
-        'apns-priority': '10',
-        'content-type': 'application/json',
-      });
+      let req: http2.ClientHttp2Stream;
+      try {
+        req = session.request({
+          ':method': 'POST',
+          ':path': `/3/device/${token}`,
+          'authorization': `bearer ${jwt}`,
+          'apns-topic': bundleId,
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'apns-collapse-id': collapseId,
+          'content-type': 'application/json',
+        });
+      } catch (err) {
+        // The session was closed under us (e.g. destroyed by a GOAWAY).
+        resolve({ success: false, error: (err as Error).message });
+        return;
+      }
 
       let responseData = '';
       let statusCode = 0;
@@ -177,8 +202,10 @@ export class ApnsProvider implements PushProvider {
             if (parsed.reason) errorReason = parsed.reason;
           } catch { /* ignore parse errors */ }
           if (errorReason === 'ExpiredProviderToken' || errorReason === 'InvalidProviderToken') {
-            // Our signing token, not the device token: mint a fresh JWT next time.
-            this.jwt = null;
+            // Our signing token, not the device token: mint a fresh JWT next
+            // time. Only if it is still the one this request used: concurrent
+            // failures must not each mint one (TooManyProviderTokenUpdates).
+            if (this.jwt?.token === jwt) this.jwt = null;
           }
           if (isPermanentTokenFailure(errorReason)) {
             logger.info('APNs token rejected, marking for removal', { status: statusCode, reason: errorReason, tokenSuffix: token.slice(-8) });

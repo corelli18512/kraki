@@ -140,7 +140,6 @@
     "Mode: %@. Click to change": "模式：%@。点按更改",
     "Model": "模型",
     "Name": "名称",
-    "Needs your approval · Safe mode": "需要你批准 · 安全模式",
     "Next image": "下一张图片",
     "No conversation messages": "暂无对话消息",
     "No image selected": "未选择图片",
@@ -264,7 +263,11 @@
     "live": "实时",
     "subagent": "子 Agent",
     "tool": "工具",
-    "… %lld more lines": "…还有 %lld 行"
+    "… %lld more lines": "…还有 %lld 行",
+    "Couldn't load steps": "无法加载步骤",
+    "Steps come from your computer. Check that it is online, then try again.": "步骤来自你的电脑。请确认它在线后重试。",
+    "Showing the first %@ of %@.": "仅显示前 %1$@（共 %2$@）。",
+    "Already answered on another device.": "已在另一台设备上回答。"
   },
   "englishPlurals": {
     "%lld columns": {

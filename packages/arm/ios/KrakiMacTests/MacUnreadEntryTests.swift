@@ -52,6 +52,16 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx)), 1.5)
     }
 
+    /// K-042: more new messages than the 15-row entry window holds. The chat
+    /// opens on the first one, not on whatever row starts the newest window.
+    func testBacklogLargerThanTheWindowOpensAtTheFirstUnread() throws {
+        let fx = try open(stored: 200, readSeq: 10)
+        drain(1_200)
+        XCTAssertEqual(try XCTUnwrap(screenY(fx, seq: 11), "first new message on screen"), landing, accuracy: 2)
+        XCTAssertEqual(fx.sv.automationUnreadEntry, .anchored)
+        XCTAssertGreaterThan(distanceToBottom(fx), 300)
+    }
+
     func testAReadSessionOpensAtTheTail() throws {
         let fx = try open(stored: 40, readSeq: 40)
         drain(1_200)
@@ -128,6 +138,7 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
         // As MainWindowView does on selection, before marking the Session read.
         if fromNotification { app.sessionStore.notificationEntrySessions.insert(sid) }
         app.sessionStore.captureEntryUnreadBoundary(sid)
+        app.messageProvider?.anchorEntryWindowAtFirstUnread(sid)
         let vm = ChatViewModel(sessionId: sid, appState: app)
         vm.refreshMessageCache()
         let host = NSHostingView(rootView: MacChatView(sessionId: sid, prebuiltViewModel: vm).environment(app))

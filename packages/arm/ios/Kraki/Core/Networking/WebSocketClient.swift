@@ -214,7 +214,11 @@ final class WebSocketClient: NSObject {
         state = .connecting
 
         let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = true
+        // Fail fast and let the owned reconnect cadence retry. Waiting for
+        // connectivity also parks a refused connection (relay down or
+        // restarting) until the connect deadline, up to 30 s, so the client
+        // came back that long after the relay did.
+        configuration.waitsForConnectivity = false
         session = URLSession(
             configuration: configuration,
             delegate: self,
@@ -604,6 +608,9 @@ final class WebSocketClient: NSObject {
         }
     }
 
+    /// Deadline of the ping `probeAfterResume` sends (see there).
+    private var resumeProbeDeadline: DispatchWorkItem?
+
     /// Keep the application-level JSON heartbeat for relay compatibility. The
     /// protocol-level ping above is the actual client-side liveness proof;
     /// successful local writes must never count as proof of connectivity.
@@ -708,12 +715,55 @@ final class WebSocketClient: NSObject {
         lastWriteCompletedAt = nil
         phaseDeadline?.cancel(); phaseDeadline = nil
         authReplyDeadline?.cancel(); authReplyDeadline = nil
+        resumeProbeDeadline?.cancel(); resumeProbeDeadline = nil
         isAuthenticated = false
         stopPing()
         stopLivenessMonitoring()
         stableConnectionWorkItem?.cancel()
         stableConnectionWorkItem = nil
         cancelReconnect()
+    }
+}
+
+// MARK: - Resume probe
+
+extension WebSocketClient {
+    /// A socket kept through a short background visit may have gone
+    /// half-open while the app was suspended (network change, NAT timeout).
+    /// The regular liveness ping tolerates 22 s of latency, so the chat stayed
+    /// stale for ~20 s with no indicator. On return ask for proof at once,
+    /// with a short deadline: a dead link is replaced within a few seconds
+    /// (a false alarm costs one ~1 s reconnect).
+    static let resumeProbeTimeout: TimeInterval = 5
+    func probeAfterResume(timeout: TimeInterval = resumeProbeTimeout) {
+        guard state == .connected, let probeTask = task else { return }
+        resumeProbeDeadline?.cancel()
+        let epoch = generation
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == epoch, self.task === probeTask else { return }
+            self.resumeProbeDeadline = nil
+            // Real payload still streaming in proves the link (the pong may
+            // queue behind it); the regular liveness check owns that case.
+            let now = Date()
+            if self.isReceivingPayload() || self.isUploading(now) { return }
+            KLog.d("⚠️ No pong after returning to the foreground — replacing stale connection")
+            self.recover(reason: "resume_ping_timeout")
+        }
+        resumeProbeDeadline = deadline
+        probeTask.sendPing { [weak self, weak probeTask] error in
+            DispatchQueue.main.async {
+                guard let self, let probeTask, self.task === probeTask else { return }
+                self.resumeProbeDeadline?.cancel()
+                self.resumeProbeDeadline = nil
+                if let error {
+                    KLog.d("⚠️ WebSocket resume ping failed: \(error)")
+                    self.recover(reason: "ping_failed")
+                } else {
+                    self.lastLivenessAt = Date()
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
     }
 }
 
@@ -758,6 +808,35 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
         KLog.d("🔒 WebSocket closed code=\(closeCode.rawValue) reason=\(reasonStr) intentional=\(intentionalClose) url=\(relayURL)")
         recover(reason: "peer_closed", code: closeCode.rawValue)
+    }
+
+    /// A captive portal answers the upgrade with a redirect to its login
+    /// page on another host (302). Following it left every attempt hanging
+    /// on the portal page until the connect timeout (10 s, doubling to 30 s),
+    /// so recovery after leaving the portal took ~30 s. Refusing a cross-host
+    /// redirect fails the attempt at once and keeps the fast retry cadence.
+    /// A redirect on the relay's own host (a self-hosted relay's reverse
+    /// proxy adding a trailing slash) is followed, as before (B17). (Region
+    /// moves are protocol-level `wrong_region`, never HTTP redirects.)
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        if Self.followsRedirect(from: task.originalRequest?.url ?? response.url, to: request.url) {
+            completionHandler(request)
+            return
+        }
+        KLog.d("⚠️ Refusing HTTP \(response.statusCode) redirect of the relay upgrade to \(request.url?.host ?? "?")")
+        completionHandler(nil)
+    }
+
+    /// Only a redirect that stays on the relay's host.
+    static func followsRedirect(from original: URL?, to target: URL?) -> Bool {
+        guard let from = original?.host?.lowercased(), let to = target?.host?.lowercased() else { return false }
+        return from == to
     }
 
     func urlSession(

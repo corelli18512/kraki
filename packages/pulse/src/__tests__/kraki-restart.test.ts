@@ -196,3 +196,28 @@ test('a new-epoch RESET far ahead of the old cursor is accepted (parity with Swi
   toComputer(relay.send(enc.encode('m')).effects);
   expect(delivered).toEqual(['m']);
 });
+
+test('a restarted peer far ahead is accepted when its HELLO arrives before its RESET (B11)', () => {
+  const far = (1n << 24n) + 1000n;
+  const relay = new Endpoint({
+    epoch: 'relay:new', durable: { supported: true },
+    restore: { epoch: 'relay:old', sendSeq: String(far), outboxBase: String(far), outbox: [], recvCursor: '0', peerEpoch: 'computer:1', disconnectedAtMs: null } as Snapshot,
+  });
+  const { computer, delivered, toComputer, toRelay } = (() => {
+    const c = new Endpoint({ epoch: 'computer:1', durable: { supported: false } });
+    Object.assign(c as unknown as Record<string, unknown>, { peerEpoch: 'relay:old', recvCursor: 17n });
+    const got: string[] = [];
+    const toC = (effects: Effects) => {
+      for (const e of effects) if (e.t === 'transmit') for (const r of c.onBytes(e.bytes, 1)) if (r.t === 'deliver') got.push(dec.decode(r.payload));
+    };
+    const toR = (effects: Effects) => { for (const e of effects) if (e.t === 'transmit') toC(relay.onBytes(e.bytes, 1)); };
+    return { computer: c, delivered: got, toComputer: toC, toRelay: toR };
+  })();
+  // The HELLO first: the computer adopts the new epoch (cursor 0), then the
+  // relay's RESET to its first deliverable seq lands in that same epoch.
+  const relayHello = relay.onConnected(1);
+  toComputer(relayHello);
+  toRelay(computer.onConnected(1));
+  toComputer(relay.send(enc.encode('m')).effects);
+  expect(delivered).toEqual(['m']);
+});

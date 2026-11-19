@@ -9,6 +9,9 @@ import type { LocalSession } from '@kraki/protocol';
 import { Download, Search, ChevronRight, ChevronDown, Loader2, Check, Plus, FolderGit2, Folder, Home, Monitor } from 'lucide-react';
 import { useEscape } from '../../hooks/useEscape';
 
+/** No local_sessions_list this long after asking: the computer is not answering. */
+const SCAN_ANSWER_MS = 30_000;
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -236,6 +239,8 @@ export function ImportSessionDialog({ open, onClose }: Props) {
   const [search, setSearch] = useState('');
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [selectedDevice, setSelectedDevice] = useState('');
+  const [scanAttempt, setScanAttempt] = useState(0);
+  const [scanUnanswered, setScanUnanswered] = useState(false);
 
   const tentacles = useMemo(
     () => [...devices.values()].filter(d => d.role === 'tentacle' && d.online),
@@ -260,8 +265,16 @@ export function ImportSessionDialog({ open, onClose }: Props) {
       wsClient.requestLocalSessions(selectedDevice);
       setSearch('');
       setImportingIds(new Set());
+      setScanUnanswered(false);
     }
-  }, [open, selectedDevice]);
+  }, [open, selectedDevice, scanAttempt]);
+
+  // A computer that never answers must not leave "Scanning…" up forever.
+  useEffect(() => {
+    if (!open || !loading) return;
+    const timer = setTimeout(() => setScanUnanswered(true), SCAN_ANSWER_MS);
+    return () => clearTimeout(timer);
+  }, [open, loading, selectedDevice, scanAttempt]);
 
   const handleSelectDevice = (id: string) => {
     setSelectedDevice(id);
@@ -377,8 +390,17 @@ export function ImportSessionDialog({ open, onClose }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-kraki-500" />
-              <p className="mt-2 text-sm text-text-muted">{t('import.scanning')}</p>
+              {scanUnanswered ? <>
+                <p className="text-sm text-text-secondary">
+                  {t('import.noAnswer', { name: devices.get(selectedDevice)?.name ?? '' })}
+                </p>
+                <button type="button" className="mt-2 text-xs font-medium text-kraki-500" onClick={() => setScanAttempt((n) => n + 1)}>
+                  {t('import.tryAgain')}
+                </button>
+              </> : <>
+                <Loader2 className="h-6 w-6 animate-spin text-kraki-500" />
+                <p className="mt-2 text-sm text-text-muted">{t('import.scanning')}</p>
+              </>}
             </div>
           ) : groups.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12">

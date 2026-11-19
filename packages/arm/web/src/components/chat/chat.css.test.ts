@@ -46,3 +46,11 @@ describe('chat.css — dark live-turn action colours', () => {
     expect(styleFor('ksteps', true).backgroundColor).toBe('rgba(255, 255, 255, 0.048)')  // transcript-D-02 calibration (shared capsule);
   });
 });
+
+// K-103: the field may shrink below the textarea's intrinsic width, so Send
+// stays on a 320 px screen (verified in Chromium; jsdom has no layout).
+describe('chat.css — composer at 320 px (K-103)', () => {
+  it('lets the composer field shrink', () => {
+    expect(styleFor('kcomposer-field', false).minWidth).toBe('0');
+  });
+});

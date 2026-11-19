@@ -133,13 +133,44 @@ export class CodexAdapter extends AgentAdapter {
       throw new Error('Codex is not logged in. Run `codex login` (or set OPENAI_API_KEY) and restart Kraki.');
     }
 
+    await this.loadModels(this.rpc!);
+    logger.info({ models: this.models.map((m) => m.id) }, 'Codex adapter started');
+  }
+
+  /** First delay before re-listing models after a failed or empty model/list. */
+  static MODEL_RETRY_FIRST_MS = 60_000;
+  private modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private modelRetryDelayMs = CodexAdapter.MODEL_RETRY_FIRST_MS;
+
+  /** model/list; a failed or empty list is retried with backoff (up to 15 min)
+   *  and a recovery re-greets the apps. Without this the picker stayed empty
+   *  until the daemon restarted. */
+  private async loadModels(rpc: CodexRpcProcess): Promise<void> {
     try {
-      const res = await this.rpc!.request<{ data?: unknown }>('model/list', {});
+      const res = await rpc.request<{ data?: unknown }>('model/list', {});
       this.models = mapCodexModels(res?.data);
     } catch (err) {
       logger.warn({ err: errMessage(err) }, 'codex model/list failed');
     }
-    logger.info({ models: this.models.map((m) => m.id) }, 'Codex adapter started');
+    if (this.models.length === 0) this.scheduleModelRetry();
+  }
+
+  private scheduleModelRetry(): void {
+    if (this.stopping || this.modelRetryTimer) return;
+    const delay = this.modelRetryDelayMs;
+    this.modelRetryDelayMs = Math.min(delay * 2, 15 * 60_000);
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = undefined;
+      if (this.stopping) return;
+      if (!this.rpc?.alive) { this.scheduleModelRetry(); return; }
+      void this.loadModels(this.rpc).then(() => {
+        if (this.stopping || this.models.length === 0) return;
+        logger.info({ models: this.models.map((m) => m.id) }, 'codex model list recovered');
+        this.modelRetryDelayMs = CodexAdapter.MODEL_RETRY_FIRST_MS;
+        this.onCapabilitiesChanged?.();
+      });
+    }, delay);
+    this.modelRetryTimer.unref?.();
   }
 
   private async spawnServer(): Promise<void> {
@@ -214,6 +245,8 @@ export class CodexAdapter extends AgentAdapter {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
+    this.modelRetryTimer = undefined;
     for (const s of this.sessions.values()) this.dropPendingCards(s, true);
     const rpc = this.rpc;
     this.rpc = null;
@@ -492,14 +525,22 @@ export class CodexAdapter extends AgentAdapter {
     if (s.abortPending) void this.interruptActive(s);
   }
 
+  /** How long Stop waits for the app-server to confirm turn/interrupt. */
+  static INTERRUPT_TIMEOUT_MS = 15_000;
+
   async interruptActive(s: CodexSession): Promise<void> {
     if (!s.activeTurnId) return;
     s.abortPending = false;
     if (!this.rpc?.alive) return;
+    const turnId = s.activeTurnId;
     try {
-      await this.rpc.request('turn/interrupt', { threadId: s.threadId, turnId: s.activeTurnId }, 15_000);
+      await this.rpc.request('turn/interrupt', { threadId: s.threadId, turnId }, CodexAdapter.INTERRUPT_TIMEOUT_MS);
     } catch (err) {
-      logger.debug({ sessionId: s.sessionId, err: errMessage(err) }, 'codex turn/interrupt failed');
+      logger.warn({ sessionId: s.sessionId, turnId, err: errMessage(err) }, 'codex turn/interrupt failed; ending the turn here');
+      // No turn/completed is coming for an interrupt the app-server never
+      // confirmed. Settle the turn here (its late events are then dropped);
+      // otherwise every later prompt queued behind it and was never answered.
+      if (s.activeTurnId === turnId) this.finalizeTurn(s);
     }
   }
 
@@ -521,6 +562,12 @@ export class CodexAdapter extends AgentAdapter {
     }
     s.activeTurnId = undefined;
     const ev = this.turnEvent(s);
+    if (s.compacting) {
+      // The turn failed or the app-server died mid-compaction: the item never
+      // completes, and the compaction indicator would stay on for good.
+      s.compacting = false;
+      this.onCompaction?.(s.sessionId, { phase: 'end', ...ev });
+    }
     const next = s.queue.shift();
     // A queued steer belongs to the relay turn that is ending here: Codex runs
     // it as a new turn, but for the relay it is the same logical turn. Settling

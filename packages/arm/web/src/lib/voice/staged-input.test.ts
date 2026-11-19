@@ -91,6 +91,16 @@ describe('staged voice input — IOSVoiceComposer completion', () => {
     expect(mergeVoiceDraft('Hello', ', world')).toBe('Hello, world');
     expect(mergeVoiceDraft('你好', '世界')).toBe('你好世界');
   });
+  it('K-224: a correction that ends inside a raw word continues that word, never "D eploy"', () => {
+    const id = outbox.stage('s', 'deploy the staging');
+    const voice = stagedVoice(id, '', false, vi.fn());
+    voice.update('D', 'deploy the staging');
+    expect(outbox.forSession('s')[0].text).toBe('Deploy the staging');
+    voice.update('Deploy t', 'deploy the staging');
+    expect(outbox.forSession('s')[0].text).toBe('Deploy the staging');
+    voice.update('Deploy the', 'deploy the staging');
+    expect(outbox.forSession('s')[0].text).toBe('Deploy the staging');
+  });
   it('aligns corrected prefixes ignoring case/whitespace and retaining raw tails', () => {
     expect(alignedRawPrefixLength('hello', 'Hello world')).toBe(5);
     expect(alignedRawPrefixLength('  HELLO', 'Hello world')).toBe(5);

@@ -106,7 +106,9 @@ enum TurnSpineProjection {
             guard let dict = item.dictValue else { return nil }
             return ContentRef.from(dict)?.id
         })
+        var folded = 0
         for artifact in artifacts where seen.insert(artifact.id).inserted {
+            folded += 1
             var encoded: [String: AnyCodable] = [
                 "type": AnyCodable(artifact.type),
                 "id": AnyCodable(artifact.id),
@@ -121,6 +123,7 @@ enum TurnSpineProjection {
         }
         var result = message
         result.payload["attachments"] = AnyCodable(merged)
+        result.foldedArtifactCount += folded
         return result
     }
 

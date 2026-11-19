@@ -27,6 +27,8 @@
 .ua-panel.is-closing { animation: ua-out 0.18s ease-in forwards; }
 @keyframes ua-in { from { opacity: 0; transform: translateY(-8px) scale(0.94); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
 @keyframes ua-out { to { opacity: 0; transform: scale(0.975); filter: blur(3px); } }
+/* Reduced motion: the panel appears without its zoom-and-blur entrance. */
+@media (prefers-reduced-motion: reduce) { .ua-panel { animation: none; } }
 
 .ua-flex { flex: 1; }
 .ua-grid { display: flex; flex-wrap: wrap; }

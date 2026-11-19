@@ -188,11 +188,15 @@ export function emitQuestionCard(
     choicesCount: choices?.length ?? 0,
   }, 'question requested');
 
+  // Kraki's choices are single-tap shortcuts. A multi-select question is
+  // flagged so the apps say, in their own language, that several can be
+  // typed in free text.
   adapter.onQuestionRequest?.(sessionId, {
     ...adapter.lifecycleEvent(adapter.sessions.get(sessionId)),
     id: qId,
     question: q?.question ?? 'The agent has a question',
     choices,
+    ...(q?.multiSelect && choices?.length ? { multiSelect: true } : {}),
   });
 
   pendingQuestions.set(qId, { resolve, questionId: qId, questions, qIndex: index, collected });
@@ -230,14 +234,11 @@ export function broadcastPendingResolutions(adapter: ClaudeAdapter, sessionId: s
   }
   entry.pendingPermissions.clear();
   for (const [qId, q] of entry.pendingQuestions) {
-    // Session ending with a question still open: echo `questions` back
-    // (required by the SDK schema) with whatever answers were collected so
-    // far in this serial chain (empty if none), so the SDK renders the rest
-    // as unanswered rather than throwing on a missing `questions` field.
-    q.resolve({
-      behavior: 'allow',
-      updatedInput: { questions: q.questions ?? [], answers: q.collected ?? {} },
-    });
+    // Stop / session end with a question still open: the user did not
+    // answer. Deny it like a withdrawn request (see handleAskUserQuestion's
+    // onAbort) — an `allow` with empty answers reads to the model as an
+    // answer.
+    q.resolve({ behavior: 'deny', message: 'Not answered: the user stopped the turn' });
     adapter.onQuestionAutoResolved?.(sessionId, qId);
   }
   entry.pendingQuestions.clear();

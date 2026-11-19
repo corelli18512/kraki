@@ -94,11 +94,17 @@ describe('validateVoiceConfig', () => {
       }).brokerUrl).toBe('wss://cn.stt.kraki.chat/voice');
     });
 
-    it('accepts ws:// URLs (e.g. local dev)', () => {
-      expect(validateVoiceConfig({
+    it('accepts ws:// URLs on this machine (e.g. local dev)', () => {
+      for (const url of ['ws://127.0.0.1:7800/voice', 'ws://localhost:7800/voice', 'ws://[::1]:7800/voice']) {
+        expect(validateVoiceConfig({ voiceLeaseEnabled: '1', voiceBrokerUrl: url }).brokerUrl).toBe(url);
+      }
+    });
+
+    it('rejects a cleartext ws:// URL for a remote broker (K-279)', () => {
+      expect(() => validateVoiceConfig({
         voiceLeaseEnabled: '1',
-        voiceBrokerUrl: 'ws://127.0.0.1:7800/voice',
-      }).brokerUrl).toBe('ws://127.0.0.1:7800/voice');
+        voiceBrokerUrl: 'ws://cn.stt.kraki.chat/voice',
+      })).toThrow(/must use wss:\/\//);
     });
 
     it('rejects http:// URLs (paste-typo from the http console)', () => {

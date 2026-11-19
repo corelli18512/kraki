@@ -258,6 +258,25 @@ export interface PermissionResolvedMessage extends BaseEnvelope {
   );
 }
 
+/** App feature (`client_features`) that opts in to `question_withdrawn`. An
+ *  older app would cache an unknown envelope as a spine row at its broadcast
+ *  seq, so tentacle sends the signal only to apps that declared this. */
+export const QUESTION_WITHDRAWN_FEATURE = 'question_withdrawn';
+
+/** Sent by tentacle when an open question is no longer answerable here (the
+ *  agent timed it out or cancelled it, or answered it itself, e.g. after a
+ *  switch to delegate mode), so apps close its choices at once instead of
+ *  leaving them answerable until the next spine row. Live only: on the spine
+ *  the question still closes as unanswered once anything else follows it.
+ *  Delivered only to apps that declared `QUESTION_WITHDRAWN_FEATURE`. */
+export interface QuestionWithdrawnMessage extends BaseEnvelope {
+  type: 'question_withdrawn';
+  sessionId: string;
+  payload: {
+    questionId: string;
+  };
+}
+
 /** Broadcast by tentacle when a session's pin state changes. */
 export interface SessionPinnedMessage extends BaseEnvelope {
   type: 'session_pinned';
@@ -342,6 +361,7 @@ export type ProducerMessage =
   | SessionSubscriptionSetMessage
   | SessionListMessage
   | PermissionResolvedMessage
+  | QuestionWithdrawnMessage
   | LocalSessionsListMessage
   | ArchivedSessionListMessage
   | AttachmentDataMessage

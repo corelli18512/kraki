@@ -97,25 +97,13 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
         // the opener is followed by non-space, the closer preceded by
         // non-space, and `_` never opens or closes inside a word — so
         // SHOULD_NOT_APPEAR or snake_case_names stay literal text.
-        func isWordChar(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+        func isWordChar(_ c: Character) -> Bool { isMarkdownWordCharacter(c) }
         func canOpen(at i: String.Index, length: Int) -> Bool {
-            let after = fragment.index(i, offsetBy: length)
-            guard after < fragment.endIndex, !fragment[after].isWhitespace else { return false }
-            if fragment[i] == "_", i > fragment.startIndex, isWordChar(fragment[fragment.index(before: i)]) { return false }
-            return true
+            markdownEmphasisCanOpen(in: fragment, at: i, length: length)
         }
+        let codeSpans = markdownCodeSpans(in: fragment)
         func closer(for marker: String, from start: String.Index) -> String.Index? {
-            var search = start
-            while search < fragment.endIndex,
-                  let found = fragment.range(of: marker, range: search..<fragment.endIndex) {
-                let close = found.lowerBound
-                let afterClose = found.upperBound
-                let precededBySpace = close > start && fragment[fragment.index(before: close)].isWhitespace
-                let followedByWord = marker.hasPrefix("_") && afterClose < fragment.endIndex && isWordChar(fragment[afterClose])
-                if close > start, !precededBySpace, !followedByWord { return close }
-                search = fragment.index(after: close)
-            }
-            return nil
+            markdownEmphasisCloser(for: marker, in: fragment, from: start, skipping: codeSpans)
         }
 
         func flushPlain(until end: String.Index) {
@@ -151,7 +139,7 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             // link label the label already is the link.
             if link == nil, fragment[index] == "<",
                let close = fragment[next...].firstIndex(of: ">"),
-               let url = autolinkURL(String(fragment[next..<close])) {
+               let url = autolinkURL(String(fragment[next..<close])) ?? mailAutolinkURL(String(fragment[next..<close])) {
                 flushPlain(until: index)
                 append(String(fragment[next..<close]), overrideLink: url)
                 index = fragment.index(after: close)
@@ -167,6 +155,26 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                     flushPlain(until: index)
                     append(String(fragment[index..<end]), overrideLink: url)
                     index = end
+                    plainStart = index
+                    continue
+                }
+            }
+
+            if fragment[index] == "*" || fragment[index] == "_" {
+                let run = markdownDelimiterRunLength(in: fragment, at: index)
+                let afterRun = fragment.index(index, offsetBy: run)
+                // A delimiter run followed by a space or the end opens
+                // nothing ("a *** b"): it is text, kept whole.
+                if afterRun == fragment.endIndex || fragment[afterRun].isWhitespace {
+                    index = afterRun
+                    continue
+                }
+                // ***strong emphasis***
+                if run == 3, canOpen(at: index, length: 3),
+                   let close = closer(for: String(repeating: String(fragment[index]), count: 3), from: afterRun) {
+                    flushPlain(until: index)
+                    appendNested(String(fragment[afterRun..<close]), bold: true, italic: true)
+                    index = fragment.index(close, offsetBy: 3)
                     plainStart = index
                     continue
                 }
@@ -207,22 +215,16 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                 continue
             }
 
-            if fragment[index] == "[",
-               let labelEnd = fragment[next...].firstIndex(of: "]"),
-               fragment.index(after: labelEnd) < fragment.endIndex,
-               fragment[fragment.index(after: labelEnd)] == "(" {
-                let destinationStart = fragment.index(labelEnd, offsetBy: 2)
-                if let destinationEnd = fragment[destinationStart...].firstIndex(of: ")"),
-                   let destination = URL(string: String(fragment[destinationStart..<destinationEnd])) {
-                    flushPlain(until: index)
-                    // Agent text is untrusted: only web and mail links become
-                    // tappable. Any other scheme (file:, app handlers, …) keeps
-                    // its label as plain text.
-                    appendNested(String(fragment[next..<labelEnd]), link: isSafeLinkURL(destination) ? destination : nil)
-                    index = fragment.index(after: destinationEnd)
-                    plainStart = index
-                    continue
-                }
+            if let parsedLink = markdownLink(in: fragment, at: index) {
+                flushPlain(until: index)
+                // Agent text is untrusted: only web and mail links become
+                // tappable. Any other scheme (file:, app handlers, …) keeps
+                // its label as plain text.
+                let destination = parsedLink.destination
+                appendNested(parsedLink.label, link: isSafeLinkURL(destination) ? destination : nil)
+                index = parsedLink.end
+                plainStart = index
+                continue
             }
 
             index = next
@@ -234,12 +236,128 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
     return parse(text, bold: false, italic: false, strikethrough: false, link: nil)
 }
 
+// MARK: - Inline parser helpers
+
+// Emphasis delimiters follow CommonMark's flanking rules (simplified):
+// the opener is followed by non-space, the closer preceded by non-space, and
+// `_` never opens or closes inside a word.
+func isMarkdownWordCharacter(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+
+/// Whether the `length`-character delimiter at `i` can open emphasis.
+func markdownEmphasisCanOpen(in fragment: String, at i: String.Index, length: Int) -> Bool {
+    let after = fragment.index(i, offsetBy: length)
+    guard after < fragment.endIndex, !fragment[after].isWhitespace else { return false }
+    if fragment[i] == "_", i > fragment.startIndex,
+       isMarkdownWordCharacter(fragment[fragment.index(before: i)]) { return false }
+    return true
+}
+
+/// Ranges of complete code spans: emphasis never closes inside one.
+func markdownCodeSpans(in fragment: String) -> [Range<String.Index>] {
+    var spans: [Range<String.Index>] = []
+    var cursor = fragment.startIndex
+    while let open = fragment[cursor...].firstIndex(of: "`") {
+        let afterOpen = fragment.index(after: open)
+        guard let close = fragment[afterOpen...].firstIndex(of: "`") else { break }
+        spans.append(open..<fragment.index(after: close))
+        cursor = fragment.index(after: close)
+    }
+    return spans
+}
+
+/// The closing `marker` for emphasis opened before `start`, outside code spans.
+func markdownEmphasisCloser(
+    for marker: String,
+    in fragment: String,
+    from start: String.Index,
+    skipping codeSpans: [Range<String.Index>]
+) -> String.Index? {
+    var search = start
+    while search < fragment.endIndex,
+          let found = fragment.range(of: marker, range: search..<fragment.endIndex) {
+        let close = found.lowerBound
+        if let span = codeSpans.first(where: { $0.contains(close) }) {
+            search = span.upperBound
+            continue
+        }
+        let afterClose = found.upperBound
+        let precededBySpace = close > start && fragment[fragment.index(before: close)].isWhitespace
+        let followedByWord = marker.hasPrefix("_") && afterClose < fragment.endIndex
+            && isMarkdownWordCharacter(fragment[afterClose])
+        if close > start, !precededBySpace, !followedByWord { return close }
+        search = fragment.index(after: close)
+    }
+    return nil
+}
+
+/// Length of the run of `fragment[i]` starting at `i`.
+func markdownDelimiterRunLength(in fragment: String, at i: String.Index) -> Int {
+    var end = i
+    while end < fragment.endIndex, fragment[end] == fragment[i] { end = fragment.index(after: end) }
+    return fragment.distance(from: i, to: end)
+}
+
+/// `[label](url)` or `![alt](url)` starting at `index`. Chat bubbles do not
+/// inline remote images: the alt text (or the URL when it is empty) links to
+/// the image instead of leaking a "!".
+func markdownLink(in fragment: String, at index: String.Index) -> (label: String, destination: URL, end: String.Index)? {
+    let next = fragment.index(after: index)
+    let isImage = fragment[index] == "!" && next < fragment.endIndex && fragment[next] == "["
+    let labelOpen = isImage ? next : index
+    let labelStart = fragment.index(after: labelOpen)
+    guard fragment[labelOpen] == "[", labelStart <= fragment.endIndex,
+          let labelEnd = fragment[labelStart...].firstIndex(of: "]"),
+          fragment.index(after: labelEnd) < fragment.endIndex,
+          fragment[fragment.index(after: labelEnd)] == "(" else { return nil }
+    let destinationStart = fragment.index(labelEnd, offsetBy: 2)
+    guard let destinationEnd = linkDestinationEnd(in: fragment, from: destinationStart),
+          let destination = URL(string: String(fragment[destinationStart..<destinationEnd])
+            .trimmingCharacters(in: .whitespaces)) else { return nil }
+    var label = String(fragment[labelStart..<labelEnd])
+    if isImage, label.isEmpty { label = destination.absoluteString }
+    return (label, destination, fragment.index(after: destinationEnd))
+}
+
 /// Schemes a chat link may open. Everything else in agent-written text could
 /// launch local files or other apps (`file:`, `vscode:`, `x-apple…:`).
 func isSafeLinkURL(_ url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased() else { return false }
     if scheme == "mailto" { return true }
     return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
+}
+
+/// The `)` closing a link destination that starts at `start`: nested
+/// balanced parentheses belong to the URL (`…/Foo_(bar))`).
+func linkDestinationEnd(in text: String, from start: String.Index) -> String.Index? {
+    var depth = 0
+    var index = start
+    while index < text.endIndex {
+        let character = text[index]
+        if character == "\\", text.index(after: index) < text.endIndex {
+            index = text.index(index, offsetBy: 2)
+            continue
+        }
+        if character == "(" { depth += 1 }
+        if character == ")" {
+            if depth == 0 { return index }
+            depth -= 1
+        }
+        index = text.index(after: index)
+    }
+    return nil
+}
+
+/// `<mailto:a@b.c>` or `<a@b.c>` (CommonMark email autolink).
+func mailAutolinkURL(_ text: String) -> URL? {
+    guard !text.contains(where: \.isWhitespace) else { return nil }
+    let address = text.lowercased().hasPrefix("mailto:") ? String(text.dropFirst(7)) : text
+    let parts = address.split(separator: "@", omittingEmptySubsequences: false)
+    // A domain is letters, digits, `.` and `-` (not `git@github.com:org/repo.git`).
+    guard parts.count == 2, !parts[0].isEmpty, parts[1].contains("."),
+          !parts[1].hasPrefix("."), !parts[1].hasSuffix("."),
+          parts[1].unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "." || $0 == "-") })
+    else { return nil }
+    return URL(string: "mailto:" + address)
 }
 
 /// A URL only when it is a complete http(s) address (no spaces).
@@ -425,6 +543,21 @@ enum MarkdownCodeSyntax {
     ]
 }
 
+/// Explicit bidirectional embeddings, overrides and isolates (U+202A–U+202E,
+/// U+2066–U+2069) let message text reorder what it displays — `txt.exe`
+/// shown as `exe.txt` inside a bubble (K-164). The bidi algorithm lays out
+/// real right-to-left text without them, so they are removed before
+/// rendering. The plain marks (LRM/RLM/ALM) can't reverse text and stay.
+func neutralizingBidiControls(_ text: String) -> String {
+    func isControl(_ scalar: Unicode.Scalar) -> Bool {
+        (0x202A...0x202E).contains(scalar.value) || (0x2066...0x2069).contains(scalar.value)
+    }
+    guard text.unicodeScalars.contains(where: isControl) else { return text }
+    var kept = String.UnicodeScalarView()
+    kept.append(contentsOf: text.unicodeScalars.filter { !isControl($0) })
+    return String(kept)
+}
+
 /// Splits a message body into inline text, blockquote, fenced
 /// code-block, and GFM table segments. Blockquote lines start with
 /// `> `. Code blocks are fenced with triple backticks. Tables follow
@@ -436,13 +569,7 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
     var segments: [MessageBodySegment] = []
     var inlineBuffer: [String] = []
     var quoteBuffer: [String] = []
-    var codeBuffer: [String] = []
-    var codeLanguage: String?
-    var inCodeBlock = false
-    /// Indentation of the opening fence. Fences nested in a list item are
-    /// indented ("  ```"); their content carries the same indent, which is
-    /// stripped so the block renders like a top-level one.
-    var codeIndent = 0
+    var codeBlock: OpenMarkdownCodeBlock?
 
     func flushInline() {
         if !inlineBuffer.isEmpty {
@@ -457,79 +584,68 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
         }
     }
 
-    let lines = text.components(separatedBy: "\n")
+    func closeCodeBlock() {
+        guard let block = codeBlock else { return }
+        segments.append(.codeBlock(language: block.language, code: block.lines.joined(separator: "\n")))
+        codeBlock = nil
+    }
+
+    let lines = neutralizingBidiControls(text).components(separatedBy: "\n")
     var i = 0
     while i < lines.count {
-        let line = lines[i]
+        var line = lines[i]
 
-        let fenceIndent = line.prefix(while: { $0 == " " }).count
-        let isFence = fenceIndent <= 8 && line.dropFirst(fenceIndent).hasPrefix("```")
-
-        if inCodeBlock {
-            if isFence {
-                segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
-                codeBuffer.removeAll()
-                codeLanguage = nil
-                inCodeBlock = false
-                codeIndent = 0
-            } else {
-                let strip = min(codeIndent, line.prefix(while: { $0 == " " }).count)
-                codeBuffer.append(String(line.dropFirst(strip)))
-            }
-            i += 1
-            continue
-        }
-
-        if isFence {
-            flushInline()
-            flushQuote()
-            let lang = String(line.dropFirst(fenceIndent + 3)).trimmingCharacters(in: .whitespaces)
-            codeLanguage = lang.isEmpty ? nil : lang
-            inCodeBlock = true
-            codeIndent = fenceIndent
-            i += 1
-            continue
-        }
-
-        // Table probe: current line looks like a table row AND the
-        // next line is a valid separator. Both checks are cheap;
-        // most messages won't have any pipes at all and short-circuit
-        // immediately.
-        if looksLikeTableRow(line),
-           i + 1 < lines.count,
-           let alignments = parseTableSeparator(lines[i + 1]) {
-            let header = parseTableRow(line)
-            // Header column count must match the separator column count.
-            if header.count == alignments.count {
-                flushInline()
-                flushQuote()
-                var rows: [[String]] = [header]
-                var j = i + 2
-                while j < lines.count {
-                    let r = lines[j]
-                    if !looksLikeTableRow(r) { break }
-                    let row = parseTableRow(r)
-                    // Pad/truncate so every row has the same column
-                    // count — GFM-compatible.
-                    var padded = row
-                    if padded.count < alignments.count {
-                        padded += Array(repeating: "", count: alignments.count - padded.count)
-                    } else if padded.count > alignments.count {
-                        padded = Array(padded.prefix(alignments.count))
-                    }
-                    rows.append(padded)
-                    j += 1
-                }
-                segments.append(.table(rows: rows, alignments: alignments))
-                i = j
+        if let block = codeBlock, block.inQuote {
+            // The quote ended (a line without ">"): so does its code block.
+            guard let content = markdownQuoteContent(line) else {
+                closeCodeBlock()
                 continue
             }
+            line = content
         }
 
-        // Blockquote: line starts with "> " or is exactly ">".
-        if line.hasPrefix("> ") || line == ">" {
+        let lineFence = markdownFence(in: line)
+
+        if let block = codeBlock {
+            if let lineFence, block.isClosed(by: lineFence) {
+                closeCodeBlock()
+            } else {
+                let strip = min(block.indent, line.prefix(while: { $0 == " " }).count)
+                codeBlock?.lines.append(String(line.dropFirst(strip)))
+            }
+            i += 1
+            continue
+        }
+
+        if let lineFence {
             flushInline()
-            let content = line == ">" ? "" : String(line.dropFirst(2))
+            flushQuote()
+            codeBlock = OpenMarkdownCodeBlock(opening: lineFence, inQuote: false)
+            i += 1
+            continue
+        }
+
+        // A fence inside a quote ("> ```"): the code renders as a code block
+        // instead of leaking its fence lines into the quote text.
+        if let content = markdownQuoteContent(line), let quotedFence = markdownFence(in: content) {
+            flushInline()
+            flushQuote()
+            codeBlock = OpenMarkdownCodeBlock(opening: quotedFence, inQuote: true)
+            i += 1
+            continue
+        }
+
+        if let table = markdownTable(in: lines, at: i) {
+            flushInline()
+            flushQuote()
+            segments.append(table.segment)
+            i = table.end
+            continue
+        }
+
+        // Blockquote: line starts with ">" (nested markers are dropped).
+        if let content = markdownQuoteContent(line) {
+            flushInline()
             quoteBuffer.append(content)
             i += 1
             continue
@@ -548,13 +664,97 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
         i += 1
     }
 
-    if inCodeBlock {
-        segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
-    }
+    closeCodeBlock()
     flushQuote()
     flushInline()
 
     return segments
+}
+
+/// A fence line: up to 8 spaces, then 3+ backticks or tildes.
+struct MarkdownFence {
+    let indent: Int
+    let marker: String
+    let info: String
+}
+
+func markdownFence(in line: String) -> MarkdownFence? {
+    let indent = line.prefix(while: { $0 == " " }).count
+    guard indent <= 8 else { return nil }
+    let rest = line.dropFirst(indent)
+    guard let first = rest.first, first == "`" || first == "~" else { return nil }
+    let marker = rest.prefix(while: { $0 == first })
+    guard marker.count >= 3 else { return nil }
+    let info = String(rest.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
+    // A backtick fence's info string cannot contain a backtick (CommonMark).
+    if first == "`", info.contains("`") { return nil }
+    return MarkdownFence(indent: indent, marker: String(marker), info: info)
+}
+
+/// A fenced code block `splitMessageBody` is inside of.
+struct OpenMarkdownCodeBlock {
+    let language: String?
+    /// Indentation of the opening fence. Fences nested in a list item are
+    /// indented ("  ```"); their content carries the same indent, which is
+    /// stripped so the block renders like a top-level one.
+    let indent: Int
+    /// The opening fence (``` or ~~~, possibly longer). Only a fence of the
+    /// same character and at least this length closes the block.
+    let fence: String
+    /// The block was opened inside a blockquote ("> ```"): its lines carry
+    /// the quote marker, and the block ends with the quote.
+    let inQuote: Bool
+    var lines: [String] = []
+
+    init(opening: MarkdownFence, inQuote: Bool) {
+        language = opening.info.isEmpty ? nil : opening.info
+        indent = opening.indent
+        fence = opening.marker
+        self.inQuote = inQuote
+    }
+
+    func isClosed(by line: MarkdownFence) -> Bool {
+        line.info.isEmpty && line.marker.first == fence.first && line.marker.count >= fence.count
+    }
+}
+
+/// Quote content without its markers: "> a", ">a", "> > a" and ">> a"
+/// all give "a" (nested quotes render as one quote level).
+func markdownQuoteContent(_ line: String) -> String? {
+    guard line.hasPrefix(">") else { return nil }
+    var rest = Substring(line)
+    while rest.hasPrefix(">") {
+        rest = rest.dropFirst()
+        if rest.hasPrefix(" ") { rest = rest.dropFirst() }
+    }
+    return String(rest)
+}
+
+/// A GFM table starting at `lines[start]`: the current line looks like a
+/// table row AND the next line is a valid separator with the same column
+/// count. Both checks are cheap; most messages have no pipes at all and
+/// short-circuit immediately. `end` is the first line after the table.
+func markdownTable(in lines: [String], at start: Int) -> (segment: MessageBodySegment, end: Int)? {
+    guard looksLikeTableRow(lines[start]),
+          start + 1 < lines.count,
+          let alignments = parseTableSeparator(lines[start + 1]) else { return nil }
+    let header = parseTableRow(lines[start])
+    // Header column count must match the separator column count.
+    guard header.count == alignments.count else { return nil }
+    var rows: [[String]] = [header]
+    var j = start + 2
+    while j < lines.count, looksLikeTableRow(lines[j]) {
+        // Pad/truncate so every row has the same column count — GFM-compatible.
+        var padded = parseTableRow(lines[j])
+        if padded.count < alignments.count {
+            padded += Array(repeating: "", count: alignments.count - padded.count)
+        } else if padded.count > alignments.count {
+            padded = Array(padded.prefix(alignments.count))
+        }
+        rows.append(padded)
+        j += 1
+    }
+    return (.table(rows: rows, alignments: alignments), j)
 }
 
 // MARK: - GFM table helpers
@@ -567,7 +767,7 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
 func looksLikeTableRow(_ line: String) -> Bool {
     guard line.contains("|") else { return false }
     let trimmed = line.trimmingCharacters(in: .whitespaces)
-    if trimmed.hasPrefix("```") || trimmed.hasPrefix("> ") || trimmed == ">" {
+    if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") || trimmed.hasPrefix(">") {
         return false
     }
     return true

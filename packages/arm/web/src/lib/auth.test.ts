@@ -36,6 +36,7 @@ function deps() {
     setStoredDeviceId: vi.fn(),
     disconnect: vi.fn(),
     connect: vi.fn(),
+    reconnectLater: vi.fn(),
     redirectToRelay: vi.fn(),
     currentRelay: 'wss://relay.kraki.chat',
   };
@@ -50,9 +51,10 @@ describe('processAuthError: credential wipe policy', () => {
     processAuthError({ code: 'auth_unavailable', message: 'Authentication service unavailable' }, 'dev_x', d);
     expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
     expect(localStorageMock.removeItem).not.toHaveBeenCalledWith('kraki_device');
-    // It reconnects to retry.
-    expect(d.disconnect).toHaveBeenCalled();
-    expect(d.connect).toHaveBeenCalled();
+    // K-198: it retries on the reconnect backoff, never at once.
+    expect(d.reconnectLater).toHaveBeenCalledOnce();
+    expect(d.disconnect).not.toHaveBeenCalled();
+    expect(d.connect).not.toHaveBeenCalled();
   });
 
   it('KEEPS credentials on service_unavailable (real RemoteAuthBackend timeout code)', () => {
@@ -64,7 +66,7 @@ describe('processAuthError: credential wipe policy', () => {
     processAuthError({ code: 'service_unavailable', message: 'Account service unavailable' }, 'dev_x', d);
     expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
     expect(localStorageMock.removeItem).not.toHaveBeenCalledWith('kraki_device');
-    expect(d.connect).toHaveBeenCalled();
+    expect(d.reconnectLater).toHaveBeenCalledOnce();
   });
 
   it('KEEPS credentials on a generic auth_rejected (may be transient)', () => {
@@ -81,6 +83,9 @@ describe('processAuthError: credential wipe policy', () => {
     processAuthError({ code: 'invalid_signature', message: 'Invalid signature' }, 'dev_x', d);
     expect(d.clearStoredDeviceId).toHaveBeenCalled();
     expect(localStorageMock.removeItem).toHaveBeenCalledWith('kraki_device');
+    // The identity is gone: reopen at once for the login screen.
+    expect(d.connect).toHaveBeenCalledOnce();
+    expect(d.reconnectLater).not.toHaveBeenCalled();
   });
 
   it('CLEARS credentials on device_not_found (deterministic)', () => {
@@ -114,7 +119,8 @@ describe('processAuthError: credential wipe policy', () => {
     expect(window.location.reload).not.toHaveBeenCalled();
     expect(localStorageMock.getItem('kraki_device')).toBe(stored);
     expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
-    expect(d.connect).toHaveBeenCalled();
+    expect(d.reconnectLater).toHaveBeenCalledOnce();
+    expect(d.connect).not.toHaveBeenCalled();
   });
 });
 
@@ -275,10 +281,15 @@ describe('release channel follows the account (internal = dogfood)', () => {
   });
 
   it('a cookie that does not stick never reloads', async () => {
-    const { applyAccountChannel } = await import('./auth');
+    const { applyAccountChannel, channelSwitchFailed } = await import('./auth');
     installJar('', { sticks: false });
     applyAccountChannel({ internal: true });
     expect(reload).not.toHaveBeenCalled();
+    // Settings tells the user instead of "Switching…" forever (K-229).
+    expect(channelSwitchFailed()).toBe(true);
+    installJar('kraki_channel=beta');
+    applyAccountChannel({ internal: true });
+    expect(channelSwitchFailed()).toBe(false);
   });
 
   it('a server that ignores the cookie cannot cause a reload loop', async () => {

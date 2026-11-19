@@ -73,6 +73,10 @@ export interface AgentMessage extends BaseEnvelope {
       id: string;
       text: string;
       choices?: string[];
+      /** The agent accepts several of the choices. Choices stay single-tap
+       *  shortcuts; apps add a hint (in the app's language) that several can
+       *  be typed, separated by commas. Older apps show no hint. */
+      multiSelect?: boolean;
     };
   };
 }
@@ -356,8 +360,24 @@ export interface ErrorMessage extends BaseEnvelope {
      *  error is that request's failure, so the requester can resolve its
      *  pending placeholder instead of timing out. */
     requestId?: string;
+    /** Echoed from a `send_input` the computer refused without storing it
+     *  (its disk is full, device trust refused it): the sender shows that
+     *  message as not delivered (Retry / Delete) instead of waiting for an
+     *  echo. Older apps ignore it. */
+    clientId?: string;
+    /** Why, for apps to word in their own language (`message` is English).
+     *  Apps show generic copy for a code they do not know. */
+    code?: SessionErrorCode;
   };
 }
+
+export type SessionErrorCode =
+  | 'input_disk_full'
+  | 'input_not_taken'
+  | 'trust_rejected_clock'
+  | 'trust_rejected_stale'
+  | 'trust_rejected_unrecorded'
+  | (string & {});
 
 /**
  * A Kraki-originated spine message — NOT the agent's words. Rendered like an

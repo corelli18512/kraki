@@ -22,9 +22,7 @@ struct LogsWindow: View {
         VStack(spacing: 0) {
             controlBar
             Divider()
-            TextEditor(text: .constant(contents))
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
+            LogTextView(text: contents, follow: follow)
                 .background(Color.surfacePrimary)
         }
         .task { await refreshFileList() }
@@ -125,6 +123,51 @@ struct LogsWindow: View {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
+    }
+}
+
+/// Read-only log text that stays on the tail while Follow is on. A SwiftUI
+/// TextEditor keeps its scroll position when its text is replaced, so Follow
+/// never showed new lines.
+struct LogTextView: NSViewRepresentable {
+    let text: String
+    let follow: Bool
+
+    final class Coordinator {
+        var wasFollowing = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.drawsBackground = false
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.drawsBackground = false
+            textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            textView.textContainerInset = NSSize(width: 4, height: 6)
+        }
+        Self.apply(text: text, follow: follow, wasFollowing: false, to: scrollView)
+        context.coordinator.wasFollowing = follow
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        Self.apply(text: text, follow: follow, wasFollowing: context.coordinator.wasFollowing, to: scrollView)
+        context.coordinator.wasFollowing = follow
+    }
+
+    /// Replace the text when it changed. While following, new text (or
+    /// turning Follow on) scrolls to the end; an unchanged reload leaves the
+    /// scroll position alone so the user can still scroll up.
+    static func apply(text: String, follow: Bool, wasFollowing: Bool, to scrollView: NSScrollView) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        let changed = textView.string != text
+        if changed { textView.string = text }
+        guard follow, changed || !wasFollowing else { return }
+        textView.scrollRangeToVisible(NSRange(location: (textView.string as NSString).length, length: 0))
     }
 }
 

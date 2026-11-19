@@ -19,8 +19,8 @@
 .kp-group > .kp-foot { padding:11px 0; border-top:1px solid #e6e6e6; }
 .kp-button { font-size:12px; padding:3px 10px; border-radius:5px; background:#e5e5e5; color:var(--color-text-primary); }
 .kp-button:disabled { opacity:.4; }
-.kp-segment { display:flex; width:195px; background:#e5e5e5; border-radius:5px; padding:1px; font-size:13px; line-height:16px; }
-.kp-segment button { flex:1; padding:3px 7px; border-radius:4px; }
+.kp-segment { display:flex; min-width:195px; max-width:100%; background:#e5e5e5; border-radius:5px; padding:1px; font-size:13px; line-height:16px; }
+.kp-segment button { flex:1; min-width:0; padding:3px 7px; border-radius:4px; overflow-wrap:anywhere; }
 .kp-segment button[aria-checked=true] { background:#007aff; color:white; }
 .kp-switch { width:36px; height:16px; border-radius:10px; background:#ddd; position:relative; flex-shrink:0; }
 .kp-switch[aria-checked=true] { background:#007aff; }

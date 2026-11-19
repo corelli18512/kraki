@@ -104,6 +104,9 @@ struct DeviceUpdateControl: View {
                     #endif
                 }
                 .controlSize(.small)
+                #if os(macOS)
+                .disabled(!MacUpdateController.updatesAvailable())
+                #endif
             } else if u.remote {
                 HStack(spacing: 10) {
                     Button("Update") { appState.commandSender?.updateDevice(device.id) }
