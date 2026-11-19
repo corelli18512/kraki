@@ -54,7 +54,8 @@
       "esbuild"
     ],
     "overrides": {
-      "@github/copilot": "1.0.63"
+      "@github/copilot": "1.0.63",
+      "@types/node@>=26 <27": "26.2.0"
     }
   },
   "devDependencies": {

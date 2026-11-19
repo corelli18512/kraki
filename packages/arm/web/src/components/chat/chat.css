@@ -566,7 +566,8 @@
 
 .kslot-outcome { display: flex; align-items: center; gap: 8px; color: var(--k-text-2); font-size: 13px; line-height: 16px; }
 .kslot-outcome .kslot-icon { width: 13px; height: 13px; color: var(--k-text-3); }
-.kslot-outcome-label { font-weight: 500; }
+.kslot-outcome-label { flex-shrink: 0; font-weight: 500; white-space: nowrap; }
+.kslot-outcome .kslot-icon { flex-shrink: 0; }
 .kslot-outcome:not(.is-failed) .kslot-icon circle { fill: currentColor; stroke: none; }
 .kslot-outcome:not(.is-failed) .kslot-icon rect { fill: var(--k-agent-light); stroke: none; }
 .dark .kslot-outcome:not(.is-failed) .kslot-icon rect { fill: var(--k-agent-dark); }

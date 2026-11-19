@@ -28,3 +28,13 @@ it('preserves singular and plural English agent/model counts', () => {
   expect(detailLine({ id: 'pi', name: 'Pi', status: 'ready', models: 1 })).toBe('Ready · 1 model');
   expect(detailLine({ id: 'pi', name: 'Pi', status: 'ready', models: 2 })).toBe('Ready · 2 models');
 });
+
+it('appends the tested-minimum note for installed agents only', async () => {
+  const old = { id: 'pi', name: 'Pi', models: 2, minVersion: '0.86.0' } as const;
+  expect(detailLine({ ...old, status: 'ready' })).toBe('Ready · 2 models · Kraki is tested with 0.86.0+, update recommended');
+  expect(detailLine({ ...old, status: 'error', hint: 'CLI failure' })).toBe('CLI failure · Kraki is tested with 0.86.0+, update recommended');
+  expect(detailLine({ ...old, status: 'not_installed' })).toBe('Not installed');
+  expect(detailLine({ ...old, status: 'checking' })).toBeNull();
+  await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+  expect(detailLine({ ...old, status: 'ready' })).toBe('已就绪 · 2 个模型 · Kraki 测试过的最低版本是 0.86.0，建议更新');
+});

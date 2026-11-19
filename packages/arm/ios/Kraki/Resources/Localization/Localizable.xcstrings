@@ -12110,6 +12110,22 @@
           }
         }
       }
+    },
+    "%@ · Kraki is tested with %@+, update recommended" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · Kraki is tested with %2$@+, update recommended"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · Kraki 测试过的最低版本是 %2$@，建议更新"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

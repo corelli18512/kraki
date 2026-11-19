@@ -187,12 +187,17 @@ export function checkCopilotCli(): CliCheckResult {
   }
 }
 
-/** Coding agents Kraki can run, in the order setup lists them. */
-export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 'pi'; name: string; bin: string; installUrl: string }> = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
-  { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli' },
+/** Coding agents Kraki can run, in the order setup lists them.
+ *  `minVersion`: the oldest version Kraki has been tested against. Kraki uses
+ *  the user's own agent install; older versions still run, they only get a
+ *  hint to update (see agents-check). From a 2026-11-19 sampled version sweep:
+ *  Pi < 0.86 lacks agent_settled/clear_queue, Claude Code 2.0.x rejects the
+ *  SDK's --thinking flag, Codex 0.100 never answers app-server initialize. */
+export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 'pi'; name: string; bin: string; installUrl: string; minVersion?: string }> = [
+  { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup', minVersion: '2.1.44' },
+  { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli', minVersion: '0.151.0' },
   { id: 'copilot', name: 'GitHub Copilot CLI', bin: 'copilot', installUrl: 'https://github.com/features/copilot/cli' },
-  { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
+  { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme', minVersion: '0.86.0' },
 ];
 
 /** Full path of `bin` as the shell would find it on PATH, or null. POSIX:
@@ -224,6 +229,16 @@ function versionFailure(err: unknown): string {
   if (e?.code === 'ETIMEDOUT' || e?.signal === 'SIGTERM') return '--version did not finish';
   const stderr = String(e?.stderr ?? '').trim().split('\n').find((l) => l.trim()) ?? '';
   return (stderr || e?.message || 'failed').slice(0, 300);
+}
+
+/** True when `version` is a semver older than `min`. Unparseable → false (never warn on doubt). */
+export function isOlderVersion(version: string | undefined, min: string | undefined): boolean {
+  const parse = (v?: string) => v?.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number);
+  const a = parse(version);
+  const b = parse(min);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
 }
 
 /** Is `bin` runnable, and which version (leading semver when present)? Looks on

@@ -122,6 +122,12 @@ struct LocalAgentsPanel: View {
     }
 
     static func detailLine(_ agent: LocalAgentsCheck.Agent) -> String? {
+        guard let line = baseDetailLine(agent) else { return nil }
+        guard let min = agent.minVersion, agent.status != .notInstalled else { return line }
+        return String(localized: "\(line) · Kraki is tested with \(min)+, update recommended")
+    }
+
+    private static func baseDetailLine(_ agent: LocalAgentsCheck.Agent) -> String? {
         switch agent.status {
         case .checking: return nil
         case .ready:

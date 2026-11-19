@@ -112,6 +112,7 @@
     "piDetect": "Found as `pi` in a terminal.",
     "notInstalled": "Not installed",
     "couldNotStart": "Couldn't start.",
+    "olderThanTested": "{{base}} · Kraki is tested with {{min}}+, update recommended",
     "checkingLabel": "Checking",
     "ready": "Ready",
     "attention": "Needs attention",
