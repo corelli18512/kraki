@@ -112,6 +112,7 @@
     "piDetect": "Kraki 会在终端中查找 `pi` 命令。",
     "notInstalled": "未安装",
     "couldNotStart": "无法启动。",
+    "olderThanTested": "{{base}} · Kraki 测试过的最低版本是 {{min}}，建议更新",
     "checkingLabel": "正在检查",
     "ready": "已就绪",
     "attention": "需要处理",

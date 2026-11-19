@@ -21,6 +21,8 @@ export interface AgentResult {
   models: number;
   hint?: string;
   installUrl?: string;
+  /** Set when the installed version is older than Kraki has been tested with. */
+  minVersion?: string;
 }
 
 export const AGENT_CATALOG = [
@@ -53,7 +55,7 @@ export function useAgentsCheck(builtIn: BuiltInBridge) {
       if (e.event === 'checking') {
         setAgents((prev) => new Map(prev).set(e.id, { ...(prev.get(e.id) ?? { models: 0 }), id: e.id, name: e.name, status: 'checking' }));
       } else if (e.event === 'agent') {
-        setAgents((prev) => new Map(prev).set(e.id, { id: e.id, name: e.name, status: e.status, version: e.version, models: e.models, hint: windowsHint(e.hint), installUrl: e.installUrl }));
+        setAgents((prev) => new Map(prev).set(e.id, { id: e.id, name: e.name, status: e.status, version: e.version, models: e.models, hint: windowsHint(e.hint), installUrl: e.installUrl, minVersion: e.minVersion }));
       }
     }).finally(() => {
       if (id !== runId.current) return;
@@ -78,6 +80,13 @@ const loginHintKeys = {
 } as const;
 
 export function detailLine(a: AgentResult): string | null {
+  const line = baseDetailLine(a);
+  return line && a.minVersion && a.status !== 'not_installed'
+    ? t('desktop:agents.olderThanTested', { base: line, min: a.minVersion })
+    : line;
+}
+
+function baseDetailLine(a: AgentResult): string | null {
   switch (a.status) {
     case 'checking': return null;
     case 'ready': return t('desktop:agents.models', { count: a.models });

@@ -488,7 +488,8 @@ async function runAgentStep(): Promise<AgentCheckResult[]> {
 }
 
 function printAgentRow(agent: (typeof SETUP_AGENTS)[number], r: AgentCheckResult | undefined): void {
-  const version = r?.version ? chalk.dim(` ${r.version}`) : '';
+  const tested = r?.minVersion ? chalk.dim(` (Kraki is tested with ${r.minVersion}+, update recommended)`) : '';
+  const version = r?.version ? chalk.dim(` ${r.version}`) + tested : '';
   switch (r?.status) {
     case 'ready': {
       const n = r.models;

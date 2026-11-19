@@ -17,7 +17,7 @@
  */
 
 import type { AgentId } from '@kraki/protocol';
-import { SETUP_AGENTS, checkAgentCli } from './checks.js';
+import { SETUP_AGENTS, checkAgentCli, isOlderVersion } from './checks.js';
 import { piHasShellOnWindows, GIT_FOR_WINDOWS_URL } from './windows-shell.js';
 import type { AgentAdapter } from './adapters/base.js';
 
@@ -35,6 +35,9 @@ export interface AgentCheckResult {
   installUrl: string;
   /** Underlying error, for logs/diagnostics. */
   detail?: string;
+  /** Set when the installed version is older than Kraki has been tested with.
+   *  Informational only: the agent still runs. */
+  minVersion?: string;
 }
 
 export type AgentsCheckEvent =
@@ -80,6 +83,8 @@ export async function checkAgent(
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
   }
   const version = cli.version;
+  // Installed results only: a not_installed result never carries it.
+  const old = isOlderVersion(version, agent.minVersion) ? { minVersion: agent.minVersion } : {};
   if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
     return {
       ...base, version, status: 'error', detail: 'no_bash',
@@ -98,15 +103,15 @@ export async function checkAgent(
       if (failure && !LOGIN_ERROR.test(failure)) throw new Error(failure);
       // Installed and running, but no model it can use: almost always a
       // missing sign-in or API key in that agent.
-      return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id] };
+      return { ...base, ...old, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id] };
     }
-    return { ...base, version, status: 'ready', models: ids.length, sampleModels: ids.slice(0, 3) };
+    return { ...base, ...old, version, status: 'ready', models: ids.length, sampleModels: ids.slice(0, 3) };
   } catch (err) {
     const message = (err as Error).message ?? String(err);
     if (LOGIN_ERROR.test(message)) {
-      return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id], detail: message };
+      return { ...base, ...old, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id], detail: message };
     }
-    return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
+    return { ...base, ...old, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
   } finally {
     try { await adapter?.stop(); } catch { /* best effort */ }
   }

@@ -21,7 +21,7 @@ export interface BuiltInState {
 
 export type AgentCheckEvent =
   | { event: 'checking'; id: string; name: string }
-  | { event: 'agent'; id: string; name: string; status: 'ready' | 'needs_login' | 'not_installed' | 'error'; version?: string; models: number; sampleModels: string[]; hint?: string; installUrl: string }
+  | { event: 'agent'; id: string; name: string; status: 'ready' | 'needs_login' | 'not_installed' | 'error'; version?: string; models: number; sampleModels: string[]; hint?: string; installUrl: string; minVersion?: string }
   | { event: 'done'; ready: string[] };
 
 export type SetupEvent =
