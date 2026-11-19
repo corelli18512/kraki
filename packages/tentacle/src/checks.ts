@@ -187,8 +187,8 @@ export function checkCopilotCli(): CliCheckResult {
   }
 }
 
-/** Coding agents Kraki can run, in the order setup lists them. */
-/** `minVersion`: the oldest version Kraki has been tested against. Kraki uses
+/** Coding agents Kraki can run, in the order setup lists them.
+ *  `minVersion`: the oldest version Kraki has been tested against. Kraki uses
  *  the user's own agent install; older versions still run, they only get a
  *  hint to update (see agents-check). From a 2026-11-19 sampled version sweep:
  *  Pi < 0.86 lacks agent_settled/clear_queue, Claude Code 2.0.x rejects the

@@ -83,7 +83,8 @@ export async function checkAgent(
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
   }
   const version = cli.version;
-  if (isOlderVersion(version, agent.minVersion)) (base as { minVersion?: string }).minVersion = agent.minVersion;
+  // Installed results only: a not_installed result never carries it.
+  const old = isOlderVersion(version, agent.minVersion) ? { minVersion: agent.minVersion } : {};
   if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
     return {
       ...base, version, status: 'error', detail: 'no_bash',
@@ -102,15 +103,15 @@ export async function checkAgent(
       if (failure && !LOGIN_ERROR.test(failure)) throw new Error(failure);
       // Installed and running, but no model it can use: almost always a
       // missing sign-in or API key in that agent.
-      return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id] };
+      return { ...base, ...old, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id] };
     }
-    return { ...base, version, status: 'ready', models: ids.length, sampleModels: ids.slice(0, 3) };
+    return { ...base, ...old, version, status: 'ready', models: ids.length, sampleModels: ids.slice(0, 3) };
   } catch (err) {
     const message = (err as Error).message ?? String(err);
     if (LOGIN_ERROR.test(message)) {
-      return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id], detail: message };
+      return { ...base, ...old, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id], detail: message };
     }
-    return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
+    return { ...base, ...old, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
   } finally {
     try { await adapter?.stop(); } catch { /* best effort */ }
   }

@@ -120,3 +120,12 @@ describe('tested minimum agent versions', () => {
     expect(r.minVersion).toBeUndefined();
   });
 });
+
+describe('minVersion on not_installed', () => {
+  it('is never set when the adapter cannot be created', async () => {
+    const pi = SETUP_AGENTS.find((a) => a.id === 'pi')!;
+    const r = await checkAgent(pi, { checkCli: () => ({ found: true, version: '0.80.0' }), createAdapter: async () => null, timeoutMs: 1000, platform: 'darwin' });
+    expect(r.status).toBe('not_installed');
+    expect(r.minVersion).toBeUndefined();
+  });
+});
