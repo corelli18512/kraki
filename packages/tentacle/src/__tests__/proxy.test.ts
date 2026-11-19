@@ -147,6 +147,13 @@ describe('unsupported proxies are named, not silently ignored (K-328)', async ()
     expect(unsupportedProxyMessage('SOCKS proxy (ALL_PROXY)')).toContain('HTTPS_PROXY=http://');
   });
 
+  it('says "an automatic …" and "a SOCKS …" in the warning (triage #108)', () => {
+    expect(unsupportedProxyMessage('automatic proxy configuration (PAC)'))
+      .toMatch(/^Your network uses an automatic proxy configuration \(PAC\), which Kraki cannot use/);
+    expect(unsupportedProxyMessage('automatic proxy discovery')).toMatch(/^Your network uses an automatic proxy discovery,/);
+    expect(unsupportedProxyMessage('SOCKS proxy')).toMatch(/^Your network uses a SOCKS proxy,/);
+  });
+
   it('keeps an HTTP proxy next to a SOCKS ALL_PROXY', () => {
     expect(detectProxy({ ALL_PROXY: 'socks5://127.0.0.1:7891', HTTPS_PROXY: 'http://127.0.0.1:7890' }, 'linux'))
       .toEqual({ https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', noProxy: [], source: 'env' });

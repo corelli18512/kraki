@@ -163,7 +163,8 @@ function systemProxyText(platform: string): string | null {
 
 /** The one-line warning for an unsupported proxy setting. */
 export function unsupportedProxyMessage(setting: string): string {
-  return `Your network uses a ${setting}, which Kraki cannot use, so it connects directly. `
+  const article = /^[aeiou]/i.test(setting) ? 'an' : 'a';
+  return `Your network uses ${article} ${setting}, which Kraki cannot use, so it connects directly. `
     + 'If that fails, set an HTTP proxy: HTTPS_PROXY=http://host:port (proxy apps usually offer an HTTP port too), '
     + 'or a web proxy in the system network settings.';
 }
