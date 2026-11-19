@@ -92,3 +92,31 @@ describe('kraki agents on Windows without bash', () => {
     expect(createAdapter).not.toHaveBeenCalled();
   });
 });
+
+import { isOlderVersion } from '../checks.js';
+
+describe('tested minimum agent versions', () => {
+  it('compares semver and never warns on unparseable versions', () => {
+    expect(isOlderVersion('0.84.1', '0.86.0')).toBe(true);
+    expect(isOlderVersion('0.86.0', '0.86.0')).toBe(false);
+    expect(isOlderVersion('1.5.2', '0.86.0')).toBe(false);
+    expect(isOlderVersion('2.0.13', '2.1.44')).toBe(true);
+    expect(isOlderVersion(undefined, '2.1.44')).toBe(false);
+    expect(isOlderVersion('dev-build', '2.1.44')).toBe(false);
+    expect(isOlderVersion('1.0.0', undefined)).toBe(false);
+  });
+
+  it('reports minVersion for an old but working agent and still marks it ready', async () => {
+    const pi = SETUP_AGENTS.find((a) => a.id === 'pi')!;
+    const adapter = { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined), listModelDetails: vi.fn().mockResolvedValue([{ id: 'm' }]) };
+    const r = await checkAgent(pi, { checkCli: () => ({ found: true, version: '0.84.1' }), createAdapter: async () => adapter as never, timeoutMs: 1000, platform: 'darwin' });
+    expect(r).toMatchObject({ status: 'ready', version: '0.84.1', minVersion: '0.86.0' });
+  });
+
+  it('omits minVersion for a tested version', async () => {
+    const pi = SETUP_AGENTS.find((a) => a.id === 'pi')!;
+    const adapter = { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined), listModelDetails: vi.fn().mockResolvedValue([{ id: 'm' }]) };
+    const r = await checkAgent(pi, { checkCli: () => ({ found: true, version: '1.5.2' }), createAdapter: async () => adapter as never, timeoutMs: 1000, platform: 'darwin' });
+    expect(r.minVersion).toBeUndefined();
+  });
+});

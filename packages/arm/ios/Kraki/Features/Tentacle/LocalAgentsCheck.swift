@@ -28,6 +28,8 @@ final class LocalAgentsCheck {
         var sampleModels: [String] = []
         var hint: String?
         var installURL: URL?
+        /// Set when the installed version is older than Kraki has been tested with.
+        var minVersion: String?
     }
 
     /// The four agents Kraki supports, in display order, before any result.
@@ -123,7 +125,8 @@ final class LocalAgentsCheck {
             models: json["models"] as? Int ?? 0,
             sampleModels: json["sampleModels"] as? [String] ?? [],
             hint: json["hint"] as? String,
-            installURL: (json["installUrl"] as? String).flatMap(URL.init(string:))
+            installURL: (json["installUrl"] as? String).flatMap(URL.init(string:)),
+            minVersion: json["minVersion"] as? String
         )
         var next = agents
         if let i = next.firstIndex(where: { $0.id == id }) {

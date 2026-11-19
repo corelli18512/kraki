@@ -17,7 +17,7 @@
  */
 
 import type { AgentId } from '@kraki/protocol';
-import { SETUP_AGENTS, checkAgentCli } from './checks.js';
+import { SETUP_AGENTS, checkAgentCli, isOlderVersion } from './checks.js';
 import { piHasShellOnWindows, GIT_FOR_WINDOWS_URL } from './windows-shell.js';
 import type { AgentAdapter } from './adapters/base.js';
 
@@ -35,6 +35,9 @@ export interface AgentCheckResult {
   installUrl: string;
   /** Underlying error, for logs/diagnostics. */
   detail?: string;
+  /** Set when the installed version is older than Kraki has been tested with.
+   *  Informational only: the agent still runs. */
+  minVersion?: string;
 }
 
 export type AgentsCheckEvent =
@@ -80,6 +83,7 @@ export async function checkAgent(
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
   }
   const version = cli.version;
+  if (isOlderVersion(version, agent.minVersion)) (base as { minVersion?: string }).minVersion = agent.minVersion;
   if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
     return {
       ...base, version, status: 'error', detail: 'no_bash',
