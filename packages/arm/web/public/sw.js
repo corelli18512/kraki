@@ -220,6 +220,10 @@ const MAX_ASSETS = 120;
 // install.sh opened in a tab): left to the network and never stored as the
 // shell, so an offline launch always gets Kraki.
 const NOT_APP_PAGE = /^\/(privacy(\/|$)|\.well-known\/)|\.[a-z0-9]+$/i;
+// The app's logo and icon images (public/, not content-hashed): network-first
+// like pages, so a new deploy's image shows online, and the last one seen is
+// used offline instead of a broken image.
+const APP_IMAGE = /^\/(logo[\w-]*\.png|icon-[\w-]+\.png|settings-logo-[\w-]+\.png|favicon\.png|apple-touch-icon\.png|model-logos\/[\w-]+\.svg)$/;
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(caches.keys().then((keys) => Promise.all(
@@ -237,6 +241,19 @@ async function pageResponse(request) {
   } catch (err) {
     const shell = await cache.match(SHELL_KEY);
     if (shell) return shell;
+    throw err;
+  }
+}
+
+async function imageResponse(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const response = await fetch(request);
+    if (response.ok && response.type === 'basic') await cache.put(request, response.clone());
+    return response;
+  } catch (err) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
     throw err;
   }
 }
@@ -264,5 +281,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(pageResponse(request));
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith(assetResponse(request));
+  } else if (APP_IMAGE.test(url.pathname)) {
+    event.respondWith(imageResponse(request));
   }
 });

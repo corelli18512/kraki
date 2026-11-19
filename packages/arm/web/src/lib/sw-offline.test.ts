@@ -87,6 +87,30 @@ describe('K-112: offline app shell', () => {
     expect(await (await sw.request('https://kraki.chat/assets/boot-abc123.js'))!.text()).toBe('body of /assets/boot-abc123.js');
   });
 
+  it('logo and icon images seen online are served offline, and stay network-first online (triage #38)', async () => {
+    const sw = loadWorker();
+    const images = [
+      '/logo.png', '/logo-dark.png', '/logo-menu.png', '/logo-menu-dark.png',
+      '/icon-192.png', '/icon-maskable-512.png', '/settings-logo-light.png', '/settings-logo-dark.png',
+      '/favicon.png', '/apple-touch-icon.png', '/model-logos/ModelClaude.svg',
+    ];
+    for (const path of images) await sw.request(`https://kraki.chat${path}`, 'no-cors');
+    expect(sw.fetch).toHaveBeenCalledTimes(images.length);
+    await sw.request('https://kraki.chat/logo.png', 'no-cors');
+    expect(sw.fetch).toHaveBeenCalledTimes(images.length + 1);
+    sw.setOnline(false);
+    for (const path of images) {
+      expect(await (await sw.request(`https://kraki.chat${path}`, 'no-cors'))!.text()).toBe(`body of ${path}`);
+    }
+  });
+
+  it('other public files are not cached as images (install.sh, vendor scripts)', async () => {
+    const sw = loadWorker();
+    expect(await sw.request('https://kraki.chat/vendor/mermaid-11.17.2.min.js')).toBeUndefined();
+    expect(await sw.request('https://kraki.chat/logo.png.sh')).toBeUndefined();
+    expect(await sw.request('https://kraki.chat/privacy/logo.png')).toBeUndefined();
+  });
+
   it('leaves other requests to the network (relay, other origins, POST)', async () => {
     const sw = loadWorker();
     expect(await sw.request('https://relay.kraki.chat/x')).toBeUndefined();
