@@ -16,9 +16,10 @@ final class MacSessionSidebarScrollTests: XCTestCase {
 
     private struct Host: View {
         let selection: Selection
+        var bottomOverlayInset: CGFloat = 0
         var body: some View {
             @Bindable var selection = selection
-            SessionsSidebarView(selectedSessionId: $selection.id)
+            SessionsSidebarView(selectedSessionId: $selection.id, bottomOverlayInset: bottomOverlayInset)
         }
     }
 
@@ -55,7 +56,7 @@ final class MacSessionSidebarScrollTests: XCTestCase {
     }
 
     /// 40 rows, newest first (s-0 on top). Offscreen window, never shown.
-    private func makeSidebar(rows: Int = 40) throws -> (AppState, Selection, NSScrollView) {
+    private func makeSidebar(rows: Int = 40, bottomOverlayInset: CGFloat = 0) throws -> (AppState, Selection, NSScrollView) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sidebar-scroll-\(UUID().uuidString)")
         roots.append(root)
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
@@ -65,7 +66,7 @@ final class MacSessionSidebarScrollTests: XCTestCase {
             app.sessionStore.upsertSession(session(i, createdAt: now.addingTimeInterval(Double(-60 * (i + 1)))))
         }
         let selection = Selection()
-        let host = NSHostingView(rootView: Host(selection: selection).environment(app))
+        let host = NSHostingView(rootView: Host(selection: selection, bottomOverlayInset: bottomOverlayInset).environment(app))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 300, height: 500),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -137,6 +138,32 @@ final class MacSessionSidebarScrollTests: XCTestCase {
         let index = try XCTUnwrap(app.sessionStore.navigationOrderedSessions.firstIndex { $0.id == "s-30" })
         XCTAssertGreaterThan(index, 20, "fixture: the unpinned row moved far down")
         XCTAssertTrue(isFullyVisible(sv, row: index), "the unpinned row is followed into view")
+    }
+
+    // MARK: Triage #88
+
+    /// Scrolled as far down as the list goes; returns how far the last row's
+    /// bottom ends above the bottom edge of the sidebar.
+    private func gapBelowLastRow(_ sv: NSScrollView, rowHeight h: CGFloat, rows: Int = 40) -> CGFloat {
+        let clip = sv.contentView
+        let end = clip.constrainBoundsRect(NSRect(origin: NSPoint(x: 0, y: 1_000_000), size: clip.bounds.size))
+        clip.setBoundsOrigin(end.origin)
+        sv.reflectScrolledClipView(clip)
+        drain(300)
+        return clip.bounds.maxY - (4 + CGFloat(rows) * h)
+    }
+
+    func testTheLastRowScrollsAboveTheConnectionNotice() throws {
+        let (_, _, plain) = try makeSidebar()
+        let h = rowHeight(plain)
+        // Without the inset the last row ends under a notice laid over the bottom.
+        XCTAssertLessThan(gapBelowLastRow(plain, rowHeight: h), MacConnectionNoticeRow.height,
+                          "fixture: without the inset the notice covers the last row")
+        let (_, _, sv) = try makeSidebar(bottomOverlayInset: MacConnectionNoticeRow.height)
+        XCTAssertGreaterThanOrEqual(gapBelowLastRow(sv, rowHeight: h), MacConnectionNoticeRow.height - 0.5,
+                                    "the last row scrolls fully above the connection notice")
+        scroll(sv, to: 0)
+        XCTAssertEqual(sv.contentView.bounds.minY, 0, accuracy: 1, "the inset does not move the rows at the top")
     }
 
     // MARK: K-245

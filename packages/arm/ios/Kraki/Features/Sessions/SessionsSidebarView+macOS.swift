@@ -252,6 +252,10 @@ struct SessionsSidebarView: View {
     /// Triggered from the rail's "+" button.
     var onNewSession: () -> Void = {}
 
+    /// Height of what the window lays over the bottom of the list (the
+    /// connection notice): the last row can scroll above it.
+    var bottomOverlayInset: CGFloat = 0
+
     @State private var scrollAnchor = MacSidebarScrollAnchor()
     private static let listCoordinateSpace = "sessions-sidebar-list"
 
@@ -320,6 +324,7 @@ struct SessionsSidebarView: View {
                 .padding(.vertical, 4)
                 .coordinateSpace(.named(Self.listCoordinateSpace))
             }
+            .contentMargins(.bottom, bottomOverlayInset, for: .scrollContent)
             .onChange(of: appState.sessionStore.sessionListRevealId) { _, _ in
                 revealRequestedSession(using: proxy)
             }

@@ -525,11 +525,15 @@ struct MainWindowView: View {
                     SessionsSidebarView(
                         selectedSessionId: $selectedSessionId,
                         searchText: sidebarSearchText,
-                        onNewSession: { startNewSession() }
+                        onNewSession: { startNewSession() },
+                        // The last row can scroll above the notice.
+                        bottomOverlayInset: appState.connectionNotice == nil ? 0 : MacConnectionNoticeRow.height
                     )
                     // Over the list, not above it: a notice that comes and
                     // goes with every reconnect must not push the rows.
-                    .overlay(alignment: .bottom) { connectionNoticeRow }
+                    .overlay(alignment: .bottom) {
+                        if let notice = appState.connectionNotice { MacConnectionNoticeRow(notice: notice) }
+                    }
                 }
                 .frame(width: MacMainWindowColumns.sidebarWidth)
                 .background(Color.surfacePrimary)
@@ -591,28 +595,6 @@ struct MainWindowView: View {
             makeRoomRequest += 1
         } else {
             inspectorShown.toggle()
-        }
-    }
-
-    /// Shown while the window is not signed in (first sign-in or reconnect).
-    @ViewBuilder
-    private var connectionNoticeRow: some View {
-        if let notice = appState.connectionNotice {
-            HStack(spacing: 7) {
-                ProgressView().controlSize(.small).scaleEffect(0.75)
-                Text(notice)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.textSecondary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 26)
-            .background(Color.surfaceSecondary.opacity(0.6))
-            // Same tint as before, but opaque: it sits over the rows.
-            .background(Color.surfacePrimary)
-            .transition(.opacity)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("connection-notice")
         }
     }
 
@@ -958,6 +940,31 @@ private struct LabeledRow: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Shown over the bottom of the sidebar while the window is not signed in
+/// (first sign-in or reconnect).
+struct MacConnectionNoticeRow: View {
+    static let height: CGFloat = 26
+    let notice: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ProgressView().controlSize(.small).scaleEffect(0.75)
+            Text(notice)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: Self.height)
+        .background(Color.surfaceSecondary.opacity(0.6))
+        // Same tint as before, but opaque: it sits over the rows.
+        .background(Color.surfacePrimary)
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("connection-notice")
     }
 }
 
