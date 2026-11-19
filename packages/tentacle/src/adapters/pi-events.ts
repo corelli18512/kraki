@@ -38,6 +38,17 @@ export function logErrorFields(value: unknown): { errCategory: string; errStatus
   return { errCategory, ...(status && { errStatus: Number(status) }) };
 }
 
+const LENGTH_STOP_PREFIX = 'The model hit its output limit';
+
+/** Failure text for a run whose output was cut off at the token limit.
+ *  `previous` keeps an already-built message (with its token count) when a
+ *  recovery failure is appended. */
+export function lengthStopMessage(outputTokens?: number, previous?: string): string {
+  if (previous?.startsWith(LENGTH_STOP_PREFIX)) return previous.replace(/ Recovery failed: .*$/s, '');
+  const count = typeof outputTokens === 'number' && outputTokens > 0 ? ` (${outputTokens} tokens)` : '';
+  return `${LENGTH_STOP_PREFIX}${count} before finishing its reply. Send "continue" to resume, or lower the thinking level.`;
+}
+
 /** Choices of a question card shown for another extension's confirm dialog. */
 export const PI_CONFIRM_CHOICES = ['Yes', 'No'] as const;
 
@@ -78,6 +89,10 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         durationMs: s?.compactionStartedAt === undefined ? undefined : Date.now() - s.compactionStartedAt,
       }, 'pi compaction ended');
       if (s) s.compactionStartedAt = undefined;
+      // A failed recovery for a truncated run explains why the turn fails.
+      if (s && errorMessage && !s.turn.isSettled && s.lastStopReason === 'length' && s.turn.pendingError) {
+        s.turn.setError(`${lengthStopMessage(undefined, s.turn.pendingError)} Recovery failed: ${errorMessage}`);
+      }
       adapter.setCompacting(sessionId, false, {
         reason: adapter.normalizeCompactionReason(e.reason),
         aborted: e.aborted === true,
@@ -146,7 +161,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       break;
     }
     case 'message_end': {
-      const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
+      const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string; usage?: { output?: number } } }).message;
       if (m?.role === 'custom') {
         // pi-subagents background run notifications.
         const custom = m as unknown as { customType?: string; content?: unknown };
@@ -171,6 +186,10 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
             // silent reply-less turn.
             s.turn.setError(m.errorMessage?.trim()
               || 'The model request failed without an error message. Try sending again.');
+          } else if (m.stopReason === 'length') {
+            // Output cut off at the token limit (often all thinking, no reply).
+            // Pi may compact and retry; a later successful message_end clears it.
+            s.turn.setError(lengthStopMessage(m.usage?.output));
           } else {
             s.turn.clearError();
           }
@@ -352,9 +371,9 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       }
       // Resolve a provisional backend failure only at this authoritative run
       // boundary. Recoverable attempts were suppressed by willRetry above.
-      if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
+      if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted' || s.lastStopReason === 'length') {
         s.turn.discardProse();
-        if (s.lastStopReason !== 'error') s.turn.clearError();
+        if (s.lastStopReason === 'aborted') s.turn.clearError();
         s.turn.finish(); // the held error, if any, then idle
         break;
       }
