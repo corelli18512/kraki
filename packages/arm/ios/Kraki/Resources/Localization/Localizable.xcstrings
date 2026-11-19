@@ -264,6 +264,26 @@
         }
       }
     },
+    "Kraki on your computer couldn't save this message because its disk is full. Free some space, then retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑上的 Kraki 无法保存这条消息，因为磁盘已满。请释放一些空间后重试。"
+          }
+        }
+      }
+    },
+    "Kraki on your computer couldn't take this message. Retry; if it keeps failing, check the computer." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑上的 Kraki 无法接收这条消息。请重试；如果一直失败，请检查那台电脑。"
+          }
+        }
+      }
+    },
     "Pairing is temporarily unavailable. Try again later." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11847,6 +11867,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的电脑"
+          }
+        }
+      }
+    },
+    "Your computer couldn't record this message securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑无法安全地记录这条消息，因此没有执行。请检查电脑上的 Kraki 能否写入其数据文件夹，然后重试。"
+          }
+        }
+      }
+    },
+    "Your computer refused this message because this device's clock is ahead of the computer's. Check the date and time on both, then retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑拒绝了这条消息，因为本设备的时钟比电脑快。请检查两台设备的日期和时间，然后重试。"
+          }
+        }
+      }
+    },
+    "Your computer refused this message: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then retry in a few minutes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑拒绝了这条消息：消息签名时间过早、本设备的时钟偏慢，或电脑最近重置了安全状态。请检查日期和时间，几分钟后再重试。"
           }
         }
       }

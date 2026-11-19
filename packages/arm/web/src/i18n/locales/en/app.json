@@ -85,5 +85,12 @@
     "importSession": "Couldn't import the session: {{detail}}",
     "alreadyImported": "This session has already been imported.",
     "requestGeneric": "The computer couldn't complete that. Try again."
+  },
+  "refusedInput": {
+    "diskFull": "Kraki on your computer couldn't save this message because its disk is full. Free some space, then retry.",
+    "clockAhead": "Your computer refused this message because this device's clock is ahead of the computer's. Check the date and time on both, then retry.",
+    "stale": "Your computer refused this message: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then retry in a few minutes.",
+    "unrecorded": "Your computer couldn't record this message securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then retry.",
+    "generic": "Kraki on your computer couldn't take this message. Retry; if it keeps failing, check the computer."
   }
 }

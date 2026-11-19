@@ -13,7 +13,7 @@ import { traceEvent } from './trace';
 import { allowAutoRead, forgetSentRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
 import { diag } from './diag';
-import { requestErrorText } from './server-errors';
+import { refusedInputText, requestErrorText } from './server-errors';
 import { sliceGraphemes } from './format';
 import { isActivePhase } from './device-update';
 
@@ -352,6 +352,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // A request's outcome outside any turn (an import that could not reach
       // its agent): the chat shows no standalone error, so say it here.
       if ((msg.payload as { requestId?: string }).requestId) store.setLastError(requestErrorText(msg.payload.message));
+      // A message the computer refused without storing it (disk full, device
+      // trust): its bubble shows not delivered, and the reason in our words.
+      if (msg.payload.clientId && outbox.refused(sid, msg.payload.clientId)) {
+        logger.warn('computer refused input', { code: msg.payload.code, message: msg.payload.message });
+        store.setLastError(refusedInputText(msg.payload.code));
+      }
       store.appendMessage(sid, msg);
       // A transient error does not own unread state. If the turn ultimately
       // fails, the Tentacle's terminal boundary + session_list creates it.

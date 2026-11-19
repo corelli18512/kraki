@@ -364,6 +364,22 @@ describe('device trust — a paired app is told when its signed request is refus
     expect(appendMessage(env)).toHaveBeenCalledWith('s1', 'error', expect.any(String), false);
   });
 
+  it('a refused message names itself and the reason as a code, so the sender marks it not delivered (triage #23)', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi', clientId: 'c1' } }, Date.now() + 11 * 60_000), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'again', clientId: 'c2' } }, Date.now() - 16 * 60_000), phone.id);
+    env.deliver(signedAt(env, phone, { type: 'rename_session', sessionId: 's2', payload: { title: 'x', clientId: 'not-an-input' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    const errors = errorsFor(env, phone) as Array<{ sessionId?: string; payload: { clientId?: string; code?: string } }>;
+    // Each refused message gets its notice, even on the same session.
+    expect(errors.map((e) => [e.sessionId, e.payload.clientId, e.payload.code])).toEqual([
+      ['s1', 'c1', 'trust_rejected_clock'],
+      ['s1', 'c2', 'trust_rejected_stale'],
+      ['s2', undefined, 'trust_rejected_clock'],
+    ]);
+  });
+
   it('a refused command on a session this computer does not have is not answered', async () => {
     const { env, phone } = paired();
     (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);

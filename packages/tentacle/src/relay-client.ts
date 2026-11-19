@@ -1616,22 +1616,29 @@ export class RelayClient {
    *
    * - A command on a session known here: an `error` on that session through
    *   send(), like every other session error (spine seq, persisted, every app).
+   *   A refused `send_input` carries its clientId: the sender shows that
+   *   message as not delivered (a bare `error` is never a chat row).
    * - A sessionless command with a requestId: a full `error` envelope
    *   (`sessionId: ''`, seq, timestamp, deviceId) to the sender only, so its
    *   placeholder fails.
    * - Anything else: nothing.
+   * Each carries a `code` for apps to word the reason in their language.
    *
-   * At most one notice per app and session (or request) every few seconds: an
-   * app retrying with a skewed clock would otherwise get one per attempt.
+   * At most one notice per app and session (or request, or message) every
+   * few seconds: an app retrying with a skewed clock would otherwise get one
+   * per attempt.
    */
   private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
     if (typeof inner.type !== 'string' || !RelayClient.TRUST_REJECTED_NOTICE_TYPES.has(inner.type)) return;
     const sessionId = isSafeId(inner.sessionId) && this.sessionManager.getMeta(inner.sessionId) ? inner.sessionId : undefined;
-    const rawRequestId = (inner.payload as { requestId?: unknown } | undefined)?.requestId;
-    const requestId = typeof rawRequestId === 'string' && rawRequestId !== '' && rawRequestId.length <= 128 ? rawRequestId : undefined;
+    const bounded = (value: unknown) => typeof value === 'string' && value !== '' && value.length <= 128 ? value : undefined;
+    const requestId = bounded((inner.payload as { requestId?: unknown } | undefined)?.requestId);
+    const clientId = inner.type === 'send_input' && sessionId
+      ? bounded((inner.payload as { clientId?: unknown } | undefined)?.clientId)
+      : undefined;
     if (!sessionId && !requestId) return;
     const now = Date.now();
-    const key = `${appId}\n${sessionId ?? `req:${requestId}`}`;
+    const key = `${appId}\n${sessionId ?? `req:${requestId}`}${clientId ? `\n${clientId}` : ''}`;
     if (now - (this.trustRejectedNoticeAt.get(key) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
     if (this.trustRejectedNoticeAt.size >= 256) {
       for (const [k, at] of this.trustRejectedNoticeAt) {
@@ -1645,9 +1652,12 @@ export class RelayClient {
       : reason === 'stale'
         ? 'This computer refused the request because it was signed too long ago, or the sending device\'s clock is behind, or this computer recently reset its security state. Check the date and time; if they are right, wait a few minutes and try again.'
         : 'This computer could not record the request securely, so it was not run. Check that Kraki on the computer can write to its data folder, then try again.';
+    const code = reason === 'from_future' ? 'trust_rejected_clock'
+      : reason === 'stale' ? 'trust_rejected_stale'
+        : 'trust_rejected_unrecorded';
     logger.info({ appId, reason, type: inner.type, sessionId }, 'Told app its request was refused (device trust)');
     if (sessionId) {
-      this.send({ type: 'error', sessionId, payload: { message } });
+      this.send({ type: 'error', sessionId, payload: { message, code, ...(clientId && { clientId }) } });
       return;
     }
     this.sendReliableUnicastTo(appId, this.consumerKeys.get(appId) ?? NO_RSA_KEY, {
@@ -1656,7 +1666,7 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { message, requestId },
+      payload: { message, code, requestId },
     });
   }
 

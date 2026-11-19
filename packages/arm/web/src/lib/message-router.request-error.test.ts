@@ -13,7 +13,9 @@ vi.mock('./message-db', () => ({
 }));
 
 import { useStore } from '../hooks/useStore';
+import { i18next } from '../i18n';
 import { CommandState } from './commands';
+import { outbox } from './chat/outbox';
 import { messageProvider } from './message-provider';
 import { handleDataMessage } from './message-router';
 import type { InnerMessage } from '@kraki/protocol';
@@ -172,6 +174,59 @@ describe('create/import with no answer (K-204, K-206)', () => {
       payload: { message: '', requestId: 'req_import_empty' },
     } as unknown as InnerMessage, { cmdState, messageProvider } as never);
     expect(useStore.getState().lastError).toBe("The computer couldn't complete that. Try again.");
+  });
+});
+
+// Triage #11/#23: a message the computer refused without storing it (disk
+// full, device trust) is named by its clientId. A bare `error` is never a chat
+// row: the bubble shows "Not delivered" (Retry / Delete) and the banner says
+// why, in the app's language (the computer's text is English).
+describe('a message the computer refused (triage #11, #23)', () => {
+  const refuse = (payload: Record<string, unknown>) => handleDataMessage({
+    type: 'error', deviceId: 'dev-t', seq: 7, timestamp: new Date().toISOString(), sessionId: 's',
+    payload: { message: 'Kraki on this computer could not save your message because its disk is full.', ...payload },
+  } as unknown as InnerMessage, { cmdState: new CommandState(), messageProvider } as never);
+
+  beforeEach(() => {
+    outbox.reset();
+    outbox.configure({ send: async () => true, isDeliveryPathUp: () => true });
+    useStore.getState().upsertSession({ id: 's', deviceId: 'dev-t', agent: 'claude', state: 'idle', messageCount: 0 });
+  });
+
+  it('marks that message not delivered and says why in the app language', async () => {
+    const disk = outbox.send('s', 'hello');
+    const other = outbox.send('s', 'second');
+    refuse({ clientId: disk, code: 'input_disk_full' });
+    expect(outbox.forSession('s').map((e) => [e.clientId, e.state])).toEqual([[disk, 'failed'], [other, 'sending']]);
+    expect(useStore.getState().lastError).toBe("Kraki on your computer couldn't save this message because its disk is full. Free some space, then retry.");
+
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      refuse({ clientId: other, code: 'trust_rejected_clock' });
+      expect(outbox.forSession('s').every((e) => e.state === 'failed')).toBe(true);
+      expect(useStore.getState().lastError).toBe('\u7535\u8111\u62D2\u7EDD\u4E86\u8FD9\u6761\u6D88\u606F\uFF0C\u56E0\u4E3A\u672C\u8BBE\u5907\u7684\u65F6\u949F\u6BD4\u7535\u8111\u5FEB\u3002\u8BF7\u68C0\u67E5\u4E24\u53F0\u8BBE\u5907\u7684\u65E5\u671F\u548C\u65F6\u95F4\uFF0C\u7136\u540E\u91CD\u8BD5\u3002');
+    } finally {
+      await i18next.changeLanguage('en');
+    }
+  });
+
+  it('an unknown code gets the generic line; Retry sends it again', () => {
+    const id = outbox.send('s', 'hello');
+    refuse({ clientId: id, code: 'something_new' });
+    expect(useStore.getState().lastError).toBe("Kraki on your computer couldn't take this message. Retry; if it keeps failing, check the computer.");
+    outbox.retry(id);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it("another app's message, or one already delivered, changes nothing here", () => {
+    const id = outbox.send('s', 'hello');
+    refuse({ clientId: 'someone-elses', code: 'input_disk_full' });
+    refuse({ code: 'trust_rejected_stale' });
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+    expect(useStore.getState().lastError).toBeNull();
+    outbox.confirm('s', id, 'hello');
+    refuse({ clientId: id, code: 'input_disk_full' });
+    expect(useStore.getState().lastError).toBeNull();
   });
 });
 

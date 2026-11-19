@@ -46,3 +46,20 @@ export function requestErrorText(message: unknown): string {
   if (raw.startsWith(ALREADY_IMPORTED_PREFIX)) return t('app:serverErrors.alreadyImported');
   return raw || t('app:serverErrors.requestGeneric');
 }
+
+/** A message the computer refused without storing it (`error.payload.code`
+ *  next to its clientId: disk full, device trust). Worded in the UI language;
+ *  the computer's English `message` goes to the log only. */
+const REFUSED_INPUT_CODES = {
+  input_disk_full: 'app:refusedInput.diskFull',
+  trust_rejected_clock: 'app:refusedInput.clockAhead',
+  trust_rejected_stale: 'app:refusedInput.stale',
+  trust_rejected_unrecorded: 'app:refusedInput.unrecorded',
+} as const;
+
+export function refusedInputText(code: unknown): string {
+  const key = typeof code === 'string' && Object.hasOwn(REFUSED_INPUT_CODES, code)
+    ? REFUSED_INPUT_CODES[code as keyof typeof REFUSED_INPUT_CODES]
+    : undefined;
+  return t(key ?? 'app:refusedInput.generic');
+}

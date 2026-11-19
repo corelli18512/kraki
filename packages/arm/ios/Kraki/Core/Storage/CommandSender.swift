@@ -579,6 +579,15 @@ final class CommandSender {
         return true
     }
 
+    /// The computer refused this input without storing it: not delivered
+    /// (Retry / Delete), never re-sent by itself. False if not waiting here.
+    func failRefusedInput(sessionId: String, clientId: String) -> Bool {
+        guard let state = outbox[sessionId]?[clientId].map(pendingState), state == .sending || state == .unconfirmed else { return false }
+        confirmationTasks.removeValue(forKey: clientId)?.cancel()
+        setPendingState(sessionId, clientId: clientId, .failed, cause: "refused_by_computer")
+        return true
+    }
+
     /// Remove an unconfirmed input (Delete). Returns its text.
     @discardableResult
     func discardPending(sessionId: String, clientId: String) -> String? {

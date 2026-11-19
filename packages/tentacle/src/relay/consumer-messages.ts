@@ -657,8 +657,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
   } catch (err) {
     logger.error({ err, sessionId, type: msg.type }, 'handleConsumerMessage failed');
     if (msg.type === 'send_input') {
-      releaseUnstoredInput(client, sessionId, msg.payload.clientId as string | undefined);
-      reportInputNotAccepted(client, sessionId, err);
+      const clientId = msg.payload.clientId as string | undefined;
+      const unstored = releaseUnstoredInput(client, sessionId, clientId);
+      reportInputNotAccepted(client, sessionId, err, unstored ? clientId : undefined);
     }
   }
 }
@@ -666,26 +667,33 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
 /** An input whose user_message was never stored stays `pending` in the
  *  ledger: forget that this process admitted it, so the app's resend with the
  *  same clientId is a fresh attempt, not a duplicate that is only re-echoed
- *  (K-122). A stored one keeps its admission (at-most-once). */
-function releaseUnstoredInput(client: RelayClient, sessionId: string, clientId: string | undefined): void {
-  if (!clientId) return;
+ *  (K-122). A stored one keeps its admission (at-most-once). Returns whether
+ *  it was not stored. */
+function releaseUnstoredInput(client: RelayClient, sessionId: string, clientId: string | undefined): boolean {
+  if (!clientId) return false;
   const entry = client.sessionManager.getInputLedgerEntry(sessionId, clientId);
-  if (entry && entry.status !== 'pending') return;
+  if (entry && entry.status !== 'pending') return false;
   client.admittedInputs.delete(`${sessionId}\u0000${clientId}`);
+  return true;
 }
 
 /** The app's message could not be taken (a write failed, e.g. the disk is
- *  full): say so in the chat rather than letting it vanish (K-122). When the
- *  disk is full the error row cannot be stored either; send it live then. */
-function reportInputNotAccepted(client: RelayClient, sessionId: string, err: unknown): void {
-  const message = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOSPC'
+ *  full): say so rather than letting it vanish (K-122). With the clientId of
+ *  an input that was not stored, the sender shows that message as not
+ *  delivered and words `code` itself; a bare `error` is never a chat row.
+ *  When the disk is full the error row cannot be stored either; send it
+ *  live then. */
+function reportInputNotAccepted(client: RelayClient, sessionId: string, err: unknown, clientId: string | undefined): void {
+  const diskFull = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOSPC';
+  const message = diskFull
     ? 'Kraki on this computer could not save your message because its disk is full. Free some space, then send it again.'
     : 'Kraki on this computer could not take your message. Send it again; if it keeps failing, check `kraki logs` on that computer.';
+  const payload = { message, code: diskFull ? 'input_disk_full' : 'input_not_taken', ...(clientId && { clientId }) };
   try {
-    client.send({ type: 'error', sessionId, payload: { message } });
+    client.send({ type: 'error', sessionId, payload });
   } catch {
     try {
-      client.send({ type: 'error', sessionId, payload: { message } }, false, { persist: false });
+      client.send({ type: 'error', sessionId, payload }, false, { persist: false });
     } catch (sendErr) {
       logger.warn({ err: sendErr, sessionId }, 'could not report the failed input to the app');
     }

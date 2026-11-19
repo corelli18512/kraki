@@ -372,6 +372,19 @@ export const outbox = {
     checkDeadlines();
   },
 
+  /** The computer refused this input without storing it (an `error` with its
+   *  clientId: disk full, device trust): not delivered (Retry / Delete), never
+   *  sent again by itself. True when an input of `sessionId` still waiting
+   *  for its echo was marked. */
+  refused(sessionId: string, clientId: string): boolean {
+    const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId && e.sessionId === sessionId);
+    if (!entry || (entry.state !== 'sending' && entry.state !== 'unconfirmed')) return false;
+    stalls.delete(clientId);
+    update((list) => list.map((e) => (e.clientId === clientId ? { ...e, needsResend: undefined, needsDispatch: undefined } : e)));
+    setState(clientId, 'failed', 'refused_by_computer');
+    return true;
+  },
+
   /** Remove an unconfirmed input (Delete). Returns its text. */
   discard(clientId: string): string | undefined {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);

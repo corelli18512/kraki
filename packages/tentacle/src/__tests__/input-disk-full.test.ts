@@ -45,6 +45,10 @@ describe('send_input on a full disk (K-122)', () => {
     // The error row cannot be stored on a full disk: the last attempt is live-only.
     expect(last[2]).toEqual({ persist: false });
     expect(adapter.sendMessage).not.toHaveBeenCalled();
+    // Triage #11: apps never draw a bare `error` row. It names the message
+    // (the sender shows it as not delivered) and the reason as a code the
+    // app words in its own language.
+    expect(last[0].payload).toMatchObject({ clientId: 'cid-1', code: 'input_disk_full' });
   });
 
   it('a resend with the same clientId runs once the disk has space again', async () => {

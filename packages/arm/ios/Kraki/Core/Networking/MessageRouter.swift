@@ -507,6 +507,7 @@ final class MessageRouter {
                appState.commandSender?.pendingPlaceholderIds[requestId] != nil {
                 appState.commandSender?.failPendingRequest(requestId, reason: errorText)
             }
+            appState.commandSender?.handleRefusedInput(sessionId: sessionId, payload: payload)
 
         // ── Session metadata ─────────────────────────────────────────────
 
