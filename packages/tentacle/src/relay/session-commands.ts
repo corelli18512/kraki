@@ -84,8 +84,14 @@ export async function handleCreateSession(client: RelayClient, msg: ConsumerMess
       // Apps draw a failed turn with its reason; a bare `error` is never a
       // chat row. A first prompt already sent to the session is that turn:
       // it is settled here, so its late delivery failure adds no second one.
+      // Like a settled or aborted turn: its input is settled in the ledger,
+      // and an error staged for it cannot close the next turn.
       const turnId = client.activeInputTurnIds.get(preSessionId);
-      if (turnId) client.settledAdapterTurnIds.set(preSessionId, turnId);
+      if (turnId) {
+        client.settledAdapterTurnIds.set(preSessionId, turnId);
+        client.sessionManager.markInputLedgerSettled(preSessionId, turnId);
+      }
+      client.pendingTerminalErrors.delete(preSessionId);
       finishTurnWithStatus(client, preSessionId, {
         type: 'failed',
         payload: { message: errorMsg, failedAt: new Date().toISOString() },

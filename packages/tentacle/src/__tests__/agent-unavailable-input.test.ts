@@ -153,4 +153,36 @@ describe('K-008: input to a session whose agent cannot run', () => {
     expect(spine[3].payload.action).toMatchObject({ type: 'failed', payload: { message: "Couldn't create the session: pi exited" } });
     expect(sm.getMeta(sessionId)?.state).toBe('disconnected');
   });
+
+  it('create_session failing while its first prompt is being sent settles that prompt and drops a staged error, like abort (triage review P2-7)', async () => {
+    let fail!: (err: Error) => void;
+    let created!: (id: string) => void;
+    const announced = new Promise<string>((resolve) => { created = resolve; });
+    const adapter = {
+      createSession: vi.fn(async (config: { sessionId: string }) => {
+        adapter.onSessionCreated?.({ sessionId: config.sessionId, agent: 'pi' });
+        created(config.sessionId);
+        await new Promise<never>((_resolve, reject) => { fail = reject; });
+      }),
+      onSessionCreated: undefined as undefined | ((e: { sessionId: string; agent: string }) => void),
+      generateTitle: vi.fn(async () => null),
+      getSessionUsage: vi.fn(() => null),
+      setSessionMode: vi.fn(),
+      setTurnIdentity: vi.fn(),
+      isTurnSettled: vi.fn(() => false),
+      sendMessage: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const { sm, client } = build(adapter as unknown as AgentAdapter);
+    const create = handleCreateSession(client, { type: 'create_session', deviceId: 'app-1', payload: { requestId: 'req-1', agentId: 'pi', model: 'm' } } as never);
+    const sessionId = await announced;
+    handleConsumerMessage(client, { type: 'send_input', sessionId, deviceId: 'app-1', payload: { text: 'hi', clientId: 'cid-1' } });
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(sm.getInputLedgerEntry(sessionId, 'cid-1')?.status).toBe('dispatching');
+    // An error staged without a turn would otherwise close the next turn.
+    client.pendingTerminalErrors.set(sessionId, { message: 'provider hiccup', source: 'adapter' });
+    fail(new Error('pi exited'));
+    await create;
+    expect(sm.getInputLedgerEntry(sessionId, 'cid-1')?.status).toBe('settled');
+    expect(client.pendingTerminalErrors.has(sessionId)).toBe(false);
+  });
 });
