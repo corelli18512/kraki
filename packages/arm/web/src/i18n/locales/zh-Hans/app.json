@@ -84,7 +84,10 @@
     "copySession": "无法复制会话：{{detail}}",
     "importSession": "无法导入会话：{{detail}}",
     "alreadyImported": "此会话已导入。",
-    "requestGeneric": "电脑无法完成此操作。请重试。"
+    "requestGeneric": "电脑无法完成此操作。请重试。",
+    "requestClockAhead": "电脑拒绝了此请求，因为本设备的时钟比电脑快。请检查两台设备的日期和时间，然后重试。",
+    "requestStale": "电脑拒绝了此请求：请求签名时间过早、本设备的时钟偏慢，或电脑最近重置了安全状态。请检查日期和时间，几分钟后再重试。",
+    "requestUnrecorded": "电脑无法安全地记录此请求，因此没有执行。请检查电脑上的 Kraki 能否写入其数据文件夹，然后重试。"
   },
   "refusedInput": {
     "diskFull": "电脑上的 Kraki 无法保存这条消息，因为磁盘已满。请释放一些空间后重试。",

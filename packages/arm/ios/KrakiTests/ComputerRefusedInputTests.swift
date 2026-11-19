@@ -86,5 +86,44 @@ final class ComputerRefusedInputTests: XCTestCase {
             let english = RefusedInputText.describe(code: code)
             XCTAssertNotEqual(zh.localizedString(forKey: english, value: nil, table: nil), english, "zh-Hans for \(code ?? "generic")")
         }
+        for code in ["trust_rejected_clock", "trust_rejected_stale", "trust_rejected_unrecorded"] {
+            let english = try XCTUnwrap(RefusedRequestText.describe(code: code))
+            XCTAssertNotEqual(zh.localizedString(forKey: english, value: nil, table: nil), english, "zh-Hans for the request's \(code)")
+        }
+    }
+
+    /// Triage review P2-5: a create or fork the computer refused (device
+    /// trust) fails its placeholder in the app's words, not the computer's
+    /// English. Other failures keep the computer's text.
+    func testRefusedCreateAndForkSayWhyInTheAppsWords() throws {
+        let app = makeApp()
+        let sender = try XCTUnwrap(app.commandSender)
+        let english = "This computer refused the request because the sending device's clock is ahead of the computer's. Check the date and time on both, then try again."
+        func failRequest(_ requestId: String, _ fields: [String: Any]) throws -> String? {
+            let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[requestId])
+            var payload: [String: Any] = ["message": english, "requestId": requestId]
+            payload.merge(fields) { $1 }
+            app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+                "type": "error", "sessionId": "", "deviceId": "d", "seq": 0, "payload": payload,
+            ]))
+            XCTAssertNil(sender.pendingPlaceholderIds[requestId])
+            return app.sessionStore.pendingSessionErrors[placeholder]
+        }
+
+        sender.forkSession(sessionId: "s")
+        let fork = try XCTUnwrap(sender.pendingPlaceholderIds.keys.first)
+        XCTAssertEqual(try failRequest(fork, ["code": "trust_rejected_stale"]),
+                       "Your computer refused this request: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then try again in a few minutes.")
+        let create = try XCTUnwrap(sender.createSession(targetDeviceId: "d", agentId: "pi", model: "m"))
+        XCTAssertEqual(try failRequest(create, ["code": "trust_rejected_clock"]),
+                       "Your computer refused this request because this device's clock is ahead of the computer's. Check the date and time on both, then try again.")
+        let unrecorded = try XCTUnwrap(sender.createSession(targetDeviceId: "d", agentId: "pi", model: "m"))
+        XCTAssertEqual(try failRequest(unrecorded, ["code": "trust_rejected_unrecorded"]),
+                       "Your computer couldn't record this request securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then try again.")
+        let newCode = try XCTUnwrap(sender.createSession(targetDeviceId: "d", agentId: "pi", model: "m"))
+        XCTAssertEqual(try failRequest(newCode, ["code": "trust_rejected_something_new"]), "The computer couldn't complete that. Try again.")
+        let other = try XCTUnwrap(sender.createSession(targetDeviceId: "d", agentId: "pi", model: "m"))
+        XCTAssertEqual(try failRequest(other, ["message": "Couldn't create the session: pi is not installed"]),
+                       "Couldn't create the session: pi is not installed")
     }
 }

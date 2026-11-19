@@ -81,6 +81,36 @@ describe('create/fork failures (release review A5)', () => {
     expect(useStore.getState().drafts.get('kraki.new-session-draft')).toBe('Hello');
   });
 
+  it('a create, copy or import the computer refused (device trust) says why in the app language (triage review P2-5)', async () => {
+    const refuse = (requestId: string, code: string, message: string) => {
+      const cmdState = new CommandState();
+      cmdState.pendingCreateRequests.add(requestId);
+      handleDataMessage({
+        type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',
+        payload: { message, code, requestId },
+      } as unknown as InnerMessage, { cmdState, messageProvider } as never);
+      expect(cmdState.pendingCreateRequests.has(requestId)).toBe(false);
+      return useStore.getState().lastError;
+    };
+    const english = "This computer refused the request because the sending device's clock is ahead of the computer's. Check the date and time on both, then try again.";
+    expect(refuse('req_c', 'trust_rejected_clock', english))
+      .toBe("Your computer refused this request because this device's clock is ahead of the computer's. Check the date and time on both, then try again.");
+    expect(refuse('req_f', 'trust_rejected_stale', english))
+      .toBe("Your computer refused this request: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then try again in a few minutes.");
+    expect(refuse('req_i', 'trust_rejected_unrecorded', english))
+      .toBe("Your computer couldn't record this request securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then try again.");
+    expect(refuse('req_n', 'trust_rejected_something_new', english)).toBe("The computer couldn't complete that. Try again.");
+    // Other codes keep the computer's text, as before.
+    expect(refuse('req_o', 'input_disk_full', "Couldn't create the session: disk full")).toBe("Couldn't create the session: disk full");
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      expect(refuse('req_z', 'trust_rejected_clock', english))
+        .toBe('\u7535\u8111\u62D2\u7EDD\u4E86\u6B64\u8BF7\u6C42\uFF0C\u56E0\u4E3A\u672C\u8BBE\u5907\u7684\u65F6\u949F\u6BD4\u7535\u8111\u5FEB\u3002\u8BF7\u68C0\u67E5\u4E24\u53F0\u8BBE\u5907\u7684\u65E5\u671F\u548C\u65F6\u95F4\uFF0C\u7136\u540E\u91CD\u8BD5\u3002');
+    } finally {
+      await i18next.changeLanguage('en');
+    }
+  });
+
   it('ignores a session-less error for a request this app did not make', () => {
     handleDataMessage({
       type: 'error', deviceId: 'dev-t', seq: 1, timestamp: new Date().toISOString(), sessionId: '',

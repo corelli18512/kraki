@@ -1611,6 +1611,11 @@ export class RelayClient {
     'delete_session', 'archive_session', 'rename_session', 'set_session_mode', 'set_session_model',
     'pin_session', 'create_session', 'fork_session', 'import_session',
   ]);
+  /** Requests answered by their requestId, never on a session: a fork names
+   *  its source session, but its refusal belongs to the fork. */
+  private static readonly TRUST_REJECTED_REQUEST_TYPES: ReadonlySet<string> = new Set([
+    'create_session', 'fork_session', 'import_session',
+  ]);
 
   /**
    * Tell a paired app that a command it signed was refused by device trust
@@ -1624,9 +1629,9 @@ export class RelayClient {
    *   message as not delivered (a bare `error` is never a chat row). When the
    *   row cannot be stored (the disk is full, which is also why the replay
    *   store could not be written) it is sent live only.
-   * - A sessionless command with a requestId: a full `error` envelope
-   *   (`sessionId: ''`, seq, timestamp, deviceId) to the sender only, so its
-   *   placeholder fails.
+   * - A create/fork/import, or another sessionless command, with a requestId:
+   *   a full `error` envelope (`sessionId: ''`, seq, timestamp, deviceId) to
+   *   the sender only, so its placeholder fails.
    * - Anything else: nothing.
    * Each carries a `code` for apps to word the reason in their language.
    *
@@ -1638,9 +1643,12 @@ export class RelayClient {
    */
   private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
     if (typeof inner.type !== 'string' || !RelayClient.TRUST_REJECTED_NOTICE_TYPES.has(inner.type)) return;
-    const sessionId = isSafeId(inner.sessionId) && this.sessionManager.getMeta(inner.sessionId) ? inner.sessionId : undefined;
     const bounded = (value: unknown) => typeof value === 'string' && value !== '' && value.length <= 128 ? value : undefined;
     const requestId = bounded((inner.payload as { requestId?: unknown } | undefined)?.requestId);
+    const answersRequest = requestId !== undefined && RelayClient.TRUST_REJECTED_REQUEST_TYPES.has(inner.type);
+    const sessionId = !answersRequest && isSafeId(inner.sessionId) && this.sessionManager.getMeta(inner.sessionId)
+      ? inner.sessionId
+      : undefined;
     const clientId = inner.type === 'send_input' && sessionId
       ? bounded((inner.payload as { clientId?: unknown } | undefined)?.clientId)
       : undefined;

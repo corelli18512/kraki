@@ -428,6 +428,23 @@ describe('device trust — a paired app is told when its signed request is refus
     }
   });
 
+  it('a refused fork of a known session fails the fork for its sender only, with no row in the source chat (triage review P2-5)', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'fork_session', sessionId: 's1', payload: { requestId: 'fork-1', sourceSessionId: 's1' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    const errors = errorsFor(env, phone) as Array<{ sessionId?: string; payload: { requestId?: string; code?: string } }>;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ sessionId: '', payload: { requestId: 'fork-1', code: 'trust_rejected_clock' } });
+    expect(appendMessage(env)).not.toHaveBeenCalledWith('s1', 'error', expect.any(String), expect.anything());
+    expect(env.sent.filter((s) => readable({ ...env, sent: [s] }, phone).some((m) => m.type === 'error')).every((s) => s.target === phone.id)).toBe(true);
+    // A message on that session still gets its notice there.
+    env.sent.length = 0;
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'hi', clientId: 'c1' } }, Date.now() + 11 * 60_000), phone.id);
+    await flush();
+    expect(errorsFor(env, phone)).toMatchObject([{ sessionId: 's1', payload: { clientId: 'c1', code: 'trust_rejected_clock' } }]);
+  });
+
   it('a refused command on a session this computer does not have is not answered', async () => {
     const { env, phone } = paired();
     (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);

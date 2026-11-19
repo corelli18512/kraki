@@ -15,6 +15,25 @@ extension CommandSender {
     }
 }
 
+/// A create/fork/import device trust refused (`error.payload.code`
+/// `trust_rejected_*`), in the app's language; nil for other failures,
+/// which keep the computer's text.
+enum RefusedRequestText {
+    static func describe(code: String?) -> String? {
+        guard let code, code.hasPrefix("trust_rejected_") else { return nil }
+        switch code {
+        case "trust_rejected_clock":
+            return String(localized: "Your computer refused this request because this device's clock is ahead of the computer's. Check the date and time on both, then try again.")
+        case "trust_rejected_stale":
+            return String(localized: "Your computer refused this request: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then try again in a few minutes.")
+        case "trust_rejected_unrecorded":
+            return String(localized: "Your computer couldn't record this request securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then try again.")
+        default:
+            return String(localized: "The computer couldn't complete that. Try again.")
+        }
+    }
+}
+
 /// `error.payload.code` of a refused message, in the app's language.
 enum RefusedInputText {
     static func describe(code: String?) -> String {

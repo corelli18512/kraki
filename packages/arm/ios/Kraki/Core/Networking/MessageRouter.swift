@@ -499,7 +499,8 @@ final class MessageRouter {
             // Not a turn boundary: a retrying turn can recover, and its card
             // (e.g. a pending permission) must stay. Turn end is signalled separately.
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            let errorText = payload?["message"] as? String ?? String(localized: "Error")
+            let errorText = RefusedRequestText.describe(code: payload?["code"] as? String)
+                ?? payload?["message"] as? String ?? String(localized: "Error")
             // If this error correlates to a pending create/fork/import
             // by requestId, fail the placeholder so the optimistic
             // view shows an error state instead of spinning forever.
@@ -595,12 +596,14 @@ final class MessageRouter {
             }
         // A create/fork/import failure has no session yet (sessionId ""): it
         // is correlated by the requestId the app sent. Fail the placeholder
-        // now with the computer's reason instead of a timeout 30 s later.
+        // now with the computer's reason (a device trust refusal in our
+        // words) instead of a timeout 30 s later.
         case "error" where (dict["sessionId"] as? String ?? "").isEmpty:
             let payload = dict["payload"] as? [String: Any]
             if let requestId = payload?["requestId"] as? String,
                let sender = appState.commandSender, sender.pendingPlaceholderIds[requestId] != nil {
-                sender.failPendingRequest(requestId, reason: payload?["message"] as? String ?? String(localized: "Error"))
+                sender.failPendingRequest(requestId, reason: RefusedRequestText.describe(code: payload?["code"] as? String)
+                    ?? payload?["message"] as? String ?? String(localized: "Error"))
             }
         default:
             return false

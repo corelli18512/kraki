@@ -27,10 +27,18 @@ export function serverErrorText(message: unknown): string {
   return t(key ?? 'app:serverErrors.generic');
 }
 
+/** Device trust refused a create/fork/import (`error.payload.code`): worded
+ *  in the UI language; the computer's English `message` is not shown. */
+const REFUSED_REQUEST_CODES = {
+  trust_rejected_clock: 'app:serverErrors.requestClockAhead',
+  trust_rejected_stale: 'app:serverErrors.requestStale',
+  trust_rejected_unrecorded: 'app:serverErrors.requestUnrecorded',
+} as const;
+
 /** A Tentacle's create/fork/import failure. These share one path (the
  *  request id), so each is framed by its own prefix in the UI language; the
- *  detail is the computer's own words and stays as sent. Any other text is
- *  shown as sent. */
+ *  detail is the computer's own words and stays as sent. A device trust
+ *  refusal is worded by its code. Any other text is shown as sent. */
 const REQUEST_ERROR_PREFIXES = [
   ["Couldn't create the session: ", 'app:serverErrors.createSession'],
   ["Couldn't copy the session: ", 'app:serverErrors.copySession'],
@@ -38,7 +46,12 @@ const REQUEST_ERROR_PREFIXES = [
 ] as const;
 const ALREADY_IMPORTED_PREFIX = 'Session already imported as ';
 
-export function requestErrorText(message: unknown): string {
+export function requestErrorText(message: unknown, code?: unknown): string {
+  if (typeof code === 'string' && code.startsWith('trust_rejected_')) {
+    return t(Object.hasOwn(REFUSED_REQUEST_CODES, code)
+      ? REFUSED_REQUEST_CODES[code as keyof typeof REFUSED_REQUEST_CODES]
+      : 'app:serverErrors.requestGeneric');
+  }
   const raw = typeof message === 'string' ? message : '';
   for (const [prefix, key] of REQUEST_ERROR_PREFIXES) {
     if (raw.startsWith(prefix)) return t(key, { detail: raw.slice(prefix.length) });

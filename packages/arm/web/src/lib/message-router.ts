@@ -241,7 +241,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     if (reqId && ctx.cmdState.pendingCreateRequests.has(reqId)) {
       ctx.cmdState.clearRequest(reqId);
       if (msg.sessionId) store.removePendingSession(msg.sessionId);
-      store.setLastError(requestErrorText(msg.payload.message));
+      store.setLastError(requestErrorText(msg.payload.message, msg.payload.code));
       return;
     }
     if (!msg.sessionId) return;
@@ -351,7 +351,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }
       // A request's outcome outside any turn (an import that could not reach
       // its agent): the chat shows no standalone error, so say it here.
-      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(requestErrorText(msg.payload.message));
+      if ((msg.payload as { requestId?: string }).requestId) store.setLastError(requestErrorText(msg.payload.message, msg.payload.code));
       // A message the computer refused without storing it (disk full, device
       // trust): its bubble shows not delivered, and the reason in our words.
       if (msg.payload.clientId && outbox.refused(sid, msg.payload.clientId)) {

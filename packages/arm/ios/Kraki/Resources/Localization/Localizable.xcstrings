@@ -380,6 +380,16 @@
         }
       }
     },
+    "The computer couldn't complete that. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑无法完成此操作。请重试。"
+          }
+        }
+      }
+    },
     "The relay reported a new encryption key for %@. Kraki keeps encrypting to the key it trusted. If you reinstalled Kraki there, that computer can't read new messages until you run `kraki connect` on it and scan the new code. If you didn't, keep using it as before." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11881,6 +11891,16 @@
         }
       }
     },
+    "Your computer couldn't record this request securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑无法安全地记录此请求，因此没有执行。请检查电脑上的 Kraki 能否写入其数据文件夹，然后重试。"
+          }
+        }
+      }
+    },
     "Your computer refused this message because this device's clock is ahead of the computer's. Check the date and time on both, then retry." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11897,6 +11917,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电脑拒绝了这条消息：消息签名时间过早、本设备的时钟偏慢，或电脑最近重置了安全状态。请检查日期和时间，几分钟后再重试。"
+          }
+        }
+      }
+    },
+    "Your computer refused this request because this device's clock is ahead of the computer's. Check the date and time on both, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑拒绝了此请求，因为本设备的时钟比电脑快。请检查两台设备的日期和时间，然后重试。"
+          }
+        }
+      }
+    },
+    "Your computer refused this request: it was signed too long ago, this device's clock is behind, or the computer recently reset its security state. Check the date and time, then try again in a few minutes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑拒绝了此请求：请求签名时间过早、本设备的时钟偏慢，或电脑最近重置了安全状态。请检查日期和时间，几分钟后再重试。"
           }
         }
       }
