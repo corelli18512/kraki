@@ -85,7 +85,7 @@ describe('kraki agents on Windows without bash', () => {
     const pi = SETUP_AGENTS.find((a) => a.id === 'pi')!;
     const createAdapter = vi.fn();
     const r = await checkAgent(pi, {
-      checkCli: () => ({ found: true, version: '0.87.1' }), createAdapter, timeoutMs: 1000,
+      checkCli: () => ({ found: true, version: '1.5.2' }), createAdapter, timeoutMs: 1000,
       platform: 'win32', piHasShell: () => false,
     });
     expect(r).toMatchObject({ status: 'error', detail: 'no_bash', hint: expect.stringContaining('Git for Windows') });
