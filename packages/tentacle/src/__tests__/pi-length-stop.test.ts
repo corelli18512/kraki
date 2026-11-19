@@ -66,10 +66,8 @@ describe('pi length (output-limit) stop', () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
     const message = onError.mock.calls[0][1].message as string;
-    expect(message).toMatch(/output limit/i);
-    expect(message).toContain('42666');
-    expect(message).toMatch(/revoked/);
-    expect(message).not.toMatch(/Context overflow recovery failed/);
+    // Pi's own recovery error, verbatim — no Kraki wording.
+    expect(message).toBe('Context overflow recovery failed: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth access token has been revoked."}}');
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -90,8 +88,7 @@ describe('pi length (output-limit) stop', () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     const message = onError.mock.calls[0][1].message as string;
-    expect(message).toMatch(/output limit/i);
-    expect(message).toMatch(/compact-and-retry/);
+    expect(message).toBe('Truncated response recovery failed after one compact-and-retry attempt.');
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -129,7 +126,7 @@ describe('pi length (output-limit) stop', () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     const message = onError.mock.calls[0][1].message as string;
-    expect(message).toMatch(/output limit/i);
-    expect(message).not.toMatch(/Automatic retry failed|Auto-compaction/);
+    // No Pi text for the truncation itself: only the raw stop reason.
+    expect(message).toBe('stopReason: length');
   });
 });

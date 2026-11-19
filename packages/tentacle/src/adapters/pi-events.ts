@@ -38,16 +38,9 @@ export function logErrorFields(value: unknown): { errCategory: string; errStatus
   return { errCategory, ...(status && { errStatus: Number(status) }) };
 }
 
-const LENGTH_STOP_PREFIX = 'The model hit its output limit';
-
-/** Failure text for a run whose output was cut off at the token limit.
- *  `previous` keeps an already-built message (with its token count) when a
- *  recovery failure is appended. */
-export function lengthStopMessage(outputTokens?: number, previous?: string): string {
-  if (previous?.startsWith(LENGTH_STOP_PREFIX)) return previous.replace(/ Automatic retry failed: .*$/s, '');
-  const count = typeof outputTokens === 'number' && outputTokens > 0 ? ` (${outputTokens} tokens)` : '';
-  return `${LENGTH_STOP_PREFIX}${count} before finishing its reply. Send "continue" to resume, or lower the thinking level.`;
-}
+/** Kraki adds no wording of its own: Pi gives no text for a truncated run, so
+ *  the failure carries only the raw stop reason Pi reported. */
+export const LENGTH_STOP_MESSAGE = 'stopReason: length';
 
 /** Choices of a question card shown for another extension's confirm dialog. */
 export const PI_CONFIRM_CHOICES = ['Yes', 'No'] as const;
@@ -93,8 +86,8 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       // Only overflow compaction is Pi's recovery for a truncated run; a failed
       // threshold compaction is unrelated maintenance.
       if (s && errorMessage && e.reason === 'overflow' && !s.turn.isSettled && s.lastStopReason === 'length' && s.turn.pendingError) {
-        const cause = errorMessage.replace(/^Context overflow recovery failed:\s*/i, '');
-        s.turn.setError(`${lengthStopMessage(undefined, s.turn.pendingError)} Automatic retry failed: ${cause}`);
+        // Pi's own recovery error, verbatim.
+        s.turn.setError(errorMessage);
       }
       adapter.setCompacting(sessionId, false, {
         reason: adapter.normalizeCompactionReason(e.reason),
@@ -192,7 +185,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
           } else if (m.stopReason === 'length') {
             // Output cut off at the token limit (often all thinking, no reply).
             // Pi may compact and retry; a later successful message_end clears it.
-            s.turn.setError(lengthStopMessage(m.usage?.output));
+            s.turn.setError(m.errorMessage?.trim() || LENGTH_STOP_MESSAGE);
           } else {
             s.turn.clearError();
           }
