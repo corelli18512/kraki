@@ -12,7 +12,7 @@ describe('declared Pi runtime contract', () => {
     };
     const rpcMode = readFileSync(join(packageRoot, 'dist', 'modes', 'rpc', 'rpc-mode.js'), 'utf8');
 
-    expect(packageJson.version).toBe('0.87.1');
+    expect(packageJson.version).toBe('1.5.2');
     expect(rpcMode).toContain('agent_settled');
     expect(rpcMode).toContain('clear_queue');
   });
