@@ -401,6 +401,33 @@ describe('device trust — a paired app is told when its signed request is refus
     expect(errors[0]).toMatchObject({ sessionId: 's1', seq: 0, payload: { clientId: 'c1', code: 'trust_rejected_unrecorded' } });
   });
 
+  it('a relay replaying refused messages gets at most 8 notices per app and session in each window (triage review P2-1)', async () => {
+    const { env, phone } = paired();
+    env.sent.length = 0;
+    const behind = Date.now() - 16 * 60_000;
+    for (let i = 0; i < 12; i++) {
+      env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: `m${i}`, clientId: `c${i}` } }, behind), phone.id);
+    }
+    env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's2', payload: { text: 'other', clientId: 'd0' } }, behind), phone.id);
+    await flush();
+    const errors = errorsFor(env, phone) as Array<{ sessionId?: string; payload: { clientId?: string } }>;
+    expect(errors.filter((e) => e.sessionId === 's1').map((e) => e.payload.clientId)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']);
+    expect(appendMessage(env).mock.calls.filter(([sid, type]) => sid === 's1' && type === 'error')).toHaveLength(8);
+    // Another session has its own allowance.
+    expect(errors.filter((e) => e.sessionId === 's2').map((e) => e.payload.clientId)).toEqual(['d0']);
+    // The next window answers again.
+    const later = Date.now() + 6_000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      env.sent.length = 0;
+      env.deliver(signedAt(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'm12', clientId: 'c12' } }, behind), phone.id);
+      await flush();
+      expect((errorsFor(env, phone) as Array<{ payload: { clientId?: string } }>).map((e) => e.payload.clientId)).toEqual(['c12']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('a refused command on a session this computer does not have is not answered', async () => {
     const { env, phone } = paired();
     (env.client.sessionManager as unknown as { getMeta: ReturnType<typeof vi.fn> }).getMeta.mockReturnValue(null);

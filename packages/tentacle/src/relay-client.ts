@@ -1597,6 +1597,10 @@ export class RelayClient {
   /** Last time each app was told a command of it was refused, per session
    *  or request (see notifyTrustRejected). */
   private trustRejectedNoticeAt = new Map<string, number>();
+  /** Refused messages (notices naming a clientId) answered per app and
+   *  session in the current window (see notifyTrustRejected). */
+  private trustRejectedMessageNotices = new Map<string, { since: number; count: number }>();
+  private static readonly TRUST_REJECTED_MESSAGE_NOTICES_PER_WINDOW = 8;
 
   /** Commands a user starts by hand. Only these are answered when device
    *  trust refuses them: background traffic (subscriptions, feature
@@ -1628,7 +1632,9 @@ export class RelayClient {
    *
    * At most one notice per app and session (or request, or message) every
    * few seconds: an app retrying with a skewed clock would otherwise get one
-   * per attempt.
+   * per attempt. Notices naming a message are also capped per app and
+   * session in that window, so a relay replaying old signed messages cannot
+   * store an error row for each.
    */
   private notifyTrustRejected(appId: string, reason: string, inner: Record<string, unknown>): void {
     if (typeof inner.type !== 'string' || !RelayClient.TRUST_REJECTED_NOTICE_TYPES.has(inner.type)) return;
@@ -1640,14 +1646,27 @@ export class RelayClient {
       : undefined;
     if (!sessionId && !requestId) return;
     const now = Date.now();
-    const key = `${appId}\n${sessionId ?? `req:${requestId}`}${clientId ? `\n${clientId}` : ''}`;
-    if (now - (this.trustRejectedNoticeAt.get(key) ?? 0) < RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) return;
+    const windowMs = RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS;
+    const scope = `${appId}\n${sessionId ?? `req:${requestId}`}`;
+    const key = clientId ? `${scope}\n${clientId}` : scope;
+    if (now - (this.trustRejectedNoticeAt.get(key) ?? 0) < windowMs) return;
+    const burst = clientId ? this.trustRejectedMessageNotices.get(scope) : undefined;
+    const burstOpen = burst !== undefined && now - burst.since < windowMs;
+    if (burstOpen && burst.count >= RelayClient.TRUST_REJECTED_MESSAGE_NOTICES_PER_WINDOW) return;
     if (this.trustRejectedNoticeAt.size >= 256) {
       for (const [k, at] of this.trustRejectedNoticeAt) {
-        if (now - at >= RelayClient.TRUST_REJECTED_NOTICE_INTERVAL_MS) this.trustRejectedNoticeAt.delete(k);
+        if (now - at >= windowMs) this.trustRejectedNoticeAt.delete(k);
+      }
+    }
+    if (this.trustRejectedMessageNotices.size >= 256) {
+      for (const [k, { since }] of this.trustRejectedMessageNotices) {
+        if (now - since >= windowMs) this.trustRejectedMessageNotices.delete(k);
       }
     }
     this.trustRejectedNoticeAt.set(key, now);
+    if (clientId) {
+      this.trustRejectedMessageNotices.set(scope, burstOpen ? { since: burst.since, count: burst.count + 1 } : { since: now, count: 1 });
+    }
     // A session error reaches every app: name the sender, not "this device".
     const message = reason === 'from_future'
       ? 'This computer refused the request because the sending device\'s clock is ahead of the computer\'s. Check the date and time on both, then try again.'
