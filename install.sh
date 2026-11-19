@@ -300,8 +300,10 @@ ensure_path_configured() {
         # shellcheck disable=SC2088 # a literal ~/ is what is searched for
         if ! grep -qF -e "${INSTALL_DIR}" -e "\$HOME/${HOME_RELATIVE}" -e "\${HOME}/${HOME_RELATIVE}" -e "~/${HOME_RELATIVE}" "$PROFILE" 2>/dev/null; then
           printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$PROFILE"
+          echo "  Added ${INSTALL_DIR} to PATH in ${PROFILE}. Open a new Terminal window to use kraki."
+        else
+          echo "  ${INSTALL_DIR} is already on the PATH in ${PROFILE}. Open a new Terminal window to use kraki."
         fi
-        echo "  Added ${INSTALL_DIR} to PATH in ${PROFILE}. Open a new Terminal window to use kraki."
       else
         echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
       fi

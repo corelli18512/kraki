@@ -117,6 +117,20 @@ for (const installerPath of installerPaths) {
       expect(readFileSync(profile, 'utf8')).toBe('export PATH="$HOME/.local/bin:$PATH"\n');
     });
 
+    it('says "Added … to PATH" only when it added the line (triage #117)', () => {
+      const home = mkdtempSync(join(tmpdir(), 'kraki-inst-home-'));
+      const profile = join(home, '.bashrc');
+      writeFileSync(profile, 'export PATH="$HOME/.local/bin:$PATH"\n');
+      const already = run('INSTALL_DIR="$HOME/.local/bin"; ensure_path_configured', { HOME: home, SHELL: '/bin/bash' });
+      expect(already.stdout).not.toContain('Added');
+      expect(already.stdout).toContain(`is already on the PATH in ${profile}. Open a new Terminal window to use kraki.`);
+
+      writeFileSync(profile, '');
+      const added = run('INSTALL_DIR="$HOME/.local/bin"; ensure_path_configured', { HOME: home, SHELL: '/bin/bash' });
+      expect(added.stdout).toContain(`Added ${home}/.local/bin to PATH in ${profile}.`);
+      expect(readFileSync(profile, 'utf8')).toContain(`export PATH="${home}/.local/bin:$PATH"`);
+    });
+
     it('says setup did not finish only when it was cancelled (B16)', () => {
       const cancelled = run('setup_cli() { return 130; }\nrun_setup');
       expect(cancelled.status).toBe(1);
