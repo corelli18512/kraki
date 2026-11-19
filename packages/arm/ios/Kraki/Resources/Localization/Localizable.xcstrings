@@ -284,6 +284,26 @@
         }
       }
     },
+    "Not delivered. %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未送达。%@"
+          }
+        }
+      }
+    },
+    "Not delivered. %@ Click to retry or delete" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未送达。%@ 点按重试或删除"
+          }
+        }
+      }
+    },
     "Pairing is temporarily unavailable. Try again later." : {
       "localizations" : {
         "zh-Hans" : {

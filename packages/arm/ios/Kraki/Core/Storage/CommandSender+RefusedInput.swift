@@ -6,12 +6,17 @@ import Foundation
 /// the reason is said in the app's words. The computer's English text is
 /// logged only.
 extension CommandSender {
+    /// Pending payload key: why the computer refused the input, in the app's
+    /// words (not kept across a relaunch).
+    static let refusedReasonKey = "localRefusedReason"
+
     func handleRefusedInput(sessionId: String, payload: [String: Any]?) {
-        guard let clientId = payload?["clientId"] as? String,
-              failRefusedInput(sessionId: sessionId, clientId: clientId) else { return }
         let code = payload?["code"] as? String
+        let reason = RefusedInputText.describe(code: code)
+        guard let clientId = payload?["clientId"] as? String,
+              failRefusedInput(sessionId: sessionId, clientId: clientId, reason: reason) else { return }
         KLog.d("[Outbox] computer refused input code=\(code ?? "-") message=\(payload?["message"] as? String ?? "")")
-        appState?.lastError = RefusedInputText.describe(code: code)
+        appState?.lastError = reason
     }
 }
 

@@ -90,6 +90,8 @@ final class ComputerRefusedInputTests: XCTestCase {
             let english = try XCTUnwrap(RefusedRequestText.describe(code: code))
             XCTAssertNotEqual(zh.localizedString(forKey: english, value: nil, table: nil), english, "zh-Hans for the request's \(code)")
         }
+        XCTAssertEqual(zh.localizedString(forKey: "Not delivered. %@", value: nil, table: nil), "未送达。%@")
+        XCTAssertEqual(zh.localizedString(forKey: "Not delivered. %@ Click to retry or delete", value: nil, table: nil), "未送达。%@ 点按重试或删除")
     }
 
     /// Triage review P2-5: a create or fork the computer refused (device
@@ -126,4 +128,45 @@ final class ComputerRefusedInputTests: XCTestCase {
         XCTAssertEqual(try failRequest(other, ["message": "Couldn't create the session: pi is not installed"]),
                        "Couldn't create the session: pi is not installed")
     }
+
+    #if os(macOS)
+    /// Triage review P2-2: the toast is iOS-only, so the Mac bubble says why
+    /// (tooltip and VoiceOver). The reason goes away with that failure.
+    func testMacBubbleSaysWhyTheComputerRefusedIt() throws {
+        let app = makeApp()
+        var accept = true
+        app.testOutboundMessageHandler = { _, _, _ in accept }
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: "s", text: "hello"))
+        let id = try XCTUnwrap(sender.pendingInputs("s").first?.clientId)
+        try refuse(app, ["clientId": id, "code": "trust_rejected_unrecorded"])
+        let why = "Your computer couldn't record this message securely, so it wasn't run. Check that Kraki on the computer can write to its data folder, then retry."
+        var cell = try bubble(app)
+        XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. \(why) Click to retry or delete")
+        XCTAssertEqual(statusToolTip(cell), "Not delivered. \(why)")
+
+        // Retried, then not taken by transport: a failure of another kind.
+        XCTAssertTrue(sender.retryPending(sessionId: "s", clientId: id))
+        accept = false
+        XCTAssertFalse(sender.retryPending(sessionId: "s", clientId: id))
+        cell = try bubble(app)
+        XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. Click to retry or delete")
+        XCTAssertEqual(statusToolTip(cell), "Not delivered")
+    }
+
+    private func statusToolTip(_ cell: MacChatBubbleCell) -> String? {
+        cell.subviews.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == cell.deliveryStatusForRegression }?.toolTip
+    }
+
+    private func bubble(_ app: AppState) throws -> MacChatBubbleCell {
+        let message = try XCTUnwrap(app.commandSender?.pendingInputs("s").first)
+        let content = MacChatBubbleContentBuilder.make(message: message, sessionId: "s", agent: "claude", documentWidth: 640)
+        let cell = MacChatBubbleCell(frame: NSRect(x: 0, y: 0, width: 640, height: 1))
+        cell.configure(
+            content: content, renderKey: "refused-\(content.pendingDeliveryState ?? "")", documentWidth: 640, sessionMode: .auto,
+            onTapSteps: { _ in }, onResolvePermission: { _, _, _ in }, onAnswerQuestion: { _, _ in },
+            onOpenImage: { _ in }, onOpenHTMLArtifact: { _ in }, onHeightInvalidated: {})
+        return cell
+    }
+    #endif
 }

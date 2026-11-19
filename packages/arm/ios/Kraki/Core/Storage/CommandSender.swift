@@ -373,7 +373,9 @@ final class CommandSender {
         message.payload["localState"]?.stringValue.flatMap(PendingState.init(rawValue:)) ?? .sending
     }
 
-    private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState, cause: String? = nil) {
+    /// `refusedReason`: why the computer refused it, in the app's words
+    /// (shown with the bubble); kept only while it is that failure.
+    private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState, cause: String? = nil, refusedReason: String? = nil) {
         guard var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
         guard message.payload["localState"]?.stringValue != state.rawValue else { return }
         appState?.sendMetrics.state(clientId, state.rawValue,
@@ -383,6 +385,7 @@ final class CommandSender {
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag(state.rawValue)])
         #endif
         message.payload["localState"] = AnyCodable(state.rawValue)
+        message.payload[Self.refusedReasonKey] = refusedReason.map { AnyCodable($0) }
         bucket[clientId] = message
         outbox[sessionId] = bucket
         persistOutbox()
@@ -580,11 +583,12 @@ final class CommandSender {
     }
 
     /// The computer refused this input without storing it: not delivered
-    /// (Retry / Delete), never re-sent by itself. False if not waiting here.
-    func failRefusedInput(sessionId: String, clientId: String) -> Bool {
+    /// (Retry / Delete) with `reason`, never re-sent by itself. False if not
+    /// waiting here.
+    func failRefusedInput(sessionId: String, clientId: String, reason: String) -> Bool {
         guard let state = outbox[sessionId]?[clientId].map(pendingState), state == .sending || state == .unconfirmed else { return false }
         confirmationTasks.removeValue(forKey: clientId)?.cancel()
-        setPendingState(sessionId, clientId: clientId, .failed, cause: "refused_by_computer")
+        setPendingState(sessionId, clientId: clientId, .failed, cause: "refused_by_computer", refusedReason: reason)
         return true
     }
 
@@ -597,36 +601,7 @@ final class CommandSender {
         return text
     }
 
-    // MARK: - Outbox queries / mutators
-
-    /// Pending placeholders for a session in send order (oldest
-    /// first). Used by `ChatViewModel` to append to the turn list at
-    /// render time.
-    func pendingInputs(_ sessionId: String) -> [ChatMessage] {
-        guard let bucket = outbox[sessionId], !bucket.isEmpty else { return [] }
-        // Send order is a local monotonic counter; millisecond timestamps
-        // alone tie for rapid sends and dictionary order is undefined.
-        return bucket.values.sorted {
-            let a = $0.payload["localOrder"]?.intValue ?? 0
-            let b = $1.payload["localOrder"]?.intValue ?? 0
-            if a != b { return a < b }
-            return ($0.timestamp ?? "") < ($1.timestamp ?? "")
-        }
-    }
-
-    /// A history/range replay is also an authoritative confirmation, even if
-    /// its live echo was missed. Match session, message type and client ID;
-    /// never clear another queued input or infer confirmation from text.
-    func confirmPendingInputs(_ sessionId: String, messages: [ChatMessage]) {
-        guard outbox[sessionId]?.isEmpty == false else { return }
-        // Some history rows inherit sessionId from their batch envelope.
-        for message in messages where (message.sessionId == nil || message.sessionId == sessionId)
-            && message.type == "user_message" && message.seq > 0 {
-            if let clientId = message.payload["clientId"]?.stringValue {
-                clearPending(sessionId, clientId: clientId)
-            }
-        }
-    }
+    // MARK: - Outbox mutators (queries: CommandSender+OutboxQueries.swift)
 
     /// Remove a single pending entry by clientId. Called by
     /// `MessageRouter` when the matching `user_message` echo lands;

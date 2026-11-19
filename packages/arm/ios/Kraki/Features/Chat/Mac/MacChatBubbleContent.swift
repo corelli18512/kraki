@@ -27,8 +27,19 @@ struct MacChatBubbleContent {
     /// Optimistic input delivery state ("sending" | "failed"), nil otherwise.
     var pendingDeliveryState: String? = nil
     var pendingClientId: String? = nil
+    /// Why the computer refused a failed input, in the app's words.
+    var pendingRefusedReason: String? = nil
 
     var bodyTextWidth: CGFloat { bubbleWidth - MacChatBubbleLayout.msgPadH * 2 }
+
+    /// VoiceOver label and tooltip of a not-delivered input's status: with
+    /// the computer's reason when it refused it (iOS says it in a toast).
+    var failedDeliveryText: (label: String, toolTip: String) {
+        guard let reason = pendingRefusedReason else {
+            return (String(localized: "Not delivered. Click to retry or delete"), String(localized: "Not delivered"))
+        }
+        return (String(localized: "Not delivered. \(reason) Click to retry or delete"), String(localized: "Not delivered. \(reason)"))
+    }
 }
 
 /// A sent message is never edited: an undelivered one is retried or deleted.
@@ -111,6 +122,7 @@ enum MacChatBubbleContentBuilder {
         if message.type == "pending_input" {
             content.pendingDeliveryState = message.payload["localState"]?.stringValue ?? "sending"
             content.pendingClientId = message.payload["clientId"]?.stringValue
+            content.pendingRefusedReason = message.payload[CommandSender.refusedReasonKey]?.stringValue
         }
         return content
     }
