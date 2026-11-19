@@ -74,6 +74,17 @@ describe('questions on the spine', () => {
     }
   });
 
+  it('a session whose agent failed right after it was created shows why as a failed turn (triage #8)', () => {
+    const reason = "Couldn't create the session: pi exited";
+    const before = [m('session_created', 1, { agent: 'pi' }), m('error', 2, { message: reason }), m('idle', 3)];
+    // A bare error row is never drawn.
+    expect(spineRows(before, [], true)).toEqual([]);
+    const failed = m('turn_status', 3, { draft: '', action: { type: 'failed', payload: { message: reason } } });
+    const rows = spineRows([before[0], before[1], failed, m('idle', 4, { reason: 'failed' })], [], true);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([3]);
+    expect(frozenCardOf(rows[0])).toEqual({ text: '', action: { type: 'failed', message: reason } });
+  });
+
   it('abort while asking draws Stopped inside the question, no separate row', () => {
     const rows = spineRows([m('user_message', 1, { content: 'go' }), ask(2, 'q1'), abort(3), m('idle', 4)], [], true);
     expect(rows.map((r) => seqOf(r.message))).toEqual([1, 2]);

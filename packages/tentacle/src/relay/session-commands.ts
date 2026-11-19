@@ -9,7 +9,7 @@ import { scanLocalSessions, filterSessions } from '../session-scanner.js';
 import { parseSessionHistory } from '../history-parser.js';
 import { EventsWatcher } from '../events-watcher.js';
 import { RelayClient } from '../relay-client.js';
-import { beginAdapterTurn, finishTurnWithStatus, purgeSessionToolState, sendTurnIdle } from './turns.js';
+import { beginAdapterTurn, finishTurnWithStatus, purgeSessionToolState, resolveTurnIdle, sendTurnIdle } from './turns.js';
 import { logger, AUTO_ARCHIVE_SWEEP_MS } from './shared.js';
 
 /** The folder a new session works in. Without one the agent works in the
@@ -81,8 +81,18 @@ export async function handleCreateSession(client: RelayClient, msg: ConsumerMess
       payload: { message: errorMsg, ...(requestId && { requestId }) },
     });
     if (announced) {
+      // Apps draw a failed turn with its reason; a bare `error` is never a
+      // chat row. A first prompt already sent to the session is that turn:
+      // it is settled here, so its late delivery failure adds no second one.
+      const turnId = client.activeInputTurnIds.get(preSessionId);
+      if (turnId) client.settledAdapterTurnIds.set(preSessionId, turnId);
+      finishTurnWithStatus(client, preSessionId, {
+        type: 'failed',
+        payload: { message: errorMsg, failedAt: new Date().toISOString() },
+      });
+      sendTurnIdle(client, preSessionId, { reason: 'failed' }, { failure: errorMsg });
+      resolveTurnIdle(client, preSessionId);
       client.sessionManager.markDisconnected(preSessionId);
-      client.send({ type: 'idle', sessionId: preSessionId, payload: {} });
       client.broadcastSessionList();
     }
   }

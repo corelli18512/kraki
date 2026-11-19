@@ -104,7 +104,7 @@ describe('K-008: input to a session whose agent cannot run', () => {
       generateTitle: vi.fn(async () => null),
       getSessionUsage: vi.fn(() => null),
     };
-    const { client, sent } = build(adapter as unknown as AgentAdapter);
+    const { sm, client, sent } = build(adapter as unknown as AgentAdapter);
     await handleCreateSession(client, { type: 'create_session', deviceId: 'app-1', payload: { requestId: 'req-1', agentId: 'pi', model: 'm' } } as never);
     const created = sent.find((m) => m.type === 'session_created');
     const error = sent.find((m) => m.type === 'error');
@@ -113,5 +113,44 @@ describe('K-008: input to a session whose agent cannot run', () => {
     // The session must not stay 'active' (running) in every app's list.
     expect(sent.find((m) => m.type === 'idle')?.sessionId).toBe(created?.sessionId);
     expect(client.sessionManager.getMeta(created!.sessionId)?.state).toBe('disconnected');
+    // Triage #8: apps never draw a bare `error` row; the reason reaches the
+    // chat as a failed turn (like a prompt that could not reach its agent).
+    const spine = rows(sm, created!.sessionId);
+    expect(spine.map((r) => r.type)).toEqual(['session_created', 'error', 'turn_status', 'idle']);
+    expect(spine[2].payload.action).toMatchObject({ type: 'failed', payload: { message: "Couldn't create the session: pi exited" } });
+    expect(spine[3].payload.reason).toBe('failed');
+  });
+
+  it('create_session failing while its first prompt is being sent closes that prompt as failed, once (triage #8)', async () => {
+    let fail!: (err: Error) => void;
+    let created!: (id: string) => void;
+    const announced = new Promise<string>((resolve) => { created = resolve; });
+    const adapter = {
+      createSession: vi.fn(async (config: { sessionId: string }) => {
+        adapter.onSessionCreated?.({ sessionId: config.sessionId, agent: 'pi' });
+        created(config.sessionId);
+        await new Promise<never>((_resolve, reject) => { fail = reject; });
+      }),
+      onSessionCreated: undefined as undefined | ((e: { sessionId: string; agent: string }) => void),
+      generateTitle: vi.fn(async () => null),
+      getSessionUsage: vi.fn(() => null),
+      setSessionMode: vi.fn(),
+      setTurnIdentity: vi.fn(),
+      isTurnSettled: vi.fn(() => false),
+      // The agent never answers the prompt; only the failed create ends it.
+      sendMessage: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const { sm, client } = build(adapter as unknown as AgentAdapter);
+    const create = handleCreateSession(client, { type: 'create_session', deviceId: 'app-1', payload: { requestId: 'req-1', agentId: 'pi', model: 'm' } } as never);
+    const sessionId = await announced;
+    handleConsumerMessage(client, { type: 'send_input', sessionId, deviceId: 'app-1', payload: { text: 'hi', clientId: 'cid-1' } });
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    fail(new Error('pi exited'));
+    await create;
+    await vi.waitFor(() => expect(client.inputChains.has(sessionId)).toBe(false));
+    const spine = rows(sm, sessionId);
+    expect(spine.map((r) => r.type)).toEqual(['session_created', 'user_message', 'error', 'turn_status', 'idle']);
+    expect(spine[3].payload.action).toMatchObject({ type: 'failed', payload: { message: "Couldn't create the session: pi exited" } });
+    expect(sm.getMeta(sessionId)?.state).toBe('disconnected');
   });
 });

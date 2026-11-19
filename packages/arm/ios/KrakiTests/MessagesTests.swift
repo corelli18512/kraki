@@ -658,6 +658,28 @@ final class ChatMessagePresentationTests: XCTestCase {
         let content = TKBubbleContent.make(message: lost, sessionId: "s", agent: "pi")
         XCTAssertEqual(content.body?.string, "Image unavailable", "the message stays visible")
     }
+
+    /// Triage #8: a session whose agent failed right after it was announced.
+    /// The `error` row is never drawn; the failed turn the computer now sends
+    /// after it is, with the reason.
+    @MainActor
+    func testCreateThatFailsShowsItsReasonAsAFailedTurn() {
+        let reason = "Couldn't create the session: pi exited"
+        func row(_ type: String, _ seq: Int, _ payload: [String: AnyCodable] = [:]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: "s", deviceId: "d", timestamp: nil, payload: payload)
+        }
+        let before = [row("session_created", 1, ["agent": AnyCodable("pi")]),
+                      row("error", 2, ["message": AnyCodable(reason)]), row("idle", 3)]
+        XCTAssertEqual(ChatViewModel.renderable(TurnSpineProjection.project(before)).map(\.seq), [],
+                       "a bare error row shows nothing")
+        let failed = row("turn_status", 3, [
+            "draft": AnyCodable(""), "action": AnyCodable(["type": "failed", "payload": ["message": reason]]),
+        ])
+        let after = [before[0], before[1], failed, row("idle", 4, ["reason": AnyCodable("failed")])]
+        let visible = ChatViewModel.renderable(TurnSpineProjection.project(after))
+        XCTAssertEqual(visible.map(\.seq), [3])
+        XCTAssertEqual(visible.first?.terminalOutcome?.message, reason)
+    }
 }
 
 /// K-019: a hole in the local message cache (rows the phone missed while it
