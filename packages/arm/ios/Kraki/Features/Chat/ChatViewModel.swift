@@ -109,11 +109,13 @@ final class ChatViewModel {
     /// Identity + delivery state of every optimistic input. Read by the view
     /// so outbox changes (new send, failed, retried) always re-render. A
     /// withdrawn question closes like an answered one, so it is part of it.
+    /// The refusal reason is too: a Retry that fails locally stays failed
+    /// but drops the computer's reason from the Mac bubble.
     var pendingSignature: String {
         (appState?.commandSender?.pendingInputs(sessionId) ?? [])
             // Text is part of the signature: a correcting voice bubble's
             // content streams in place.
-            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)#\($0.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])" }
+            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.payload[CommandSender.refusedReasonKey]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)#\($0.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])" }
             .joined(separator: ",") + withdrawnQuestions.sorted().map { "|w:\($0)" }.joined()
     }
 

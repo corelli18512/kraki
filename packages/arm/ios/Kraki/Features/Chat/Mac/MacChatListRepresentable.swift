@@ -329,7 +329,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         let validIDs = Set(messages.map(\.id))
         coordinator.itemCache = coordinator.itemCache.filter { validIDs.contains($0.key) }
         var items: [MacChatItem] = messages.map { message in
-            let signature = messageSignature(message)
+            let signature = Self.messageSignature(message)
             if let cached = coordinator.itemCache[message.id], cached.signature == signature {
                 return cached
             }
@@ -447,16 +447,18 @@ struct MacChatListRepresentable: NSViewRepresentable {
         return min(max(height, 52), 640)
     }
 
-    private func messageSignature(_ message: ChatMessage) -> String {
+    /// What a bubble draws: when it changes, the list rebuilds the bubble.
+    static func messageSignature(_ message: ChatMessage) -> String {
         var hasher = Hasher()
         hasher.combine(message.id)
         hasher.combine(message.type)
-        Self.combineVisibleText(message.content, into: &hasher)
-        Self.combineVisibleText(message.interruptedDraft, into: &hasher)
-        Self.combineVisibleText(message.result, into: &hasher)
+        combineVisibleText(message.content, into: &hasher)
+        combineVisibleText(message.interruptedDraft, into: &hasher)
+        combineVisibleText(message.result, into: &hasher)
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
+        hasher.combine(message.payload[CommandSender.refusedReasonKey]?.stringValue ?? "")
         hasher.combine(message.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])
         hasher.combine(message.attachments?.count ?? 0)
         for ref in message.contentRefAttachments {

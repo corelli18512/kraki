@@ -119,6 +119,37 @@ final class ComputerRefusedInputTests: XCTestCase {
         XCTAssertEqual(copies, 1)
     }
 
+    /// A Retry of a refused message that this device then could not send at
+    /// all is a failure of another kind: the computer's reason no longer
+    /// explains it, and the bubble redraws without it.
+    func testRetryThatFailsLocallyDropsTheComputersReason() throws {
+        let app = makeApp()
+        var accept = true
+        app.testOutboundMessageHandler = { _, _, _ in accept }
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: "s", text: "hello"))
+        let id = try XCTUnwrap(sender.pendingInputs("s").first?.clientId)
+        try refuse(app, ["clientId": id, "code": "input_disk_full"])
+        let refused = try XCTUnwrap(sender.pendingInputs("s").first)
+        XCTAssertNotNil(refused.payload[CommandSender.refusedReasonKey])
+        let viewModel = ChatViewModel(sessionId: "s", appState: app)
+        let refusedSignature = viewModel.pendingSignature
+
+        accept = false
+        XCTAssertFalse(sender.retryPending(sessionId: "s", clientId: id))
+        let failed = try XCTUnwrap(sender.pendingInputs("s").first)
+        XCTAssertEqual(sender.pendingState(failed), .failed)
+        XCTAssertNil(failed.payload[CommandSender.refusedReasonKey], "the computer's reason is gone")
+        XCTAssertNotEqual(viewModel.pendingSignature, refusedSignature, "the chat re-renders the bubble")
+        #if os(macOS)
+        XCTAssertNotEqual(MacChatListRepresentable.messageSignature(failed), MacChatListRepresentable.messageSignature(refused),
+                          "the Mac list rebuilds the bubble")
+        let cell = try bubble(app)
+        XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. Click to retry or delete")
+        XCTAssertEqual(statusToolTip(cell), "Not delivered")
+        #endif
+    }
+
     /// Triage review P2-5: a create or fork the computer refused (device
     /// trust) fails its placeholder in the app's words, not the computer's
     /// English. Other failures keep the computer's text.

@@ -573,6 +573,10 @@ final class CommandSender {
         }
         appState?.sendMetrics.retried(clientId, manual: true)
         guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+            // Still failed, now for another reason: the computer's no longer applies.
+            if outbox[sessionId]?[clientId]?.payload[Self.refusedReasonKey] != nil {
+                outbox[sessionId]?[clientId]?.payload.removeValue(forKey: Self.refusedReasonKey)
+            }
             setPendingState(sessionId, clientId: clientId, .failed, cause: "refused")
             return false
         }
