@@ -5,7 +5,8 @@ import XCTest
 
 /// Session › Rename… and a session row's Rename… open Session Info with the
 /// title being edited, also as the first sheet a freshly mounted chat shows;
-/// Esc in the title field saves an edited title like Done (review #91).
+/// Esc in the title field saves an edited title like Done (review #91); a
+/// Session deleted while its title is being edited gets no rename (review F1).
 /// Through the production main window and the real Session Info sheet.
 @MainActor
 final class MacSessionInfoRenameTests: XCTestCase {
@@ -15,6 +16,7 @@ final class MacSessionInfoRenameTests: XCTestCase {
     private var app: AppState!
     private var window: NSWindow?
     private var renames: [(sessionId: String?, title: String?)] = []
+    private var deletes: [String?] = []
     private var savedInspectorShown: Any?
     private var savedRenderBubbleTest: String?
 
@@ -35,6 +37,9 @@ final class MacSessionInfoRenameTests: XCTestCase {
             if message["type"] as? String == "rename_session" {
                 self?.renames.append((message["sessionId"] as? String,
                                       (message["payload"] as? [String: Any])?["title"] as? String))
+            }
+            if message["type"] as? String == "delete_session" {
+                self?.deletes.append(message["sessionId"] as? String)
             }
             return true
         }
@@ -137,7 +142,88 @@ final class MacSessionInfoRenameTests: XCTestCase {
         XCTAssertEqual(app.sessionStore.sessions["s1"]?.title, "Fix login bug")
     }
 
+    // MARK: The session goes away while its title is being edited (review F1)
+
+    /// Rename… → type → Delete → confirm: the session is deleted, and the
+    /// sheet closing afterwards does not rename the deleted session.
+    func testDeletingWhileTheTitleIsEditedSendsNoRename() throws {
+        try untilTheClosedSheetIsReleased {
+            mount(selected: "s1")
+            let sheet = try openRenameAndType("Fix login bug (deleted)")
+
+            // Pressed as a click on a Mac button does it: the title field keeps the focus.
+            let delete = try XCTUnwrap(waitFor { self.button(titled: "Delete", in: sheet) },
+                                       "Session Info offers Delete")
+            XCTAssertTrue(delete.accessibilityPerformPress?() ?? false)
+            let confirmation = try XCTUnwrap(waitFor { sheet.attachedSheet }, "Delete asks for confirmation")
+            let confirm = try XCTUnwrap(waitFor { self.button(titled: "Delete", in: confirmation) },
+                                        "the confirmation offers Delete")
+            XCTAssertNotNil(titleField(in: sheet, showing: "Fix login bug (deleted)"),
+                            "the title is still being edited")
+            // The alert's NSButton reports false here although it performs the click.
+            _ = confirm.accessibilityPerformPress?()
+
+            XCTAssertTrue(waitFor { self.window?.attachedSheet == nil }, "Session Info closes")
+            XCTAssertEqual(deletes, ["s1"], "the session is deleted")
+            XCTAssertNil(app.sessionStore.sessions["s1"])
+        }
+        XCTAssertTrue(renames.isEmpty, "no rename for the deleted session: \(renames)")
+    }
+
+    /// Removed by another device (session_deleted) while its title is being
+    /// edited: its chat closes, and Session Info closing renames nothing.
+    func testRemovalElsewhereWhileTheTitleIsEditedSendsNoRename() throws {
+        try untilTheClosedSheetIsReleased {
+            mount(selected: "s1")
+            _ = try openRenameAndType("Fix login bug (removed)")
+
+            // MessageRouter, session_deleted.
+            app.sessionStore.removeSession("s1")
+
+            XCTAssertTrue(waitFor { self.window?.attachedSheet == nil }, "Session Info closes with its chat")
+        }
+        XCTAssertTrue(renames.isEmpty, "no rename for the removed session: \(renames)")
+    }
+
     // MARK: Fixture
+
+    /// Session › Rename… on s1, then the title typed over (still being edited).
+    private func openRenameAndType(_ title: String) throws -> NSWindow {
+        requestRenameFromTheSessionMenu("s1")
+        let sheet = try waitForSheet()
+        let field = try XCTUnwrap(waitFor { self.titleField(in: sheet, showing: "Fix login bug") },
+                                  "the title is being edited: \(describe(sheet))")
+        XCTAssertTrue(waitFor { self.hasFocus(field, in: sheet) })
+        let editor = try XCTUnwrap(sheet.firstResponder as? NSTextView)
+        editor.selectAll(nil)
+        editor.insertText(title, replacementRange: editor.selectedRange())
+        drain(100)
+        return sheet
+    }
+
+    /// A closed sheet's onDisappear runs when its view is released, which in
+    /// a test is the autorelease pool's drain (in the app, the next run loop
+    /// turn): run `steps` in their own pool so that it happens in the test.
+    private func untilTheClosedSheetIsReleased(_ steps: () throws -> Void) rethrows {
+        try autoreleasepool { try steps() }
+        drain(500)
+    }
+
+    /// A button by its title, through the accessibility tree (SwiftUI buttons
+    /// are not NSButtons).
+    private func button(titled title: String, in window: NSWindow) -> AnyObject? {
+        func find(_ element: AnyObject) -> AnyObject? {
+            if element.accessibilityRole?() == .button,
+               element.accessibilityTitle?() == title || element.accessibilityLabel?() == title {
+                return element
+            }
+            for child in element.accessibilityChildren?() ?? [] {
+                if let found = find(child as AnyObject) { return found }
+            }
+            return nil
+        }
+        return window.contentView.flatMap { find($0) }
+    }
 
     /// The production main window on screen (floating, never key: the
     /// developer's keyboard focus stays where it is).

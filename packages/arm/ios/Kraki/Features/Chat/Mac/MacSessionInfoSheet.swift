@@ -103,8 +103,9 @@ struct MacSessionInfoSheet: View {
         .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
             // Closed any other way while the title is still being edited:
-            // keep what was typed, by the same rules (review #91).
-            saveTitleIfEdited()
+            // keep what was typed, by the same rules (review #91). Not for a
+            // Session that is gone (deleted here or elsewhere, review F1).
+            if appState.sessionStore.sessions[session.id] != nil { saveTitleIfEdited() }
             sessionIDCopyFeedbackTask?.cancel()
             sessionIDCopyFeedbackTask = nil
         }
@@ -114,6 +115,8 @@ struct MacSessionInfoSheet: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
+                // Drop the title edit: no rename for the deleted Session.
+                editingTitle = false
                 appState.commandSender?.deleteSession(sessionId: session.id)
                 dismiss()
             }
