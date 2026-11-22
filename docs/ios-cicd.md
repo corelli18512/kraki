@@ -24,8 +24,10 @@ to App Store Connect. It can be triggered in either of two ways:
 
 The job runs on `xcode-27` with `/Applications/Xcode_27.1.app` selected and
 fails before archiving if the iOS SDK is older than `MIN_IOS_SDK_MAJOR` (27):
-App Store Connect rejects uploads built with an older SDK (ITMS-90725). After
-archiving it checks the app's `DTSDKName` the same way. To move to a newer
+App Store Connect rejects uploads built with an older SDK (ITMS-90725). It also
+fails there if that Xcode has no `altool` (`xcrun --find altool`), which the
+upload step needs. After archiving it checks the `DTSDKName` of both the app and
+`KrakiNotification.appex` the same way. To move to a newer
 Xcode, change the path in every workflow that selects it (`ci.yml`,
 `ios-testflight.yml`, `release.yml`, `network-resilience.yml`).
 
