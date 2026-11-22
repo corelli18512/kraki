@@ -21,9 +21,15 @@ export function isOfficialRelay(relay: string): boolean {
     if (url.protocol !== 'wss:' && url.protocol !== 'ws:') return false;
     // This machine's own relay (local development) needs no confirmation.
     if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return true;
+    // The relay this build is configured for, with its own scheme: a
+    // production build configured for wss://relay.kraki.chat must still treat
+    // ws://relay.kraki.chat as not ours (K-243).
     const configured = import.meta.env.VITE_WS_URL as string | undefined;
     if (configured) {
-      try { if (new URL(configured).host === url.host) return true; } catch { /* ignore */ }
+      try {
+        const own = new URL(configured);
+        if (own.host === url.host && own.protocol === url.protocol) return true;
+      } catch { /* ignore */ }
     }
     // Kraki's relays are only reached over TLS (as on iOS): a plain ws://
     // link naming them is not one of ours and is confirmed like any other.

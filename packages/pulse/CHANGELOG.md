@@ -1,5 +1,23 @@
 # @coinfra/pulse
 
+## 0.5.3
+
+### Patch Changes
+
+- An explicit ACK below `outboxBase` (the peer is missing seqs already pruned,
+  for example after a piggybacked ack from its previous connection advanced the
+  base) is answered like a HELLO behind the base: a RESET to the first
+  deliverable seq plus the resend, once per cursor. Ignoring it left the peer
+  treating every later send as a hole, so a computer stayed deaf to relay
+  control after a relay restart.
+- Every RESET-and-resend also announces a dropped tail gap, and the resume
+  resend triggered by a HELLO counts as the repair batch for that cursor, so
+  in-flight hole ACKs no longer trigger a second full resend.
+- A RESET is untrusted input: `oldest = 0` is ignored, and within one stream a
+  jump of more than 2^24 seqs past the receive cursor is ignored. Before
+  anything was delivered in a stream, a restarted peer may start up to 2^53
+  ahead. Same rules in SwiftPulse, which also announces a purged tail now.
+
 ## 0.5.2
 
 ### Patch Changes

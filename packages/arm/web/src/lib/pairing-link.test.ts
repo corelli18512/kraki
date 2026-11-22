@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decidePairingLink, isOfficialRelay } from './pairing-link';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1';
@@ -21,6 +21,22 @@ describe('pairing link (release review A10 / D5)', () => {
     expect(decidePairingLink('?relay=ws://relay.kraki.chat&token=pt_1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'relay.kraki.chat' });
     // Local development relays stay plain ws://.
     expect(isOfficialRelay('ws://localhost:4000')).toBe(true);
+  });
+
+  describe('in a build configured for a relay (VITE_WS_URL)', () => {
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it('K-243: a production build still requires TLS for Kraki relays', () => {
+      vi.stubEnv('VITE_WS_URL', 'wss://relay.kraki.chat');
+      expect(isOfficialRelay('wss://relay.kraki.chat')).toBe(true);
+      expect(isOfficialRelay('ws://relay.kraki.chat')).toBe(false);
+      expect(decidePairingLink('?relay=ws://relay.kraki.chat&token=pt_1', ANDROID)).toEqual({ kind: 'confirm-relay', host: 'relay.kraki.chat' });
+    });
+
+    it('trusts the configured plain ws:// relay of a self-hosted build', () => {
+      vi.stubEnv('VITE_WS_URL', 'ws://kraki.lan:4000');
+      expect(isOfficialRelay('ws://kraki.lan:4000')).toBe(true);
+    });
   });
 
   it('K-001: asks before a token-less ?relay= points a signed-out browser at another server', () => {
