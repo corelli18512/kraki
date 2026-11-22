@@ -1,13 +1,23 @@
 {
   "name": "@kraki/tentacle",
   "version": "0.39.0",
-  "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
+  "description": "Kraki: chat with the coding agents on your computers (Claude Code, Codex, GitHub Copilot, Pi) from your phone, Mac or browser",
   "repository": {
     "type": "git",
     "url": "https://github.com/corelli18512/kraki",
     "directory": "packages/tentacle"
   },
-  "homepage": "https://github.com/corelli18512/kraki/tree/main/packages/tentacle#readme",
+  "homepage": "https://kraki.chat",
+  "keywords": [
+    "kraki",
+    "claude-code",
+    "codex",
+    "copilot",
+    "coding-agent",
+    "ai-agents",
+    "remote-control",
+    "cli"
+  ],
   "bugs": {
     "url": "https://github.com/corelli18512/kraki/issues"
   },
