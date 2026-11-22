@@ -522,8 +522,8 @@ struct MacApp: App {
         let installsUsagePeek = true
         #endif
         if installsUsagePeek {
-            Task { @MainActor in
-                UsagePeekController.shared.install(appState: state) { [weak coordinator] in
+            Task { @MainActor [weak coordinator] in
+                UsagePeekController.shared.install(appState: state) {
                     state.sessionStore.activeSessionId ?? coordinator?.lastSelectedSessionId
                 }
             }
