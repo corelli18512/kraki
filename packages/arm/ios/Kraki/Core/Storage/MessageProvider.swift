@@ -1201,7 +1201,8 @@ extension MessageProvider {
 
 extension MessageProvider {
     /// After `SessionStore.captureEntryUnreadBoundary`: when the unread part
-    /// starts before the tail window, open the window at its first row.
+    /// starts above the tail window, extend the window up to its first row
+    /// (bounded; `MessageStore.anchorWindowAtFirstUnread`).
     func anchorEntryWindowAtFirstUnread(_ sessionId: String) {
         guard let appState, let boundary = appState.sessionStore.entryUnreadBoundaries[sessionId] else { return }
         appState.messageStore.anchorWindowAtFirstUnread(sessionId, after: boundary)

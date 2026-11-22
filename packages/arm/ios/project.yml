@@ -280,6 +280,7 @@ targets:
       - path: KrakiTests/DeviceRenameTests.swift
       - path: KrakiTests/SessionTitleEditTests.swift
       - path: KrakiTests/ComputerRefusedInputTests.swift
+      - path: KrakiTests/MessageStoreUnreadEntryWindowTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
