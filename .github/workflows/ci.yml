@@ -69,7 +69,7 @@ jobs:
           tar xzf actionlint.tgz actionlint
           ./actionlint -shellcheck= -color
       - name: Test change routing and release provenance
-        run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs scripts/release/*.test.mjs scripts/l10n/*.test.mjs
+        run: node --test scripts/ci/*.test.mjs scripts/release/*.test.mjs scripts/l10n/*.test.mjs
       - name: Localization check (keys, placeholders, untranslated/hard-coded ratchet)
         # Dependency-free and fast; runs for every change (incl. catalog-only).
         run: node scripts/l10n/check.mjs
@@ -110,6 +110,14 @@ jobs:
 
       - name: Run validation
         run: pnpm validate
+
+      - name: Web tests with the deploy build env
+        # deploy-web.yml builds and tests the web app with these values set; a
+        # test that fails only with them (K-243) must fail here, not at deploy.
+        env:
+          VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://relay.kraki.chat' }}
+          VITE_IOS_APP_STORE_URL: ${{ vars.IOS_APP_STORE_URL }}
+        run: pnpm --filter @kraki/arm-web test
 
   test-ios:
     name: Test iOS (Kraki)

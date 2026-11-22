@@ -32,7 +32,7 @@ only the last commit.
 | Change | Routine checks |
 | --- | --- |
 | Documentation | Routing tests and aggregate gate only |
-| Web / Head / other TS packages | TypeScript lint, build and regression |
+| Web / Head / other TS packages | TypeScript lint, build and regression (the web tests run a second time with Deploy Web's `VITE_*` values) |
 | CLI / crypto / installer / daemon smoke scripts | TypeScript + Linux/Windows/Mac binary lifecycle checks |
 | Native app, native tests, native diagnostics | iOS functional regression + Mac build, diagnostics and fake-audio safety tests |
 | Protocol, lockfile, root build config, CI routing | All routine groups |
