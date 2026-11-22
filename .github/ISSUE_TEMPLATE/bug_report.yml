@@ -37,7 +37,9 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: In the app, open Settings → About → Copy Diagnostics and paste it here (versions, device and connection details; no message content). For the CLI, paste the output of `kraki --version`.
+      description: |
+        Web app / Kraki for Windows: Settings → About → Copy Diagnostics. Kraki for Mac / iPhone: copy the version lines from Settings → About (app, Background Service, Relay). CLI: the output of `kraki --version`.
+        This contains versions, computer names and connection details (no message content). Remove anything you don't want public.
       render: text
   - type: textarea
     id: extra

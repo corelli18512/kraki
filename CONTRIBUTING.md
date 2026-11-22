@@ -3,8 +3,8 @@
 Thanks for helping! Bug reports, ideas and pull requests are all welcome.
 
 - **Questions and ideas:** [Discussions](https://github.com/corelli18512/kraki/discussions)
-- **Bugs:** [open an issue](https://github.com/corelli18512/kraki/issues/new/choose) and include the
-  diagnostics from Settings → About → Copy Diagnostics
+- **Bugs:** [open an issue](https://github.com/corelli18512/kraki/issues/new/choose) and include your app
+  versions (Settings → About; in the web app and Kraki for Windows, Copy Diagnostics)
 - **Security problems:** see [SECURITY.md](SECURITY.md) — never in a public issue
 
 ## Before a larger change

@@ -32,8 +32,8 @@ and keep your agents moving.
 
 - **Every agent, every machine.** Sessions from your work laptop, your home desktop and every agent
   on them, in one list.
-- **Approve from anywhere.** A notification when an agent needs you; approve, deny or answer from
-  your phone.
+- **Approve from anywhere.** A notification when an agent needs you; answer its questions, and in
+  Safe mode approve or deny each change, from your phone.
 - **Native, not a chat box in a browser.** Mac and iPhone apps with code, diffs, tables and live
   tool activity, and voice input that knows your code.
 - **Zero network setup.** No ports, VPN or tunnels: each computer makes one outbound connection.
