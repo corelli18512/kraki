@@ -174,14 +174,34 @@ final class MacLaunchCoordinator {
             // remove the gate after the first AppKit-backed layout has settled.
             beginPreparingAuthenticatedSurface()
         } else {
-            await waitForMinimumLaunchVisibility()
-            guard !Task.isCancelled else {
-                hasStarted = false
-                return
-            }
-            phase = .signedOut
-            logDestination("signedOut")
+            await finishLaunchWithoutAuthenticatedRoot(
+                appState: appState,
+                ownerChoicePending: { tentacleCLI.ownerChoicePending }
+            )
         }
+    }
+
+    /// Keeps the gate up for its minimum time, then shows the signed-out page,
+    /// unless a sign-in finished during that wait: reconcileAuthentication
+    /// ignores changes while launching, so this is its only chance to count
+    /// (the iOS cold-launch race G1). Credentials that were already there
+    /// (forced signed-out launch, a pending owner choice) keep it signed out.
+    func finishLaunchWithoutAuthenticatedRoot(
+        appState: AppState,
+        ownerChoicePending: () -> Bool
+    ) async {
+        let hadStoredCredentials = appState.hasStoredCredentials
+        await waitForMinimumLaunchVisibility()
+        guard !Task.isCancelled else {
+            hasStarted = false
+            return
+        }
+        if !hadStoredCredentials, appState.hasStoredCredentials, !ownerChoicePending() {
+            beginPreparingAuthenticatedSurface()
+            return
+        }
+        phase = .signedOut
+        logDestination("signedOut")
     }
 
     /// Called after the AppKit launch indicator has installed its repeating
