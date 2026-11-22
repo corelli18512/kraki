@@ -176,12 +176,18 @@ final class IOSNewSessionNavigationTests: XCTestCase {
         return find(window?.rootViewController)
     }
 
+    /// The tabs' root controllers. On iOS 27 SwiftUI hosts its tabs as
+    /// `UITab`s and leaves `viewControllers` empty.
+    private func tabRoots(_ tabs: UITabBarController) -> [UIViewController] {
+        tabs.tabs.isEmpty ? tabs.viewControllers ?? [] : tabs.tabs.compactMap(\.viewController)
+    }
+
     /// Pages on the Sessions tab's stack (the list root counts as one).
     private var sessionsStackDepth: Int {
         func navigations(_ vc: UIViewController) -> [UINavigationController] {
             ((vc as? UINavigationController).map { [$0] } ?? []) + vc.children.flatMap(navigations)
         }
-        guard let first = tabs()?.viewControllers?.first else { return 0 }
+        guard let tabs = tabs(), let first = tabRoots(tabs).first else { return 0 }
         return navigations(first).map(\.viewControllers.count).max() ?? 0
     }
 
@@ -235,9 +241,15 @@ final class IOSNewSessionNavigationTests: XCTestCase {
         defer { app.sessionStore.setDraft(IOSNewSessionComposer.draftID, "") }
         app.sessionStore.setDraft(IOSNewSessionComposer.draftID, "Hello")
         let tabBar = try XCTUnwrap(tabs())
-        let plus = try XCTUnwrap(tabBar.viewControllers?.first { $0.tabBarItem.title == String(localized: "New Session") },
-                                 "tabs: \(tabBar.viewControllers?.map { $0.tabBarItem.title ?? "-" } ?? [])")
-        _ = tabBar.delegate?.tabBarController?(tabBar, shouldSelect: plus)
+        let newSession = String(localized: "New Session")
+        if !tabBar.tabs.isEmpty {
+            let plus = try XCTUnwrap(tabBar.tabs.first { $0.title == newSession }, "tabs: \(tabBar.tabs.map(\.title))")
+            _ = tabBar.delegate?.tabBarController?(tabBar, shouldSelectTab: plus)
+        } else {
+            let plus = try XCTUnwrap(tabBar.viewControllers?.first { $0.tabBarItem.title == newSession },
+                                     "tabs: \(tabBar.viewControllers?.map { $0.tabBarItem.title ?? "-" } ?? [])")
+            _ = tabBar.delegate?.tabBarController?(tabBar, shouldSelect: plus)
+        }
         XCTAssertTrue(drain(until: { tabBar.presentedViewController != nil && self.startEnabled }), "sheet not shown")
 
         XCTAssertTrue(try XCTUnwrap(startButton).accessibilityActivate())
