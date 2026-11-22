@@ -1,25 +1,56 @@
 <p align="center">
-  <img src="./logo.png" alt="Kraki" width="160">
+  <img src="./logo.png" alt="Kraki" width="140">
 </p>
 
 <h1 align="center">Kraki</h1>
 
-<p align="center"><strong>Control your coding agents from your phone</strong></p>
+<p align="center"><strong>A native chat app for your coding agents — every agent, every machine, one app.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-beta-blue" alt="Beta">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/E2E-AES--256--GCM-green?logo=letsencrypt&logoColor=white" alt="E2E Encrypted">
-  <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://kraki.chat">Website</a> ·
+  <a href="https://kraki.chat/docs/">Docs</a> ·
+  <a href="https://github.com/corelli18512/kraki/discussions">Discussions</a> ·
+  <a href="LICENSE">MIT License</a>
 </p>
 
-> **Kraki is in beta** — things may change between releases. Website: [kraki.chat](https://kraki.chat)
+<p align="center">
+  <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+</p>
 
-Kraki bridges your coding agent to your phone or browser. Watch sessions in real time, approve tool calls, answer questions, and send follow-up instructions — from anywhere, on any device. All traffic is end-to-end encrypted.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://kraki.chat/shots/mac-dark-20261016.jpg">
+    <img src="https://kraki.chat/shots/mac-light-20261016.jpg" alt="Kraki for Mac: sessions from several computers and agents in one window" width="860">
+  </picture>
+</p>
 
-**On a Mac**, [download Kraki for Mac](https://kraki.chat/download/mac) (`Kraki.dmg`), drag it to Applications and open it. It finds the coding agents on your Mac, runs Kraki in the background and signs you in — no Terminal needed.
+Kraki brings **Claude Code, Codex, GitHub Copilot and Pi** — running on all your computers — into one
+chat app. Follow what your agents are doing, approve tool calls, answer their questions and send the
+next instruction (by voice, too) from your Mac, iPhone, PC or any browser. Step away from the desk
+and keep your agents moving.
 
-Or install the command-line version with one command:
+- **Every agent, every machine.** Sessions from your work laptop, your home desktop and every agent
+  on them, in one list.
+- **Approve from anywhere.** A notification when an agent needs you; answer its questions, and in
+  Safe mode approve or deny each change, from your phone.
+- **Native, not a chat box in a browser.** Mac and iPhone apps with code, diffs, tables and live
+  tool activity, and voice input that knows your code.
+- **Zero network setup.** No ports, VPN or tunnels: each computer makes one outbound connection.
+  Conversations are end-to-end encrypted between your devices. Run your own relay if you prefer.
+
+## Get Kraki
+
+| | |
+| --- | --- |
+| **Mac** | [Download Kraki for Mac](https://kraki.chat/download/mac) — macOS 15+, Apple silicon and Intel. Finds your agents and signs you in; no Terminal needed. |
+| **iPhone** | Native app, in beta on TestFlight. |
+| **Windows** (preview) | [Download Kraki for Windows](https://kraki.chat/download/windows) — Windows 10/11 x64. The installer isn't signed yet: choose *More info → Run anyway*. |
+| **Any phone or browser** | [app.kraki.chat](https://app.kraki.chat) — add it to your home screen for notifications. |
+| **Linux / command line** | See below. |
+
+Install Kraki on each computer whose agents you want to use (Kraki for Mac, Kraki for Windows, or the
+command-line version), then add your phone by scanning the QR code it shows.
 
 ```bash
 # macOS / Linux
@@ -33,44 +64,9 @@ npm i -g @kraki/tentacle
 kraki
 ```
 
-## You need Kraki if
-
-- **You want to step away from the desk** but keep steering the agent. Approve tool calls, answer questions, and send follow-ups from your phone while the agent keeps working.
-- **Zero network setup.** No port forwarding, no VPN, no tunnels. The relay is end-to-end encrypted — it can't read your code — so you don't need to self-host to stay safe.
-- **You want more than a chat box.** A purpose-built interface for interactive coding agents — code diffs, tool approval flows, structured prompts, and session history.
-- **You work across multiple machines** and want one place to see all agent sessions from your phone or browser.
-
-## Set up
-
-**Kraki for Mac** includes everything: download `Kraki.dmg` from the [Mac releases](https://github.com/corelli18512/kraki/releases?q=mac-v&expanded=true), drag Kraki to Applications and follow the two setup steps (coding agents + Full Disk Access, then sign in). If the command-line version is already installed, Kraki for Mac offers to take over; you only need one of them.
-
-Command-line version:
-
-```bash
-# macOS / Linux
-curl -fsSL https://app.kraki.chat/install.sh | bash
-
-# Windows (PowerShell)
-irm https://app.kraki.chat/install.ps1 | iex
-
-# or with npm (all platforms)
-npm i -g @kraki/tentacle
-kraki
-```
-
-Or [download the binary manually](https://github.com/corelli18512/kraki/releases/latest) — on macOS/Linux, run `chmod +x ./kraki-cli-*` first.
-
-> Note: macOS may show Gatekeeper and Windows may show SmartScreen on first launch. If you trust the release, use "Open Anyway" / "Run anyway".
-
-On first run, Kraki will:
-
-1. check the coding agents on this computer (installed, signed in, models available) and, on macOS, Full Disk Access — the same first step as Kraki for Mac
-2. sign you in with GitHub (reusing the GitHub CLI if it is signed in, else a one-time code) and connect to the hosted relay for your region
-3. start in the background and show a QR code for your phone
-
-Run `kraki agents` any time to recheck your agents.
-
-> 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications, full-screen mode, and instant access without opening a browser.
+On first run the command-line version checks the coding agents on this computer, signs you in with
+GitHub, starts in the background and shows a QR code for your phone. Run `kraki agents` any time to
+recheck your agents. Binaries are also on the [releases page](https://github.com/corelli18512/kraki/releases/latest).
 
 ### Uninstall the command-line version
 
@@ -89,9 +85,8 @@ On macOS and Linux the installer may have added `export PATH="$HOME/.local/bin:$
 
 Kraki's data (sessions, sign-in, this computer's identity) stays in `~/.kraki` (Windows: `%USERPROFILE%\.kraki`); delete that folder to remove it too. "Delete all Kraki data…" in `kraki` moves it to the Trash on macOS and to `~/.kraki.deleted-<date>` elsewhere, so it can be recovered; delete that folder to free the space. Your agents' own files are never touched.
 
-### Self-host your own relay
-
-See [self-hosting guide](./docs/self-hosting.md) for relay setup, GitHub login, and push notification configuration.
+More: [install and troubleshooting](https://kraki.chat/docs/) ·
+[run your own relay](./docs/self-hosting.md) · [security model](./docs/security.md)
 
 ## How it works
 
@@ -115,12 +110,14 @@ For the full security model, see [`docs/security.md`](./docs/security.md).
 
 ## Repository guide
 
-- `packages/protocol` - shared message and envelope types
-- `packages/crypto` - encryption primitives and blob helpers
+- `packages/tentacle` - the `kraki` CLI and background service next to your agents
 - `packages/head` - thin relay server
+- `packages/protocol`, `packages/crypto`, `packages/pulse` - shared message types, encryption and the reliable transport
+- `packages/arm/web` - web app / PWA (also the UI of Kraki for Windows)
+- `packages/arm/ios` - Kraki for Mac and the iPhone app
+- `packages/desktop` - Kraki for Windows (Electron shell)
+- `packages/voice-broker` - cloud voice gateway
 - [`packages/monitor`](packages/monitor/README.md) - independent client diagnostic log REST collector (not the relay)
-- `packages/tentacle` - CLI bridge next to the agent
-- `packages/arm/web` - web receiver / PWA
 - `packages/tests` - integration tests
 
 For the runtime design, see [`docs/architecture.md`](./docs/architecture.md).
@@ -185,6 +182,10 @@ pnpm dev:demo          # old mock tentacle / REPL demo flow
 Kraki's security guarantees are limited to the model described in [`docs/security.md`](./docs/security.md). The relay cannot read message bodies, but that does not cover endpoint compromise, company policy, network monitoring, logging, data residency, or other organizational controls.
 
 You are responsible for deciding whether Kraki is appropriate for your environment. If you plan to use it with company-managed devices, repositories, or networks, review your organization's policies and consult your security / IT team before using it.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security problems: [SECURITY.md](SECURITY.md).
 
 ## License
 
