@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import { toWellFormedText } from '../session-manager.js';
-import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../push-preview-text.js';
+import { markdownToPlainText, sliceGraphemes, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../push-preview-text.js';
 import type { RelayClient } from '../relay-client.js';
 import { logger, traceLog } from './shared.js';
 
@@ -97,9 +97,7 @@ export function buildPushPreview(
   const meta = client.sessionManager.getMeta(msg.sessionId as string);
   const rawTitle = meta?.title ?? meta?.autoTitle;
   const normalizedTitle = rawTitle ? toWellFormedText(rawTitle).replace(/\s+/g, ' ').trim() : undefined;
-  const title = normalizedTitle
-    ? Array.from(normalizedTitle).slice(0, 80).join('')
-    : undefined;
+  const title = normalizedTitle ? sliceGraphemes(normalizedTitle, 80) : undefined;
 
   // Encrypt to ALL consumerKeys (online + offline). The push preview is
   // specifically for offline delivery — online devices already got the real

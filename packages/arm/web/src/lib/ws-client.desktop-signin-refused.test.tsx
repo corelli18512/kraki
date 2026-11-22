@@ -176,6 +176,27 @@ describe('Kraki for Windows: the relay refuses the built-in Kraki\'s sign-in', (
     wsClient.disconnect();
   });
 
+  it('signs in again after signing out in the same app run (B1)', async () => {
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: RELAY, deviceId: 'dev-desktop' }));
+    accepted.add('gho_ok');
+    installDesktop({ current: 'gho_ok' });
+    const { client, useStore } = await boot();
+    client.connect();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(useStore.getState().status).toBe('connected');
+
+    // ProfileBar's signOut: forget the stored device and disconnect.
+    localStorage.removeItem('kraki_device');
+    client.disconnect();
+    useStore.setState({ status: 'awaiting_login' });
+
+    expect(client.connectWithDesktopCredentials()).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(authAttempts()).toEqual(['gho_ok', 'gho_ok']);
+    expect(useStore.getState().status).toBe('connected');
+    client.disconnect();
+  });
+
   it('a new token from the built-in Kraki is used without waiting for the app\'s sign-in', async () => {
     const token = { current: 'gho_revoked' };
     installDesktop(token);

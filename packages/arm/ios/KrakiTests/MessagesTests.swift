@@ -517,6 +517,32 @@ final class ProducerMessageDecoderTests: XCTestCase {
         XCTAssertNil(msg?.questionPresentation, "presentation is client-derived, never decoded")
     }
 
+    /// Triage #14: the computer flags a multi-select question; the app words
+    /// the hint (localized), the same in every state.
+    func testMultiSelectQuestionShowsTheAppsHint() throws {
+        let data = makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "",
+            "question": ["id": "q-1", "text": "Which databases?", "choices": ["Postgres", "SQLite"], "multiSelect": true],
+        ])
+        var msg = try XCTUnwrap(ProducerMessageDecoder.decode(data))
+        XCTAssertEqual(msg.questionSpec?.multiSelect, true)
+        msg.questionPresentation = QuestionPresentation(state: .open)
+        let open = try XCTUnwrap(msg.frozenCard)
+        XCTAssertEqual(open.text, "**Which databases?**\n\nYou can choose more than one: type them separated by commas.")
+        msg.questionPresentation = QuestionPresentation(state: .answered)
+        XCTAssertEqual(msg.frozenCard?.text, open.text)
+
+        // Not flagged (older computers) or nothing to pick from: no hint.
+        let single = ProducerMessageDecoder.decode(makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "", "question": ["id": "q-2", "text": "Which one?", "choices": ["A", "B"]],
+        ]))
+        XCTAssertEqual(single?.frozenCard?.text, "**Which one?**")
+        let free = ProducerMessageDecoder.decode(makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "", "question": ["id": "q-3", "text": "Anything else?", "multiSelect": true],
+        ]))
+        XCTAssertEqual(free?.frozenCard?.text, "**Anything else?**")
+    }
+
     func testQuestionPresentationIsNeverEncoded() throws {
         var msg = ChatMessage(type: "agent_message", seq: 3, sessionId: "s", deviceId: nil, timestamp: nil,
                               payload: ["question": AnyCodable(["id": "q", "text": "?"])])
@@ -631,5 +657,171 @@ final class ChatMessagePresentationTests: XCTestCase {
         XCTAssertFalse(message(["content": AnyCodable("hello")]).imageUnavailable)
         let content = TKBubbleContent.make(message: lost, sessionId: "s", agent: "pi")
         XCTAssertEqual(content.body?.string, "Image unavailable", "the message stays visible")
+    }
+
+    /// Triage #8: a session whose agent failed right after it was announced.
+    /// The `error` row is never drawn; the failed turn the computer now sends
+    /// after it is, with the reason.
+    @MainActor
+    func testCreateThatFailsShowsItsReasonAsAFailedTurn() {
+        let reason = "Couldn't create the session: pi exited"
+        func row(_ type: String, _ seq: Int, _ payload: [String: AnyCodable] = [:]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: "s", deviceId: "d", timestamp: nil, payload: payload)
+        }
+        let before = [row("session_created", 1, ["agent": AnyCodable("pi")]),
+                      row("error", 2, ["message": AnyCodable(reason)]), row("idle", 3)]
+        XCTAssertEqual(ChatViewModel.renderable(TurnSpineProjection.project(before)).map(\.seq), [],
+                       "a bare error row shows nothing")
+        let failed = row("turn_status", 3, [
+            "draft": AnyCodable(""), "action": AnyCodable(["type": "failed", "payload": ["message": reason]]),
+        ])
+        let after = [before[0], before[1], failed, row("idle", 4, ["reason": AnyCodable("failed")])]
+        let visible = ChatViewModel.renderable(TurnSpineProjection.project(after))
+        XCTAssertEqual(visible.map(\.seq), [3])
+        XCTAssertEqual(visible.first?.terminalOutcome?.message, reason)
+    }
+}
+
+/// K-019: a hole in the local message cache (rows the phone missed while it
+/// was away) is filled from the computer, not skipped.
+@MainActor
+final class MessageProviderCacheHoleTests: XCTestCase {
+    private let sid = "cache-hole"
+
+    private func row(_ seq: Int) -> ChatMessage {
+        ChatMessage(type: seq % 2 == 1 ? "user_message" : "agent_message", seq: seq, sessionId: sid, deviceId: "d",
+                    timestamp: nil, payload: ["content": AnyCodable("row-\(seq)")])
+    }
+
+    /// EARLY 1…20 and LATE 53…100 cached; 21…52 missing.
+    private func fixture(online: Bool = true, lateCached: Bool = true) throws -> (AppState, MessageProvider, () -> [Int]) {
+        let db = MessageDatabase(inMemory: ())
+        try db.insert(sid, (1...20).map(row) + (lateCached ? (53...100).map(row) : []))
+        let app = AppState(testDatabase: db)
+        app.sessionStore.sessions[sid] = SessionInfo(
+            id: sid, deviceId: "d", deviceName: "d", agent: "pi", model: "m", title: "t", state: .idle,
+            mode: .auto, lastSeq: 100, readSeq: 100, messageCount: 0, createdAt: Date(), pinned: false)
+        app.deviceStore.devices["d"] = DeviceSummary(
+            id: "d", name: "d", role: .tentacle, kind: .desktop, publicKey: nil, encryptionKey: nil,
+            online: true, lastSeen: nil, createdAt: nil)
+        app.connectionStatus = online ? .connected : .disconnected
+        var befores: [Int] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "request_session_messages",
+               let before = (message["payload"] as? [String: Any])?["beforeSeq"] as? Int {
+                befores.append(before)
+            }
+            return true
+        }
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 100, deviceId: "d")
+        _ = app.messageStore.loadInitialWindow(sid)
+        if lateCached {
+            // Page older through the LATE run until the window top is 53.
+            while let top = app.messageStore.windowState(sid)?.topSeq, top > 53 {
+                let page = app.messageStore.dbMessagesBefore(sid, beforeSeq: top, limit: min(10, top - 53))
+                app.messageStore.prependOlderPage(sid, page)
+            }
+            XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 53, "the window reached the top of the LATE run")
+        }
+        return (app, provider, { befores })
+    }
+
+    func testPagingOlderAtAHoleAsksTheComputerInsteadOfStitchingOldRows() async throws {
+        let (app, provider, befores) = try fixture()
+        defer { app.disconnect() }
+        let grew = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertFalse(grew)
+        XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 53, "EARLY rows are not stitched under LATE")
+        XCTAssertEqual(befores(), [53], "the missing rows are requested")
+        // The computer answers with the rows right below 53.
+        provider.handleBatch(sessionId: sid, messages: (41...52).map(row), lastSeq: 52, totalLastSeq: 100,
+                             containsHead: false)
+        XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 41)
+        XCTAssertEqual(app.messageStore.currentWindow(sid).first.map(\.seq), 41)
+        XCTAssertEqual(app.messageStore.currentWindow(sid).map(\.seq).prefix(13), ArraySlice(41...53))
+    }
+
+    func testOfflinePagingStillShowsCachedOlderRows() async throws {
+        let (app, provider, befores) = try fixture(online: false)
+        defer { app.disconnect() }
+        let grew = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertTrue(grew, "nothing can fill the hole offline: show what is cached")
+        XCTAssertEqual(befores(), [])
+        XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 11)
+    }
+
+    func testAHoleTheComputerCannotFillIsAskedOnlyOnce() async throws {
+        let (app, provider, befores) = try fixture()
+        defer { app.disconnect() }
+        _ = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        // The computer has nothing more (legacy seq gap).
+        provider.handleBatch(sessionId: sid, messages: [], lastSeq: 0, totalLastSeq: 100, containsHead: false)
+        let grew = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertTrue(grew)
+        XCTAssertEqual(befores(), [53])
+        XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, 11)
+    }
+
+    /// Review of K-019: a legacy session whose replayed rows are not
+    /// seq-adjacent has a "hole" under every page. Once the Tentacle answers
+    /// a hole request with only rows the DB already had, later pages come
+    /// straight from the DB instead of a round trip each.
+    func testLegacySeqGapsCostOnlyOneTentacleRoundTrip() async throws {
+        let db = MessageDatabase(inMemory: ())
+        let legacy = Array(stride(from: 1, through: 199, by: 2))
+        try db.insert(sid, legacy.map(row))
+        let app = AppState(testDatabase: db)
+        defer { app.disconnect() }
+        app.sessionStore.sessions[sid] = SessionInfo(
+            id: sid, deviceId: "d", deviceName: "d", agent: "pi", model: "m", title: "t", state: .idle,
+            mode: .auto, lastSeq: 199, readSeq: 199, messageCount: 0, createdAt: Date(), pinned: false)
+        app.deviceStore.devices["d"] = DeviceSummary(
+            id: "d", name: "d", role: .tentacle, kind: .desktop, publicKey: nil, encryptionKey: nil,
+            online: true, lastSeen: nil, createdAt: nil)
+        app.connectionStatus = .connected
+        var befores: [Int] = []
+        app.testOutboundMessageHandler = { message, _, _ in
+            if message["type"] as? String == "request_session_messages",
+               let before = (message["payload"] as? [String: Any])?["beforeSeq"] as? Int {
+                befores.append(before)
+            }
+            return true
+        }
+        let provider = try XCTUnwrap(app.messageProvider)
+        provider.setTentacleInfo(sessionId: sid, lastSeq: 199, deviceId: "d")
+        _ = app.messageStore.loadInitialWindow(sid)
+        let firstTop = try XCTUnwrap(app.messageStore.windowState(sid)?.topSeq)
+        XCTAssertGreaterThan(firstTop, 21)
+        _ = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertEqual(befores, [firstTop], "the first gap is asked of the Tentacle")
+        // The Tentacle replays the same legacy rows the DB already has.
+        let replay = legacy.filter { $0 < firstTop }.suffix(10)
+        provider.handleBatch(sessionId: sid, messages: replay.map(row), lastSeq: replay.last ?? 0,
+                             totalLastSeq: 199, containsHead: false)
+        let secondTop = try XCTUnwrap(app.messageStore.windowState(sid)?.topSeq)
+        XCTAssertLessThan(secondTop, firstTop)
+        let grew = await provider.ensureOlderLoadedAsync(sessionId: sid)
+        XCTAssertTrue(grew, "the next older page comes from the DB")
+        XCTAssertLessThan(app.messageStore.windowState(sid)?.topSeq ?? .max, secondTop)
+        XCTAssertEqual(befores, [firstTop], "no second round trip")
+    }
+
+    func testGapBridgeKeepsWalkingUntilTheHoleIsClosed() throws {
+        let (app, provider, befores) = try fixture(lateCached: false)
+        defer { app.disconnect() }
+        // A head fetch landed LATE 53…80 above EARLY: the bridge starts.
+        provider.ensureLoaded(sessionId: sid, reason: "test")
+        provider.handleBatch(sessionId: sid, messages: (53...100).map(row), lastSeq: 100, totalLastSeq: 100,
+                             containsHead: true)
+        XCTAssertEqual(befores().last, 53)
+        // First bridge page (41…52): 21…40 still missing → keep walking.
+        provider.handleBatch(sessionId: sid, messages: (41...52).map(row), lastSeq: 52, totalLastSeq: 100,
+                             containsHead: false)
+        XCTAssertEqual(befores().last, 41, "the bridge continues below the first page")
+        provider.handleBatch(sessionId: sid, messages: (21...40).map(row), lastSeq: 40, totalLastSeq: 100,
+                             containsHead: false)
+        XCTAssertEqual(befores().last, 41, "closed: no further request")
+        XCTAssertEqual(app.messageDatabase.messagesAfter(sid, afterSeq: 0, limit: 200).map(\.seq), Array(1...100))
     }
 }

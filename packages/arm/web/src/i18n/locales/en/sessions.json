@@ -1,6 +1,7 @@
 {
   "archive": {
     "loading": "Loading…",
+    "offline": "Archived sessions load when their computer is online.",
     "after": "Archive After",
     "never": "Never",
     "detail": "Sessions without new messages for this long are archived. Pinned sessions are never archived.",
@@ -65,6 +66,8 @@
     "title": "Import Session",
     "search": "Search sessions…",
     "scanning": "Scanning local sessions…",
+    "noAnswer": "{{name}} didn’t answer.",
+    "tryAgain": "Try again",
     "noMatch": "No sessions match your search",
     "empty": "No local sessions found",
     "trySearch": "Try a different search term",
@@ -86,6 +89,8 @@
     "thinking": "Thinking",
     "startHint": "Start session (Enter)",
     "start": "Start session",
+    "starting": "Starting the session on {{deviceName}}…",
+    "startingUnknown": "Starting the session…",
     "noComputers": "No computer is online. Open Kraki on a computer to start a session there.",
     "installLocal": "Kraki works with the coding agents on your computer. Install one and sign in to it, then check again.",
     "installRemote": "Kraki works with the coding agents on that computer. Install one there, sign in to it, then restart Kraki on it.",

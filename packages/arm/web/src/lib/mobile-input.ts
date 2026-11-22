@@ -26,3 +26,10 @@ export function enterSendsMessage(): boolean {
   }
   return shouldAutoFocusTextInput();
 }
+
+/** A mouse or trackpad is the primary pointer. On a touch screen a tap on a
+ *  focusable container moves focus to it, which closes the on-screen keyboard. */
+export function hasFinePointer(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(pointer: fine)').matches;
+}

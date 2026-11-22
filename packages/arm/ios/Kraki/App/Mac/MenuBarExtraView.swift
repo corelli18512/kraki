@@ -93,6 +93,7 @@ struct MenuBarExtraView: View {
             switch status {
             case .needsLoginItems: BuiltInTentacle.openLoginItemsSettings()
             default:
+                Self.selectThisMacSettingsTab()
                 NSApp.activate(ignoringOtherApps: true)
                 openSettings()
             }
@@ -101,6 +102,12 @@ struct MenuBarExtraView: View {
             Text(status.title)
             if let detail = status.detail { Text(detail) }
         }
+    }
+
+    /// The status row is about this Mac: Settings opens on This Mac, not on
+    /// whichever tab was used last.
+    static func selectThisMacSettingsTab() {
+        PreferencesTabSelection.shared.tab = .thisMac
     }
 
     private func openKraki(selecting sessionId: String? = nil) {
@@ -140,7 +147,7 @@ struct MenuBarIconLabel: View {
 
     var body: some View {
         Image(nsImage: icon)
-            .accessibilityLabel(Text(verbatim: "Kraki"))
+            .accessibilityLabel(Text(verbatim: MacMenuBarIcon.accessibilityLabel(status: tentacleCLI.onlineStatus)))
     }
 
     private var icon: NSImage {
@@ -204,7 +211,8 @@ enum MenuBarNeedsYou {
             case "question": reason = String(localized: "Asked you a question")
             default: return nil
             }
-            return Item(id: id, title: title, reason: reason, timestamp: preview.timestamp)
+            // One line: a title long enough to wrap pushed the reason out of the menu.
+            return Item(id: id, title: MacCommands.menuTitle(title), reason: reason, timestamp: preview.timestamp)
         }
         .sorted { ($0.timestamp, $0.id) > ($1.timestamp, $1.id) }
     }

@@ -71,6 +71,18 @@ final class IOSUnreadEntryTests: XCTestCase {
         XCTAssertEqual(fx.vc.automationUnreadEntry, .anchored)
     }
 
+    /// The dominant case: one short unread reply (cursor on it, the turn's
+    /// idle unread). Main's window and main's landing: the tail.
+    func testOneShortUnreadReplyOpensAtTheTailWithMainsWindow() throws {
+        let fx = try open(stored: 40, readSeq: 40, idleAt: 41, overrides: [40: "短回复"])
+        XCTAssertEqual(fx.app.messageStore.currentWindow(sid).map(\.seq), fx.mainWindow, "window untouched")
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 41)
+        drain(800)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5, "the tail, as on main")
+        XCTAssertNotNil(screenY(fx, seq: 40), "the reply on screen")
+        XCTAssertNotEqual(fx.vc.automationUnreadEntry, .anchored)
+    }
+
     func testRedDotWithAShortNewReplyOpensAtTheTail() throws {
         let fx = try open(stored: 40, readSeq: 38, overrides: [39: "继续", 40: "好的，已经改好了。"])
         drain(800)
@@ -88,6 +100,128 @@ final class IOSUnreadEntryTests: XCTestCase {
         try ingest(fx, seq: 41, type: "agent_message", text: long(3_000))
         drain(1_000)
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5)
+    }
+
+    /// K-042: more new messages than the entry window holds (inside the cap).
+    /// The chat opens on the first one, not on whatever row starts the newest
+    /// window, and the window still ends at the newest message.
+    func testBacklogLargerThanTheWindowOpensAtTheFirstUnread() throws {
+        let fx = try open(stored: 100, readSeq: 40)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 100, "the newest rows stay loaded")
+        drain(1_000)
+        let firstNew = try XCTUnwrap(screenY(fx, seq: 41), "first new message on screen: \(visible(fx))")
+        XCTAssertTrue(landingRange.contains(firstNew), "first new message starts under the glass, got \(firstNew)")
+        XCTAssertEqual(fx.vc.automationUnreadEntry, .anchored)
+        XCTAssertTrue(fx.vc.automationControlsVisible.down, "↓ offers the newest message")
+
+        // ↓ still reaches the newest message of the whole conversation.
+        fx.vc.automationTapDown()
+        drain(1_800)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 100)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5)
+    }
+
+    /// A backlog above the cap (60 unread rows above the newest window, more
+    /// than 30) keeps main's window and main's landing: the first new row that
+    /// window holds. Extended, those 93 rows passed the window's rendered-height
+    /// cap and each live arrival trimmed the row under the reader.
+    func testBacklogAboveTheCapOpensLikeMainAtTheNewestWindow() throws {
+        let fx = try open(stored: 130, readSeq: 40)
+        XCTAssertEqual(fx.app.messageStore.currentWindow(sid).map(\.seq), fx.mainWindow)
+        XCTAssertEqual(fx.mainWindow.first, 101)
+        drain(1_000)
+        let top = try XCTUnwrap(screenY(fx, seq: 101), "window top on screen: \(visible(fx))")
+        XCTAssertTrue(landingRange.contains(top), "lands where main lands, got \(top)")
+        XCTAssertEqual(fx.vc.automationUnreadEntry, .anchored)
+        for seq in 131...134 {
+            try ingest(fx, seq: seq, type: seq % 2 == 1 ? "user_message" : "agent_message", text: "继续")
+            drain(500)
+            XCTAssertEqual(fx.app.messageStore.windowState(sid)?.topSeq, 101, "nothing trimmed above the reader")
+            XCTAssertEqual(try XCTUnwrap(screenY(fx, seq: 101), "after \(seq): \(visible(fx))"), top, accuracy: 1)
+        }
+    }
+
+    /// The agent is working (pending permission) when a backlog is opened:
+    /// the live card survives the entry and sits under the newest row.
+    func testBacklogWithARunningTurnKeepsItsLiveCardAtTheHead() throws {
+        let fx = try open(stored: 99, readSeq: 40) { app in
+            app.messageStore.beginCardTurn(self.sid)
+            app.messageStore.applyCardMessage(self.sid, "我先看一下日志。", reset: false)
+            app.messageStore.setCardAction(self.sid, ChatMessage(
+                type: "permission", seq: 0, sessionId: self.sid, deviceId: self.dev, timestamp: nil,
+                payload: ["id": AnyCodable("p1"), "toolName": AnyCodable("shell"), "description": AnyCodable("Run: ls")]))
+        }
+        drain(800)
+        XCTAssertNotNil(fx.app.messageStore.visibleCard(sid), "the live card is still there")
+        XCTAssertEqual(fx.vc.vm.permissions.map(\.id), ["p1"], "its permission can still be answered")
+        XCTAssertEqual(fx.vc.items.last, ChatPerfListVC.liveCardID)
+        XCTAssertEqual(fx.vc.message(fx.vc.items[fx.vc.items.count - 2])?.seq, 99, "right under the newest row")
+        fx.app.messageStore.applyCardMessage(sid, "还在查。", reset: false)
+        XCTAssertEqual(fx.app.messageStore.visibleCard(sid)?.text, "我先看一下日志。还在查。", "live frames still land")
+    }
+
+    /// The agent's last message asks a question: the composer answers it.
+    func testBacklogEndingInAQuestionLetsTheComposerAnswerIt() throws {
+        let fx = try open(stored: 99, readSeq: 40, questionAt: 100)
+        drain(600)
+        let composer = ChatViewModel(sessionId: sid, appState: fx.app)
+        XCTAssertEqual(composer.questions.last?.id, "q1", "the reply goes out as the answer")
+        XCTAssertEqual(fx.vc.vm.questions.last?.id, "q1")
+    }
+
+    /// Unread rows this device has not stored yet: nothing is skipped inside
+    /// the window — main's window and landing.
+    func testBacklogWithAHoleInTheCacheSkipsNoUnreadRow() throws {
+        let fx = try open(stored: 100, readSeq: 30, missing: 31...60)
+        let window = fx.app.messageStore.currentWindow(sid).map(\.seq)
+        XCTAssertEqual(window, fx.mainWindow)
+        XCTAssertTrue(zip(window, window.dropFirst()).allSatisfy { $1 == $0 + 1 }, "no hole inside the window: \(window)")
+        drain(1_000)
+        let top = try XCTUnwrap(screenY(fx, seq: 71), "window top on screen: \(visible(fx))")
+        XCTAssertTrue(landingRange.contains(top), "lands where main lands, got \(top)")
+    }
+
+    /// Cold start before `session_list` (no Tentacle head known yet): the
+    /// newest rows this device has are still loaded and reachable.
+    func testBacklogBeforeTheSessionListArrivesStillHoldsTheNewestRows() throws {
+        let fx = try open(stored: 100, readSeq: 40, knowsTentacle: false)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 100)
+        drain(1_000)
+        XCTAssertNotNil(screenY(fx, seq: 41), "lands on the first new message: \(visible(fx))")
+        let bottom = fx.cv.contentSize.height + fx.cv.adjustedContentInset.bottom - fx.cv.bounds.height
+        fx.cv.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+        fx.vc.scrollViewDidScroll(fx.cv)
+        drain(800)
+        XCTAssertNotNil(screenY(fx, seq: 100), "scrolling down reaches the newest message: \(visible(fx))")
+    }
+
+    /// Messages arriving after a backlog entry at the cap (30 unread rows
+    /// above the newest window) join the window at once, trim nothing above
+    /// the reader and leave them where they are; ↓ reaches them.
+    func testArrivalsAfterABacklogEntryJoinTheWindowWithoutMovingTheReader() throws {
+        let fx = try open(stored: 100, readSeq: 40)
+        drain(1_000)
+        let firstNew = try XCTUnwrap(screenY(fx, seq: 41))
+        for seq in 101...104 {
+            try ingest(fx, seq: seq, type: seq % 2 == 1 ? "user_message" : "agent_message", text: "继续")
+            drain(500)
+            XCTAssertEqual(fx.app.messageStore.windowState(sid), MessageStore.WindowState(topSeq: 38, bottomSeq: seq),
+                           "in the window, not held back as history; nothing trimmed above the reader")
+            XCTAssertEqual(try XCTUnwrap(screenY(fx, seq: 41), "after \(seq): \(visible(fx))"), firstNew, accuracy: 1,
+                           "the reader is not moved")
+        }
+        fx.vc.automationTapDown()
+        drain(1_800)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5)
+        XCTAssertNotNil(screenY(fx, seq: 104), "↓ reaches them")
+    }
+
+    /// Backlog that already fits in the newest window keeps that window.
+    func testBacklogInsideTheWindowKeepsTheNewestWindow() throws {
+        let fx = try open(stored: 200, readSeq: 190, overrides: [191: long(2_500)])
+        drain(800)
+        XCTAssertEqual(fx.app.messageStore.windowState(sid)?.bottomSeq, 200)
+        XCTAssertNotNil(screenY(fx, seq: 191))
     }
 
     // MARK: Scenario 2 — killed in the background, notification tap
@@ -180,7 +314,9 @@ final class IOSUnreadEntryTests: XCTestCase {
 
     // MARK: Fixture
 
-    struct Fx { let vc: ChatPerfListVC; let cv: UICollectionView; let app: AppState }
+    /// `mainWindow`: the entry window's seqs before the first-unread anchor
+    /// (what main opens).
+    struct Fx { let vc: ChatPerfListVC; let cv: UICollectionView; let app: AppState; let mainWindow: [Int] }
 
     private func long(_ minimum: Int) -> String {
         var text = ""
@@ -206,10 +342,15 @@ final class IOSUnreadEntryTests: XCTestCase {
     /// (before markRead), then the chat list appears.
     /// `idleAt`: the turn ended with Tentacle's `idle` row at that seq (no
     /// bubble; it is what leaves readSeq below lastSeq for a red dot).
-    private func open(stored: Int, readSeq: Int, idleAt: Int? = nil, fromNotification: Bool = false,
-                      overrides: [Int: String] = [:]) throws -> Fx {
+    /// `questionAt`: the agent's ask_user (question `q1`) at that seq.
+    /// `missing`: rows this device has not stored. `knowsTentacle`: false for
+    /// a cold start before `session_list`. `beforeEntry`: state already there
+    /// when the Session is opened (e.g. a running turn's live card).
+    private func open(stored: Int, readSeq: Int, idleAt: Int? = nil, questionAt: Int? = nil,
+                      missing: ClosedRange<Int>? = nil, knowsTentacle: Bool = true, fromNotification: Bool = false,
+                      overrides: [Int: String] = [:], beforeEntry: (AppState) -> Void = { _ in }) throws -> Fx {
         let database = try db()
-        let msgs = (1...stored).map { seq -> ChatMessage in
+        let msgs = (1...stored).filter { !(missing?.contains($0) ?? false) }.map { seq -> ChatMessage in
             let base = ChatUXRegressionTests.body(seq)
             return ChatMessage(type: base.type, seq: seq, sessionId: sid, deviceId: dev,
                                timestamp: "2026-10-09T00:00:00.000Z",
@@ -220,17 +361,28 @@ final class IOSUnreadEntryTests: XCTestCase {
             try database.insert(sid, [ChatMessage(type: "idle", seq: idleAt, sessionId: sid, deviceId: dev,
                                                timestamp: "2026-10-09T00:00:01.000Z", payload: [:])])
         }
+        if let questionAt {
+            let question: [String: AnyCodable] = ["id": AnyCodable("q1"), "text": AnyCodable("要不要顺便把旧接口也删掉？"),
+                                                  "choices": AnyCodable(["删掉", "先保留"])]
+            try database.insert(sid, [ChatMessage(type: "agent_message", seq: questionAt, sessionId: sid, deviceId: dev,
+                                               timestamp: "2026-10-09T00:00:01.000Z",
+                                               payload: ["content": AnyCodable(""), "question": AnyCodable(question)])])
+        }
+        let lastSeq = max(stored, idleAt ?? 0, questionAt ?? 0)
         let app = AppState(testDatabase: database)
         states.append(app)
-        app.sessionStore.sessions[sid] = session(lastSeq: idleAt ?? stored, readSeq: readSeq)
+        app.sessionStore.sessions[sid] = session(lastSeq: lastSeq, readSeq: readSeq)
         app.deviceStore.devices[dev] = DeviceSummary(
             id: dev, name: "Mac", role: .tentacle, kind: .desktop, publicKey: nil,
             encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
         app.testOutboundMessageHandler = { _, _, _ in true }
-        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: idleAt ?? stored, deviceId: dev)
+        if knowsTentacle { app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: lastSeq, deviceId: dev) }
+        beforeEntry(app)
         _ = app.messageStore.loadInitialWindow(sid)
+        let mainWindow = app.messageStore.currentWindow(sid).map(\.seq)
         if fromNotification { app.sessionStore.notificationEntrySessions.insert(sid) }
         app.sessionStore.captureEntryUnreadBoundary(sid)
+        app.messageProvider?.anchorEntryWindowAtFirstUnread(sid)
 
         let vc = ChatPerfListVC(sessionId: sid, appState: app, agent: "claude", bottomContentInset: 54)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
@@ -243,7 +395,7 @@ final class IOSUnreadEntryTests: XCTestCase {
         vc.view.layoutIfNeeded()
         vc.viewDidAppear(false)
         let cv = try XCTUnwrap(find(vc.view))
-        return Fx(vc: vc, cv: cv, app: app)
+        return Fx(vc: vc, cv: cv, app: app, mainWindow: mainWindow)
     }
 
     private func ingest(_ fx: Fx, seq: Int, type: String, text: String) throws {

@@ -40,6 +40,15 @@ final class PreferencesManager {
 
     private weak var appState: AppState?
     private static let themeKey = "colorScheme"
+    private static let pendingThemeKey = "kraki.pendingThemeSync"
+    private let defaults: UserDefaults
+
+    /// A theme picked while offline, not yet sent (K-081). It is sent on the
+    /// next sign-in and wins over the account's stored theme then.
+    var pendingTheme: AppColorScheme? {
+        get { defaults.string(forKey: Self.pendingThemeKey).flatMap(AppColorScheme.init(rawValue:)) }
+        set { defaults.set(newValue?.rawValue, forKey: Self.pendingThemeKey) }
+    }
 
     // Custom Words: silent account sync. Edits are flushed into the store's
     // persisted outbox 0.7 s after the last change and sent as one request;
@@ -50,8 +59,9 @@ final class PreferencesManager {
     private var vocabularyInFlight: (id: String, count: Int)?
     private var vocabularyUser: String?
 
-    init(appState: AppState) {
+    init(appState: AppState, defaults: UserDefaults = .standard) {
         self.appState = appState
+        self.defaults = defaults
         appState.voiceVocabularyStore.onChange = { [weak self] in self?.scheduleVocabularySend() }
     }
 
@@ -126,9 +136,43 @@ final class PreferencesManager {
     /// Send a theme change up to head so the user's other devices
     /// (web, other phones) see it on their next reconnect.
     func sendTheme(_ scheme: AppColorScheme) {
+        // Offline: keep it for the next sign-in instead of dropping it, or
+        // the account's stored theme would silently revert it (K-081).
+        guard appState?.connectionStatus == .connected else {
+            // Signed out: there is no account to send it to, and keeping it
+            // would overwrite the next account's theme (K-080).
+            guard appState?.hasStoredCredentials == true else { return }
+            pendingTheme = scheme
+            return
+        }
+        pendingTheme = nil
         // Match the JSON enum the web client + head expect: theme is
         // stored as one of `"system" | "light" | "dark"`.
         sendPreferences(["theme": scheme.rawValue])
+    }
+
+    /// `auth_ok`'s preferences. A theme picked while offline is sent now and
+    /// kept; otherwise the account's stored values apply.
+    func applyAuthPreferences(_ prefs: [String: Any]) {
+        guard let pending = pendingTheme else {
+            applyRemote(prefs)
+            return
+        }
+        var others = prefs
+        others.removeValue(forKey: "theme")
+        applyRemote(others)
+        sendTheme(pending)
+    }
+
+    /// Signed out: the theme is the account's preference, so the next account
+    /// starts from System instead of inheriting this one's (K-080), and an
+    /// unsent change of this account is not sent as the next one's.
+    func resetTheme() {
+        pendingTheme = nil
+        guard defaults.object(forKey: Self.themeKey) != nil else { return }
+        isApplyingRemote = true
+        defaults.removeObject(forKey: Self.themeKey)
+        DispatchQueue.main.async { [weak self] in self?.isApplyingRemote = false }
     }
 
     /// Generic helper for any preference patch. Always merges
@@ -174,7 +218,6 @@ final class PreferencesManager {
 
         if let themeString = prefs["theme"] as? String,
            let scheme = AppColorScheme(rawValue: themeString) {
-            let defaults = UserDefaults.standard
             let current = defaults.string(forKey: Self.themeKey)
             if current != scheme.rawValue {
                 defaults.set(scheme.rawValue, forKey: Self.themeKey)

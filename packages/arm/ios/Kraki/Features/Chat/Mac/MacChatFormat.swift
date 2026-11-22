@@ -2,8 +2,8 @@
 import Foundation
 
 /// Session-info number formats for the Mac chat inspector. Same output as
-/// Shared/Helpers.swift (iOS-only); keep them in sync. Token counts and USD
-/// costs are intentionally not locale-formatted; durations use catalog keys.
+/// Shared/Helpers.swift (iOS-only); keep them in sync. Token counts keep the
+/// compact K/M notation; cost and duration come from `UsageNumberFormat`.
 enum MacChatFormat {
     static func tokenCount(_ count: Int) -> String {
         if count < 1_000 { return "\(count)" }
@@ -16,21 +16,11 @@ enum MacChatFormat {
     }
 
     static func cost(_ cost: Double) -> String {
-        if cost < 0.01 {
-            return String(format: "$%.4f", cost)
-        }
-        return String(format: "$%.3f", cost)
+        UsageNumberFormat.cost(cost)
     }
 
     static func duration(_ milliseconds: Double) -> String {
-        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" }
-        let totalSeconds = min(milliseconds / 1_000, 1e12)
-        if totalSeconds < 60 {
-            return String(format: String(localized: "%.1fs"), totalSeconds)
-        }
-        let minutes = Int(totalSeconds) / 60
-        let seconds = Int(totalSeconds) % 60
-        return String(localized: "\(minutes)m \(seconds)s")
+        UsageNumberFormat.duration(milliseconds)
     }
 }
 #endif

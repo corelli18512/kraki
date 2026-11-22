@@ -7,6 +7,8 @@
 /// and appears at most once:
 ///
 /// - only after a fresh setup sign-in (`pendingKey`, set by BuiltInSetupView);
+/// - only while this Mac's Kraki runs (it makes the code); a remote-only Mac
+///   never shows it;
 /// - never when the account already has a phone (it is cleared instead);
 /// - once on screen it stays until "Skip for Now" or "Start Using Kraki": the
 ///   phone joining is its success state, and a reconnect does not hide it.
@@ -23,8 +25,10 @@ struct MacConnectPhoneStep: View {
     static let pendingKey = "setup.connectPhonePending"
 
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(Self.pendingKey) private var pending = false
+    @AppStorage(BuiltInTentacle.thisMacRoleKey) private var thisMacRole = BuiltInTentacle.ThisMacRole.undecided.rawValue
     /// Wait briefly for the account's device list before deciding, so a user
     /// who already has a phone never sees the step flash. Once settled the
     /// decision is latched for the step's lifetime.
@@ -35,8 +39,21 @@ struct MacConnectPhoneStep: View {
         devices.contains { $0.role == .app && $0.id != selfId && ($0.kind == .ios || $0.kind == .android) }
     }
 
-    static func shouldShow(pending: Bool, connected: Bool, devicesKnown: Bool, hasPhone: Bool) -> Bool {
-        pending && connected && devicesKnown && !hasPhone
+    static func shouldShow(pending: Bool, connected: Bool, devicesKnown: Bool, hasPhone: Bool, canMakeCode: Bool) -> Bool {
+        pending && connected && devicesKnown && !hasPhone && canMakeCode
+    }
+
+    /// The code comes from this Mac's own Kraki (`kraki connect`): a
+    /// remote-only Mac has none, and one that isn't running can't make one.
+    static func canMakeCode(role: BuiltInTentacle.ThisMacRole, daemonState: TentacleCLIManager.DaemonState) -> Bool {
+        guard role != .remoteOnly, case .running = daemonState else { return false }
+        return true
+    }
+
+    private var remoteOnly: Bool { thisMacRole == BuiltInTentacle.ThisMacRole.remoteOnly.rawValue }
+    private var canMakeCode: Bool {
+        Self.canMakeCode(role: BuiltInTentacle.ThisMacRole(rawValue: thisMacRole) ?? .undecided,
+                         daemonState: tentacleCLI.daemonState)
     }
 
     private var devicesKnown: Bool { !appState.deviceStore.devices.isEmpty }
@@ -52,14 +69,19 @@ struct MacConnectPhoneStep: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: settled)
-        .task(id: pending && appState.connectionStatus == .connected && devicesKnown) {
-            guard !settled, pending, appState.connectionStatus == .connected, devicesKnown else { return }
+        .task(id: pending && appState.connectionStatus == .connected && devicesKnown && canMakeCode) {
+            guard !settled, pending else { return }
+            if remoteOnly {
+                pending = false
+                return
+            }
+            guard appState.connectionStatus == .connected, devicesKnown, canMakeCode else { return }
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
             if hasPhone {
                 pending = false
             } else if Self.shouldShow(pending: pending, connected: appState.connectionStatus == .connected,
-                                      devicesKnown: devicesKnown, hasPhone: false) {
+                                      devicesKnown: devicesKnown, hasPhone: false, canMakeCode: canMakeCode) {
                 settled = true
             }
         }

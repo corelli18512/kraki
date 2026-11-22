@@ -55,6 +55,23 @@ export function validateVoiceConfig(input: VoiceConfigInput): VoiceConfigResolve
       `VOICE_BROKER_URL must start with ws:// or wss:// (got: ${brokerUrl})`,
     );
   }
+  // Clients send voice audio and their voice credential to this URL: only a
+  // broker on this machine (local dev) may use cleartext ws://.
+  if (brokerUrl?.startsWith('ws://') && !isLoopbackUrl(brokerUrl)) {
+    throw new Error(
+      `VOICE_BROKER_URL must use wss:// unless the broker runs on this machine (got: ${brokerUrl})`,
+    );
+  }
 
   return { enabled, brokerUrl };
+}
+
+function isLoopbackUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return host === 'localhost' || host === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(host);
 }

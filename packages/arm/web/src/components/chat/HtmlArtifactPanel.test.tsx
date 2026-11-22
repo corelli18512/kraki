@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { prepareReportPreview } from '../../lib/report-preview';
 import { HtmlArtifactPanel, exportHtmlReport, withArtifactCsp } from './HtmlArtifactPanel';
+import { ChatHeader } from './ChatHeader';
 
 const attachment = vi.hoisted(() => ({ status: 'loading', text: null as string | null, error: null as string | null }));
 const useText = vi.hoisted(() => vi.fn(() => attachment));
@@ -33,6 +35,28 @@ describe('HtmlArtifactPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close Report' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+  it.each([false, true])('K-213: Escape closes only the mode menu, not the report under it (narrow=%s)', (narrow) => {
+    const onClose = vi.fn();
+    render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><ChatHeader title="Session" mode="auto" narrow={narrow} onMode={() => {}} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('K-213: an Escape that cancels an IME candidate leaves the mode menu open', () => {
+    render(<ChatHeader title="Session" mode="auto" narrow={false} onMode={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('leaves the report open when Escape belongs to an image preview above it', () => {
     const onClose = vi.fn();
     const { rerender } = render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><div className="kimage-viewer" /></>);
@@ -146,6 +170,40 @@ describe('HtmlArtifactPanel', () => {
     expect(anchor.download).toBe('.._.._report.html');
     expect(anchor.href).toBe('blob:report');
     click.mockRestore();
+  });
+  it('K-230: keeps a decomposed (NFD) Japanese report name intact (NFC) on download', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await exportHtmlReport('<title>R</title>', 'レポート-がぎ.html'.normalize('NFD'));
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('レポート-がぎ.html'.normalize('NFC'));
+    await exportHtmlReport('<title>R</title>', 'Café re\u0301sume\u0301.html');
+    expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('Café résumé.html'.normalize('NFC'));
+    click.mockRestore();
+  });
+  it('K-235: on iPhone opens the report in a new tab (sandboxed, opaque origin) instead of only downloading', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const tabDocument = document.implementation.createHTMLDocument('');
+    const tab = { document: tabDocument, opener: window } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab);
+    await exportHtmlReport('<title>Original</title><script>run()</script>', 'Quarterly report.html');
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(click).not.toHaveBeenCalled();
+    expect(tab.opener).toBeNull();
+    expect(tabDocument.title).toBe('Quarterly report.html');
+    const frame = tabDocument.querySelector('iframe')!;
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.srcdoc).toMatch(/^<meta http-equiv="Content-Security-Policy"/);
+    expect(frame.srcdoc).toContain('<script>run()</script>');
+    // No tab (pop-ups blocked, home-screen web app, in-app browser): the
+    // download still happens instead of an error.
+    open.mockReturnValue(null);
+    await expect(exportHtmlReport('<p>x</p>', 'r.html')).resolves.toBeUndefined();
+    expect(click).toHaveBeenCalledOnce();
+    vi.restoreAllMocks();
+  });
+  it('K-235: report header buttons get a 44 pt tall touch target on touch screens', () => {
+    const css = readFileSync('src/components/chat/chat.css', 'utf8');
+    expect(css).toMatch(/@media \(pointer: coarse\) \{[^@]*\.kreport-header button::after \{[^}]*inset: -9px -4px;/);
   });
   it('prepends restrictive CSP before scripts; later report policies can only tighten it', () => {
     const html = withArtifactCsp('<head><script>run()</script><meta http-equiv="Content-Security-Policy" content="default-src *"></head>');

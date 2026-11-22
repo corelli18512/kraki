@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSessionStatus, countPendingQuestions } from './session-status';
+import { attentionCount, getSessionStatus, countPendingQuestions } from './session-status';
 import type { SessionSummary } from '@kraki/protocol';
 import type { SessionCard } from '../types/store';
 
@@ -27,6 +27,18 @@ describe('countPendingQuestions', () => {
     expect(countPendingQuestions('s1', m)).toBe(1);
     expect(countPendingQuestions('s2', m)).toBe(0);
     expect(countPendingQuestions('s3', m)).toBe(0);
+  });
+});
+
+describe('attentionCount (tab title, K-220)', () => {
+  it('adds Sessions waiting on an approval or answer to the unread count, each once', () => {
+    const ids = ['s1', 's2', 's3', 's4'];
+    const previews = new Map([['s2', { type: 'permission' }], ['s3', { type: 'question' }], ['s4', { type: 'agent' }]]);
+    expect(attentionCount(new Map(), ids, new Map(), new Map())).toBe(0);
+    // A live permission card (s1) and the previews (s2, s3).
+    expect(attentionCount(new Map(), ids, cardMap([{ sessionId: 's1' }]), previews)).toBe(3);
+    // Unread and waiting counts once; a decided permission does not wait.
+    expect(attentionCount(new Map([['s2', 1], ['s4', 2]]), ids, cardMap([{ sessionId: 's1', decided: true }]), previews)).toBe(4);
   });
 });
 
@@ -87,6 +99,12 @@ describe('one name per session and model (same as iOS/Mac)', () => {
     expect(sessionDisplayTitle({})).toBe('New Session');
     expect(sessionDisplayTitle({ autoTitle: 'Fix tests' })).toBe('Fix tests');
     expect(sessionDisplayTitle({ title: 'Mine', autoTitle: 'Fix tests' })).toBe('Mine');
+  });
+  it('K-005: a title that is not text falls back instead of throwing', async () => {
+    const { sessionDisplayTitle } = await import('./session-status');
+    expect(sessionDisplayTitle({ title: 42 as unknown as string })).toBe('New Session');
+    expect(sessionDisplayTitle({ title: { x: 1 } as unknown as string, autoTitle: 'Fix tests' })).toBe('Fix tests');
+    expect(sessionDisplayTitle({ autoTitle: [] as unknown as string })).toBe('New Session');
   });
   it("models show their agent's name", async () => {
     const { modelDisplayName } = await import('./session-status');

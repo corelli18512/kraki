@@ -32,4 +32,19 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["en", "zh-Hans"])
         XCTAssertEqual(AppLanguage.simplifiedChinese.nativeName, "简体中文")
     }
+
+    /// K-222: permission prompts also arrive in Auto/Delegate, so the caption
+    /// must not claim Safe mode.
+    func testPermissionCaptionDoesNotClaimSafeMode() throws {
+        XCTAssertEqual(PermissionPromptCopy.caption, "Needs your approval")
+        let zh = try bundle("zh-Hans")
+        XCTAssertEqual(zh.localizedString(forKey: "Needs your approval", value: nil, table: nil), "需要你批准")
+    }
+
+    /// Triage #14: the multi-select hint is the app's own copy.
+    func testMultiSelectHintIsLocalized() throws {
+        XCTAssertEqual(ChatMessage.multiSelectHint, "You can choose more than one: type them separated by commas.")
+        let zh = try bundle("zh-Hans")
+        XCTAssertEqual(zh.localizedString(forKey: ChatMessage.multiSelectHint, value: nil, table: nil), "可以选择多个：输入时用逗号分隔。")
+    }
 }

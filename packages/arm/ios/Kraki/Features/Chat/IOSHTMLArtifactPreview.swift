@@ -13,6 +13,10 @@ struct IOSHTMLArtifactPreview: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     @State private var loadedArtifactID: String?
+    /// The report's web content process kept crashing (IOSHTMLArtifactWebView).
+    @State private var crashedArtifactID: String?
+    /// Bumped by Try Again: a fresh web view (and content process).
+    @State private var webViewGeneration = 0
     @State private var exportURL: IOSReportExportItem?
 
     let selection: IOSSelectedHTMLArtifact
@@ -87,13 +91,24 @@ struct IOSHTMLArtifactPreview: View {
             case .ready(let mimeType, let data):
                 if data.count > HTMLArtifactSecurity.maxBytes {
                     errorState(String(localized: "This report exceeds the 10 MB safety limit."))
+                } else if crashedArtifactID == selection.ref.id {
+                    errorState(String(localized: "The report stopped responding.")) {
+                        loadedArtifactID = nil
+                        crashedArtifactID = nil
+                        webViewGeneration += 1
+                    }
                 } else if mimeType == "text/html", let html = String(data: data, encoding: .utf8) {
+                    // No backdrop of its own: the sheet's surface shows while
+                    // the report renders (a white one flashed in dark mode and
+                    // reached under the navigation bar, hiding its title).
                     ZStack {
                         IOSHTMLArtifactWebView(
                             html: HTMLArtifactSecurity.securedHTML(html),
                             artifactID: selection.ref.id,
-                            onReady: { loadedArtifactID = selection.ref.id }
+                            onReady: { loadedArtifactID = selection.ref.id },
+                            onContentProcessFailure: { crashedArtifactID = selection.ref.id }
                         )
+                        .id(webViewGeneration)
                         .opacity(loadedArtifactID == selection.ref.id ? 1 : 0)
                         if loadedArtifactID != selection.ref.id {
                             VStack(spacing: 10) {
@@ -104,7 +119,6 @@ struct IOSHTMLArtifactPreview: View {
                             }
                         }
                     }
-                    .background(Color.white)
                     .ignoresSafeArea(.container, edges: .bottom)
                 } else {
                     errorState(String(localized: "This attachment is not a valid UTF-8 HTML report."))
@@ -123,7 +137,7 @@ struct IOSHTMLArtifactPreview: View {
         }
     }
 
-    private func errorState(_ reason: String) -> some View {
+    private func errorState(_ reason: String, retry: (() -> Void)? = nil) -> some View {
         VStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 24, weight: .medium))
@@ -131,11 +145,18 @@ struct IOSHTMLArtifactPreview: View {
             Text("Couldn’t load this report")
                 .font(.headline)
                 .foregroundStyle(Color.textTitle)
-            Text(reason)
-                .font(.subheadline)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
+            if !reason.isEmpty {
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+            if let retry {
+                Button("Try Again", action: retry)
+                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -159,13 +180,14 @@ private struct IOSActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-private struct IOSHTMLArtifactWebView: UIViewRepresentable {
+struct IOSHTMLArtifactWebView: UIViewRepresentable {
     let html: String
     let artifactID: String
     let onReady: () -> Void
+    let onContentProcessFailure: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onReady: onReady)
+        Coordinator(onReady: onReady, onContentProcessFailure: onContentProcessFailure)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -178,7 +200,6 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
-        webView.underPageBackgroundColor = .white
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.isInspectable = false
@@ -189,6 +210,7 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onReady = onReady
+        context.coordinator.onContentProcessFailure = onContentProcessFailure
         context.coordinator.load(html: html, artifactID: artifactID, into: webView)
     }
 
@@ -200,13 +222,17 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         var onReady: () -> Void
+        /// The content process died again before the reloaded report
+        /// finished: show an error with Try Again instead of a blank sheet.
+        var onContentProcessFailure: () -> Void
         private var loadedArtifactID: String?
         private var loadedHTML: String?
         private var initialNavigationPending = false
         private var recoveryAttempts = 0
 
-        init(onReady: @escaping () -> Void) {
+        init(onReady: @escaping () -> Void, onContentProcessFailure: @escaping () -> Void) {
             self.onReady = onReady
+            self.onContentProcessFailure = onContentProcessFailure
         }
 
         func load(html: String, artifactID: String, into webView: WKWebView) {
@@ -233,9 +259,11 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            guard recoveryAttempts == 0,
-                  let artifactID = loadedArtifactID,
-                  let html = loadedHTML else { return }
+            guard let artifactID = loadedArtifactID, let html = loadedHTML else { return }
+            guard recoveryAttempts == 0 else {
+                onContentProcessFailure()
+                return
+            }
             recoveryAttempts += 1
             loadedArtifactID = nil
             load(html: html, artifactID: artifactID, into: webView)

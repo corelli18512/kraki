@@ -62,10 +62,12 @@ extension AppState {
     }
 
     /// Plaintext control for the relay itself (not end-to-end encrypted to
-    /// the user's computers), sent on the raw socket.
+    /// the user's computers), sent on the raw socket. Returns false, sending
+    /// nothing, while the socket is not signed in: the relay would never see
+    /// the frame, so callers must tell the user rather than drop it (K-025).
     @discardableResult
     func sendRelayControl(_ message: [String: Any]) -> Bool {
-        guard let wsClient,
+        guard let wsClient, wsClient.state == .connected, wsClient.isAuthenticated,
               let data = try? JSONSerialization.data(withJSONObject: message),
               let string = String(data: data, encoding: .utf8) else { return false }
         wsClient.sendRaw(string)

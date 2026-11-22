@@ -90,6 +90,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// the geometry momentarily >24 pt from the bottom, the distance rule
     /// dropped tail-following, and the Chat stopped short of the bottom.
     var sendTailLock = false
+    let keyboardFocusView = MacChatKeyboardFocusView(frame: .zero)
     var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0

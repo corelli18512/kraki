@@ -25,7 +25,9 @@ export function isOfficialRelay(relay: string): boolean {
     if (configured) {
       try { if (new URL(configured).host === url.host) return true; } catch { /* ignore */ }
     }
-    return OFFICIAL_RELAY_HOST.test(url.hostname);
+    // Kraki's relays are only reached over TLS (as on iOS): a plain ws://
+    // link naming them is not one of ours and is confirmed like any other.
+    return url.protocol === 'wss:' && OFFICIAL_RELAY_HOST.test(url.hostname);
   } catch {
     return false;
   }
@@ -43,20 +45,34 @@ export type PairingLinkDecision =
   | { kind: 'offer-app' }
   | { kind: 'confirm-relay'; host: string };
 
+/** The relay the user confirmed with Connect, kept in this tab's
+ *  sessionStorage: the link itself cannot carry the consent, or a crafted
+ *  link would simply include it. */
+export const CONFIRMED_RELAY_KEY = 'kraki.confirmedRelay';
+
+/** `hasStoredDevice`: this browser is already signed in. A link without a
+ *  token then cannot move it to another relay (the relay client keeps the
+ *  stored one), so there is nothing to confirm. Without a sign-in, a
+ *  token-less `?relay=` still points sign-in at that server and is confirmed.
+ *  `confirmedRelay`: the relay the user confirmed in this tab
+ *  (CONFIRMED_RELAY_KEY). */
 export function decidePairingLink(
   search: string,
   userAgent: string,
   maxTouchPoints = 0,
+  hasStoredDevice = false,
+  confirmedRelay: string | null = null,
 ): PairingLinkDecision {
   const params = new URLSearchParams(search);
   const token = params.get('token');
-  if (!token) return { kind: 'none' };
   const relay = params.get('relay');
-  if (relay && !isOfficialRelay(relay) && params.get('confirmRelay') !== '1') {
+  if (!token && (!relay || hasStoredDevice)) return { kind: 'none' };
+  if (relay && !isOfficialRelay(relay) && confirmedRelay !== relay) {
     let host = relay;
     try { host = new URL(relay).host; } catch { /* show raw */ }
     return { kind: 'confirm-relay', host };
   }
+  if (!token) return { kind: 'none' };
   if (isIOSBrowser(userAgent, maxTouchPoints) && params.get('web') !== '1') return { kind: 'offer-app' };
   return { kind: 'proceed' };
 }
@@ -72,6 +88,9 @@ function strip(): string {
 }
 
 const PAGE_STYLE = 'font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:15vh auto;padding:24px;text-align:center;line-height:1.5;color:inherit';
+// The app's CSS reset (Tailwind preflight) already applies to this pre-React
+// page and would render the heading at body size and weight.
+const HEADING_STYLE = 'font-size:22px;font-weight:600;line-height:1.3;margin:0 0 8px';
 const BUTTON = 'display:block;width:100%;margin:12px 0;padding:14px;border-radius:12px;border:0;font-size:17px;font-weight:600;cursor:pointer';
 
 /** Render a blocking interstitial for the decision, before React mounts.
@@ -81,18 +100,24 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
   const appStore = import.meta.env.VITE_IOS_APP_STORE_URL as string | undefined;
   if (decision.kind === 'confirm-relay') {
     root.innerHTML = `<div style="${PAGE_STYLE}">
-      <h2>${t('app:pairing.confirmTitle')}</h2>
+      <h2 style="${HEADING_STYLE}">${t('app:pairing.confirmTitle')}</h2>
       <p>${t('app:pairing.confirmDetail')}</p>
       <button id="kraki-confirm" style="${BUTTON};background:#2384d4;color:#fff">${t('app:pairing.connect')}</button>
       <button id="kraki-cancel" style="${BUTTON};background:transparent;color:#888">${t('common:action.cancel')}</button>
     </div>`;
     root.querySelector('b')!.textContent = decision.host;
-    root.querySelector('#kraki-confirm')!.addEventListener('click', () => window.location.replace(withParam('confirmRelay', '1')));
+    root.querySelector('#kraki-confirm')!.addEventListener('click', () => {
+      const relay = new URLSearchParams(window.location.search).get('relay');
+      try {
+        if (relay) window.sessionStorage.setItem(CONFIRMED_RELAY_KEY, relay);
+      } catch { /* storage blocked: the page asks again */ }
+      window.location.reload();
+    });
     root.querySelector('#kraki-cancel')!.addEventListener('click', () => window.location.replace(strip()));
     return true;
   }
   root.innerHTML = `<div style="${PAGE_STYLE}">
-    <h2>${t('app:pairing.appTitle')}</h2>
+    <h2 style="${HEADING_STYLE}">${t('app:pairing.appTitle')}</h2>
     <p>${appStore
       ? t('app:pairing.install')
       : t('app:pairing.unavailable')}</p>
@@ -102,26 +127,9 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
   const store = root.querySelector<HTMLAnchorElement>('#kraki-store');
   if (store && appStore) store.href = appStore;
   root.querySelector('#kraki-web')!.addEventListener('click', () => window.location.replace(withParam('web', '1')));
-  // Kraki is not installed (iOS would have opened it). Go straight to the App
-  // Store once per code; coming back shows this page, so the user can still
-  // continue in the browser. The token stays unused either way.
-  if (appStore && shouldAutoOpenStore(window.sessionStorage, window.location.search)) {
-    window.location.assign(appStore);
-  }
-  return true;
-}
-
-/** True the first time this pairing code reaches the "open in app" page in
- *  this tab. Records the visit, so returning from the App Store doesn't loop. */
-export function shouldAutoOpenStore(storage: Pick<Storage, 'getItem' | 'setItem'>, search: string): boolean {
-  const token = new URLSearchParams(search).get('token');
-  if (!token) return false;
-  const key = `kraki.storeOffered.${token.slice(0, 16)}`;
-  try {
-    if (storage.getItem(key)) return false;
-    storage.setItem(key, '1');
-  } catch {
-    return false; // storage blocked: don't risk a redirect loop
-  }
+  // The App Store opens only from the tap on "Get Kraki for iPhone". Opening it
+  // by itself during page load (no user gesture) made the browser replace this
+  // page in history, so Back could not return to "Continue in browser"; and
+  // the once-per-code guard lived in per-tab storage (K-241).
   return true;
 }

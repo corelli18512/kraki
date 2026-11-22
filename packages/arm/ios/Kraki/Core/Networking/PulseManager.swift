@@ -239,6 +239,19 @@ final class PulseManager {
     /// (send.summary `uploadMs`).
     private(set) var lastSentLiveSeq: UInt64 = 0
     var hasQueuedUpload: Bool { !outQueue.isEmpty }
+    /// Last time a queued part went to the socket or the Relay acknowledged
+    /// one. An upload counts as moving only while this is recent.
+    private(set) var lastUploadProgressAt: Date?
+    static let uploadProgressWindowSeconds: TimeInterval = 15
+    /// Parts still wait to go and the upload made progress recently. A queue
+    /// the Relay stopped acknowledging is not "uploading" forever.
+    var isUploadMoving: Bool {
+        Self.isUploadMoving(queued: hasQueuedUpload, lastProgressAt: lastUploadProgressAt, now: Date())
+    }
+    static func isUploadMoving(queued: Bool, lastProgressAt: Date?, now: Date) -> Bool {
+        guard queued, let lastProgressAt else { return false }
+        return now.timeIntervalSince(lastProgressAt) < uploadProgressWindowSeconds
+    }
     /// E2E payloads handed to this Pulse, and the connection generation while
     /// authenticated (send.summary `uploadMs` is measured on that one only).
     private(set) var payloadsHandedOff = 0
@@ -269,6 +282,7 @@ final class PulseManager {
             let seq = sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
             admitted(next.token, seq: seq)
             inflight.append((seq, next.payload.count, Date()))
+            lastUploadProgressAt = Date()
         }
     }
 
@@ -404,6 +418,7 @@ final class PulseManager {
                 pruneReplayables(acked: seqUpTo)
                 host?.onAcked(seqUpTo: seqUpTo)
                 inflight.removeAll { $0.seq <= seqUpTo }
+                lastUploadProgressAt = Date()
                 pumpOutQueue()
             case .resetInbound(let fromSeq, let epoch):
                 // The peer restarted: parts of a payload in progress are gone.

@@ -68,6 +68,10 @@ enum MacImageGalleryLayout {
         return displaySize(source: source, maxWidth: maxWidth, maxHeight: 192).height
     }
 
+    /// Smallest side of a displayed image: a tiny image (1×1) still gets a
+    /// visible, tappable card (the image fills and crops into it).
+    static let minimumSide: CGFloat = 44
+
     static func displaySize(source: CGSize, maxWidth: CGFloat, maxHeight: CGFloat) -> CGSize {
         guard source.width > 0, source.height > 0, maxWidth > 0 else { return .zero }
         var width = min(source.width, maxWidth)
@@ -76,7 +80,8 @@ enum MacImageGalleryLayout {
             height = maxHeight
             width = height * source.width / source.height
         }
-        return CGSize(width: width, height: height)
+        let floor = min(minimumSide, maxWidth, maxHeight)
+        return CGSize(width: max(width, floor), height: max(height, floor))
     }
 }
 

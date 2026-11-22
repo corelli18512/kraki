@@ -30,6 +30,17 @@ export function useDictation(owner: string) {
   };
 }
 
+/** Leaving a composer (it unmounts) must not leave the microphone streaming
+ *  with no indicator: what was heard goes to that composer's draft (K-224). */
+export function useStopDictationOnLeave(owner: string) {
+  useEffect(() => () => {
+    const voice = useVoice.getState();
+    if (voice.owner !== owner || voice.staged) return;
+    if (voice.phase === 'connecting') cancelDictation();
+    else if (voice.phase === 'recording') finishDictation('edit');
+  }, [owner]);
+}
+
 /** Start dictating; once the user accepts the cloud notice it starts by itself. */
 export function useStartDictation(owner: string, context: () => VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void, onStage?: StageVoice) {
   const pendingConsent = useVoice((s) => s.consentPending && s.owner === owner);

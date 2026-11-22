@@ -9,7 +9,9 @@
  *  - macOS:   `caffeinate -i -w <daemon pid>` (dies with the daemon)
  *  - Windows: a hidden PowerShell holding SetThreadExecutionState
  *             (ES_CONTINUOUS | ES_SYSTEM_REQUIRED) until the daemon exits
- *  - Linux:   `systemd-inhibit --what=idle` when available
+ *  - Linux:   `systemd-inhibit --what=idle` around a shell loop that ends
+ *             when the daemon PID is gone (systemd-inhibit itself is not tied
+ *             to its parent, so `sleep infinity` outlived a crashed daemon)
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -43,7 +45,11 @@ export function sleepInhibitCommand(platform: NodeJS.Platform, pid: number): [st
       return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]];
     }
     case 'linux':
-      return ['systemd-inhibit', ['--what=idle', '--who=Kraki', '--why=An agent turn is running', 'sleep', 'infinity']];
+      // Held while the daemon lives, like the Windows loop: a crashed or
+      // SIGKILLed daemon never runs end(), and the old `sleep infinity` kept
+      // the machine from idle-sleeping forever (K-127).
+      return ['systemd-inhibit', ['--what=idle', '--who=Kraki', '--why=An agent turn is running',
+        '/bin/sh', '-c', `while kill -0 ${pid} 2>/dev/null; do sleep 20; done`]];
     default:
       return null;
   }
@@ -58,6 +64,8 @@ export class SleepGuard {
   private disabled = false;
   /** When the current assertion was taken (for the Released line). */
   private heldSince = 0;
+  /** The current inhibitor process actually started. */
+  private spawned = false;
 
   constructor(deps: Partial<SleepGuardDeps> = {}) {
     this.deps = { platform: process.platform, pid: process.pid, spawn, now: Date.now, ...deps };
@@ -123,16 +131,24 @@ export class SleepGuard {
     if (!command) return;
     try {
       const child = this.deps.spawn(command[0], command[1], { stdio: 'ignore', windowsHide: true, detached: false });
+      this.spawned = false;
+      // "Holding" only once the inhibitor really runs: without systemd-inhibit
+      // the spawn fails afterwards, and the log claimed a hold that never
+      // existed (K-268).
+      child.on('spawn', () => {
+        if (this.child !== child) return;
+        this.spawned = true;
+        logger.info({ sessionIds: [...this.active.keys()] }, 'Holding idle-sleep assertion while an agent turn runs');
+      });
       child.on('error', (err) => {
-        logger.debug({ err: err.message }, 'sleep inhibitor unavailable');
-        if (this.child === child) this.child = null;
+        logger.warn({ command: command[0], err: err.message }, 'Kraki cannot keep this computer awake while agents run: the sleep inhibitor is not available');
+        if (this.child === child) { this.child = null; this.spawned = false; }
         this.disabled = true; // e.g. no systemd-inhibit: stop retrying
       });
-      child.on('exit', () => { if (this.child === child) this.child = null; });
+      child.on('exit', () => { if (this.child === child) { this.child = null; this.spawned = false; } });
       child.unref?.();
       this.child = child;
       this.heldSince = this.deps.now();
-      logger.info({ sessionIds: [...this.active.keys()] }, 'Holding idle-sleep assertion while an agent turn runs');
     } catch (err) {
       logger.debug({ err: (err as Error).message }, 'could not start sleep inhibitor');
     }
@@ -140,8 +156,10 @@ export class SleepGuard {
 
   private end(): void {
     const child = this.child;
+    const held = this.spawned;
     this.child = null;
+    this.spawned = false;
     try { child?.kill(); } catch { /* already gone */ }
-    logger.info({ heldMs: this.deps.now() - this.heldSince }, 'Released idle-sleep assertion');
+    if (held) logger.info({ heldMs: this.deps.now() - this.heldSince }, 'Released idle-sleep assertion');
   }
 }

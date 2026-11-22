@@ -19,9 +19,16 @@ struct StepsSheetView: View {
     @Environment(AppState.self) private var appState
     /// Subagent pages pushed on top of the turn's Steps (dispatch toolCallIds).
     @State private var subagentPath: [String] = []
+    /// No trace arrived within `StepsLoadPhase.timeout` of the last request.
+    @State private var loadTimedOut = false
+    /// Bumped by Retry: restarts the timeout.
+    @State private var loadAttempt = 0
 
+    private var loadedSteps: [ChatMessage]? {
+        store.turnSteps(sessionId, bubbleSeq: targetSeq)
+    }
     private var steps: [ChatMessage] {
-        store.turnSteps(sessionId, bubbleSeq: targetSeq) ?? []
+        loadedSteps ?? []
     }
 
     /// TRACE is pull-based rather than broadcast live. Refresh only at semantic
@@ -42,7 +49,8 @@ struct StepsSheetView: View {
         NavigationStack(path: $subagentPath) {
             ScrollViewReader { proxy in
                 Group {
-                    if steps.isEmpty {
+                    switch StepsLoadPhase.of(loadedSteps, live: live, timedOut: loadTimedOut) {
+                    case .loading:
                         VStack(spacing: 10) {
                             ProgressView()
                             Text("Loading steps…")
@@ -50,7 +58,23 @@ struct StepsSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
+                    case .failed:
+                        ContentUnavailableView {
+                            Label("Couldn't load steps", systemImage: "exclamationmark.triangle")
+                        } description: {
+                            Text("Steps come from your computer. Check that it is online, then try again.")
+                        } actions: {
+                            Button("Try again", action: retryLoad)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .empty:
+                        ContentUnavailableView(
+                            "No steps recorded",
+                            systemImage: "checkmark.circle",
+                            description: Text("This turn completed without a recorded tool trace.")
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .loaded:
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 // Trace entries are off-spine (seq=0) so their
@@ -92,6 +116,11 @@ struct StepsSheetView: View {
                     guard live, oldValue != newValue else { return }
                     refreshLiveTrace()
                 }
+                .task(id: loadAttempt) {
+                    loadTimedOut = false
+                    try? await Task.sleep(for: StepsLoadPhase.timeout)
+                    if !Task.isCancelled, loadedSteps == nil { loadTimedOut = true }
+                }
             }
             .navigationTitle("Steps")
             .navigationBarTitleDisplayMode(.inline)
@@ -108,6 +137,14 @@ struct StepsSheetView: View {
                 .background(Color.surfacePrimary)
             }
         }
+    }
+
+    private func retryLoad() {
+        if let provider = appState.messageProvider {
+            provider.invalidateTurnTrace(sessionId: sessionId, bubbleSeq: targetSeq)
+            provider.requestTurnTrace(sessionId: sessionId, bubbleSeq: targetSeq)
+        }
+        loadAttempt += 1
     }
 
     private func refreshLiveTrace() {
@@ -160,9 +197,10 @@ struct StepsSheetView: View {
                     .textSelection(.enabled)
             }
         case "error":
-            Label(message.content ?? message.result ?? String(localized: "Error"), systemImage: "exclamationmark.triangle")
+            Label(ErrorStep.text(message), systemImage: "exclamationmark.triangle")
                 .font(.subheadline)
                 .foregroundStyle(.red)
+                .textSelection(.enabled)
         case "permission":
             VStack(alignment: .leading, spacing: 3) {
                 Label(PermissionStep.title(message), systemImage: "lock")
@@ -183,6 +221,24 @@ struct StepsSheetView: View {
                     .textSelection(.enabled)
             }
         }
+    }
+}
+
+/// What the Steps sheet shows for a trace that has not (or not fully) arrived
+/// (K-015): a request that is never answered (relay down, computer offline,
+/// reply lost) ends in an error with Retry, and a concluded turn whose trace is
+/// empty says so, instead of "Loading steps…" forever.
+enum StepsLoadPhase: Equatable {
+    case loading, failed, empty, loaded
+
+    /// Longer than the request ledger's in-flight window, so Retry sends anew.
+    static let timeout: Duration = .seconds(15)
+
+    static func of(_ steps: [ChatMessage]?, live: Bool, timedOut: Bool) -> StepsLoadPhase {
+        guard let steps else { return timedOut ? .failed : .loading }
+        if !steps.isEmpty { return .loaded }
+        // A running turn may simply have no steps yet.
+        return live ? .loading : .empty
     }
 }
 

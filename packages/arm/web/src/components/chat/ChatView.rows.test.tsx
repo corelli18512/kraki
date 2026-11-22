@@ -13,7 +13,7 @@ import { LIVE_KEY, type ChatRow } from './Bubble';
 
 vi.mock('../../lib/message-db', () => ({ putMessage: async () => {} }));
 vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => false }));
-vi.mock('./Composer', () => ({ composerIntent: () => 'steer', Composer: () => null }));
+vi.mock('./Composer', () => ({ composerIntent: () => 'steer', composerTarget: () => 'conversation', Composer: () => null }));
 vi.mock('./ChatScroller', () => ({
   ChatScroller: ({ rows }: { rows: ChatRow[] }) => <ol>{rows.map((row) => <li key={row.key} data-testid="row" data-key={row.key}>
     {row.kind === 'live' ? `live: ${row.card.text}` : row.kind === 'pending' ? row.entry.text : contentOf(row.item.message)}

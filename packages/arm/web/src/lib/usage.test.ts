@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage, DeviceSummary } from '@kraki/protocol';
-import { accountKeyForSession, canRefreshUsage, isStale, mergedUsage, orderedAccounts, readStatus, ringState, ringWindows, shortReset, type DeviceUsageSnapshot } from './usage';
+import { accountKeyForSession, canRefreshUsage, isDataStale, isStale, mergedUsage, orderedAccounts, readStatus, ringState, ringWindows, shortReset, type DeviceUsageSnapshot } from './usage';
 
 const now = Date.parse('2026-10-05T00:00:00Z');
 const iso = (ms: number) => new Date(now + ms).toISOString();
@@ -21,6 +21,13 @@ describe('account usage (Mac/iOS AccountUsage + DeviceStore)', () => {
     expect(isStale(acct({ fetchedAt: iso(-3600e3) }), now)).toBe(true);
     expect(readStatus(acct({ error: 'auth' }), now)).toBe('Sign-in needed');
     expect(readStatus(acct({ error: 'rate_limited', retryAt: iso(150_000) }), now)).toBe('Rate limited · retry in 3m');
+  });
+
+  it('a failed refresh after a fresh reading does not make the reading stale (K-233)', () => {
+    const windows = [{ id: 'f', kind: 'five_hour' as const, remainingPercent: 50 }];
+    expect(isDataStale(acct({ windows, fetchedAt: iso(-10_000), error: 'rate_limited' }), now)).toBe(false);
+    expect(isDataStale(acct({ windows, fetchedAt: iso(-3600e3), error: 'rate_limited' }), now)).toBe(true);
+    expect(isDataStale(acct({ fetchedAt: '' }), now)).toBe(true);
   });
 
   it('merges one account across devices, keeping the freshest successful reading', () => {

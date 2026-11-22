@@ -23,8 +23,10 @@ they touch.
 
 1. A test relay: `node packages/head/dist/cli.js start --port <port> --auth github --db <tmp>/head.db`
    (`PAIRING_ENABLED=true`; for voice, `VOICE_LEASE_*` and a test voice
-   gateway). Point the apps at it with `KRAKI_RELAY_URL` (CLI / Windows) or a
-   pairing link (phone / browser).
+   gateway). Point the apps at it with a
+   pairing link (phone / browser); for the CLI / Windows, `KRAKI_RELAY_URL` is
+   only setup's default, so set it and run `kraki config reset` (or set up
+   fresh). A daemon always uses the relay saved by setup.
 2. Clean virtual machines for Mac and Windows; a phone or a mobile-sized
    browser for the phone side.
 3. One coding agent configured in each machine (any model works).

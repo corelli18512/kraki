@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { matchesUsageShortcut, setUsageShortcut, shortcutFromEvent, useUsageShortcut } from './usage-shortcut';
+import { matchesUsageShortcut, setUsageShortcut, shortcutFromEvent, shortcutLabel, useUsageShortcut } from './usage-shortcut';
 beforeEach(() => { useUsageShortcut.setState({ shortcut: 'F6', enabled: true, recording: false }); });
 describe('usage shortcut preferences', () => {
   it('accepts F1–F20 and modified keys but rejects bare letters/modifiers', () => {
@@ -16,5 +16,10 @@ describe('usage shortcut preferences', () => {
     expect(matchesUsageShortcut(new KeyboardEvent('keydown', { key: 'a', altKey: true }))).toBe(false);
     setUsageShortcut('F8', false);
     expect(matchesUsageShortcut(new KeyboardEvent('keydown', { key: 'F8' }))).toBe(false);
+  });
+  it('names the Command and Option keys in a Mac browser only (K-226)', () => {
+    expect(shortcutLabel('Super+Alt+J', true)).toBe('Cmd+Option+J');
+    expect(shortcutLabel('Super+Alt+J', false)).toBe('Super+Alt+J');
+    expect(shortcutLabel('F6', true)).toBe('F6');
   });
 });

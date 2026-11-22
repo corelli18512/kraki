@@ -822,4 +822,79 @@ extension SessionStoreTests {
         XCTAssertEqual(store.unreadSessionIDs, expected())
         XCTAssertEqual(store.totalUnread, expected().count)
     }
+
+    // MARK: - Drafts (K-083)
+
+    /// A typed draft is still there after the app is killed and relaunched.
+    func testDraftsSurviveRelaunch() {
+        store.setDraft("sess-1", "half-typed thought")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts["sess-1"], "half-typed thought")
+
+        store.setDraft("sess-1", "")
+        store.flushCache()
+        XCTAssertNil(SessionStore().drafts["sess-1"], "a sent or cleared draft does not come back")
+    }
+
+    func testRemovedSessionAndResetForgetPersistedDrafts() {
+        store.setDraft("gone", "for a deleted session")
+        store.setDraft("kept", "still here")
+        store.removeSession("gone")
+        store.flushCache()
+        XCTAssertEqual(SessionStore().drafts, ["kept": "still here"])
+
+        store.reset()
+        XCTAssertEqual(SessionStore().drafts, [:], "sign-out leaves no draft on disk")
+    }
+
+    /// U9: a removed computer's drafts stay in memory for its return, but
+    /// are neither saved nor counted as unsent drafts the user can't see.
+    func testDraftsOfARemovedComputerAreKeptInMemoryOnly() {
+        store.upsertSession(makeDigest(id: "gone"), deviceId: "dev-1", deviceName: "MB")
+        store.upsertSession(makeDigest(id: "kept"), deviceId: "dev-2", deviceName: "PC")
+        store.setDraft("gone", "for a removed computer")
+        store.setDraft("kept", "still here")
+        store.removeSession("gone", keepingComposer: true)
+        store.flushCache()
+        XCTAssertEqual(store.drafts["gone"], "for a removed computer")
+        XCTAssertEqual(store.listedDrafts, ["kept": "still here"])
+        XCTAssertEqual(SessionStore().drafts, ["kept": "still here"])
+
+        // The computer is back: its draft counts and is saved again.
+        store.upsertSession(makeDigest(id: "gone"), deviceId: "dev-1", deviceName: "MB")
+        XCTAssertEqual(store.listedDrafts.count, 2)
+    }
+
+    /// ios-shell-2 #6: an unconfirmed Archive After value does not outlive
+    /// the account.
+    func testResetForgetsPendingArchiveAfter() {
+        store.pendingAutoArchiveDays["dev-1"] = 30
+        store.reset()
+        XCTAssertEqual(store.pendingAutoArchiveDays, [:])
+        XCTAssertEqual(store.autoArchiveDays, 14)
+    }
+
+    // MARK: - Open session removed (K-039)
+
+    /// K-039 / B4: a removed session (here, from another device, or missing
+    /// from its computer's session list) is announced whether or not it is
+    /// the open chat: its page may sit under a fork or in a hidden tab.
+    func testRemovingASessionAnnouncesItsIdForItsPagesToClose() {
+        store.upsertSession(makeDigest(id: "open"), deviceId: "dev-1", deviceName: "MB")
+        store.upsertSession(makeDigest(id: "other"), deviceId: "dev-1", deviceName: "MB")
+        store.activeSessionId = nil // its tab is not on screen
+        let before = store.sessionRemovalSignal
+
+        store.removeSession("other")
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 1, "session_deleted")
+        XCTAssertEqual(store.lastRemovedSessionIDs, ["other"])
+
+        store.removeSession("never-listed")
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 1, "nothing was removed")
+
+        store.reconcileSessionList([makeDigest(id: "kept")], deviceId: "dev-1", deviceName: "MB")
+        XCTAssertNil(store.sessions["open"])
+        XCTAssertEqual(store.sessionRemovalSignal, before &+ 2, "dropped from its computer's session list")
+        XCTAssertEqual(store.lastRemovedSessionIDs, ["open"])
+    }
 }

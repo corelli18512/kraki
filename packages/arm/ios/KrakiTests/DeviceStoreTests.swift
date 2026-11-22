@@ -84,6 +84,17 @@ final class DeviceStoreTests: XCTestCase {
         XCTAssertEqual(store.agentAvailability(for: "dev-1"), .noAgents)
     }
 
+    // K-097: a computer with no coding agent is online once it has greeted,
+    // not "Connecting…" forever.
+    func testOnlineAndGreetedWithoutAgents() {
+        store.addDevice(makeDevice(id: "dev-1", online: true))
+        XCTAssertFalse(store.isOnlineAndGreeted("dev-1"))
+        store.setGreeting("dev-1", name: "MacBook", agents: nil, version: "0.41.0")
+        XCTAssertTrue(store.isOnlineAndGreeted("dev-1"))
+        store.setOnline("dev-1", false)
+        XCTAssertFalse(store.isOnlineAndGreeted("dev-1"))
+    }
+
     func testAgentAvailabilityReadyWithAgents() {
         store.addDevice(makeDevice(id: "dev-1", online: true))
         store.setGreeting(

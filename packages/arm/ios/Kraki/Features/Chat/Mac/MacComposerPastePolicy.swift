@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Whether ⌘V in the Mac composer attaches an image or pastes into the text.
@@ -72,5 +73,26 @@ enum MacComposerPastePolicy {
             .filter { !preferred.contains($0) }
         return pasteboard.availableType(from: preferred + others)
     }
+}
+
+/// A drop on the composer box outside the editor (attach button, image slot,
+/// padding): the same rule as ⌘V and the editor's own drop, read from the
+/// drag pasteboard. Text and other files are not taken here.
+@MainActor
+struct MacComposerImageDrop: DropDelegate {
+    var pasteboard = NSPasteboard(name: .drag)
+    /// Attaches the image, or explains why not; false refuses the drop.
+    let offer: @MainActor (NSImage) -> Bool
+
+    func accepts() -> Bool { MacComposerPastePolicy.attachesImage(pasteboard) }
+
+    func drop() -> Bool {
+        guard accepts(), let image = MacComposerPastePolicy.image(from: pasteboard) else { return false }
+        return offer(image)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool { accepts() }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: accepts() ? .copy : .forbidden) }
+    func performDrop(info: DropInfo) -> Bool { drop() }
 }
 #endif

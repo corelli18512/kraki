@@ -16,6 +16,7 @@ tentacle. Remove a legacy path only when **both** conditions in its row hold.
 | `idempotent_input` | tentacle | `device_greeting.features` | `send_input` carrying a `clientId` is applied at most once |
 | `fragments` (`PAYLOAD_FRAGMENT_FEATURE`) | tentacle, then app | `device_greeting.features`, `client_features` | large Pulse payloads may be split into fragments (protocol `fragments.ts`) |
 | `account_usage` | tentacle | `device_greeting.features` | broadcasts `account_usage` (subscription usage of the computer's agent accounts) |
+| `account_usage_off` | tentacle | `device_greeting.features` | supports account usage but it is turned off: no usage, and no "update Kraki" hint |
 | `account_usage_refresh` | tentacle | `device_greeting.features` | answers `refresh_account_usage` |
 | `pulseProgressAck` | device | auth `device.pulseProgressAck` | understands Pulse progress acknowledgements |
 

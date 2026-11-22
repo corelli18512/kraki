@@ -29,16 +29,10 @@ struct ChatScrollPolicy: Equatable {
         case anchored
     }
 
-    struct NavigationControlVisibility: Equatable {
-        let showTail: Bool
-        let showLatestMessageStart: Bool
-    }
-
     static let defaultBottomTolerance: CGFloat = 24
     static let defaultMovementEpsilon: CGFloat = 0.5
     static let edgeTriggerDistance: CGFloat = 320
     static let olderPrefetchViewportMultiplier: CGFloat = 2
-    static let tailControlViewportMultiplier: CGFloat = 1.5
     static let navigationControlAnimationDurationSeconds: Double = 0.2
     static let navigationSafetyTimeoutSeconds: Double = 0.6
 
@@ -105,30 +99,6 @@ struct ChatScrollPolicy: Equatable {
         )
     }
 
-    func navigationControlVisibility(
-        distanceToBottom: CGFloat,
-        viewportLength: CGFloat,
-        hasUnloadedNewer: Bool,
-        currentOffset: CGFloat,
-        latestMessageStartOffset: CGFloat?
-    ) -> NavigationControlVisibility {
-        guard !navigationActive else {
-            return NavigationControlVisibility(
-                showTail: false,
-                showLatestMessageStart: false
-            )
-        }
-        let farFromBottom = distanceToBottom
-            > Self.tailControlViewportMultiplier * max(viewportLength, 1)
-        let showStart = latestMessageStartOffset.map {
-            abs(currentOffset - $0) > bottomTolerance
-        } == true
-        return NavigationControlVisibility(
-            showTail: farFromBottom || hasUnloadedNewer,
-            showLatestMessageStart: showStart
-        )
-    }
-
     mutating func resetForEntry(unreadBoundary: Int? = nil) {
         unreadEntry = unreadBoundary.map { .armed(boundary: $0) } ?? .none
         entryBottomLocked = true
@@ -173,8 +143,17 @@ struct ChatScrollPolicy: Equatable {
         }
     }
 
-    mutating func endUserInteraction() {
+    /// Ends the native interaction. `restingDistanceToBottom` is the settled
+    /// distance to the newest tail: a view resting on the tail follows it
+    /// whatever the last movement was. A rubber-band bounce back from
+    /// overscroll past the tail (the keyboard inset shrinking under a drag at
+    /// the tail) reads as older movement but ends on the tail. Older intent
+    /// that stopped short of the tail still wins over the bottom tolerance.
+    mutating func endUserInteraction(restingDistanceToBottom: CGFloat? = nil) {
         interactionActive = false
+        if let restingDistanceToBottom, restingDistanceToBottom <= movementEpsilon {
+            setFollowingTail(true)
+        }
     }
 
     /// Records native content-offset movement. Both adapters use coordinates

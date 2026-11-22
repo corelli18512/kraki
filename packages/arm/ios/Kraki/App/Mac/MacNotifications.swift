@@ -18,6 +18,26 @@ import Foundation
 import UserNotifications
 import AppKit
 
+/// The Dock's unread count. It is set again once notifications are allowed:
+/// macOS shows the badge only with permission, and the count may not change
+/// for a while after that (K-314).
+@MainActor
+enum MacDockBadge {
+    private(set) static var unread = 0
+
+    static func show(unread total: Int) {
+        unread = total
+        NSApp.dockTile.badgeLabel = label(total)
+    }
+
+    static func reapply() {
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.badgeLabel = label(unread)
+    }
+
+    static func label(_ total: Int) -> String { total > 0 ? "\(total)" : "" }
+}
+
 @MainActor
 final class MacNotifications: NSObject {
     static let shared = MacNotifications()
@@ -38,8 +58,9 @@ final class MacNotifications: NSObject {
     func requestAuthorization() async {
         NotificationPermissionPrompt.began()
         defer { NotificationPermissionPrompt.ended() }
-        _ = try? await UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .badge, .sound])
+        let granted = (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        if granted { MacDockBadge.reapply() }
     }
 
     /// After every auth: ask macOS for permission the first time, then

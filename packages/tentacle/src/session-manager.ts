@@ -758,6 +758,10 @@ export class SessionManager {
     return this.inputLedger.getInputLedger(sessionId);
   }
 
+  peekInputLedger(sessionId: string): InputLedgerEntry[] {
+    return this.inputLedger.peekInputLedger(sessionId);
+  }
+
   getInputLedgerEntry(sessionId: string, clientId: string): InputLedgerEntry | null {
     return this.inputLedger.getInputLedgerEntry(sessionId, clientId);
   }

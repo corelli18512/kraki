@@ -523,6 +523,26 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertTrue(host.staged.isEmpty)
     }
 
+    /// K-072: the OS microphone prompt makes the app inactive, which departs
+    /// the recording. That must not cancel the request: a denial still shows
+    /// the Settings hint on the first tap.
+    func testInactiveDuringMicrophonePromptKeepsTheDenialVisible() async {
+        let (host, voice) = make()
+        host.audio.permission = .undetermined; host.audio.deferPermission = true
+        voice.begin(sessionID: "a", selection: nil, context: .init(fields: [:], vocabulary: []))
+        await settle()
+        XCTAssertEqual(host.voiceInputController.state, .requestingPermission)
+        voice.depart(sessionID: "a")
+        host.audio.permission = .denied
+        host.audio.permissionContinuation?.resume(returning: false)
+        host.audio.permissionContinuation = nil
+        try? await waitBriefly { host.voiceInputController.hasFailure(for: "a") }
+        XCTAssertTrue(host.voiceInputController.hasFailure(for: "a"), "the denial is reported")
+        XCTAssertEqual(host.voiceInputController.state, .failed(VoiceInputError.microphoneDenied.localizedDescription))
+        XCTAssertEqual(host.audio.activations, 0)
+        XCTAssertTrue(host.staged.isEmpty)
+    }
+
     func testDepartDoesNotInterruptAStagedSend() async {
         let (host, voice) = make()
         let session = await start(host, voice)

@@ -119,6 +119,37 @@ describe('HeadServer: routing-rejected DATA frames', () => {
     expect(app.received.some((p) => p.includes('"first"'))).toBe(true);
     expect(app.received.some((p) => p.includes('"second"'))).toBe(true);
   });
+
+  it('consumes a multicast frame naming more than 64 targets so later frames still flow (K-136)', async () => {
+    const port = await startHead();
+    const tentacle = await connectPeer(port, 'tentacle', 'tentacle-1');
+    const app = await connectPeer(port, 'app', 'app-1');
+    const endpoint = new Endpoint({ epoch: 'routing-reject-tentacle-65', random: () => 0.5 });
+    const transmit = (effects: Effect[], to: string | string[]) => {
+      for (const e of effects) {
+        if (e.t !== 'transmit') continue;
+        const pulse = Buffer.from(e.bytes).toString('base64');
+        tentacle.ws.send(JSON.stringify(Array.isArray(to)
+          ? { type: 'multicast', to, pulse, blob: '', keys: {} }
+          : { type: 'unicast', to, pulse, blob: '', keys: {} }));
+      }
+    };
+    transmit(endpoint.onConnected(Date.now()), '');
+    const appEndpoint = new Endpoint({ epoch: 'routing-reject-app-65', random: () => 0.5 });
+    for (const e of appEndpoint.onConnected(Date.now())) {
+      if (e.t === 'transmit') app.ws.send(JSON.stringify({ type: 'unicast', to: '', pulse: Buffer.from(e.bytes).toString('base64') }));
+    }
+    await sleep(50);
+
+    const tooMany = [app.deviceId, ...Array.from({ length: 64 }, (_, i) => `other-app-${i}`)];
+    transmit(endpoint.send(new TextEncoder().encode('{"n":"too-many"}')).effects, tooMany);
+    transmit(endpoint.send(new TextEncoder().encode('{"n":"after"}')).effects, [app.deviceId]);
+    await sleep(200);
+
+    expect(tentacle.errors.some((e) => /target count/i.test(e))).toBe(true);
+    expect(app.received.some((p) => p.includes('"too-many"'))).toBe(false);
+    expect(app.received.some((p) => p.includes('"after"'))).toBe(true);
+  });
 });
 
 describe('HeadServer: pulse broadcast sender role', () => {

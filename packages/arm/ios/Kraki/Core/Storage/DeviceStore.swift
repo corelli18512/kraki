@@ -199,6 +199,15 @@ final class DeviceStore {
         return pendingGreetingIds.contains(deviceId) ? .connecting : .noAgents
     }
 
+    /// Online and greeted, with or without a coding agent: the device list and
+    /// page show it as Online. A computer without an agent never sends models,
+    /// so waiting for them showed "Connecting…" forever.
+    func isOnlineAndGreeted(_ deviceId: String) -> Bool {
+        guard devices[deviceId]?.online == true else { return false }
+        let availability = agentAvailability(for: deviceId)
+        return availability == .ready || availability == .noAgents
+    }
+
     func agent(_ agentId: AgentId, on deviceId: String) -> AgentCapabilities? {
         agents(for: deviceId).first { $0.id == agentId }
     }
@@ -574,17 +583,19 @@ final class DeviceStore {
             finishUsageRefresh(id, requestId: requestId, error: payload.refreshError)
         }
         // A transport/disabled error carries a cache, not a new successful reading.
-        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accounts) }
+        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accountsOnLocalClock()) }
     }
 
     /// Online tentacles whose greeting says they predate account usage, so the app
-    /// can name them instead of silently showing nothing for them.
+    /// can name them instead of silently showing nothing for them. One that has
+    /// it turned off says `account_usage_off`: updating would not help (K-084).
     func devicesNeedingUsageUpdate() -> [DeviceSummary] {
         devices.values
             .filter { $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id) }
             .filter { device in
                 guard let features = deviceFeatures[device.id] else { return false }
-                return !features.contains("account_usage") && deviceUsage[device.id] == nil
+                return !features.contains("account_usage") && !features.contains("account_usage_off")
+                    && deviceUsage[device.id] == nil
             }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

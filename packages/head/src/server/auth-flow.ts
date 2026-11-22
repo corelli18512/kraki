@@ -290,9 +290,12 @@ export function mirrorAuthResult(server: HeadServer, result: AuthResult, renameC
         // the device, `defaultName` is the device's own one. Mirror both, so
         // a rename (or clearing it) made on another edge shows here too.
         const renamed = typeof d.defaultName === 'string';
+        // Only the device signing in is seen now; the others keep their own
+        // last_seen (or the account service's, when later).
         server.storage.upsertDevice(
           d.id, result.userId, renamed ? d.defaultName! : d.name, d.role,
           d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
+          { seen: d.id === result.deviceId, lastSeen: d.lastSeen },
         );
         // Renamed here after this auth started: the list predates that
         // rename, which this edge already stored at the account service and

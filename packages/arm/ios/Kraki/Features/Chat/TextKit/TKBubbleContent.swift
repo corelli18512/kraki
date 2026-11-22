@@ -134,7 +134,10 @@ final class TKBubbleContent {
                      steps: Int, isFrozen: Bool = false,
                      frozenTimestamp: String? = nil,
                      attachments: [ContentRef] = []) -> TKBubbleContent {
-        let draft = card.text
+        // The landed reply is trimmed (Tentacle TurnTracker): leading blank
+        // lines would draw the draft taller and jump at handoff (K-047).
+        let trimmed = String(card.text.drop(while: \.isWhitespace))
+        let draft = isFrozen ? trimmed : withoutIncompleteTrailingGrapheme(trimmed)
         var payload: [String: AnyCodable] = [:]
         if !draft.isEmpty { payload["content"] = AnyCodable(draft) }
         if steps > 0 { payload["steps"] = AnyCodable(steps) }
@@ -167,6 +170,27 @@ final class TKBubbleContent {
                                isLive: !isFrozen, isFrozen: isFrozen,
                                frozenTimestamp: frozenTimestamp,
                                liveBody: liveBody)
+    }
+
+    /// A streamed chunk can end inside a grapheme cluster (an emoji ZWJ
+    /// sequence, a flag's regional-indicator pair or tag sequence). Drawn as
+    /// is, the half shows as a wrong glyph (a boxed letter, a family as
+    /// separate people) until the rest arrives; hold that cluster back (K-049).
+    static func withoutIncompleteTrailingGrapheme(_ text: String) -> String {
+        guard let last = text.last else { return text }
+        let scalars = Array(last.unicodeScalars)
+        let joinerPending = scalars.last?.value == 0x200D
+        // A flag is a pair of regional indicators; an odd run is unfinished.
+        let regionalRun = text.unicodeScalars.reversed().prefix { (0x1F1E6...0x1F1FF).contains($0.value) }.count
+        // A tag sequence (subdivision flag) ends with CANCEL TAG.
+        let tagPending = scalars.contains { (0xE0020...0xE007E).contains($0.value) } && scalars.last?.value != 0xE007F
+        guard joinerPending || regionalRun % 2 == 1 || tagPending else { return text }
+        if regionalRun % 2 == 1, !joinerPending, !tagPending {
+            var trimmed = text.unicodeScalars
+            trimmed.removeLast()
+            return String(trimmed)
+        }
+        return String(text.dropLast())
     }
 
     func bubbleWidth(cellWidth: CGFloat) -> CGFloat {
@@ -439,13 +463,13 @@ final class TKBubbleContent {
         switch kind {
         case .user:
             body = rawBody.map { rendered in
-                let solid = TKMarkdown.recolored(rendered, color: .white)
+                let solid = TKMarkdown.underliningLinks(TKMarkdown.recolored(rendered, color: .white))
                 return Self.lighteningUncorrected(solid, message: message) ?? solid
             }
         case .error:
-            body = TKMarkdown.recolored(
+            body = TKMarkdown.underliningLinks(TKMarkdown.recolored(
                 rawBody ?? NSAttributedString(string: message.result ?? String(localized: "Error")),
-                color: .systemRed)
+                color: .systemRed))
         case .system, .agent:
             body = rawBody
         }

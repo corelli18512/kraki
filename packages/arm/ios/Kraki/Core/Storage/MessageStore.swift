@@ -107,10 +107,10 @@ final class MessageStore {
     /// top. iOS previously materialized 200 rows at entry, which made one rich
     /// history window repeatedly rebuild hundreds of offscreen geometries.
     #if os(macOS)
-    private static let initialWindowSize = 15
+    static let initialWindowSize = 15
     private static let defaultMinimumPixelManagedWindowCount = 15
     #else
-    private static let initialWindowSize = 30
+    static let initialWindowSize = 30
     private static let defaultMinimumPixelManagedWindowCount = 1
     #endif
     /// Maximum count of in-memory window before `expandWindow` trims
@@ -175,11 +175,8 @@ final class MessageStore {
             // Advance the persisted head only when the row is really on disk:
             // a failed write (disk full, data protection) must leave the gap
             // visible so the history is fetched again.
-            do {
-                try db.insert(sessionId, [message])
+            if cacheWrites.record({ try db.insert(sessionId, [message]) }) {
                 notePersisted(sessionId, upTo: message.seq)
-            } catch {
-                KLog.d("⚠️ Message cache write failed: \(error)")
             }
         }
 
@@ -308,13 +305,12 @@ final class MessageStore {
         }
         #endif
 
-        do {
-            try db.insert(sessionId, batch)
+        if cacheWrites.record({ try db.insert(sessionId, batch) }) {
             notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
-        } catch {
-            KLog.d("⚠️ Message cache write failed: \(error)")
         }
     }
+
+    @ObservationIgnored private(set) var cacheWrites = MessageCacheWrites()
 
     // MARK: - Local head
 
@@ -335,10 +331,14 @@ final class MessageStore {
     func markCaughtUp(_ sessionId: String, through seq: Int) {
         guard seq > 0 else { return }
         persistedHeads[sessionId] = max(persistedHead(sessionId), seq)
+        retireCardIfCaughtUp(sessionId)
     }
 
+    /// The catch-up is not coming: show the held live card, and drop a
+    /// concluded turn's card that was kept for its concluding bubble.
     func releaseCardHold(_ sessionId: String) {
         cardHoldUntil.removeValue(forKey: sessionId)
+        if cardEndsAtSeq[sessionId] != nil { endCardTurn(sessionId) }
     }
 
     private func notePersisted(_ sessionId: String, upTo seq: Int) {
@@ -346,6 +346,7 @@ final class MessageStore {
         if seq > current || persistedHeads[sessionId] == nil {
             persistedHeads[sessionId] = max(current, seq)
         }
+        retireCardIfCaughtUp(sessionId)
     }
 
     /// Prepend a page selected by persistent-spine row order. Unlike the live
@@ -753,6 +754,11 @@ final class MessageStore {
         db.lastSeq(sessionId)
     }
 
+    /// Highest persisted seq strictly below `seq` (0 if none).
+    func dbLastSeq(_ sessionId: String, below seq: Int) -> Int {
+        db.lastSeq(sessionId, below: seq)
+    }
+
     /// Tail of the persisted message stream — used by callers that
     /// need the genuine "latest N" regardless of window state
     /// (preview rebuild, sidebar last-message-content).
@@ -918,12 +924,21 @@ final class MessageStore {
         var action: ChatMessage?
         /// Which steer the card is drawn above (MessageStore+SteerPlacement).
         var steer = SteerPlacement()
+        /// Words arrived after the current action was set (see `setCardAction`).
+        var narratedSinceAction = false
     }
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its
     /// transient draft cannot reappear below the permanent spine bubble.
-    /// Reopened only by the next persisted user_message.
-    private var closedCardTurns: Set<String> = []
+    /// Reopened only by the next persisted user_message. Written only by the
+    /// card-turn transitions (here and MessageStore+CardTurn).
+    var closedCardTurns: Set<String> = []
+    /// A concluded turn whose concluding bubble is still to arrive by catch-up:
+    /// its last card is kept until the spine reaches this seq (K-013).
+    var cardEndsAtSeq: [String: Int] = [:]
+    @ObservationIgnored private var lastDeltaSeq: [String: Int] = [:]
+    /// Questions no longer answerable here (`question_withdrawn`).
+    var withdrawnQuestions: [String: Set<String>] = [:]
 
     /// Per-turn TRACE steps, lazily pulled via `turn_trace_batch` and keyed by
     /// the concluding bubble's spine seq. In-memory only — the "Steps" popup
@@ -934,47 +949,22 @@ final class MessageStore {
     /// dictionary writes, so every authoritative trace replacement advances it.
     private(set) var traceRevision: UInt64 = 0
 
-    /// Reopen transient draft/action state for an accepted user input. A normal
-    /// prompt starts a fresh turn and clears stale card state; a steer is a
-    /// visible interjection inside the current lifecycle and must preserve the
-    /// active draft/action while only reopening the late-frame gate.
-    func beginCardTurn(_ sessionId: String, delivery: String? = nil) {
-        closedCardTurns.remove(sessionId)
-        if delivery != "steer" { cards.removeValue(forKey: sessionId) }
-    }
-
-    /// Permanently retire transient state for the concluded turn. Late WS
-    /// coalescing or request_card snapshots are ignored until beginCardTurn.
-    func endCardTurn(_ sessionId: String) {
-        if !closedCardTurns.contains(sessionId) { closedCardTurns.insert(sessionId) }
-        if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
-    }
-
-    /// Restore the gate from persisted conversation truth when opening a DB
-    /// window. `session.state == active` is not sufficient because a reconnect
-    /// snapshot may race after the preceding turn already concluded. A question
-    /// `agent_message` is not a boundary: it does not conclude the turn.
-    func restoreCardTurnGate(_ sessionId: String, from messages: [ChatMessage]) {
-        guard let boundary = messages.last(where: {
-            ["user_message", "agent_message", "turn_status", "interrupted_turn",
-             "system_message", "idle", "session_ended"].contains($0.type) && $0.questionSpec == nil
-        }) else { return }
-        if boundary.type == "user_message" {
-            closedCardTurns.remove(sessionId)
-        } else {
-            endCardTurn(sessionId)
-        }
-    }
-
     /// `agent_message_delta`: append the chunk, or replace the draft when
     /// `reset` (new segment / resummarize / reconnect snapshot). Keep-last.
-    func applyCardMessage(_ sessionId: String, _ content: String, reset: Bool) {
+    /// `envelopeSeq`: the delta's envelope seq (unique per send). An appending
+    /// delta received twice (a re-sent envelope) is applied once (K-148).
+    func applyCardMessage(_ sessionId: String, _ content: String, reset: Bool, envelopeSeq: Int? = nil) {
         guard !closedCardTurns.contains(sessionId) else { return }
+        if let envelopeSeq, envelopeSeq > 0 {
+            guard reset || lastDeltaSeq[sessionId] != envelopeSeq else { return }
+            lastDeltaSeq[sessionId] = envelopeSeq
+        }
         // Non-empty model output proves the runtime advanced beyond compaction.
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()
         card.followSteerOnNewSegment(reset: reset, content: content)
         card.text = reset ? content : card.text + content
+        if !content.isEmpty { card.narratedSinceAction = true }
         if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
             // Narration resumed: the retained resolved prompt is now superseded,
             // exactly as Tentacle intended when it cleared the slot.
@@ -987,15 +977,15 @@ final class MessageStore {
     func setCardAction(_ sessionId: String, _ action: ChatMessage?) {
         guard !closedCardTurns.contains(sessionId) else { return }
         var card = cards[sessionId] ?? SessionCard()
-        if action == nil, let current = card.action, Self.isResolvedPrompt(current) {
-            // Tentacle retires a resolved permission the instant narration
-            // resumes and sends the empty slot just BEFORE the first delta
-            // (usually a reset that replaces the earlier narration). Applying
-            // it on its own either deletes the whole live bubble (no draft) or
-            // strips the prompt and briefly exposes only the previous
-            // segment's narration. Keep the resolved prompt until the
-            // replacing narration arrives; a tool action or the turn end also
-            // supersedes it.
+        if action == nil, let current = card.action, Self.isSettledTail(current), !card.narratedSinceAction {
+            // Tentacle retires a resolved permission or a completed tool the
+            // instant narration resumes. Older Tentacles send the empty slot
+            // just BEFORE the first delta (usually a reset that replaces the
+            // earlier narration). Applying it on its own either deletes the
+            // whole live bubble (no draft) or strips the chip and briefly
+            // exposes only the previous segment's narration (K-064). Keep it
+            // until the replacing narration arrives; a tool action or the turn
+            // end also supersedes it. (Current Tentacles send the words first.)
             var retained = current
             retained.payload["retained"] = AnyCodable(true)
             // Tentacle only retires a prompt it has resolved, so the clear is
@@ -1013,7 +1003,8 @@ final class MessageStore {
             // bubble back to unanswered while confirmation is in flight.
             return
         }
-        card.action = action
+        card.action = Self.notingAnsweredElsewhere(action, replacing: card.action)
+        if action != nil { card.narratedSinceAction = false }
         cards[sessionId] = card
     }
 
@@ -1073,6 +1064,7 @@ final class MessageStore {
         state: SessionState
     ) {
         cards.removeValue(forKey: sessionId)
+        cardEndsAtSeq.removeValue(forKey: sessionId)
         guard state == .active || state == .compacting else {
             closedCardTurns.insert(sessionId)
             return
@@ -1102,6 +1094,7 @@ final class MessageStore {
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
     func clearCard(_ sessionId: String) {
         if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
+        cardEndsAtSeq.removeValue(forKey: sessionId)
     }
 
     /// `turn_trace_batch`: replace a turn's pulled steps.
@@ -1112,8 +1105,9 @@ final class MessageStore {
         var sessionTraces = traces[sessionId] ?? [:]
         sessionTraces[bubbleSeq] = entries
         if sessionTraces.count > Self.maxTracesPerSession {
-            // Drop the oldest turns (lowest bubble seq) first.
-            for seq in sessionTraces.keys.sorted().prefix(sessionTraces.count - Self.maxTracesPerSession) {
+            // Drop the oldest turns (lowest bubble seq) first, never the one
+            // just pulled: an old turn's Steps were re-pulled to be shown.
+            for seq in sessionTraces.keys.filter({ $0 != bubbleSeq }).sorted().prefix(sessionTraces.count - Self.maxTracesPerSession) {
                 sessionTraces.removeValue(forKey: seq)
             }
         }
@@ -1134,6 +1128,9 @@ final class MessageStore {
         runtimeStatusBySession.removeAll()
         cards.removeAll()
         closedCardTurns.removeAll()
+        cardEndsAtSeq.removeAll()
+        lastDeltaSeq.removeAll()
+        withdrawnQuestions.removeAll()
         traces.removeAll()
         messages.removeAll()
         windows.removeAll()
@@ -1181,5 +1178,31 @@ extension MessageStore {
     func lowerCaughtUp(_ sessionId: String, to seq: Int) {
         guard let head = persistedHeads[sessionId], head > seq else { return }
         persistedHeads.removeValue(forKey: sessionId)
+    }
+}
+
+/// Writes to the message cache, and whether they currently fail (disk full,
+/// data protection). Nothing is lost on failure: unwritten rows leave a gap
+/// that is fetched again once writes work. The start and the end of a run of
+/// failures are logged, in release builds too; single failed writes are not.
+struct MessageCacheWrites {
+    private(set) var failing = false
+
+    /// Runs `write` and returns whether it succeeded.
+    mutating func record(_ write: () throws -> Void) -> Bool {
+        do {
+            try write()
+            if failing {
+                failing = false
+                KLog.diag("[MessageStore] message cache writes work again")
+            }
+            return true
+        } catch {
+            if !failing {
+                failing = true
+                KLog.diag("[MessageStore] message cache writes failing; history is fetched again later: \(error)")
+            }
+            return false
+        }
     }
 }

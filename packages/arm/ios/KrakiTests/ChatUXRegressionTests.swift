@@ -223,7 +223,7 @@ final class ChatUXRegressionTests: XCTestCase {
             let width = content.bodyTextWidth(cellWidth: fx.cv.bounds.width)
             var truth: CGFloat = 0
             if let body = content.body {
-                for chunk in TKBodyChunks.chunks(body) {
+                for chunk in TKBodyChunks.chunks(body, splitCodeBlocks: true) {
                     truth += chunk.gapBefore + TKMeasure.height(body.attributedSubstring(from: chunk.range), width: width)
                 }
             }

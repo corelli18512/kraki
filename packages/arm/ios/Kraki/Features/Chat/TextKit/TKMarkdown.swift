@@ -98,14 +98,67 @@ enum TKMarkdown {
                              lineCache: TKInlineLineCache?) -> NSAttributedString {
         switch seg {
         case .inline(let content):
-            return inlineSegment(content, lineCache: lineCache)
+            return breakingLongTokens(inlineSegment(content, lineCache: lineCache))
         case .blockquote(let content):
-            return blockquoteSegment(content)
+            return breakingLongTokens(blockquoteSegment(content))
         case .codeBlock(let language, let code):
-            return codeSegment(language: language, code: code, allowHighlighting: allowHighlighting)
+            return breakingLongTokens(codeSegment(language: language, code: code, allowHighlighting: allowHighlighting))
         case .table(let rows, let alignments):
             return tableSegment(rows: rows, alignments: alignments)
         }
+    }
+
+    /// A run this long of printable ASCII without a natural break (`/`, `-`)
+    /// is a token (base64, hash, path part), not a word.
+    static let longTokenLength = 24
+    /// Characters between the break opportunities given to a long token.
+    static let longTokenBreakStride = 4
+
+    /// TextKit 2 breaks a token wider than the line with an inserted hyphen
+    /// that is not in the text (and paragraph hyphenation settings do not
+    /// turn it off). Give long tokens zero-width break opportunities instead,
+    /// so they wrap as written. Copy strips them (`plainText`,
+    /// `TKBodyTextView.copy`).
+    ///
+    /// Only printable ASCII forms a token: any other character (CJK, Thai,
+    /// emoji, combining marks) ends the run, so scripts written without
+    /// spaces keep their own line-breaking rules.
+    static func breakingLongTokens(_ piece: NSAttributedString) -> NSAttributedString {
+        let ns = piece.string as NSString
+        let length = ns.length
+        guard length >= longTokenLength else { return piece }
+        var insertions: [Int] = []
+        var runStart = 0
+        var runLength = 0
+        func closeRun() {
+            if runLength >= longTokenLength {
+                for offset in stride(from: longTokenBreakStride, to: runLength, by: longTokenBreakStride) {
+                    insertions.append(runStart + offset)
+                }
+            }
+            runLength = 0
+        }
+        let slash = UInt16(UInt8(ascii: "/")), hyphen = UInt16(UInt8(ascii: "-"))
+        var units = [unichar](repeating: 0, count: length)
+        ns.getCharacters(&units, range: NSRange(location: 0, length: length))
+        for index in 0..<length {
+            let unit = units[index]
+            // `!`...`~`: printable ASCII other than space.
+            if unit > 0x20, unit < 0x7F, unit != slash, unit != hyphen {
+                if runLength == 0 { runStart = index }
+                runLength += 1
+            } else {
+                closeRun()
+            }
+        }
+        closeRun()
+        guard !insertions.isEmpty else { return piece }
+        let result = NSMutableAttributedString(attributedString: piece)
+        for location in insertions.reversed() {
+            let attributes = result.attributes(at: location - 1, effectiveRange: nil)
+            result.insert(NSAttributedString(string: "\u{200B}", attributes: attributes), at: location)
+        }
+        return result
     }
 
     /// Inline markdown segment: headings and lists are normalized before the
@@ -314,6 +367,7 @@ enum TKMarkdown {
         }
         return output
             .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .replacingOccurrences(of: "\u{200B}", with: "")
             .replacingOccurrences(of: "\n\n\n", with: "\n\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -326,6 +380,18 @@ enum TKMarkdown {
         copy.enumerateAttribute(.tkBlockKind, in: full) { value, range, _ in
             if value as? String != TKBlockKind.code.rawValue {
                 copy.addAttribute(.foregroundColor, value: color, range: range)
+            }
+        }
+        return copy
+    }
+
+    /// Links drawn in the surrounding text color (the user's white bubble
+    /// text) are told apart by an underline.
+    static func underliningLinks(_ attr: NSAttributedString) -> NSAttributedString {
+        let copy = NSMutableAttributedString(attributedString: attr)
+        copy.enumerateAttribute(.link, in: NSRange(location: 0, length: copy.length)) { value, range, _ in
+            if value != nil {
+                copy.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
             }
         }
         return copy

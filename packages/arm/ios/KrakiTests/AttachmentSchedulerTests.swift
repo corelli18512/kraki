@@ -236,8 +236,18 @@ final class AttachmentSchedulerTests: XCTestCase {
         store.requestIfNeeded(id: gone, sessionId: "s", priority: .userOpened)
         store.ingestChunk(id: gone, index: 0, total: 0, mimeType: "", data: "", error: "not_found", paced: true)
         await settle()
-        XCTAssertEqual(store.state(for: gone), .error(reason: "not_found"))
+        // K-155: the wire code is not user copy; the bubble shows its
+        // localized "Couldn't load image" for an empty reason.
+        XCTAssertEqual(store.state(for: gone), .error(reason: ""))
         XCTAssertNil(store.inFlightForTesting)
+    }
+
+    /// K-155: tool output, subagent reports and HTML reports share the store;
+    /// an empty reason must not render as "Couldn't load: ".
+    func testEmptyFailureReasonGetsGenericAttachmentCopy() {
+        XCTAssertEqual(AttachmentState.loadFailureText(""), String(localized: "Couldn't load this attachment"))
+        XCTAssertFalse(AttachmentState.loadFailureText("").hasSuffix(": "))
+        XCTAssertEqual(AttachmentState.loadFailureText("disk full"), String(localized: "Couldn't load: \("disk full")"))
     }
 
     func testCachedBytesLoadFromDiskWithoutTheNetwork() async {

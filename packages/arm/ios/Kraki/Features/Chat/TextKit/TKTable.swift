@@ -227,13 +227,7 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenu
     }
 
     private func sort(by column: Int) {
-        let next: ChatTable
-        if tableLayout.sortColumn == column {
-            next = tableLayout.sortAscending ? tableLayout.sorted(by: column, ascending: false)
-                : tableLayout.sorted(by: nil, ascending: true)
-        } else {
-            next = tableLayout.sorted(by: column, ascending: !tableLayout.numeric[column])
-        }
+        let next = tableLayout.nextSort(tappingColumn: column)
         replaceTable(next)
         onSort?(next)
     }

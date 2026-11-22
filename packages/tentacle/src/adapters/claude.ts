@@ -25,6 +25,7 @@ import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMo
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
+import { fitToMaxDimension } from '../image-resize.js';
 import { handleSDKMessage } from './claude-messages.js';
 import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions, releasePendingForMode } from './claude-permissions.js';
 import { resetSubagentPhase } from './claude-subagents.js';
@@ -43,6 +44,24 @@ export { linkIntoShadow };
 
 /** Upper bound for the startup model/account probe. */
 const CLAUDE_PROBE_TIMEOUT_MS = 20_000;
+
+/** Anthropic's per-image limit, which applies to the base64 data. */
+const CLAUDE_MAX_IMAGE_BASE64 = 5 * 1024 * 1024;
+
+interface PreparedImages { blocks: Array<Record<string, unknown>>; omitted: number }
+const NO_IMAGES: PreparedImages = { blocks: [], omitted: 0 };
+
+/** Text plus prepared images as the SDK user message content; notes any
+ *  image that was left out. */
+function buildUserContent(text: string, images: PreparedImages): string | Array<Record<string, unknown>> {
+  const { blocks, omitted } = images;
+  if (omitted > 0) {
+    const note = `[${omitted === 1 ? 'An attached image was' : `${omitted} attached images were`} too large to send (limit 5 MB each) and ${omitted === 1 ? 'was' : 'were'} left out.]`;
+    text = text ? `${text}\n\n${note}` : note;
+  }
+  if (blocks.length === 0) return text;
+  return [...(text ? [{ type: 'text', text }] : []), ...blocks];
+}
 
 export class ClaudeAdapter extends AgentAdapter {
   sessions = new Map<string, SessionEntry>();
@@ -216,12 +235,54 @@ export class ClaudeAdapter extends AgentAdapter {
       );
     }
 
+    const loggedOut = await this.probeModels(sdk);
+    if (loggedOut) {
+      throw new Error(
+        'Claude Code is not logged in. Run `claude` and use /login (Claude subscription), ' +
+        'or configure ANTHROPIC_API_KEY / a cloud provider, then restart Kraki.',
+      );
+    }
+    if (this.cachedModels.length === 0) this.scheduleModelRetry(sdk);
+
+    logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
+  }
+
+  /** First delay before re-probing after a failed or empty model list. */
+  static MODEL_RETRY_FIRST_MS = 60_000;
+  private modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private modelRetryDelayMs = ClaudeAdapter.MODEL_RETRY_FIRST_MS;
+  private stopped = false;
+
+  /** A failed, wedged or empty startup probe left Claude with no models until
+   *  a daemon restart. Re-probe with backoff (up to 15 min); a recovery
+   *  re-greets the apps. */
+  private scheduleModelRetry(sdk: typeof import('@anthropic-ai/claude-agent-sdk')): void {
+    if (this.stopped || this.modelRetryTimer) return;
+    const delay = this.modelRetryDelayMs;
+    this.modelRetryDelayMs = Math.min(delay * 2, 15 * 60_000);
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = undefined;
+      if (this.stopped) return;
+      void this.probeModels(sdk).then(() => {
+        if (this.stopped) return;
+        if (this.cachedModels.length === 0) { this.scheduleModelRetry(sdk); return; }
+        logger.info({ count: this.cachedModels.length }, 'Claude model list recovered');
+        this.onCapabilitiesChanged?.();
+      });
+    }, delay);
+    this.modelRetryTimer.unref?.();
+  }
+
+  /** One throwaway control-only query: fills the model list and reports
+   *  whether Claude has no credential at all (true = logged out). */
+  private async probeModels(sdk: typeof import('@anthropic-ai/claude-agent-sdk')): Promise<boolean> {
     // Authentication is the SDK's business: an API key, ANTHROPIC_AUTH_TOKEN,
     // a cloud provider, or a Claude subscription login are all valid. One
     // throwaway control-only query (no model call) lists models and reports
     // whether ANY credential is configured; Kraki does not guess from env vars.
     const env = this.claudeEnv(secureStorageEnv());
     let loggedOut = false;
+    this.lastModelListError = undefined;
     const ac = new AbortController();
     // A wedged Claude CLI must not hold the daemon (and every other agent)
     // back from starting: bound the probe and always tear it down.
@@ -279,6 +340,8 @@ export class ClaudeAdapter extends AgentAdapter {
         this.cachedModels = resolved;
         logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
       }
+      // An empty list is retried (cachedModels stays empty) but is not a start
+      // failure: `kraki agents` reports it as needs_login.
     } catch (err) {
       this.lastModelListError = (err as Error).message;
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
@@ -287,17 +350,13 @@ export class ClaudeAdapter extends AgentAdapter {
       ac.abort();
     }
 
-    if (loggedOut) {
-      throw new Error(
-        'Claude Code is not logged in. Run `claude` and use /login (Claude subscription), ' +
-        'or configure ANTHROPIC_API_KEY / a cloud provider, then restart Kraki.',
-      );
-    }
-
-    logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
+    return loggedOut;
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
+    this.modelRetryTimer = undefined;
     for (const [sessionId, entry] of this.sessions) {
       try {
         broadcastPendingResolutions(this, sessionId);
@@ -463,6 +522,14 @@ export class ClaudeAdapter extends AgentAdapter {
     attachments?: Attachment[],
     options?: SendMessageOptions,
   ): Promise<void> {
+    if (!this.sessions.has(sessionId)) {
+      logger.warn({ sessionId }, 'sendMessage: session not found');
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    // Images first (scaling one down is slow): no turn state may change
+    // between beginTurn below and handing the message to the SDK, or a steer
+    // arriving meanwhile would land in the wrong turn.
+    const images = attachments?.length ? await this.prepareImages(sessionId, attachments) : NO_IMAGES;
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'sendMessage: session not found');
@@ -499,7 +566,7 @@ export class ClaudeAdapter extends AgentAdapter {
     // Lazily start the query on first message — the SDK binary needs a
     // prompt to work with, so we pass the first user message directly
     // instead of using the streaming input channel.
-    const content = this.buildUserContent(sessionId, text, attachments);
+    const content = buildUserContent(text, images);
     if (!entry.query) {
       await this.spawnQuery(sessionId, content);
       return;
@@ -512,11 +579,14 @@ export class ClaudeAdapter extends AgentAdapter {
     } as unknown as SDKUserMessage);
   }
 
-  /** Text plus user-attached images as Anthropic content blocks. Images may
-   *  arrive inline (base64) or as a content_ref into the AttachmentStore. */
-  private buildUserContent(sessionId: string, text: string, attachments?: Attachment[]): string | Array<Record<string, unknown>> {
-    const images: Array<Record<string, unknown>> = [];
-    for (const att of attachments ?? []) {
+  /** User-attached images as Anthropic content blocks. Images may arrive
+   *  inline (base64) or as a content_ref into the AttachmentStore. An image
+   *  over the API's per-image limit is scaled down; one still too large is
+   *  left out (counted in `omitted`), instead of failing the whole prompt. */
+  private async prepareImages(sessionId: string, attachments: Attachment[]): Promise<PreparedImages> {
+    const blocks: Array<Record<string, unknown>> = [];
+    let omitted = 0;
+    for (const att of attachments) {
       let data: string | undefined;
       let mimeType = att.mimeType;
       if (att.type === 'image') {
@@ -526,10 +596,20 @@ export class ClaudeAdapter extends AgentAdapter {
         if (hit) { data = hit.bytes.toString('base64'); mimeType = hit.meta.mimeType ?? mimeType; }
       }
       if (!data || !/^image\/(png|jpeg|gif|webp)$/.test(mimeType)) continue;
-      images.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data } });
+      if (data.length > CLAUDE_MAX_IMAGE_BASE64) {
+        const original = Buffer.from(data, 'base64');
+        const fitted = await fitToMaxDimension(original, mimeType).catch(() => ({ bytes: original, mimeType }));
+        data = fitted.bytes.toString('base64');
+        mimeType = fitted.mimeType;
+        if (data.length > CLAUDE_MAX_IMAGE_BASE64) {
+          logger.warn({ sessionId, bytes: original.length }, 'Image attachment too large for Claude; left out');
+          omitted += 1;
+          continue;
+        }
+      }
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data } });
     }
-    if (images.length === 0) return text;
-    return [...(text ? [{ type: 'text', text }] : []), ...images];
+    return { blocks, omitted };
   }
 
   /**
@@ -1013,6 +1093,7 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+  static SUBAGENT_HOLD_IDLE_MS = 30 * 60_000;
 
   // ── Permission handler ────────────────────────────
 
@@ -1021,6 +1102,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private cleanupSessionState(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    if (entry?.subagentHoldTimer) clearTimeout(entry.subagentHoldTimer);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
