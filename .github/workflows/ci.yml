@@ -115,7 +115,8 @@ jobs:
     name: Test iOS (Kraki)
     needs: scope
     if: needs.scope.outputs.native == 'true'
-    runs-on: macos-26
+    # Same Xcode as the TestFlight upload (ios-testflight.yml).
+    runs-on: xcode-27
     timeout-minutes: 45
 
     steps:
@@ -123,7 +124,9 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
 
       - name: Cache Swift packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -138,17 +141,27 @@ jobs:
         id: simulator
         run: |
           set -euo pipefail
-          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c '
-          import json, sys
+          SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          DEVICE_ID="$(xcrun simctl list devices available -j | SDK_VERSION="$SDK_VERSION" python3 -c '
+          import json, os, re, sys
           data = json.load(sys.stdin)
-          preferred = ("iPhone 17 Pro", "iPhone 16 Pro", "iPhone 16")
-          devices = [d for runtime in data["devices"].values() for d in runtime if d.get("isAvailable")]
-          for name in preferred:
-              for device in devices:
-                  if device.get("name") == name:
-                      print(device["udid"])
-                      raise SystemExit(0)
-          raise SystemExit("No supported iPhone Simulator is available")
+          sdk = tuple([int(part) for part in os.environ["SDK_VERSION"].split(".")] + [0])[:2]
+          # Same 402x874 pt screen as the iPhone 17 Pro used for local runs.
+          preferred = ("iPhone 17 Pro", "iPhone 18 Pro", "iPhone 17")
+          runtimes = []
+          for runtime, devices in data["devices"].items():
+              match = re.search(r"\.iOS-(\d+)-(\d+)$", runtime)
+              # Newest runtime the selected Xcode can host; a newer one cannot run its tests.
+              if match and (int(match[1]), int(match[2])) <= sdk:
+                  runtimes.append(((int(match[1]), int(match[2])), devices))
+          for version, devices in sorted(runtimes, key=lambda item: item[0], reverse=True):
+              for name in preferred:
+                  for device in devices:
+                      if device.get("isAvailable") and device.get("name") == name:
+                          print(device["udid"])
+                          print("%s, iOS %d.%d" % (name, version[0], version[1]), file=sys.stderr)
+                          raise SystemExit(0)
+          raise SystemExit("No supported iPhone Simulator for the iOS %s SDK" % os.environ["SDK_VERSION"])
           ')"
           echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Using Simulator $DEVICE_ID"
@@ -184,7 +197,7 @@ jobs:
     name: Network resilience (fast)
     needs: scope
     if: needs.scope.outputs.resilience == 'true'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
 
     steps:
@@ -192,7 +205,9 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
 
       - name: Enable corepack
         run: corepack enable
@@ -243,7 +258,8 @@ jobs:
     name: Build macOS GUI (KrakiMac)
     needs: scope
     if: needs.scope.outputs.native == 'true'
-    runs-on: macos-26
+    # Same Xcode as the Mac release archive (release.yml build-mac-gui).
+    runs-on: xcode-27
     timeout-minutes: 45
 
     steps:
@@ -251,7 +267,9 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
 
       - name: Lint Swift (SwiftLint, ratchet baseline)
         # New violations, or existing ones growing, fail; see .swiftlint.yml.
