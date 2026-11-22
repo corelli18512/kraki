@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in Kraki doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **don't paste secrets** (tokens, keys, private code) — issues are public.
+        Security problems: [report them privately](https://github.com/corelli18512/kraki/security/advisories/new) instead.
+  - type: dropdown
+    id: app
+    attributes:
+      label: Where did it happen?
+      multiple: true
+      options: [Kraki for Mac, iPhone app, Kraki for Windows, Web app, Command-line (kraki CLI), Self-hosted relay]
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: Which coding agent was involved, if any (Claude Code, Codex, GitHub Copilot, Pi)?
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In the app, open Settings → About → Copy Diagnostics and paste it here (versions, device and connection details; no message content). For the CLI, paste the output of `kraki --version`.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or anything else
