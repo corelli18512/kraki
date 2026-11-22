@@ -98,6 +98,23 @@ final class HelpersTests: XCTestCase {
         XCTAssertEqual(formatCost(0.001, locale: Locale(identifier: "de_DE")).filter { $0.isNumber || $0 == "," }, "0,0010")
     }
 
+    /// K-305 owner choice: the symbol is the plain "$" in every region, not
+    /// "US$" (en_GB, zh_Hans) or "USD"; grouping, separators and the symbol's
+    /// side still follow the region.
+    func testFormatCostUsesPlainDollarSignInEveryRegion() {
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_US")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_GB")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "zh_Hans_CN")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "de_DE")), "1.234,568\u{00A0}$")
+        for id in ["en_US", "en_GB", "zh_Hans_CN", "de_DE", "fr_FR", "en_AU", "en_CA"] {
+            for cost in [0.001, 0.042, 1234.568] {
+                let text = formatCost(cost, locale: Locale(identifier: id))
+                XCTAssertFalse(text.contains("US"), "\(id): \(text)")
+                XCTAssertTrue(text.contains("$"), "\(id): \(text)")
+            }
+        }
+    }
+
     /// K-146: the seconds value used the POSIX decimal point in every region.
     func testFormatDurationFollowsRegion() {
         XCTAssertEqual(formatDuration(4_600, locale: Locale(identifier: "en_US")), "4.6s")

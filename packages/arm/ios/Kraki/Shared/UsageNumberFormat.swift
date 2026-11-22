@@ -3,12 +3,14 @@ import Foundation
 /// Session-usage numbers (iOS Session info sheet and Mac chat inspector).
 /// Cost keeps its fixed precision ($0.042, 4 places under a cent) and token
 /// counts keep compact K/M notation, but grouping, the decimal separator and
-/// the currency symbol's placement follow the user's region.
+/// the currency symbol's placement follow the user's region. The symbol itself
+/// is always the narrow "$" (never "US$" / "$US" / "USD") — K-305 owner choice.
 enum UsageNumberFormat {
     static func cost(_ cost: Double, locale: Locale = .autoupdatingCurrent) -> String {
         let fractionDigits = cost < 0.01 ? 4 : 3
         return cost.formatted(
             .currency(code: "USD")
+                .presentation(.narrow)
                 .precision(.fractionLength(fractionDigits))
                 .locale(locale)
         )

@@ -93,6 +93,33 @@ it('keeps USD notation and precision in Chinese for ordinary costs', async () =>
   } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
 });
 
+// K-305 owner choice: the cost symbol is the plain "$", never "US$", in both
+// app languages and whatever the browser's region is.
+it('shows the total cost with a plain $ symbol, never US$, in every language and region (K-305)', async () => {
+  const { i18next } = await import('../../i18n');
+  const { act, cleanup } = await import('@testing-library/react');
+  const languages = vi.spyOn(navigator, 'languages', 'get');
+  const language = vi.spyOn(navigator, 'language', 'get');
+  try {
+    for (const region of ['en-US', 'en-GB', 'zh-Hans-CN', 'de-DE']) {
+      languages.mockReturnValue([region]);
+      language.mockReturnValue(region);
+      for (const lang of ['en', 'zh-Hans']) {
+        await act(async () => { await i18next.changeLanguage(lang); });
+        render(<SessionInfoPanel session={session} usage={{ ...usage, totalCost: 1234.568 }} onClose={close} />);
+        const cost = screen.getByText((text) => text.includes('1234.568') || text.includes('1,234.568'));
+        expect(cost.textContent).toMatch(/^\$/);
+        expect(cost.textContent).not.toContain('US');
+        cleanup();
+      }
+    }
+  } finally {
+    languages.mockRestore();
+    language.mockRestore();
+    await act(async () => { await i18next.changeLanguage('en'); });
+  }
+});
+
 it('shows an effort level it has no copy for as the agent reported it, not as a translation key', () => {
   const unknown: ModelDetail[] = [{ ...details[0], supportedReasoningEfforts: ['minimal' as never, 'low'] }];
   render(<SessionInfoPanel session={session} usage={usage} models={['m1']} modelDetails={unknown} onClose={close} />);
