@@ -68,8 +68,16 @@ jobs:
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  actionlint.tgz" | sha256sum -c -
           tar xzf actionlint.tgz actionlint
           ./actionlint -shellcheck= -color
-      - name: Test change routing and release provenance
-        run: node --test scripts/ci/*.test.mjs scripts/release/*.test.mjs scripts/l10n/*.test.mjs
+      - name: Shellcheck the relay deploy script
+        # It only runs on production relays, so CI is the one place it can be
+        # checked before it does. Pinned binary + checksum.
+        run: |
+          curl -sSfL -o shellcheck.txz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck.txz" | sha256sum -c -
+          tar xJf shellcheck.txz --strip-components=1 shellcheck-v0.11.0/shellcheck
+          ./shellcheck scripts/deploy-edge-relay.sh
+      - name: Test change routing, release tooling and the relay deploy script (fake root)
+        run: node --test scripts/ci/*.test.mjs scripts/release/*.test.mjs scripts/l10n/*.test.mjs scripts/deploy-edge-relay.test.mjs
       - name: Localization check (keys, placeholders, untranslated/hard-coded ratchet)
         # Dependency-free and fast; runs for every change (incl. catalog-only).
         run: node scripts/l10n/check.mjs
