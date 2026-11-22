@@ -46,6 +46,17 @@ describe('pairing-link localized interstitial', () => {
     expect(root.querySelector('#kraki-web')).toHaveTextContent('在浏览器中继续');
   });
 
+  it('styles the heading itself: the CSS reset would render it at body size and weight', () => {
+    vi.stubEnv('VITE_IOS_APP_STORE_URL', 'https://apps.apple.com/example');
+    for (const decision of [{ kind: 'confirm-relay', host: 'my.server' }, { kind: 'offer-app' }] as const) {
+      const root = document.createElement('div');
+      renderPairingInterstitial(decision, root);
+      const heading = root.querySelector<HTMLHeadingElement>('h2')!;
+      expect(heading.style.fontSize, decision.kind).toBe('22px');
+      expect(heading.style.fontWeight, decision.kind).toBe('600');
+    }
+  });
+
   it('K-241: never leaves for the App Store by itself; the store link is a normal tap', () => {
     vi.stubEnv('VITE_IOS_APP_STORE_URL', 'https://apps.apple.com/example');
     const assign = vi.fn();

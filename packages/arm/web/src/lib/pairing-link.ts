@@ -88,6 +88,9 @@ function strip(): string {
 }
 
 const PAGE_STYLE = 'font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:15vh auto;padding:24px;text-align:center;line-height:1.5;color:inherit';
+// The app's CSS reset (Tailwind preflight) already applies to this pre-React
+// page and would render the heading at body size and weight.
+const HEADING_STYLE = 'font-size:22px;font-weight:600;line-height:1.3;margin:0 0 8px';
 const BUTTON = 'display:block;width:100%;margin:12px 0;padding:14px;border-radius:12px;border:0;font-size:17px;font-weight:600;cursor:pointer';
 
 /** Render a blocking interstitial for the decision, before React mounts.
@@ -97,7 +100,7 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
   const appStore = import.meta.env.VITE_IOS_APP_STORE_URL as string | undefined;
   if (decision.kind === 'confirm-relay') {
     root.innerHTML = `<div style="${PAGE_STYLE}">
-      <h2>${t('app:pairing.confirmTitle')}</h2>
+      <h2 style="${HEADING_STYLE}">${t('app:pairing.confirmTitle')}</h2>
       <p>${t('app:pairing.confirmDetail')}</p>
       <button id="kraki-confirm" style="${BUTTON};background:#2384d4;color:#fff">${t('app:pairing.connect')}</button>
       <button id="kraki-cancel" style="${BUTTON};background:transparent;color:#888">${t('common:action.cancel')}</button>
@@ -114,7 +117,7 @@ export function renderPairingInterstitial(decision: PairingLinkDecision, root: H
     return true;
   }
   root.innerHTML = `<div style="${PAGE_STYLE}">
-    <h2>${t('app:pairing.appTitle')}</h2>
+    <h2 style="${HEADING_STYLE}">${t('app:pairing.appTitle')}</h2>
     <p>${appStore
       ? t('app:pairing.install')
       : t('app:pairing.unavailable')}</p>
