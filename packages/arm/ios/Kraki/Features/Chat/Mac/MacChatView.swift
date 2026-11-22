@@ -447,6 +447,9 @@ struct MacChatView: View {
                 guard viewModel.pageNewerRaw() else { break }
                 pages += 1
             }
+            // The page cap stopped the slide short of rows this device already
+            // has: reload the tail, or ↓ and a send stop mid-history (K-016).
+            if viewModel.hasNewerLocalRows { viewModel.jumpToHead() }
         } else {
             viewModel.jumpToHead()
         }
