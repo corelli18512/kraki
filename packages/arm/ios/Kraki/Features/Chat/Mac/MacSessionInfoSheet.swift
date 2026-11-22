@@ -103,9 +103,8 @@ struct MacSessionInfoSheet: View {
         .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
             // Closed any other way while the title is still being edited:
-            // keep what was typed, by the same rules (review #91). Not for a
-            // Session that is gone (deleted here or elsewhere, review F1).
-            if appState.sessionStore.sessions[session.id] != nil { saveTitleIfEdited() }
+            // keep what was typed, by the same rules (review #91).
+            saveTitleIfEdited()
             sessionIDCopyFeedbackTask?.cancel()
             sessionIDCopyFeedbackTask = nil
         }
@@ -362,7 +361,13 @@ struct MacSessionInfoSheet: View {
 
     /// Not editing, or unchanged: no rename, so an auto title does not
     /// become a fixed one (and clearing a never-set title is a no-op).
+    /// Nor for a Session that is gone (deleted here or elsewhere, review F1),
+    /// whichever path saves: Done, Esc, Return, losing focus or onDisappear.
     private func saveTitleIfEdited() {
+        guard appState.sessionStore.sessions[session.id] != nil else {
+            editingTitle = false
+            return
+        }
         if let title = MacSessionInfoRules.titleToSaveOnClose(
             editing: editingTitle, draft: titleDraft, session: session
         ) {

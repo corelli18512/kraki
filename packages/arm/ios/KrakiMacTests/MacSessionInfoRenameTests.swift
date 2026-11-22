@@ -5,8 +5,9 @@ import XCTest
 
 /// Session › Rename… and a session row's Rename… open Session Info with the
 /// title being edited, also as the first sheet a freshly mounted chat shows;
-/// Esc in the title field saves an edited title like Done (review #91); a
-/// Session deleted while its title is being edited gets no rename (review F1).
+/// Esc in the title field saves an edited title like Done (review #91), and
+/// so does the sheet closing another way; a Session deleted while its title is
+/// being edited gets no rename (review F1).
 /// Through the production main window and the real Session Info sheet.
 @MainActor
 final class MacSessionInfoRenameTests: XCTestCase {
@@ -140,6 +141,28 @@ final class MacSessionInfoRenameTests: XCTestCase {
         drain(2_000) // past the sheet's late onDisappear
         XCTAssertTrue(renames.isEmpty, "nothing changed, nothing is sent: \(renames)")
         XCTAssertEqual(app.sessionStore.sessions["s1"]?.title, "Fix login bug")
+    }
+
+    // MARK: Closed another way while the title is being edited
+
+    /// Another Session opened while s1's title is being edited: s1's chat and
+    /// its Session Info close, and what was typed is saved for s1 — the
+    /// still-existing Session keeps the onDisappear save (review F1 follow-up).
+    func testOpeningAnotherSessionWhileTheTitleIsEditedSavesIt() throws {
+        try untilTheClosedSheetIsReleased {
+            mount(selected: "s1")
+            _ = try openRenameAndType("Fix login bug (switched)")
+
+            NotificationCenter.default.post(name: .macSelectSession, object: nil,
+                                            userInfo: ["sessionId": "s2", "scope": scope])
+
+            XCTAssertTrue(waitFor { self.window?.attachedSheet == nil }, "Session Info closes with s1's chat")
+        }
+        XCTAssertTrue(waitFor { !self.renames.isEmpty }, "the edited title is saved")
+        drain(500)
+        XCTAssertEqual(renames.map(\.title), ["Fix login bug (switched)"])
+        XCTAssertEqual(renames.first?.sessionId, "s1")
+        XCTAssertEqual(app.sessionStore.sessions["s1"]?.title, "Fix login bug (switched)")
     }
 
     // MARK: The session goes away while its title is being edited (review F1)
