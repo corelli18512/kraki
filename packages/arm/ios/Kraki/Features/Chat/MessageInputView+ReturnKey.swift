@@ -25,5 +25,27 @@ extension MessageInputView {
         let age = now.timeIntervalSince(keyAt)
         return age >= 0 && age < literalNewlineWindow
     }
+
+    /// The draft a Return typed but did not send, until the field has been
+    /// given it. A plain reference rather than @State: the edit sets it and a
+    /// view update reads it, outside SwiftUI's state transactions.
+    final class UnsentReturnNewline {
+        var draft: String?
+    }
+
+    /// Reports each draft SwiftUI applies to the native views, from the same
+    /// platform-view update that gives the text field its text.
+    struct ComposerTextApplied: UIViewRepresentable {
+        let text: String
+        let applied: (String) -> Void
+
+        func makeUIView(context: Context) -> UIView {
+            let view = UIView()
+            view.isUserInteractionEnabled = false
+            return view
+        }
+
+        func updateUIView(_ view: UIView, context: Context) { applied(text) }
+    }
 }
 #endif
