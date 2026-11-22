@@ -70,8 +70,8 @@ struct MacSessionInfoSheet: View {
                 Text("Session Info").font(.system(size: 17, weight: .semibold))
                 Spacer()
                 Button("Done") {
-                    // Done and Esc close the sheet without the title field
-                    // losing focus first: save what was typed.
+                    // Done closes the sheet without the title field losing
+                    // focus first: save what was typed.
                     saveTitleIfEdited()
                     dismiss()
                 }
@@ -102,6 +102,9 @@ struct MacSessionInfoSheet: View {
         .onChange(of: liveSession.model) { _, _ in syncModelConfiguration() }
         .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
+            // Closed any other way while the title is still being edited:
+            // keep what was typed, by the same rules (review #91).
+            saveTitleIfEdited()
             sessionIDCopyFeedbackTask?.cancel()
             sessionIDCopyFeedbackTask = nil
         }
@@ -129,6 +132,12 @@ struct MacSessionInfoSheet: View {
                         .multilineTextAlignment(.trailing)
                         .focused($titleFocused)
                         .onSubmit { commitTitleEdit() }
+                        // Esc here goes to the field editor, not to Done's
+                        // shortcut: save what was typed and close, like Done.
+                        .onExitCommand {
+                            saveTitleIfEdited()
+                            dismiss()
+                        }
                         .onChange(of: titleFocused) { _, focused in
                             if !focused && editingTitle { commitTitleEdit() }
                         }

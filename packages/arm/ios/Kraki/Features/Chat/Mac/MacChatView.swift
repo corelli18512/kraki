@@ -19,9 +19,11 @@ struct MacChatView: View {
     @State private var stepsTarget: StepsTarget?
     /// Height the floating Composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
-    @State private var showInfo = false
-    /// Session Info was opened by Rename…: it starts with the title being edited.
-    @State private var infoStartsRenaming = false
+    /// Session Info being shown. Rename… opens it with the title being edited;
+    /// the flag travels with the presentation, so the first sheet a freshly
+    /// mounted chat shows gets it too (a separate @State read only inside the
+    /// sheet's content was still false there, review #91).
+    @State private var sessionInfo: SessionInfoPresentation?
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
     init(
@@ -42,6 +44,11 @@ struct MacChatView: View {
         let id = UUID()
         let seq: Int
         let live: Bool
+    }
+
+    private struct SessionInfoPresentation: Identifiable {
+        let id = UUID()
+        let startsRenaming: Bool
     }
 
     private var session: SessionInfo? { viewModel.session }
@@ -191,13 +198,11 @@ struct MacChatView: View {
             // From the menu (current chat) or a session row's Rename… (that one).
             if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
             _ = MacSessionInfoRequest.take(sessionId)
-            infoStartsRenaming = true
-            showInfo = true
+            sessionInfo = SessionInfoPresentation(startsRenaming: true)
         }
         .onChange(of: sessionId, initial: true) { _, id in
             if MacSessionInfoRequest.take(id) {
-                infoStartsRenaming = true
-                showInfo = true
+                sessionInfo = SessionInfoPresentation(startsRenaming: true)
             }
         }
         #if DEBUG
@@ -221,8 +226,7 @@ struct MacChatView: View {
                 stepsTarget = StepsTarget(seq: seq, live: viewModel.card != nil)
                 viewModel.requestSteps(forBubbleSeq: seq)
             case "info":
-                infoStartsRenaming = false
-                showInfo = true
+                sessionInfo = SessionInfoPresentation(startsRenaming: false)
             case "jumpLatest":
                 reanchorNewest(viewModel)
             case "pageOlder":
@@ -248,9 +252,9 @@ struct MacChatView: View {
             )
             .environment(appState)
         }
-        .sheet(isPresented: $showInfo) {
+        .sheet(item: $sessionInfo) { presentation in
             if let session {
-                MacSessionInfoSheet(session: session, startsRenaming: infoStartsRenaming)
+                MacSessionInfoSheet(session: session, startsRenaming: presentation.startsRenaming)
                     .environment(appState)
             }
         }
@@ -290,8 +294,7 @@ struct MacChatView: View {
         ZStack {
             if let session, !modePickerExpanded {
                 Button {
-                    infoStartsRenaming = false
-                    showInfo = true
+                    sessionInfo = SessionInfoPresentation(startsRenaming: false)
                 } label: {
                     Text(showsSyncing ? String(localized: "Syncing…") : session.displayTitle)
                         .font(.system(size: 13, weight: .semibold))
