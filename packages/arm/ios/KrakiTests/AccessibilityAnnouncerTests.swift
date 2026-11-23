@@ -80,13 +80,18 @@ extension ChatUXRegressionTests {
     func testUnconfirmedSendIsAnnounced() throws {
         var spoken: [String] = []
         let fx = try makeFixture(total: 10) { _ in true }
+        // Online, as when a send goes unconfirmed: the fixture's app starts
+        // disconnected and would also (rightly) announce "Connecting…" once
+        // that has lasted `reconnectingIndicatorDelay` (2 s), which a slow
+        // simulator reaches before the end of this test.
+        fx.app.connectionStatus = .connected
         fx.app.announceForAccessibility = { spoken.append($0) }
         fx.app.deviceStore.setDeviceFeatures(dev, features: ["idempotent_input"])
         fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
         drain(600)
         let sender = try XCTUnwrap(fx.app.commandSender)
         XCTAssertTrue(sender.sendInput(sessionId: sid, text: "no echo"))
-        drain(1_000)
+        drain { sender.pendingInputs(sid).first.map(sender.pendingState) == .unconfirmed }
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed)
         XCTAssertEqual(spoken, ["Awaiting delivery confirmation"])
     }
