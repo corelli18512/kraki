@@ -111,17 +111,6 @@ final class ChatUXRegressionTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000))
     }
 
-    /// Runs the main run loop until `condition` holds or `seconds` pass. A
-    /// state reached by the app's own timers is waited for: a fixed drain
-    /// does not give them that much main-thread time when the simulator
-    /// blocks the main thread for a while (seen on the iOS 27 CI runner).
-    @discardableResult
-    func drain(until condition: () -> Bool, seconds: TimeInterval = 5) -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition(), Date() < deadline { drain(20) }
-        return condition()
-    }
-
     struct Row { let id: String; let y: CGFloat; let h: CGFloat; let exact: CGFloat }
 
     private func rows(_ cv: UICollectionView) -> [Row] {
@@ -715,13 +704,10 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
         drain(600)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let sentAt = Date()
         XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
         let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
-        // Silent resend, then shown unconfirmed.
-        XCTAssertTrue(drain { sender.pendingInputs(sid).first.map(sender.pendingState) == .unconfirmed })
+        XCTAssertTrue(drain { sender.pendingInputs(sid).first.map(sender.pendingState) == .unconfirmed }) // silent resend, then shown unconfirmed
         XCTAssertTrue(fx.app.sendMetrics.summaries.isEmpty, "still in flight")
-        let retriedAt = Date()
         XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
         drain(50)
         sender.clearPending(sid, clientId: clientId) // the echo landed
@@ -735,8 +721,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(summary.manualRetries, 1)
         XCTAssertFalse(summary.falseAlarm, "the user had to retry")
         XCTAssertGreaterThan(summary.shownMs, 0)
-        XCTAssertGreaterThan(try XCTUnwrap(summary.confirmMs), retriedAt.timeIntervalSince(sentAt) * 1000,
-                             "timed from the first send, not from the retry")
+        XCTAssertGreaterThan(try XCTUnwrap(summary.confirmMs), summary.shownMs + 200, "from the send (200 ms window), not the retry")
         XCTAssertEqual(summary.textLength, 5)
     }
 

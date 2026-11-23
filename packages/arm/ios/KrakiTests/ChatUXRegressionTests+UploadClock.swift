@@ -52,4 +52,20 @@ extension ChatUXRegressionTests {
         XCTAssertFalse(PulseManager.isUploadMoving(queued: false, lastProgressAt: now, now: now))
     }
 }
+
+// MARK: Waiting for the confirmation clock
+
+extension ChatUXRegressionTests {
+    /// Runs the main run loop until `condition` holds or `seconds` pass. A
+    /// state the confirmation clock reaches (10 steps of `Task.sleep` on the
+    /// main actor) is waited for: a fixed drain does not give the clock that
+    /// much main-thread time when the simulator blocks the main thread for a
+    /// while (~0.7 s on the iOS 27 CI runner).
+    @discardableResult
+    func drain(until condition: () -> Bool, seconds: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition(), Date() < deadline { drain(20) }
+        return condition()
+    }
+}
 #endif
