@@ -6,10 +6,20 @@
  * every few hours; a failed check keeps the previous answer.
  *
  * Kraki for Mac's built-in tentacle is updated together with the app, so for
- * it the comparison is between Mac app versions (Sparkle appcast), not
- * tentacle versions.
+ * it the comparison is between Mac app builds (Sparkle appcast), not
+ * tentacle versions. The Mac follows the update channel chosen in Kraki for
+ * Mac (Settings › General › Updates): Stable reads the production appcast,
+ * Dogfood the dogfood feed (which also lists the newest formal release).
+ *
+ * Mac versions are reported so that every app orders them like Sparkle does
+ * (by build): a formal build is its version (`0.2.92`), a dogfood build
+ * (CFBundleVersion `<formal build>.<N>`) is `<version>-dev.<N>`
+ * (`0.2.92-dev.28`). Semver puts `0.2.92-dev.28` below `0.2.92` and below
+ * `0.2.93-dev.35`, as Sparkle does with builds 93.28 < 94 < 94.35, so
+ * released apps compare them correctly without knowing about builds.
  */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { isSea } from 'node:sea';
@@ -20,6 +30,9 @@ import { createLogger } from './logger.js';
 const logger = createLogger('update-status');
 
 export const MAC_APPCAST_URL = 'https://raw.githubusercontent.com/corelli18512/kraki/mac-updates/appcast.xml';
+/** Kraki for Mac's Dogfood channel (MacUpdateChannel.dogfoodFeedURL). */
+export const MAC_DOGFOOD_APPCAST_URL = 'https://github.com/corelli18512/kraki/releases/download/dogfood-mac/appcast-dogfood.xml';
+export type MacUpdateChannel = 'stable' | 'dogfood';
 export const UPDATE_CHECK_FIRST_DELAY_MS = 30_000;
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 3600_000;
 
@@ -27,8 +40,35 @@ export interface InstallInfo {
   method: KrakiInstallMethod;
   /** What an update replaces: binary, .app bundle, npm package dir, or the Mac app. */
   target?: string;
-  /** Kraki for Mac's version, for `mac-app`. */
+  /** Kraki for Mac's version as reported (`0.2.92`, or `0.2.92-dev.28` for a dogfood build), for `mac-app`. */
   appVersion?: string;
+  /** Kraki for Mac's CFBundleVersion (`94`, or `93.28` for a dogfood build). */
+  appBuild?: string;
+  /** Kraki for Mac's bundle identifier: where its update channel is stored. */
+  appBundleId?: string;
+}
+
+/** `0.2.92` + `93.28` → `0.2.92-dev.28`; a formal build (`94`) keeps its version. */
+export function macVersionLabel(version: string, build?: string): string {
+  const n = build?.match(/^\d+\.(\d+)$/)?.[1];
+  return n ? `${version}-dev.${n}` : version;
+}
+
+/** Sparkle's order for our CFBundleVersions: numeric, part by part. */
+export function compareBuilds(a: string, b: string): number {
+  const x = a.split('.').map((n) => Number.parseInt(n, 10) || 0), y = b.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The channel Kraki for Mac follows (its own defaults; Stable unless set). */
+export function readMacUpdateChannel(bundleId: string | undefined): MacUpdateChannel {
+  if (!bundleId || process.platform !== 'darwin') return 'stable';
+  const r = spawnSync('/usr/bin/defaults', ['read', bundleId, 'mac.updateChannel'], { encoding: 'utf8', timeout: 5000 });
+  return r.status === 0 && r.stdout.trim() === 'dogfood' ? 'dogfood' : 'stable';
 }
 
 export function readPlistString(plistPath: string, key: string): string | undefined {
@@ -47,6 +87,8 @@ export interface DetectInputs {
   scriptPath?: string;
   readPackageName?: (dir: string) => string | undefined;
   readAppVersion?: (appPath: string) => string | undefined;
+  readAppBuild?: (appPath: string) => string | undefined;
+  readAppBundleId?: (appPath: string) => string | undefined;
 }
 
 function defaultPackageName(dir: string): string | undefined {
@@ -64,8 +106,10 @@ export function detectInstall(inputs: DetectInputs = {}): InstallInfo {
   const sea = inputs.sea ?? isSea();
   const plat = inputs.platform ?? process.platform;
   const exe = inputs.execPath ?? realpath(process.execPath);
-  const readAppVersion = inputs.readAppVersion
-    ?? ((app: string) => readPlistString(join(app, 'Contents', 'Info.plist'), 'CFBundleShortVersionString'));
+  const plist = (key: string) => (app: string) => readPlistString(join(app, 'Contents', 'Info.plist'), key);
+  const readAppVersion = inputs.readAppVersion ?? plist('CFBundleShortVersionString');
+  const readAppBuild = inputs.readAppBuild ?? plist('CFBundleVersion');
+  const readAppBundleId = inputs.readAppBundleId ?? plist('CFBundleIdentifier');
 
   // …/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki
   if (env.KRAKI_MANAGED_BY === 'kraki-mac') {
@@ -73,7 +117,15 @@ export function detectInstall(inputs: DetectInputs = {}): InstallInfo {
     const i = parts.lastIndexOf('Library');
     if (i > 2 && parts[i - 1] === 'Contents') {
       const app = parts.slice(0, i - 1).join('/');
-      return { method: 'mac-app', target: app, appVersion: readAppVersion(app) };
+      const version = readAppVersion(app);
+      const build = readAppBuild(app);
+      const bundleId = readAppBundleId(app);
+      return {
+        method: 'mac-app', target: app,
+        appVersion: version && macVersionLabel(version, build),
+        ...(build ? { appBuild: build } : {}),
+        ...(bundleId ? { appBundleId: bundleId } : {}),
+      };
     }
     return { method: 'mac-app' };
   }
@@ -108,10 +160,54 @@ export function parseAppcastLatest(xml: string): string | undefined {
   return xml.match(/<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/)?.[1]?.trim();
 }
 
+export interface AppcastItem {
+  version: string;
+  /** CFBundleVersion (`sparkle:version`). */
+  build: string;
+  url?: string;
+}
+
+export function parseAppcastItems(xml: string): AppcastItem[] {
+  const items: AppcastItem[] = [];
+  for (const m of xml.matchAll(/<item\b[\s\S]*?<\/item>/g)) {
+    const it = m[0];
+    const version = it.match(/<sparkle:shortVersionString>([^<]+)</)?.[1]?.trim();
+    const build = it.match(/<sparkle:version>([^<]+)</)?.[1]?.trim()
+      ?? it.match(/sparkle:version="([^"]+)"/)?.[1]?.trim();
+    const url = it.match(/<enclosure\b[^>]*\burl="([^"]+)"/)?.[1];
+    if (version && build) items.push({ version, build, ...(url ? { url } : {}) });
+  }
+  return items;
+}
+
+/** The highest build in a feed: what Sparkle offers. */
+export function newestAppcastItem(xml: string): AppcastItem | undefined {
+  return parseAppcastItems(xml).reduce<AppcastItem | undefined>((best, it) => (!best || compareBuilds(it.build, best.build) > 0 ? it : best), undefined);
+}
+
+/** Where a Kraki for Mac version is downloaded from: a GitHub release asset of
+ *  this repository, only `mac-v*` or `dogfood-mac`. */
+export interface MacAppDownload { tag: string; asset: string }
+
+export function macAppDownloadFromUrl(url: string | undefined): MacAppDownload | undefined {
+  const m = url?.match(/^https:\/\/github\.com\/corelli18512\/kraki\/releases\/download\/((?:mac-v[0-9][0-9A-Za-z.-]*)|dogfood-mac)\/([A-Za-z0-9._-]+\.app\.zip)$/);
+  return m ? { tag: m[1], asset: m[2] } : undefined;
+}
+
+/** Downloads of the versions the last check reported, by reported version. */
+const macDownloads = new Map<string, MacAppDownload>();
+
+/** Where to download `version` (as reported in `latest`); formal releases by tag otherwise. */
+export function macAppDownload(version: string): MacAppDownload {
+  return macDownloads.get(version) ?? { tag: `mac-v${version}`, asset: 'Kraki.app.zip' };
+}
+
 export interface CheckDeps {
   fetchLatestTentacle: () => Promise<string | null>;
   fetchText: (url: string) => Promise<string>;
   isNewer: (a: string, b: string) => boolean;
+  /** Kraki for Mac's update channel (default: read from its defaults). */
+  macChannel?: (bundleId: string | undefined) => MacUpdateChannel;
 }
 
 async function defaultDeps(): Promise<CheckDeps> {
@@ -143,13 +239,27 @@ export async function checkUpdateStatus(
   if (install.method === 'mac-app') {
     const current = install.appVersion;
     if (!current) return null;
-    let latestApp: string | undefined;
-    try { latestApp = parseAppcastLatest(await d.fetchText(MAC_APPCAST_URL)); } catch { /* keep undefined */ }
-    if (!latestApp && !latestTentacle) return null;
+    const channel = (d.macChannel ?? readMacUpdateChannel)(install.appBundleId);
+    let newest: AppcastItem | undefined;
+    try {
+      newest = newestAppcastItem(await d.fetchText(channel === 'dogfood' ? MAC_DOGFOOD_APPCAST_URL : MAC_APPCAST_URL));
+    } catch { /* keep undefined */ }
+    if (!newest && !latestTentacle) return null;
+    let latest: string | undefined;
+    if (newest) {
+      const label = macVersionLabel(newest.version, newest.build);
+      // By build, as Sparkle decides; an app that predates appBuild compares versions.
+      const newer = install.appBuild ? compareBuilds(newest.build, install.appBuild) > 0 : d.isNewer(label, current);
+      if (newer) {
+        latest = label;
+        const download = macAppDownloadFromUrl(newest.url);
+        if (download) macDownloads.set(label, download);
+      }
+    }
     return {
       installedVia: 'mac-app',
       current,
-      ...(latestApp && d.isNewer(latestApp, current) ? { latest: latestApp } : {}),
+      ...(latest ? { latest } : {}),
       ...(latestTentacle ? { latestTentacle } : {}),
       ...remote,
       checkedAt: now().toISOString(),

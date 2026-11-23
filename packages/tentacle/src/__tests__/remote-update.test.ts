@@ -111,6 +111,29 @@ describe('stageUpdate', () => {
     await expect(stageUpdate({ ...stageBase, latestApp: '0.2.70', install: { method: 'mac-app', target, appVersion: '0.2.68' } }, () => {}, d))
       .rejects.toThrow(/someone else/);
   });
+  it('mac-app: a dogfood build downloads its own archive from dogfood-mac', async () => {
+    const { checkUpdateStatus, MAC_DOGFOOD_APPCAST_URL } = await import('../update-status.js');
+    const { isNewer } = await import('../update.js');
+    const feed = '<rss><channel><item><sparkle:version>94.35</sparkle:version><sparkle:shortVersionString>0.2.93</sparkle:shortVersionString>'
+      + '<enclosure url="https://github.com/corelli18512/kraki/releases/download/dogfood-mac/Kraki-94.35.app.zip"/></item></channel></rss>';
+    await checkUpdateStatus({ method: 'mac-app', appVersion: '0.2.92-dev.28', appBuild: '93.28' }, '0.39.0-dev.28', {
+      fetchLatestTentacle: async () => '0.39.0', fetchText: async (u) => (u === MAC_DOGFOOD_APPCAST_URL ? feed : ''), isNewer, macChannel: () => 'dogfood',
+    });
+    const target = join(home, 'Kraki.app');
+    mkdirSync(target, { recursive: true });
+    const d = fakeDeps({ 'Kraki-94.35.app.zip': 'ZIP' }, 'sha-ZIP Kraki-94.35.app.zip');
+    const fetched: string[] = [];
+    const fetchText = d.fetchText;
+    d.fetchText = async (u) => { fetched.push(u); return fetchText(u); };
+    d.run = (cmd, args) => {
+      if (cmd === 'ditto') mkdirSync(join(args[3], 'Kraki.app'), { recursive: true });
+      if (cmd === 'codesign' && args[0] === '-dv') return { code: 0, out: 'TeamIdentifier=AAA' };
+      return { code: 0, out: '' };
+    };
+    const plan = await stageUpdate({ ...stageBase, latestApp: '0.2.93-dev.35', install: { method: 'mac-app', target, appVersion: '0.2.92-dev.28' } }, () => {}, d);
+    expect(fetched.some((u) => u.endsWith('/dogfood-mac/SHA256SUMS.txt'))).toBe(true);
+    expect(plan.to).toBe('0.2.93-dev.35');
+  });
 });
 
 function updater(over: Partial<DeviceUpdateInfo> = {}, running = 0) {

@@ -189,7 +189,10 @@ export async function stageUpdate(
       case 'mac-app': {
         const to = input.latestApp;
         if (!to) throw new Error('no newer Kraki for Mac');
-        await downloadVerified(d, `mac-v${to}`, 'Kraki.app.zip', tmp, onProgress);
+        // The release the checked feed named (dogfood builds live in `dogfood-mac`).
+        const { macAppDownload } = await import('./update-status.js');
+        const source = macAppDownload(to);
+        await downloadVerified(d, source.tag, source.asset, tmp, onProgress);
         const out = `${target}.new`;
         rmSync(out, { recursive: true, force: true });
         mkdirSync(out, { recursive: true });
