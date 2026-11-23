@@ -9,21 +9,47 @@ export interface AvailableUpdate {
   /** Install method, or `legacy` when inferred for an older computer. */
   installedVia: string;
   remote: boolean;
+  /** A Kraki for Windows whose built-in tentacle predates reporting the app's
+   *  version: `latest` is a tentacle version. */
+  tentacleVersions?: boolean;
 }
 
-function parts(v: string): number[] {
-  return v.split('-', 1)[0].split('.').map((n) => Number.parseInt(n, 10) || 0);
+/**
+ * Kraki for Windows reports the app's version (`0.1.12`) since tentacle 0.39;
+ * its older built-in tentacles reported their own, which is also the
+ * greeting's `version`.
+ */
+function reportsTentacleVersion(info: DeviceUpdateInfo, tentacleVersion: string | undefined): boolean {
+  return info.installedVia === 'windows-app' && info.current === tentacleVersion;
 }
 
+function split(v: string): { core: number[]; pre: string[] } {
+  const [core, pre = ''] = v.replace(/^v/, '').split('+')[0].split(/-(.*)/s);
+  return { core: core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre: pre ? pre.split('.') : [] };
+}
+
+/** Semantic-version order, pre-releases included (`0.2.92-dev.28` < `0.2.92`),
+ *  as the tentacle (`update.ts isNewer`) and iOS/Mac (`KrakiVersion.isNewer`). */
 export function isNewerVersion(a: string, b: string): boolean {
-  const x = parts(a);
-  const y = parts(b);
-  for (let i = 0; i < Math.max(x.length, y.length, 3); i++) {
-    const l = x[i] ?? 0;
-    const r = y[i] ?? 0;
+  const x = split(a);
+  const y = split(b);
+  for (let i = 0; i < Math.max(x.core.length, y.core.length, 3); i++) {
+    const l = x.core[i] ?? 0;
+    const r = y.core[i] ?? 0;
     if (l !== r) return l > r;
   }
-  return false;
+  if (x.pre.length === 0 || y.pre.length === 0) return x.pre.length === 0 && y.pre.length > 0;
+  for (let i = 0; i < Math.min(x.pre.length, y.pre.length); i++) {
+    const l = x.pre[i];
+    const r = y.pre[i];
+    if (l === r) continue;
+    const nl = /^\d+$/.test(l);
+    const nr = /^\d+$/.test(r);
+    if (nl && nr) return Number(l) > Number(r);
+    if (nl !== nr) return nr; // alphanumeric outranks numeric
+    return l > r;
+  }
+  return x.pre.length > y.pre.length;
 }
 
 export function knownLatestTentacle(updates: Map<string, DeviceUpdateInfo>): string | undefined {
@@ -41,9 +67,11 @@ export function availableUpdate(
 ): AvailableUpdate | null {
   const info = updates.get(device.id);
   if (info) {
-    return info.latest && isNewerVersion(info.latest, info.current)
-      ? { latest: info.latest, installedVia: info.installedVia, remote: info.remote === true }
-      : null;
+    if (!info.latest || !isNewerVersion(info.latest, info.current)) return null;
+    return {
+      latest: info.latest, installedVia: info.installedVia, remote: info.remote === true,
+      ...(reportsTentacleVersion(info, versions.get(device.id)) ? { tentacleVersions: true } : {}),
+    };
   }
   if (device.role !== 'tentacle') return null;
   const version = versions.get(device.id);
@@ -53,15 +81,25 @@ export function availableUpdate(
     : null;
 }
 
+/** The apps that ship Kraki report their own version (`current`, `latest`):
+ *  name the app with it. */
+function productName(installedVia: string, tentacleVersions = false): string {
+  if (installedVia === 'mac-app') return 'Kraki for Mac';
+  if (installedVia === 'windows-app' && !tentacleVersions) return 'Kraki for Windows';
+  return 'Kraki';
+}
+
 export function displayVersion(deviceId: string, updates: Map<string, DeviceUpdateInfo>, versions: Map<string, string>): string | undefined {
   const info = updates.get(deviceId);
-  if (info?.installedVia === 'mac-app') return `Kraki for Mac ${info.current}`;
   const v = versions.get(deviceId);
+  if (info && productName(info.installedVia, reportsTentacleVersion(info, v)) !== 'Kraki') {
+    return `${productName(info.installedVia)} ${info.current}`;
+  }
   return v ? `Kraki ${v}` : undefined;
 }
 
 export function updateTitle(u: AvailableUpdate): string {
-  return t('devices:updateHelp.available', { product: u.installedVia === 'mac-app' ? 'Kraki for Mac' : 'Kraki', version: u.latest });
+  return t('devices:updateHelp.available', { product: productName(u.installedVia, u.tentacleVersions), version: u.latest });
 }
 
 export function updateHowTo(u: AvailableUpdate): string {

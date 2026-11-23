@@ -65,7 +65,8 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
   const block = deviceUpdates.get(device.id)?.remoteBlock;
   const text = block === 'disabled'
     ? t('update.disabled', { howTo: updateHowTo(update) })
-    : block === 'not_writable'
+    // `kraki update` can't help a Kraki for Windows installed for all users.
+    : block === 'not_writable' && update.installedVia !== 'windows-app'
       ? t('update.admin')
       : updateHowTo(update);
   return box('info', updateTitle(update), text);

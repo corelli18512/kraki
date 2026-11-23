@@ -110,3 +110,21 @@ it('a computer back online with no version known does not claim the update faile
     expect(useStore.getState().updateProgress.has('pc')).toBe(false);
   } finally { vi.useRealTimers(); }
 });
+
+it('Kraki for Windows: names the app; one installed for all users says how to update it there', () => {
+  useStore.getState().setDeviceVersion('pc', '0.39.0');
+  useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: false, remoteBlock: 'not_writable' });
+  render(<DeviceUpdateBox device={device} />);
+  expect(screen.getByText('Kraki for Windows 0.1.12 is available')).toBeInTheDocument();
+  expect(screen.getByText('Install the latest Kraki for Windows on that PC. Kraki updates with the app.')).toBeInTheDocument();
+  expect(screen.queryByText(/kraki update/)).not.toBeInTheDocument();
+});
+
+it('Kraki for Windows that may be updated remotely: the Update button', () => {
+  useStore.getState().setDeviceVersion('pc', '0.39.0');
+  useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
+  render(<DeviceUpdateBox device={device} />);
+  expect(screen.getByText('Kraki for Windows 0.1.12 is available')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+  expect(commands.updateDevice).toHaveBeenCalledWith('pc');
+});
