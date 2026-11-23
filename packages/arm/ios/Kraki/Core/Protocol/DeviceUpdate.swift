@@ -8,9 +8,10 @@
 import Foundation
 
 struct DeviceUpdateInfo: Codable, Equatable, Sendable {
-    /// `mac-app` | `app-bundle` | `binary` | `npm` | `unknown`.
+    /// `mac-app` | `windows-app` | `app-bundle` | `binary` | `npm` | `unknown`.
     var installedVia: String
-    /// Version of what an update replaces (Mac app version for `mac-app`).
+    /// Version of what an update replaces (the app's version for `mac-app`
+    /// and, since tentacle 0.39, `windows-app`).
     var current: String
     /// Set only when newer than `current`.
     var latest: String?
@@ -50,8 +51,25 @@ struct AvailableUpdate: Equatable, Sendable {
     /// inferred for a computer that predates update reporting).
     let installedVia: String
     let remote: Bool
+    /// A Kraki for Windows whose built-in tentacle predates reporting the
+    /// app's version: `latest` is a tentacle version.
+    var reportsTentacleVersion = false
 
     var isMacApp: Bool { installedVia == "mac-app" }
+    var isWindowsApp: Bool { installedVia == "windows-app" && !reportsTentacleVersion }
+
+    /// What `latest` is a version of.
+    var productName: String {
+        if isMacApp { return String(localized: "Kraki for Mac") }
+        if isWindowsApp { return String(localized: "Kraki for Windows") }
+        return "Kraki"
+    }
+
+    /// Kraki for Windows reports the app's version since tentacle 0.39; its
+    /// older built-in tentacles reported their own (the greeting's version).
+    static func reportedTentacleVersion(_ info: DeviceUpdateInfo, tentacleVersion: String?) -> Bool {
+        info.installedVia == "windows-app" && info.current == tentacleVersion
+    }
 
     /// One line telling the user how to update that computer themselves.
     var howTo: String {

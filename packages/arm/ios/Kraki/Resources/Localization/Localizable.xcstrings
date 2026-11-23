@@ -5635,6 +5635,26 @@
         }
       }
     },
+    "Kraki for Windows" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows 版 Kraki"
+          }
+        }
+      }
+    },
+    "Kraki for Windows %@ is available" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki for Windows %@ 已可用"
+          }
+        }
+      }
+    },
     "kraki found" : {
       "localizations" : {
         "zh-Hans" : {

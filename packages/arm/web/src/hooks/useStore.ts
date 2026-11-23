@@ -706,9 +706,9 @@ export const useStore = create<Store>()(persist((set, get) => ({
       // updates (and never, if its update check fails): that version being
       // the target is the update having landed too.
       const p = state.updateProgress.get(deviceId);
-      if (p && isActivePhase(p.phase) && p.to && version === p.to) {
+      if (p && isActivePhase(p.phase)) {
         const progress = new Map(state.updateProgress);
-        progress.set(deviceId, { ...p, phase: 'updated', at: Date.now() });
+        progress.set(deviceId, p.to && version === p.to ? { ...p, phase: 'updated', at: Date.now() } : { ...p, versionReported: true });
         return { deviceVersions: next, updateProgress: progress };
       }
       return { deviceVersions: next };
@@ -720,9 +720,9 @@ export const useStore = create<Store>()(persist((set, get) => ({
       next.set(deviceId, update);
       // The new version greeting us is the update having landed.
       const p = state.updateProgress.get(deviceId);
-      if (p && isActivePhase(p.phase) && p.to && update.current === p.to) {
+      if (p && isActivePhase(p.phase)) {
         const progress = new Map(state.updateProgress);
-        progress.set(deviceId, { ...p, phase: 'updated', at: Date.now() });
+        progress.set(deviceId, p.to && update.current === p.to ? { ...p, phase: 'updated', at: Date.now() } : { ...p, updateReported: true });
         return { deviceUpdates: next, updateProgress: progress };
       }
       return { deviceUpdates: next };

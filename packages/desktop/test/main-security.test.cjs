@@ -291,3 +291,47 @@ test('voice volume on Windows: launch recovery runs, and again on resume and unl
     assert.equal(recoveries, 2);
   } finally { rmSync(userData, { recursive: true }); }
 });
+
+test('a remote update\'s installer closes the app without taking this PC offline', async () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'kraki-remote-update-'));
+  try {
+    const env = loadMain();
+    const calls = [];
+    env.context.__builtIn = {
+      home: () => home,
+      quickState: () => ({ available: true, owned: true, running: true, relayState: 'connected', cliDaemon: false, configured: true }),
+      disable: async () => { calls.push('disable'); },
+    };
+    vm.runInContext('builtIn = __builtIn', env.context);
+    const app = vm.runInContext('app', env.context);
+    app.quit = () => { calls.push('quit'); };
+    vm.runInContext('dialog', env.context).showMessageBox = async () => { calls.push('ask'); return { response: 1, checkboxChecked: false }; };
+    const quitFromTray = vm.runInContext('quitFromTray', env.context);
+
+    // No update: Quit asks before taking this PC offline (cancelled here).
+    await quitFromTray();
+    assert.deepEqual(calls, ['ask']);
+    calls.length = 0;
+
+    require('node:fs').mkdirSync(path.join(home, 'remote-update'));
+    writeFileSync(path.join(home, 'remote-update', 'plan.json'), JSON.stringify({ method: 'windows-app' }));
+    // Staged, installer not running yet: closing still hides to the tray.
+    let hidden = false;
+    vm.runInContext('win', env.context).hide = () => { hidden = true; };
+    env.main.emitWindow('close', { preventDefault() {} });
+    assert.equal(hidden, true);
+    assert.deepEqual(calls, []);
+    writeFileSync(path.join(home, 'remote-update', 'windows-installer-running'), '{}');
+    // The installer closes the window: the app quits, staying online.
+    let prevented = false;
+    env.main.emitWindow('close', { preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.deepEqual(calls, ['quit']);
+    assert.equal(vm.runInContext('quitting', env.context), true);
+    calls.length = 0;
+    vm.runInContext('quitting = false', env.context);
+    // Tray › Quit while it installs: no question, never offline.
+    await quitFromTray();
+    assert.deepEqual(calls, ['quit']);
+  } finally { rmSync(home, { recursive: true }); }
+});

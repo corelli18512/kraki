@@ -1,14 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
-import { availableUpdate, displayVersion, isNewerVersion, updateHowTo } from './device-update';
+import { availableUpdate, displayVersion, isNewerVersion, reportedVersion, updateHowTo, updateTitle } from './device-update';
 
 const t = (id: string): DeviceSummary => ({ id, name: id, role: 'tentacle', online: true });
 
 describe('device-update', () => {
-  it('compares versions numerically, ignoring a pre-release suffix', () => {
+  it('compares versions numerically', () => {
     expect(isNewerVersion('0.36.0', '0.35.12')).toBe(true);
     expect(isNewerVersion('0.35.12', '0.35.10-poc')).toBe(true);
     expect(isNewerVersion('0.2.9', '0.2.10')).toBe(false);
+    expect(isNewerVersion('0.36.0', '0.36.0')).toBe(false);
+  });
+  it('orders pre-releases as semver does, like the tentacle and iOS/Mac', () => {
+    // A dogfood build sorts below its release and among its own builds.
+    expect(isNewerVersion('0.2.92', '0.2.92-dev.28')).toBe(true);
+    expect(isNewerVersion('0.2.92-dev.28', '0.2.92')).toBe(false);
+    expect(isNewerVersion('0.2.93-dev.36', '0.2.93-dev.35')).toBe(true);
+    expect(isNewerVersion('0.2.93-dev.35', '0.2.93-dev.36')).toBe(false);
+    expect(isNewerVersion('0.2.93-dev.35', '0.2.92')).toBe(true);
+    expect(isNewerVersion('1.2.0-beta.10', '1.2.0-beta.9')).toBe(true);
+    expect(isNewerVersion('1.2.0-rc.1', '1.2.0-beta.3')).toBe(true);
+    expect(isNewerVersion('1.2.0-beta', '1.2.0-beta')).toBe(false);
+    expect(isNewerVersion('1.2.0-beta.1', '1.2.0-beta')).toBe(true);
+    // Alphanumeric identifiers outrank numeric ones.
+    expect(isNewerVersion('1.0.0-alpha', '1.0.0-1')).toBe(true);
+  });
+  it('offers a Mac on Dogfood the newer dogfood build', () => {
+    const u = new Map<string, DeviceUpdateInfo>([['m', { installedVia: 'mac-app', current: '0.2.93-dev.35', latest: '0.2.93-dev.36' }]]);
+    expect(availableUpdate(t('m'), u, new Map())?.latest).toBe('0.2.93-dev.36');
   });
   it('uses the reported update', () => {
     const u = new Map<string, DeviceUpdateInfo>([['a', { installedVia: 'npm', current: '0.35.12', latest: '0.36.0', latestTentacle: '0.36.0' }]]);
@@ -26,6 +45,53 @@ describe('device-update', () => {
     const u = new Map<string, DeviceUpdateInfo>([['m', { installedVia: 'mac-app', current: '0.2.68', latest: '0.2.70' }]]);
     expect(displayVersion('m', u, new Map([['m', '0.35.12']]))).toBe('Kraki for Mac 0.2.68');
     expect(updateHowTo(availableUpdate(t('m'), u, new Map())!)).toContain('Check for Updates');
+  });
+});
+
+describe('Kraki for Windows', () => {
+  it('names Kraki for Windows with the app\'s version', () => {
+    const u = new Map<string, DeviceUpdateInfo>([['w', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', latestTentacle: '0.39.0', remote: true }]]);
+    const v = new Map([['w', '0.39.0']]);
+    expect(displayVersion('w', u, v)).toBe('Kraki for Windows 0.1.11');
+    const a = availableUpdate(t('w'), u, v)!;
+    expect(a).toEqual({ latest: '0.1.12', installedVia: 'windows-app', remote: true });
+    expect(updateTitle(a)).toBe('Kraki for Windows 0.1.12 is available');
+    expect(updateHowTo(a)).toContain('Kraki for Windows');
+  });
+  it('an older built-in tentacle reported its own version: still "Kraki"', () => {
+    const u = new Map<string, DeviceUpdateInfo>([['w', { installedVia: 'windows-app', current: '0.38.11', latest: '0.39.0', latestTentacle: '0.39.0', remote: false, remoteBlock: 'unsupported' }]]);
+    const v = new Map([['w', '0.38.11']]);
+    expect(displayVersion('w', u, v)).toBe('Kraki 0.38.11');
+    const a = availableUpdate(t('w'), u, v)!;
+    expect(updateTitle(a)).toBe('Kraki 0.39.0 is available');
+    expect(updateHowTo(a)).toContain('Kraki for Windows');
+  });
+  it('reportedVersion: the version an update\'s from/to name', () => {
+    const v = new Map([['w', '0.39.0'], ['m', '0.39.0'], ['c', '0.39.0'], ['old', '0.38.11']]);
+    const u = new Map<string, DeviceUpdateInfo>([
+      ['w', { installedVia: 'windows-app', current: '0.1.11', remote: true }],
+      ['m', { installedVia: 'mac-app', current: '0.2.92', remote: true }],
+      ['c', { installedVia: 'binary', current: '0.39.0', remote: true }],
+      ['old', { installedVia: 'windows-app', current: '0.38.11', remote: false }],
+    ]);
+    expect(reportedVersion('w', u, v).version).toBe('0.1.11');
+    expect(reportedVersion('m', u, v).version).toBe('0.2.92');
+    expect(reportedVersion('c', u, v).version).toBe('0.39.0');
+    expect(reportedVersion('old', u, v).version).toBe('0.38.11');
+    expect(reportedVersion('none', u, new Map([['none', '0.35.0']])).version).toBe('0.35.0');
+  });
+  it('reportedVersion: fresh only when a greeting reported that version since the last status', () => {
+    const v = new Map([['w', '0.39.0'], ['c', '0.39.0']]);
+    const u = new Map<string, DeviceUpdateInfo>([
+      ['w', { installedVia: 'windows-app', current: '0.1.11', remote: true }],
+      ['c', { installedVia: 'binary', current: '0.39.0', remote: true }],
+    ]);
+    const p = { phase: 'installing' as const, at: 0 };
+    expect(reportedVersion('w', u, v).fresh).toBe(false);
+    expect(reportedVersion('w', u, v, { ...p, versionReported: true }).fresh).toBe(false);
+    expect(reportedVersion('w', u, v, { ...p, updateReported: true }).fresh).toBe(true);
+    expect(reportedVersion('c', u, v, { ...p, updateReported: true }).fresh).toBe(false);
+    expect(reportedVersion('c', u, v, { ...p, versionReported: true }).fresh).toBe(true);
   });
 });
 

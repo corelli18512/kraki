@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkUpdateStatus, compareBuilds, detectInstall, MAC_APPCAST_URL, MAC_DOGFOOD_APPCAST_URL, macAppDownload,
-  macAppDownloadFromUrl, macVersionLabel, newestAppcastItem, parseAppcastLatest, type CheckDeps,
+  macAppDownloadFromUrl, macVersionLabel, newestAppcastItem, parseAppcastLatest, windowsAppDaemon, windowsAppFromDaemon,
+  type CheckDeps,
 } from '../update-status.js';
-import { isNewer } from '../update.js';
+import type { ManagedByMarker } from '../managed.js';
+import {
+  fetchLatestWindowsAppVersion, isNewer, windowsAppReleaseVersion, windowsAppVersionFromDownloadUrl, type GitHubRelease,
+} from '../update.js';
 
 const now = () => new Date('2026-10-05T00:00:00Z');
 function deps(tentacle: string | null, appcast?: string | Error): CheckDeps {
@@ -18,9 +22,38 @@ const APPCAST = '<rss><channel><item><sparkle:version>72</sparkle:version><spark
 
 describe('detectInstall', () => {
   it('Kraki for Windows: the built-in kraki.exe updates with the app', () => {
-    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe' }).method).toBe('windows-app');
-    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe' }).method).toBe('windows-app');
+    const none = () => null;
+    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe', readManagedBy: none }).method).toBe('windows-app');
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe', readManagedBy: none }).method).toBe('windows-app');
     expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\kraki-cli\\kraki.exe' }).method).toBe('binary');
+  });
+  const WIN_APP = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+  const WIN_DAEMON = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe';
+  const marker = (over: Partial<ManagedByMarker> = {}) => () => ({ by: 'kraki-windows' as const, label: 'kraki-windows', appPath: WIN_APP, appVersion: '0.1.11', updatedAt: '', ...over });
+  it('Kraki for Windows: the app and its version from managed-by.json', () => {
+    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: true, platform: 'win32', execPath: WIN_DAEMON, readManagedBy: marker() }))
+      .toEqual({ method: 'windows-app', target: WIN_APP, appVersion: '0.1.11' });
+    // Paths compare without case.
+    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: true, platform: 'win32', execPath: WIN_DAEMON, readManagedBy: marker({ appPath: WIN_APP.toLowerCase() }) }).appVersion)
+      .toBe('0.1.11');
+  });
+  it('Kraki for Windows: the app from the kraki.exe path; no version without a marker for that app', () => {
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: WIN_DAEMON, readManagedBy: () => null }))
+      .toEqual({ method: 'windows-app', target: WIN_APP });
+    // A marker of another install (or of Kraki for Mac) says nothing about this one.
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: WIN_DAEMON, readManagedBy: marker({ appPath: 'D:\\Kraki\\Kraki.exe' }) }))
+      .toEqual({ method: 'windows-app', target: WIN_APP });
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: WIN_DAEMON, readManagedBy: marker({ by: 'kraki-mac' as never }) }).appVersion)
+      .toBeUndefined();
+  });
+  it('Kraki for Windows: a kraki.exe run from elsewhere by the app uses the marker\'s app', () => {
+    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: false, platform: 'win32', execPath: 'C:\\dev\\node.exe', readManagedBy: marker() }))
+      .toEqual({ method: 'windows-app', target: WIN_APP, appVersion: '0.1.11' });
+  });
+  it('windowsAppFromDaemon / windowsAppDaemon', () => {
+    expect(windowsAppFromDaemon(WIN_DAEMON)).toBe(WIN_APP);
+    expect(windowsAppFromDaemon('C:\\Users\\a\\kraki-cli\\kraki.exe')).toBeUndefined();
+    expect(windowsAppDaemon(WIN_APP)).toBe(WIN_DAEMON);
   });
 
   it('Kraki for Mac helper → mac-app, with the app version', () => {
@@ -82,6 +115,27 @@ describe('checkUpdateStatus', () => {
   it('Mac app already on the newest app: no latest even if a tentacle is newer', async () => {
     const r = await checkUpdateStatus({ method: 'mac-app', appVersion: '0.2.70' }, '0.35.12', deps('0.36.0', APPCAST), now);
     expect(r?.latest).toBeUndefined();
+  });
+  it('Kraki for Windows compares app versions with the newest win-v* release', async () => {
+    const win = { method: 'windows-app' as const, target: 'C:\\K\\Kraki.exe', appVersion: '0.1.10' };
+    const d = { ...deps('0.39.0'), fetchLatestWindowsApp: async () => '0.1.11' };
+    expect(await checkUpdateStatus(win, '0.38.11', d, now, { remote: true })).toEqual({
+      installedVia: 'windows-app', current: '0.1.10', latest: '0.1.11', latestTentacle: '0.39.0', remote: true, checkedAt: '2026-10-05T00:00:00.000Z',
+    });
+    // Up to date: the newer tentacle alone is no update for the app.
+    const same = await checkUpdateStatus({ ...win, appVersion: '0.1.11' }, '0.38.11', d, now);
+    expect(same?.latest).toBeUndefined();
+    expect(same?.current).toBe('0.1.11');
+    // App release unknown (offline for GitHub and kraki.chat): no latest, tentacle still reported.
+    const unknown = await checkUpdateStatus(win, '0.38.11', { ...deps('0.39.0'), fetchLatestWindowsApp: async () => null }, now);
+    expect(unknown).toMatchObject({ installedVia: 'windows-app', current: '0.1.10', latestTentacle: '0.39.0' });
+    expect(unknown?.latest).toBeUndefined();
+    // Nothing learnt → null, so the previous answer is kept.
+    expect(await checkUpdateStatus(win, '0.38.11', { ...deps(null), fetchLatestWindowsApp: async () => null }, now)).toBeNull();
+    // The app's version unknown: tentacle versions, as before 0.39 (apps say "Kraki", not "Kraki for Windows").
+    expect(await checkUpdateStatus({ method: 'windows-app', target: 'C:\\K\\Kraki.exe' }, '0.38.11', d, now)).toMatchObject({
+      installedVia: 'windows-app', current: '0.38.11', latest: '0.39.0', latestTentacle: '0.39.0',
+    });
   });
   it('nothing learnt (offline) → null, so the previous answer is kept', async () => {
     expect(await checkUpdateStatus({ method: 'binary' }, '0.35.12', deps(null), now)).toBeNull();
@@ -151,5 +205,36 @@ describe('Kraki for Mac update channels (builds)', () => {
     expect(macAppDownloadFromUrl('https://example.com/Kraki.app.zip')).toBeUndefined();
     expect(macAppDownloadFromUrl(`${REL}/dogfood-mac/../x/Kraki.app.zip`)).toBeUndefined();
     expect(macAppDownload('9.9.9')).toEqual({ tag: 'mac-v9.9.9', asset: 'Kraki.app.zip' });
+  });
+});
+
+const winRelease = (tag: string, over: Partial<GitHubRelease> = {}): GitHubRelease => {
+  const v = tag.replace(/^win-v/, '');
+  return { tag_name: tag, assets: [{ name: `Kraki-Setup-${v}-x64.exe`, browser_download_url: '' }, { name: 'SHA256SUMS.txt', browser_download_url: '' }], ...over };
+};
+
+describe('Kraki for Windows releases', () => {
+  it('only formal win-v* releases with their installer count', () => {
+    expect(windowsAppReleaseVersion(winRelease('win-v0.1.11'))).toBe('0.1.11');
+    expect(windowsAppReleaseVersion(winRelease('win-v0.1.12', { prerelease: true }))).toBeNull();
+    expect(windowsAppReleaseVersion(winRelease('win-v0.1.12', { draft: true }))).toBeNull();
+    expect(windowsAppReleaseVersion(winRelease('win-v0.1.12', { assets: [] }))).toBeNull();
+    expect(windowsAppReleaseVersion(winRelease('v0.39.0'))).toBeNull();
+    expect(windowsAppReleaseVersion(winRelease('mac-v0.2.92'))).toBeNull();
+  });
+  it('reads the version from the kraki.chat download redirect', () => {
+    expect(windowsAppVersionFromDownloadUrl('https://github.com/corelli18512/kraki/releases/download/win-v0.1.11/Kraki-Setup-0.1.11-x64.exe')).toBe('0.1.11');
+    expect(windowsAppVersionFromDownloadUrl('https://github.com/corelli18512/kraki/releases/download/win-v0.1.11/Kraki-Setup-0.1.10-x64.exe')).toBeNull();
+    expect(windowsAppVersionFromDownloadUrl('https://github.com/evil/kraki/releases/download/win-v0.1.11/Kraki-Setup-0.1.11-x64.exe')).toBeNull();
+    expect(windowsAppVersionFromDownloadUrl(null)).toBeNull();
+  });
+  it('the highest release on the first page, else the download redirect', async () => {
+    const redirect = async () => 'https://github.com/corelli18512/kraki/releases/download/win-v0.1.9/Kraki-Setup-0.1.9-x64.exe';
+    const list = [winRelease('v0.39.0'), winRelease('win-v0.1.10'), winRelease('win-v0.1.12', { prerelease: true }), winRelease('win-v0.1.11')];
+    expect(await fetchLatestWindowsAppVersion({ fetchReleases: async () => list, fetchRedirectLocation: redirect })).toBe('0.1.11');
+    // Rate limited (HTTP 403) or no win-v* release on the page.
+    expect(await fetchLatestWindowsAppVersion({ fetchReleases: async () => { throw new Error('HTTP 403'); }, fetchRedirectLocation: redirect })).toBe('0.1.9');
+    expect(await fetchLatestWindowsAppVersion({ fetchReleases: async () => [winRelease('v0.39.0')], fetchRedirectLocation: redirect })).toBe('0.1.9');
+    expect(await fetchLatestWindowsAppVersion({ fetchReleases: async () => { throw new Error('x'); }, fetchRedirectLocation: async () => { throw new Error('offline'); } })).toBeNull();
   });
 });

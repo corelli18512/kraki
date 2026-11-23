@@ -123,13 +123,19 @@ struct DeviceUpdateSection: View {
         }
         guard let u = store.availableUpdate(for: device.id) else { return nil }
         return Presentation(icon: .symbol("arrow.down.circle.fill", .krakiPrimary),
-                            title: u.isMacApp ? String(localized: "Kraki for Mac \(u.latest) is available") : String(localized: "Kraki \(u.latest) is available"),
+                            title: availableTitle(u),
                             detail: u.remote ? nil : blockedText(u, store.deviceUpdates[device.id]?.remoteBlock),
                             detailIsMarkdown: !u.remote,
                             actions: u.remote ? [.updateNow(enabled: device.online)] : [])
     }
 
     private static func version(_ v: String?) -> String { v.map { "Kraki \($0)" } ?? "Kraki" }
+
+    private static func availableTitle(_ u: AvailableUpdate) -> String {
+        if u.isMacApp { return String(localized: "Kraki for Mac \(u.latest) is available") }
+        if u.isWindowsApp { return String(localized: "Kraki for Windows \(u.latest) is available") }
+        return String(localized: "Kraki \(u.latest) is available")
+    }
 
     private static func busyTitle(_ p: DeviceUpdateProgress?) -> String {
         let n = p?.runningSessions ?? 0
@@ -139,7 +145,9 @@ struct DeviceUpdateSection: View {
     private static func blockedText(_ u: AvailableUpdate, _ remoteBlock: String?) -> String {
         switch remoteBlock {
         case "disabled": return String(localized: "Updating from other devices is turned off on that computer. \(u.howTo)")
-        case "not_writable": return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
+        // `kraki update` can't help a Kraki for Windows installed for all users.
+        case "not_writable" where u.installedVia != "windows-app":
+            return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
         default: return u.howTo
         }
     }
