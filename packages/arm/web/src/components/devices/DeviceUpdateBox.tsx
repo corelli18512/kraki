@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { DeviceSummary } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import { availableUpdate, isActivePhase, updateHowTo, updateTitle, type UpdateProgress } from '../../lib/device-update';
+import { availableUpdate, isActivePhase, reportedVersion, updateHowTo, updateTitle, type UpdateProgress } from '../../lib/device-update';
 
 /** No status at all this long after Update: the computer did not get the request. */
 const REQUEST_ANSWER_MS = 60_000;
@@ -23,7 +23,8 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
     return () => clearInterval(t);
   }, []);
 
-  const version = deviceVersions.get(device.id);
+  // Compared with the update's from/to: the app's version for Kraki for Mac/Windows.
+  const version = reportedVersion(device.id, deviceUpdates, deviceVersions);
   const update = availableUpdate(device, deviceUpdates, deviceVersions);
   const visible = progress && (isActivePhase(progress.phase) || progress.phase === 'busy' || now - progress.at < 600_000);
   if (!visible && !update) return null;
@@ -103,8 +104,8 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
         if (now - p.at <= INSTALL_RETURN_MS) {
           return box('info', device.online ? t('update.installing', { version: to }) : t('update.restarting', { name: device.name }), t('update.backSoon'));
         }
-        // Decide from the version the computer greeted with; a greeting from
-        // the new version may come without any update status.
+        // Decide from the version the computer reports; a greeting from the
+        // new version may come without any update status.
         if (p.to && version === p.to) return box('ok', t('update.updated', { version: to }));
         if (device.online && p.from && version === p.from) {
           return box('warn', t('update.rolledBack'), (

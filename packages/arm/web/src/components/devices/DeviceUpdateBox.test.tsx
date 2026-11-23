@@ -128,3 +128,32 @@ it('Kraki for Windows that may be updated remotely: the Update button', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Update' }));
   expect(commands.updateDevice).toHaveBeenCalledWith('pc');
 });
+
+// Review P2-5: Kraki for Mac/Windows name app versions in from/to; the
+// greeting's version is the built-in tentacle's and never matches them.
+it('Kraki for Windows back online after the wait: decided from the app version it reports', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setDeviceVersion('pc', '0.39.0');
+    useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.1.11', to: '0.1.12', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.getByText('Update didn’t work, so nothing changed')).toBeInTheDocument();
+    expect(screen.getByText('The new version didn’t start on My PC, so it went back to 0.1.11.', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText(/didn’t say whether the update finished/)).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+it('Kraki for Mac back online after the wait on the new app version: Updated', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setDeviceVersion('pc', '0.39.0');
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.2.92', to: '0.2.93', at: Date.now() });
+    // Reported before the update began, without a phase change (an older store).
+    useStore.setState({ deviceUpdates: new Map([['pc', { installedVia: 'mac-app', current: '0.2.93', remote: true }]]) });
+    render(<DeviceUpdateBox device={device} />);
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.getByText('✓ Updated to Kraki 0.2.93')).toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});

@@ -98,6 +98,16 @@ export function displayVersion(deviceId: string, updates: Map<string, DeviceUpda
   return v ? `Kraki ${v}` : undefined;
 }
 
+/** The version an update's `from`/`to` name: Kraki for Mac and Kraki for
+ *  Windows report the app's (`current`), every other install its tentacle's
+ *  (the greeting's `version`). */
+export function reportedVersion(deviceId: string, updates: Map<string, DeviceUpdateInfo>, versions: Map<string, string>): string | undefined {
+  const info = updates.get(deviceId);
+  const v = versions.get(deviceId);
+  if (info && productName(info.installedVia, reportsTentacleVersion(info, v)) !== 'Kraki') return info.current;
+  return v;
+}
+
 export function updateTitle(u: AvailableUpdate): string {
   return t('devices:updateHelp.available', { product: productName(u.installedVia, u.tentacleVersions), version: u.latest });
 }

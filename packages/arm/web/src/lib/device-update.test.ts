@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
-import { availableUpdate, displayVersion, isNewerVersion, updateHowTo, updateTitle } from './device-update';
+import { availableUpdate, displayVersion, isNewerVersion, reportedVersion, updateHowTo, updateTitle } from './device-update';
 
 const t = (id: string): DeviceSummary => ({ id, name: id, role: 'tentacle', online: true });
 
@@ -65,6 +65,20 @@ describe('Kraki for Windows', () => {
     const a = availableUpdate(t('w'), u, v)!;
     expect(updateTitle(a)).toBe('Kraki 0.39.0 is available');
     expect(updateHowTo(a)).toContain('Kraki for Windows');
+  });
+  it('reportedVersion: the version an update\'s from/to name', () => {
+    const v = new Map([['w', '0.39.0'], ['m', '0.39.0'], ['c', '0.39.0'], ['old', '0.38.11']]);
+    const u = new Map<string, DeviceUpdateInfo>([
+      ['w', { installedVia: 'windows-app', current: '0.1.11', remote: true }],
+      ['m', { installedVia: 'mac-app', current: '0.2.92', remote: true }],
+      ['c', { installedVia: 'binary', current: '0.39.0', remote: true }],
+      ['old', { installedVia: 'windows-app', current: '0.38.11', remote: false }],
+    ]);
+    expect(reportedVersion('w', u, v)).toBe('0.1.11');
+    expect(reportedVersion('m', u, v)).toBe('0.2.92');
+    expect(reportedVersion('c', u, v)).toBe('0.39.0');
+    expect(reportedVersion('old', u, v)).toBe('0.38.11');
+    expect(reportedVersion('none', u, new Map([['none', '0.35.0']]))).toBe('0.35.0');
   });
 });
 
