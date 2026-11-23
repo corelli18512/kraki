@@ -225,7 +225,10 @@ export interface StageDeps {
 async function defaultStageDeps(): Promise<StageDeps> {
   const u = await import('./update.js');
   return {
-    download: u.downloadFile, fetchText: u.fetchText, hashFile: u.hashFile, parseChecksum: u.parseChecksum,
+    download: (url, dest, onProgress) => u.downloadFile(url, dest, onProgress, {
+      onRetry: (r) => log(`download ${basename(dest)}: attempt ${r.attempt} failed at ${r.received}/${r.total || '?'} bytes (${r.error.message}); resuming in ${Math.round(r.delayMs / 1000)}s`),
+    }),
+    fetchText: u.fetchText, hashFile: u.hashFile, parseChecksum: u.parseChecksum,
     run: (cmd, args, opts) => {
       const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: opts?.timeoutMs ?? 120_000, shell: opts?.shell, windowsHide: true });
       return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };

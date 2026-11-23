@@ -9,7 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, statSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { basename, join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
@@ -109,10 +109,10 @@ function getLocation(location: string | string[] | undefined): string | undefine
   return location;
 }
 
-function createDirectRequest(target: URL, onResponse: (res: IncomingMessage) => void) {
+function createDirectRequest(target: URL, headers: Record<string, string>, onResponse: (res: IncomingMessage) => void) {
   const requestFn = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const req = requestFn(target, {
-    headers: { 'User-Agent': 'kraki-updater' },
+    headers: { 'User-Agent': 'kraki-updater', ...headers },
     method: 'GET',
   }, onResponse);
 
@@ -126,6 +126,7 @@ function createDirectRequest(target: URL, onResponse: (res: IncomingMessage) => 
 function createProxiedRequest(
   target: URL,
   proxyUrl: URL,
+  headers: Record<string, string>,
   onResponse: (res: IncomingMessage) => void,
   onError: (err: Error) => void,
 ) {
@@ -164,7 +165,7 @@ function createProxiedRequest(
 
     const tunneledOptions: HttpsRequestOptions & { socket: typeof socket } = {
       agent: false,
-      headers: { 'User-Agent': 'kraki-updater' },
+      headers: { 'User-Agent': 'kraki-updater', ...headers },
       host: target.hostname,
       method: 'GET',
       path: `${target.pathname}${target.search}`,
@@ -187,38 +188,42 @@ function createProxiedRequest(
   return connectReq;
 }
 
+/** A redirect the updater refuses to follow; retrying can't change it. */
+class RedirectPolicyError extends Error {}
+
 /** Follow a redirect, never from https to plain http (update downloads are
  *  installed as executables). */
-function followRedirect(from: URL, location: string, redirects: number): Promise<IncomingMessage> {
+function followRedirect(from: URL, location: string, redirects: number, headers: Record<string, string>): Promise<IncomingMessage> {
   const next = new URL(location, from);
   if (from.protocol === 'https:' && next.protocol !== 'https:') {
-    return Promise.reject(new Error(`Refusing insecure redirect to ${next.origin}`));
+    return Promise.reject(new RedirectPolicyError(`Refusing insecure redirect to ${next.origin}`));
   }
-  return sendRequest(next.toString(), redirects + 1);
+  return sendRequest(next.toString(), redirects + 1, true, headers);
 }
 
-function sendRequest(url: string, redirects = 0, follow = true): Promise<IncomingMessage> {
+/** `headers` (e.g. `Range`) go to every hop of the redirect chain. */
+function sendRequest(url: string, redirects = 0, follow = true, headers: Record<string, string> = {}): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     if (redirects > MAX_REDIRECTS) {
-      reject(new Error(`Too many redirects while fetching ${url}`));
+      reject(new RedirectPolicyError(`Too many redirects while fetching ${url}`));
       return;
     }
 
     const target = new URL(url);
     const proxyUrl = getProxyForUrl(url);
-    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, (res) => {
+    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, headers, (res) => {
       const location = getLocation(res.headers.location);
       if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects).then(resolve, reject);
+        followRedirect(target, location, redirects, headers).then(resolve, reject);
         return;
       }
       resolve(res);
-    }, reject) : createDirectRequest(target, (res) => {
+    }, reject) : createDirectRequest(target, headers, (res) => {
       const location = getLocation(res.headers.location);
       if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects).then(resolve, reject);
+        followRedirect(target, location, redirects, headers).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -977,40 +982,191 @@ export function fetchText(url: string): Promise<string> {
   });
 }
 
+export interface DownloadOptions {
+  /** Attempts in a row that add no new bytes before giving up. */
+  maxAttempts?: number;
+  /** Delay before the first retry; doubles per fruitless attempt up to `maxRetryDelayMs`. */
+  retryDelayMs?: number;
+  maxRetryDelayMs?: number;
+  /** No body bytes for this long ends the attempt; the next one resumes. */
+  stallTimeoutMs?: number;
+  onRetry?: (retry: DownloadRetry) => void;
+}
+
+export interface DownloadRetry {
+  /** The attempt that just failed, counted from 1. */
+  attempt: number;
+  /** Bytes already in the file; the next attempt asks for the rest. */
+  received: number;
+  /** Size of the whole file, 0 while unknown. */
+  total: number;
+  delayMs: number;
+  error: Error;
+}
+
+// 8 fruitless attempts wait 10+20+40+80+160+160+160 s ≈ 10.5 min in total.
+const DOWNLOAD_MAX_ATTEMPTS = 8;
+const DOWNLOAD_RETRY_DELAY_MS = 10_000;
+const DOWNLOAD_MAX_RETRY_DELAY_MS = 160_000;
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000;
+
+/** A download failure that another attempt can't fix (404, disk full). */
+class FatalDownloadError extends Error {}
+
+function fileSize(path: string): number {
+  try { return statSync(path).size; } catch { return 0; }
+}
+
+/** `Content-Range: bytes <start>-<end>/<total>`; a 416 sends `bytes` `*` `/<total>`. */
+function parseContentRange(header: string | undefined): { start: number | null; total: number | null } | null {
+  const m = /^bytes (?:(\d+)-\d+|\*)\/(\d+|\*)$/.exec(header?.trim() ?? '');
+  if (!m) return null;
+  return { start: m[1] === undefined ? null : Number(m[1]), total: m[2] === '*' ? null : Number(m[2]) };
+}
+
+/**
+ * One request for the bytes `dest` doesn't have yet. Resolves when the file
+ * is complete; throws when the attempt ends early (a later one resumes) or
+ * with FatalDownloadError.
+ */
+async function downloadAttempt(
+  url: string,
+  dest: string,
+  file: { total: number },
+  stallTimeoutMs: number,
+  onBytes: (received: number) => void,
+): Promise<void> {
+  const offset = fileSize(dest);
+  // Every attempt starts from `url`: a signed CDN URL it redirected to
+  // earlier may have expired.
+  const res = await sendRequest(url, 0, true, offset > 0 ? { Range: `bytes=${offset}-` } : {});
+  const status = res.statusCode ?? 0;
+  const range = parseContentRange(res.headers['content-range']);
+
+  if (status === 416 && offset > 0) {
+    res.destroy();
+    const total = range?.total ?? file.total;
+    if (total === offset) { file.total = total; return; }
+    unlinkSync(dest);
+    throw new Error('Range not satisfiable; restarting the download');
+  }
+  if (status !== 200 && status !== 206) {
+    res.destroy();
+    const message = `Download failed: HTTP ${status}`;
+    throw status >= 500 || status === 408 || status === 429 ? new Error(message) : new FatalDownloadError(message);
+  }
+
+  let start = 0;
+  if (status === 206) {
+    // Append only where the file ends, and only to the same file.
+    if (range?.start !== offset || (range.total !== null && file.total > 0 && range.total !== file.total)) {
+      res.destroy();
+      try { unlinkSync(dest); } catch { /* ignore */ }
+      file.total = 0;
+      throw new Error(`Content-Range ${res.headers['content-range'] ?? '(none)'} doesn't continue at byte ${offset}; restarting the download`);
+    }
+    start = offset;
+    if (range.total !== null) file.total = range.total;
+  } else {
+    // 200: the whole file again (the server ignored Range, or none was sent).
+    const contentLength = Number.parseInt(res.headers['content-length'] ?? '', 10);
+    file.total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+  }
+
+  const out = createWriteStream(dest, { flags: start > 0 ? 'a' : 'w' });
+  const closed = new Promise<void>((resolve) => out.once('close', () => resolve()));
+  // pipeline() passes either side's error to the other: remember which failed first.
+  let failedSide: 'read' | 'write' | null = null;
+  res.on('error', () => { failedSide ??= 'read'; });
+  out.on('error', () => { failedSide ??= 'write'; });
+
+  let stall: NodeJS.Timeout | undefined;
+  const armStall = () => {
+    clearTimeout(stall);
+    stall = setTimeout(() => {
+      res.destroy(new Error(`No data for ${stallTimeoutMs / 1000}s`));
+    }, stallTimeoutMs);
+  };
+  let received = start;
+  res.on('data', (chunk: Buffer) => {
+    received += chunk.length;
+    armStall();
+    onBytes(received);
+  });
+  armStall();
+  try {
+    await pipeline(res, out);
+  } catch (err) {
+    // Writing failed (disk full, no access): another attempt won't help.
+    if (failedSide === 'write') throw new FatalDownloadError((err as Error).message);
+    throw err;
+  } finally {
+    clearTimeout(stall);
+    await closed;
+  }
+
+  const size = fileSize(dest);
+  if (file.total > 0 && size !== file.total) {
+    if (size > file.total) unlinkSync(dest);
+    throw new Error(`Connection closed at ${size} of ${file.total} bytes`);
+  }
+}
+
+/**
+ * Download `url` to `dest`. A dropped, reset or stalled connection doesn't
+ * fail the download: it retries with backoff and resumes with `Range` from
+ * the bytes already written (a server that ignores Range sends it all again).
+ * It gives up after `maxAttempts` attempts in a row that add no new bytes, at
+ * once on a 4xx. `onProgress` never goes backwards. Callers verify the
+ * SHA-256 of the result.
+ */
 export async function downloadFile(
   url: string,
   dest: string,
   onProgress?: (received: number, total: number) => void,
+  options: DownloadOptions = {},
 ): Promise<void> {
-  const res = await sendRequest(url);
-  if (res.statusCode !== 200) {
-    throw new Error(`Download failed: HTTP ${res.statusCode}`);
-  }
+  const maxAttempts = options.maxAttempts ?? DOWNLOAD_MAX_ATTEMPTS;
+  const retryDelayMs = options.retryDelayMs ?? DOWNLOAD_RETRY_DELAY_MS;
+  const maxRetryDelayMs = options.maxRetryDelayMs ?? DOWNLOAD_MAX_RETRY_DELAY_MS;
+  const stallTimeoutMs = options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS;
+  const file = { total: 0 };
 
-  const contentLength = Number.parseInt(res.headers['content-length'] ?? '', 10);
-  const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
-  let received = 0;
+  let reported = 0;
   let lastTick = 0;
+  const report = (received: number, final = false) => {
+    // A restarted download stays quiet until it passes where it was.
+    if (!onProgress || received < reported) return;
+    // Throttle to ~10 updates/sec so the spinner doesn't churn.
+    const now = Date.now();
+    if (!final && now - lastTick < 100) return;
+    lastTick = now;
+    reported = received;
+    onProgress(received, file.total);
+  };
 
-  if (onProgress) {
-    res.on('data', (chunk: Buffer) => {
-      received += chunk.length;
-      // Throttle to ~10 updates/sec so the spinner doesn't churn.
-      const now = Date.now();
-      if (now - lastTick >= 100) {
-        lastTick = now;
-        onProgress(received, total);
+  // A leftover file isn't ours to resume.
+  try { unlinkSync(dest); } catch { /* ignore */ }
+  let furthest = 0;
+  let fruitless = 0;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await downloadAttempt(url, dest, file, stallTimeoutMs, (received) => report(received));
+      report(fileSize(dest), true);
+      return;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const received = fileSize(dest);
+      if (received > furthest) { furthest = received; fruitless = 0; }
+      fruitless++;
+      if (error instanceof FatalDownloadError || error instanceof RedirectPolicyError || fruitless >= maxAttempts) {
+        try { unlinkSync(dest); } catch { /* ignore */ }
+        throw error;
       }
-    });
-  }
-
-  const file = createWriteStream(dest);
-  try {
-    await pipeline(res, file);
-    if (onProgress) onProgress(received, total); // final update
-  } catch (err) {
-    try { unlinkSync(dest); } catch { /* ignore */ }
-    throw err;
+      const delayMs = Math.min(retryDelayMs * 2 ** (fruitless - 1), maxRetryDelayMs);
+      options.onRetry?.({ attempt, received, total: file.total, delayMs, error });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 

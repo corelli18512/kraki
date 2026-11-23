@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
+import { downloadFile, fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -121,6 +121,49 @@ describe('update proxy support', () => {
     await expect(fetchLatestVersion()).resolves.toBe('0.12.0');
     expect(mockHttpRequest).toHaveBeenCalledOnce();
     expect(mockHttpsRequest).toHaveBeenCalledOnce();
+  });
+
+  it('resumes a dropped download through the proxy with Range', async () => {
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1081';
+    const body = Buffer.from('0123456789');
+
+    mockHttpRequest.mockImplementation(() => {
+      const req = createMockRequest(() => {
+        req._handlers.connect?.({ statusCode: 200, headers: {} }, { destroy: vi.fn(), unshift: vi.fn() }, Buffer.alloc(0));
+      });
+      return req;
+    });
+    const ranges: Array<string | undefined> = [];
+    mockHttpsRequest.mockImplementation((options: { headers: Record<string, string> }, callback: (res: PassThrough) => void) => {
+      const range = options.headers.Range;
+      ranges.push(range);
+      return createMockRequest(() => {
+        const res = new PassThrough() as PassThrough & { statusCode: number; headers: Record<string, string> };
+        if (!range) {
+          res.statusCode = 200;
+          res.headers = { 'content-length': String(body.length) };
+          callback(res);
+          res.write(body.subarray(0, 4));
+          setTimeout(() => res.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 20);
+        } else {
+          const from = Number(/bytes=(\d+)-/.exec(range)![1]);
+          res.statusCode = 206;
+          res.headers = { 'content-length': String(body.length - from), 'content-range': `bytes ${from}-${body.length - 1}/${body.length}` };
+          callback(res);
+          res.end(body.subarray(from));
+        }
+      });
+    });
+
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dest = join(mkdtempSync(join(tmpdir(), 'kraki-proxy-download-')), 'asset');
+    await downloadFile('https://github.com/corelli18512/kraki/releases/download/win-v1/Kraki-Setup-1-x64.exe', dest, undefined, { retryDelayMs: 1 });
+
+    expect(readFileSync(dest, 'utf8')).toBe('0123456789');
+    expect(ranges).toEqual([undefined, 'bytes=4-']);
+    expect(mockHttpRequest).toHaveBeenCalledTimes(2);
   });
 });
 
