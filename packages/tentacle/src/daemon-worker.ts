@@ -610,6 +610,7 @@ export async function startWorker(): Promise<WorkerResult> {
     runningSessions: () => relay.runningSessionCount(),
     runningSessionIds: () => relay.runningSessionIds(),
     emit: (p) => relay.sendUpdateStatus(p),
+    launch: (plan) => { remoteUpdate.launchApplier(plan); resultWatch.watch(); },
   });
   relay.onUpdateRequest = async (requestId, when, fromDeviceId) => {
     // The updater checks for the newest release itself before acting.
@@ -623,14 +624,12 @@ export async function startWorker(): Promise<WorkerResult> {
   // The applier writes the outcome only after this (new) daemon is online,
   // so look for it for a few minutes after start, not just once; and while an
   // update this daemon handed off runs (an installer that fails leaves it up).
-  let resultChecks = 0;
-  const resultWatch = setInterval(() => {
-    if (++resultChecks > 36 && !updater.inProgress) return;
-    if (relay.getState() !== 'connected') return;
-    const r = announceUpdateResult();
-    if (r) updater.applierFinished(r.requestId);
-  }, 5000);
-  resultWatch.unref();
+  const resultWatch = remoteUpdate.watchUpdateResult({
+    connected: () => relay.getState() === 'connected',
+    announce: announceUpdateResult,
+    pending: () => updater.inProgress,
+    finished: (requestId) => updater.applierFinished(requestId),
+  });
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {

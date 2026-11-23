@@ -35,15 +35,20 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { isSea } from 'node:sea';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { getKrakiHome, getLogsDir, type KrakiConfig } from './config.js';
 import { loadManagedBy, sameWindowsPath, WINDOWS_APP_OWNER } from './managed.js';
 import type { InstallInfo } from './update-status.js';
 
 export const APPLY_UPDATE_COMMAND = '__apply-update';
-/** electron-builder NSIS: `/S` silent, `/currentuser` the per-user install. */
-export const WINDOWS_INSTALLER_ARGS = ['/S', '/currentuser'] as const;
+/** electron-builder NSIS: `/S` silent, `/currentuser` the per-user install,
+ *  `--updated` as electron-updater passes it: an update keeps the user's
+ *  shortcuts (a deleted desktop shortcut stays deleted). */
+export const WINDOWS_INSTALLER_ARGS = ['/S', '/currentuser', '--updated'] as const;
+/** In the remote-update directory while the applier runs the Kraki for
+ *  Windows installer: the app it closes quits without going offline. */
+export const WINDOWS_INSTALLER_MARKER = 'windows-installer-running';
 /** After the installer exits: the app starts, then brings its kraki.exe online. */
 const WINDOWS_APP_DEADLINE_SECONDS = 180;
 const GITHUB = 'https://github.com/corelli18512/kraki/releases/download';
@@ -98,14 +103,14 @@ function writable(p: string): boolean {
 }
 
 /** Windows reports every directory as writable to access(); only creating a
- *  file tells whether this user may change it (Program Files may not). */
-export function dirAcceptsNewFiles(dir: string): boolean {
-  const probe = join(dir, `.kraki-write-test-${process.pid}-${Date.now()}`);
-  try {
-    writeFileSync(probe, '');
-    rmSync(probe, { force: true });
-    return true;
-  } catch { return false; }
+ *  file tells whether this user may change it (Program Files may not). A file
+ *  that was created answers yes, even when antivirus or OneDrive keeps it
+ *  from being removed right away. */
+export function dirAcceptsNewFiles(dir: string, remove: (p: string) => void = (p) => rmSync(p, { force: true })): boolean {
+  const probe = join(dir, `.kraki-write-test-${randomUUID()}`);
+  try { writeFileSync(probe, '', { flag: 'wx' }); } catch { return false; }
+  try { remove(probe); } catch (err) { log(`could not remove ${probe}: ${(err as Error).message}`); }
+  return true;
 }
 
 /** The daemon re-checks every minute: once a probe file could be created,
@@ -122,19 +127,83 @@ function parentDir(p: string): string {
   return p.replace(/[\\/][^\\/]+$/, '') || p;
 }
 
+/**
+ * electron-builder's APP_GUID for an appId (no `nsis.guid` set): a name-based
+ * UUID v5 in its namespace 50e065bc-3134-11e6-9bab-38c9862bdaf3, as
+ * app-builder-lib 26 NsisTarget (`UUID.v5(appInfo.id, ELECTRON_BUILDER_NS_UUID)`).
+ * The installer records the install folder under `Software\<APP_GUID>`.
+ */
+export function electronBuilderAppGuid(appId: string): string {
+  const ns = Buffer.from('50e065bc313411e69bab38c9862bdaf3', 'hex');
+  const h = createHash('sha1').update(ns).update(appId).digest();
+  h[6] = (h[6] & 0x0f) | 0x50;
+  h[8] = (h[8] & 0x3f) | 0x80;
+  const x = h.subarray(0, 16).toString('hex');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
+
+/** Kraki for Windows' appId (packages/desktop/package.json `build.appId`). */
+export const WINDOWS_APP_GUID = electronBuilderAppGuid('chat.kraki.desktop');
+
+export type RegistryHive = 'HKCU' | 'HKLM';
+
+/** A REG_SZ value from `reg query <key> /v <name>` output. */
+export function parseRegQueryValue(out: string, name: string): string | undefined {
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/^\s*(.+?)\s{2,}REG_(?:EXPAND_)?SZ(?:\s{2,}(.*?))?\s*$/);
+    if (m && m[1].toLowerCase() === name.toLowerCase()) return m[2] || undefined;
+  }
+  return undefined;
+}
+
+/** Where Kraki for Windows' installer recorded an install for this user (HKCU)
+ *  or for all users (HKLM); the installer is x64, so the 64-bit view. */
+export function windowsAppInstallLocation(hive: RegistryHive): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const r = spawnSync('reg.exe', ['query', `${hive}\\Software\\${WINDOWS_APP_GUID}`, '/v', 'InstallLocation', '/reg:64'],
+    { encoding: 'utf8', timeout: 10_000, windowsHide: true });
+  return r.status === 0 ? parseRegQueryValue(r.stdout ?? '', 'InstallLocation') : undefined;
+}
+
+function sameInstallDir(a: string, b: string): boolean {
+  return sameWindowsPath(a.replace(/[\\/]+$/, ''), b.replace(/[\\/]+$/, ''));
+}
+
+/** The installer's records change only with an install, which restarts this daemon. */
+const installLocations = new Map<RegistryHive, string | undefined>();
+function cachedInstallLocation(hive: RegistryHive): string | undefined {
+  if (!installLocations.has(hive)) installLocations.set(hive, windowsAppInstallLocation(hive));
+  return installLocations.get(hive);
+}
+
+/**
+ * Kraki for Windows updates with the app: its installer, run silently for
+ * this user (`/currentuser`), installs to the folder recorded for this user.
+ * So only an install recorded there may be updated remotely: an install for
+ * all users (HKLM) needs an administrator, even in a folder this user may
+ * write (`C:\Kraki`), where `/currentuser` would install a second copy.
+ */
+function windowsAppBlock(
+  dir: string, canWrite: (p: string) => boolean, installLocation: (hive: RegistryHive) => string | undefined,
+): RemoteBlock | null {
+  const allUsers = installLocation('HKLM');
+  if (allUsers && sameInstallDir(allUsers, dir)) return 'not_writable';
+  const mine = installLocation('HKCU');
+  if (!mine || !sameInstallDir(mine, dir)) return 'unsupported';
+  return canWrite(dir) ? null : 'not_writable';
+}
+
 export function remoteUpdateBlock(
   install: InstallInfo,
   config: Pick<KrakiConfig, 'remoteUpdate'> | null,
   canWrite?: (p: string) => boolean,
+  installLocation: (hive: RegistryHive) => string | undefined = cachedInstallLocation,
 ): RemoteBlock | null {
   if (config?.remoteUpdate === false) return 'disabled';
   if (install.method === 'unknown' || !install.target) return 'unsupported';
   if ((install.method === 'mac-app' || install.method === 'windows-app') && !install.appVersion) return 'unsupported';
-  // Kraki for Windows updates with the app: its installer, run as this user,
-  // rewrites the install directory. A per-machine install (Program Files)
-  // needs an administrator, so it is never tried.
   if (install.method === 'windows-app') {
-    return (canWrite ?? installDirWritable)(parentDir(install.target)) ? null : 'not_writable';
+    return windowsAppBlock(parentDir(install.target), canWrite ?? installDirWritable, installLocation);
   }
   canWrite ??= writable;
   // Moving the install aside needs its parent directory; replacing in place
@@ -407,6 +476,44 @@ export function takeUnannouncedResult(maxAgeMs = 30 * 60_000): UpdateResult | nu
   } catch { return null; }
 }
 
+export interface UpdateResultWatchOptions {
+  connected: () => boolean;
+  /** Announce an unannounced result (takeUnannouncedResult); the result, if any. */
+  announce: () => UpdateResult | null;
+  /** An update this daemon handed off is still running (RemoteUpdater.inProgress). */
+  pending: () => boolean;
+  /** Its applier finished (RemoteUpdater.applierFinished). */
+  finished: (requestId: string | undefined) => void;
+  intervalMs?: number;
+  /** Checks after start: the applier that started this daemon writes its
+   *  result only once this daemon is online. */
+  startChecks?: number;
+}
+
+/**
+ * Looks for result.json every few seconds: for a few minutes after the daemon
+ * starts, and while an update it handed off runs (`watch()` again on hand-off;
+ * an installer that fails leaves this daemon up). Stops when neither applies.
+ */
+export function watchUpdateResult(o: UpdateResultWatchOptions): { watch: () => void; stop: () => void; readonly active: boolean } {
+  let checks = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stop = () => { if (timer) clearInterval(timer); timer = undefined; };
+  const tick = () => {
+    if (++checks > (o.startChecks ?? 36) && !o.pending()) { stop(); return; }
+    if (!o.connected()) return;
+    const r = o.announce();
+    if (r) o.finished(r.requestId);
+  };
+  const watch = () => {
+    if (timer) return;
+    timer = setInterval(tick, o.intervalMs ?? 5000);
+    timer.unref?.();
+  };
+  watch();
+  return { watch, stop, get active() { return timer !== undefined; } };
+}
+
 /** Remove leftovers of a finished update; a locked one is retried next start. */
 export function cleanupAfterUpdate(target?: string, opts: { duringUpdate?: boolean } = {}): void {
   if (!target) return;
@@ -420,7 +527,7 @@ export function cleanupAfterUpdate(target?: string, opts: { duringUpdate?: boole
   }
   // A Kraki for Windows installer an applier didn't get to remove.
   const staged = (() => { try { return readdirSync(workDir()).filter((n) => /^Kraki-Setup-.*\.exe$/.test(n)); } catch { return []; } })();
-  for (const n of ['applier', 'applier.exe', ...staged]) {
+  for (const n of ['applier', 'applier.exe', WINDOWS_INSTALLER_MARKER, ...staged]) {
     try { rmSync(join(workDir(), n), { force: true }); } catch { /* in use */ }
   }
 }
@@ -713,7 +820,14 @@ export async function applyWindowsApp(plan: UpdatePlan, deps: WindowsApplierDeps
     // Stops Kraki for Windows and its kraki.exe (this applier runs from a
     // copy outside the install), replaces them, and starts the app again in
     // the tray when this PC starts Kraki at sign-in.
-    const code = deps.runInstaller(plan.staged, plan.installerArgs ?? [...WINDOWS_INSTALLER_ARGS]);
+    const marker = join(workDir(), WINDOWS_INSTALLER_MARKER);
+    let code: number | null;
+    writeFileSync(marker, `${JSON.stringify({ requestId: plan.requestId, at: new Date().toISOString() })}\n`);
+    try {
+      code = deps.runInstaller(plan.staged, plan.installerArgs ?? [...WINDOWS_INSTALLER_ARGS]);
+    } finally {
+      try { rmSync(marker, { force: true }); } catch { /* the next daemon removes it */ }
+    }
     log(`  installer → ${code}`);
     if (code !== 0) throw new Error(code === null ? 'the installer didn’t finish' : `the installer exited with code ${code}`);
     let running = deps.appRunning(plan.target);
