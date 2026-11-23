@@ -99,12 +99,12 @@ struct IOSNewSessionComposer: View {
                         // As in the chat composer (K-154): store the typed
                         // newline, so a draft that is not sent is written
                         // back without it and the field follows.
-                        unsentReturn.draft = newValue
+                        unsentReturn.returnTyped(old: text, typed: newValue)
                         store.setDraft(Self.draftID, newValue)
                         send()
-                        if text != newValue { unsentReturn.draft = nil }
+                        if text != newValue { unsentReturn.clear() }
                     } else {
-                        unsentReturn.draft = nil
+                        unsentReturn.clear()
                         store.setDraft(Self.draftID, newValue)
                     }
                 }
@@ -148,8 +148,8 @@ struct IOSNewSessionComposer: View {
     /// update that gave the field the typed draft (see MessageInputView).
     private func dropReturnNewline(_ typed: String) {
         DispatchQueue.main.async {
-            guard text == typed else { return }
-            store.setDraft(Self.draftID, String(typed.dropLast()))
+            guard text == typed, let base = unsentReturn.takeBase(showing: typed) else { return }
+            store.setDraft(Self.draftID, base)
         }
     }
 

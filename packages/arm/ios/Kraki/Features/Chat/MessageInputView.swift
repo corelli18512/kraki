@@ -806,12 +806,12 @@ struct MessageInputView: View {
                     // so a draft that is not sent (empty / whitespace) is
                     // written back without it and the field follows; storing
                     // the unchanged text never reached the field.
-                    unsentReturn.draft = newValue
+                    unsentReturn.returnTyped(old: text, typed: newValue)
                     sessionStore.setDraft(sessionId, newValue)
                     handleModeSubmit()
-                    if text != newValue { unsentReturn.draft = nil }
+                    if text != newValue { unsentReturn.clear() }
                 } else {
-                    unsentReturn.draft = nil
+                    unsentReturn.clear()
                     sessionStore.setDraft(sessionId, newValue)
                 }
             }
@@ -873,8 +873,8 @@ struct MessageInputView: View {
     /// `onChange(of:)` was a reliable sign of that update on iOS 27.
     private func dropReturnNewline(_ typed: String) {
         DispatchQueue.main.async {
-            guard text == typed else { return }
-            sessionStore.setDraft(sessionId, String(typed.dropLast()))
+            guard text == typed, let base = unsentReturn.takeBase(showing: typed) else { return }
+            sessionStore.setDraft(sessionId, base)
         }
     }
 

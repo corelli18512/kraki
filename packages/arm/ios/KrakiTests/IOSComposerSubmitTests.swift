@@ -153,6 +153,29 @@ import Darwin
         XCTAssertEqual(sentAttachments.count, 0, "nothing to send")
     }
 
+    /// Two Returns before the first newline was removed (a held or quickly
+    /// repeated key) go back to the draft before the first one, not to "\n".
+    func testQuickRepeatedReturnOnEmptyOrWhitespaceDraftLeavesNoNewline() throws {
+        continueAfterFailure = false
+        let app = try show()
+        let field = try XCTUnwrap(editor())
+        field.becomeFirstResponder()
+        func draft() -> String { app.sessionStore.drafts[sessionId] ?? "" }
+        drain(0.3)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "" && draft() == "" }),
+                      "two Returns on an empty field left \((field.text ?? "").debugDescription)")
+        field.insertText("  ")
+        XCTAssertTrue(drain(until: { draft() == "  " }))
+        drain(0.3)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "  " && draft() == "  " }),
+                      "two Returns on whitespace left \((field.text ?? "").debugDescription)")
+        XCTAssertEqual(sentAttachments.count, 0, "nothing to send")
+    }
+
     /// Chinese composition is typing, not a Return: the marked pinyin and
     /// the committed characters stay in the draft, and Return afterwards
     /// sends what was committed and empties the field.

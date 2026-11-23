@@ -205,6 +205,17 @@ final class IOSNewSessionComposerTests: XCTestCase {
         XCTAssertEqual(sent(), [], "nothing to start")
     }
 
+    /// Two Returns before the first newline was removed go back to the draft
+    /// before the first one, not to "\n".
+    func testQuickRepeatedReturnOnEmptyDraftLeavesNoNewline() throws {
+        let (field, sent) = try showComposer(canStart: true)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "" && self.draft == "" }),
+                      "two Returns on an empty field left \((field.text ?? "").debugDescription)")
+        XCTAssertEqual(sent(), [])
+    }
+
     /// Before a computer, agent and model are chosen, Return keeps the typed
     /// message as the draft, without the newline.
     func testReturnBeforeTheSessionCanStartKeepsTheMessage() throws {
