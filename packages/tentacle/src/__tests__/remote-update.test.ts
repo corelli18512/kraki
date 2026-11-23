@@ -125,14 +125,22 @@ describe('stageUpdate', () => {
     const fetched: string[] = [];
     const fetchText = d.fetchText;
     d.fetchText = async (u) => { fetched.push(u); return fetchText(u); };
+    let shippedBuild = '94.35';
     d.run = (cmd, args) => {
-      if (cmd === 'ditto') mkdirSync(join(args[3], 'Kraki.app'), { recursive: true });
+      if (cmd === 'ditto') {
+        mkdirSync(join(args[3], 'Kraki.app', 'Contents'), { recursive: true });
+        writeFileSync(join(args[3], 'Kraki.app', 'Contents', 'Info.plist'), `<plist><dict><key>CFBundleVersion</key><string>${shippedBuild}</string></dict></plist>`);
+      }
       if (cmd === 'codesign' && args[0] === '-dv') return { code: 0, out: 'TeamIdentifier=AAA' };
       return { code: 0, out: '' };
     };
-    const plan = await stageUpdate({ ...stageBase, latestApp: '0.2.93-dev.35', install: { method: 'mac-app', target, appVersion: '0.2.92-dev.28' } }, () => {}, d);
+    const input = { ...stageBase, latestApp: '0.2.93-dev.35', install: { method: 'mac-app' as const, target, appVersion: '0.2.92-dev.28' } };
+    const plan = await stageUpdate(input, () => {}, d);
     expect(fetched.some((u) => u.endsWith('/dogfood-mac/SHA256SUMS.txt'))).toBe(true);
     expect(plan.to).toBe('0.2.93-dev.35');
+    // An archive of another build (an older signed app behind a newer feed entry) is refused.
+    shippedBuild = '90';
+    await expect(stageUpdate(input, () => {}, d)).rejects.toThrow(/build 90, expected 94\.35/);
   });
 });
 

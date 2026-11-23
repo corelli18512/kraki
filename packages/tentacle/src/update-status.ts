@@ -16,7 +16,9 @@
  * (CFBundleVersion `<formal build>.<N>`) is `<version>-dev.<N>`
  * (`0.2.92-dev.28`). Semver puts `0.2.92-dev.28` below `0.2.92` and below
  * `0.2.93-dev.35`, as Sparkle does with builds 93.28 < 94 < 94.35, so
- * released apps compare them correctly without knowing about builds.
+ * released iPhone/Mac apps (prerelease-aware `KrakiVersion.isNewer`) compare
+ * them correctly without knowing about builds. The Web app ignores the
+ * prerelease part until it learns semver order.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -187,7 +189,12 @@ export function newestAppcastItem(xml: string): AppcastItem | undefined {
 
 /** Where a Kraki for Mac version is downloaded from: a GitHub release asset of
  *  this repository, only `mac-v*` or `dogfood-mac`. */
-export interface MacAppDownload { tag: string; asset: string }
+export interface MacAppDownload {
+  tag: string;
+  asset: string;
+  /** The CFBundleVersion the feed promised: the downloaded app must carry it. */
+  build?: string;
+}
 
 export function macAppDownloadFromUrl(url: string | undefined): MacAppDownload | undefined {
   const m = url?.match(/^https:\/\/github\.com\/corelli18512\/kraki\/releases\/download\/((?:mac-v[0-9][0-9A-Za-z.-]*)|dogfood-mac)\/([A-Za-z0-9._-]+\.app\.zip)$/);
@@ -253,7 +260,7 @@ export async function checkUpdateStatus(
       if (newer) {
         latest = label;
         const download = macAppDownloadFromUrl(newest.url);
-        if (download) macDownloads.set(label, download);
+        if (download) macDownloads.set(label, { ...download, build: newest.build });
       }
     }
     return {

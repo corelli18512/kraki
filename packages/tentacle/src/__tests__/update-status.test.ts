@@ -127,12 +127,12 @@ describe('Kraki for Mac update channels (builds)', () => {
   it('Dogfood channel: a dogfood Mac is offered the newest dogfood build, from dogfood-mac', async () => {
     const r = await checkUpdateStatus(dogfoodMac, '0.39.0-dev.28', feeds('dogfood'), now);
     expect(r).toMatchObject({ installedVia: 'mac-app', current: '0.2.92-dev.28', latest: '0.2.93-dev.35' });
-    expect(macAppDownload('0.2.93-dev.35')).toEqual({ tag: 'dogfood-mac', asset: 'Kraki-94.35.app.zip' });
+    expect(macAppDownload('0.2.93-dev.35')).toEqual({ tag: 'dogfood-mac', asset: 'Kraki-94.35.app.zip', build: '94.35' });
   });
   it('Stable channel on a dogfood build: offered the formal release with the same version (higher build)', async () => {
     const r = await checkUpdateStatus(dogfoodMac, '0.39.0-dev.28', feeds('stable'), now);
     expect(r?.latest).toBe('0.2.92');
-    expect(macAppDownload('0.2.92')).toEqual({ tag: 'mac-v0.2.92', asset: 'Kraki.app.zip' });
+    expect(macAppDownload('0.2.92')).toEqual({ tag: 'mac-v0.2.92', asset: 'Kraki.app.zip', build: '94' });
   });
   it('up to date on the channel: no latest', async () => {
     const r = await checkUpdateStatus({ ...dogfoodMac, appVersion: '0.2.93-dev.35', appBuild: '94.35' }, '0.39.1-dev.35', feeds('dogfood'), now);
