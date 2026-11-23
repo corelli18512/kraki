@@ -19,12 +19,18 @@
  *      it again, so the computer is never left offline.
  *   5. The applier writes the outcome to <KRAKI_HOME>/remote-update/result.json;
  *      the daemon that comes up next announces it to apps once.
+ *
+ * Kraki for Windows is updated by its own installer instead (applyWindowsApp):
+ * the daemon downloads and verifies `Kraki-Setup-<version>-x64.exe` of the
+ * `win-v<version>` release, and the applier runs it silently. The installer
+ * stops the app and its kraki.exe and starts the app again; the app brings
+ * this PC back online. There is no old installer to roll back to.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
   accessSync, appendFileSync, chmodSync, constants as fsConstants, copyFileSync, cpSync, existsSync,
-  mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -32,9 +38,14 @@ import { isSea } from 'node:sea';
 import { randomUUID } from 'node:crypto';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { getKrakiHome, getLogsDir, type KrakiConfig } from './config.js';
+import { loadManagedBy, sameWindowsPath, WINDOWS_APP_OWNER } from './managed.js';
 import type { InstallInfo } from './update-status.js';
 
 export const APPLY_UPDATE_COMMAND = '__apply-update';
+/** electron-builder NSIS: `/S` silent, `/currentuser` the per-user install. */
+export const WINDOWS_INSTALLER_ARGS = ['/S', '/currentuser'] as const;
+/** After the installer exits: the app starts, then brings its kraki.exe online. */
+const WINDOWS_APP_DEADLINE_SECONDS = 180;
 const GITHUB = 'https://github.com/corelli18512/kraki/releases/download';
 
 export type RemoteBlock = NonNullable<DeviceUpdateInfo['remoteBlock']>;
@@ -62,6 +73,8 @@ export interface UpdatePlan {
   to: string;
   /** Tentacle version to expect online (differs from `to` for the Mac app). */
   expectTentacle?: string;
+  /** Kraki for Windows: arguments for the staged installer. */
+  installerArgs?: string[];
   deadlineSeconds: number;
 }
 
@@ -84,17 +97,46 @@ function writable(p: string): boolean {
   try { accessSync(p, fsConstants.W_OK); return true; } catch { return false; }
 }
 
+/** Windows reports every directory as writable to access(); only creating a
+ *  file tells whether this user may change it (Program Files may not). */
+export function dirAcceptsNewFiles(dir: string): boolean {
+  const probe = join(dir, `.kraki-write-test-${process.pid}-${Date.now()}`);
+  try {
+    writeFileSync(probe, '');
+    rmSync(probe, { force: true });
+    return true;
+  } catch { return false; }
+}
+
+/** The daemon re-checks every minute: once a probe file could be created,
+ *  don't write another one each time. */
+const writableDirs = new Set<string>();
+function installDirWritable(dir: string): boolean {
+  if (writableDirs.has(dir)) return true;
+  const ok = dirAcceptsNewFiles(dir);
+  if (ok) writableDirs.add(dir);
+  return ok;
+}
+
+function parentDir(p: string): string {
+  return p.replace(/[\\/][^\\/]+$/, '') || p;
+}
+
 export function remoteUpdateBlock(
   install: InstallInfo,
   config: Pick<KrakiConfig, 'remoteUpdate'> | null,
-  canWrite: (p: string) => boolean = writable,
+  canWrite?: (p: string) => boolean,
 ): RemoteBlock | null {
   if (config?.remoteUpdate === false) return 'disabled';
   if (install.method === 'unknown' || !install.target) return 'unsupported';
-  if (install.method === 'mac-app' && !install.appVersion) return 'unsupported';
-  // Kraki for Windows ships this binary inside the app; replacing it alone
-  // would desync the two. It updates with the app.
-  if (install.method === 'windows-app') return 'unsupported';
+  if ((install.method === 'mac-app' || install.method === 'windows-app') && !install.appVersion) return 'unsupported';
+  // Kraki for Windows updates with the app: its installer, run as this user,
+  // rewrites the install directory. A per-machine install (Program Files)
+  // needs an administrator, so it is never tried.
+  if (install.method === 'windows-app') {
+    return (canWrite ?? installDirWritable)(parentDir(install.target)) ? null : 'not_writable';
+  }
+  canWrite ??= writable;
   // Moving the install aside needs its parent directory; replacing in place
   // needs the install itself.
   if (!canWrite(dirname(install.target)) || !canWrite(install.target)) return 'not_writable';
@@ -214,6 +256,25 @@ export async function stageUpdate(
         const { readPlistString } = await import('./update-status.js');
         const shipped = readPlistString(join(staged, 'Contents', 'Info.plist'), 'KrakiTentacleVersion');
         return { ...base, staged, cli: [helper], to, expectTentacle: shipped ?? input.latestTentacle };
+      }
+      case 'windows-app': {
+        const to = input.latestApp;
+        if (!to) throw new Error('no newer Kraki for Windows');
+        if (!/^\d+\.\d+\.\d+$/.test(to)) throw new Error(`not a Kraki for Windows release: ${to}`);
+        const { windowsAppInstallerAsset } = await import('./update.js');
+        const { windowsAppDaemon } = await import('./update-status.js');
+        const asset = windowsAppInstallerAsset(to);
+        await downloadVerified(d, `win-v${to}`, asset, tmp, onProgress);
+        // Outside the install directory, which the installer rewrites.
+        const staged = join(work, asset);
+        rmSync(staged, { force: true });
+        moveOrCopy(tmp, staged);
+        // Silent, for this user only (never asks for an administrator); the
+        // installer keeps the directory it was installed to before.
+        return {
+          ...base, staged, cli: [windowsAppDaemon(target)], to,
+          installerArgs: [...WINDOWS_INSTALLER_ARGS], deadlineSeconds: WINDOWS_APP_DEADLINE_SECONDS,
+        };
       }
       case 'npm': {
         // A global install into a private prefix: same layout as the real
@@ -357,14 +418,16 @@ export function cleanupAfterUpdate(target?: string, opts: { duringUpdate?: boole
     try { rmSync(p, { recursive: true, force: true }); log(`removed ${p}`); }
     catch (err) { log(`could not remove ${p} yet: ${(err as Error).message}`); }
   }
-  for (const n of ['applier', 'applier.exe']) {
+  // A Kraki for Windows installer an applier didn't get to remove.
+  const staged = (() => { try { return readdirSync(workDir()).filter((n) => /^Kraki-Setup-.*\.exe$/.test(n)); } catch { return []; } })();
+  for (const n of ['applier', 'applier.exe', ...staged]) {
     try { rmSync(join(workDir(), n), { force: true }); } catch { /* in use */ }
   }
 }
 
 // ── Applier ─────────────────────────────────────────────
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function runCli(cli: string[], args: string[], timeoutMs = 60_000): { code: number | null; out: string } {
   const r = spawnSync(cli[0], [...cli.slice(1), ...args], { encoding: 'utf8', timeout: timeoutMs, windowsHide: true, env: applierEnv() });
@@ -411,6 +474,7 @@ export async function runApplier(args: string[]): Promise<void> {
     return;
   }
   if (plan.method === 'mac-app') return applyMacApp(plan);
+  if (plan.method === 'windows-app') return applyWindowsApp(plan);
   const expect = plan.to;
   const old = `${plan.target}.old`;
   const t0 = Date.now();
@@ -538,6 +602,147 @@ async function applyMacApp(plan: UpdatePlan): Promise<void> {
   }
 }
 
+// Kraki for Windows: its installer is the unit of update.
+
+/**
+ * Whether Kraki for Windows itself runs, from `<path>|<command line>` lines of
+ * the processes named like it. Its renderer/GPU children (`--type=`) and the
+ * voice-volume watchdog (Kraki.exe run as Node) are not the app; the built-in
+ * `resources\kraki\kraki.exe` has another path.
+ */
+export function windowsAppRunningIn(output: string, appExe: string): boolean {
+  return output.split(/\r?\n/).some((line) => {
+    const i = line.indexOf('|');
+    if (i < 0) return false;
+    const cmd = line.slice(i + 1);
+    return sameWindowsPath(line.slice(0, i).trim(), appExe) && !/\s--type=/.test(cmd) && !cmd.includes('voice-volume-watchdog');
+  });
+}
+
+export interface WindowsAppStatus {
+  running?: boolean;
+  relayState?: string | null;
+  daemonVersion?: string | null;
+  /** The version of the kraki.exe that answered (the installed one). */
+  version?: string | null;
+}
+
+export interface WindowsApplierDeps {
+  /** Run the installer to the end; its exit code. */
+  runInstaller: (installer: string, args: string[]) => number | null;
+  appRunning: (appExe: string) => boolean;
+  launchApp: (appExe: string) => void;
+  status: (cli: string[]) => WindowsAppStatus;
+  /** The Kraki for Windows version recorded in managed-by.json for this install. */
+  appVersion: (appExe: string) => string | undefined;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+/** How long the installer may take before the applier gives up on it. */
+const WINDOWS_INSTALLER_TIMEOUT_MS = 10 * 60_000;
+/** The installer starts the app on its way out; after this, the applier does. */
+const WINDOWS_APP_RETURN_MS = 15_000;
+
+function powershell(script: string, timeoutMs = 20_000): { code: number | null; out: string } {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
+  return { code: r.status, out: r.stdout ?? '' };
+}
+
+function defaultWindowsApplierDeps(): WindowsApplierDeps {
+  return {
+    runInstaller: (installer, args) => {
+      const r = spawnSync(installer, args, { timeout: WINDOWS_INSTALLER_TIMEOUT_MS, windowsHide: true, stdio: 'ignore', env: appEnv(), cwd: tmpdir() });
+      if (r.error) log(`  installer: ${r.error.message}`);
+      return r.status;
+    },
+    appRunning: (appExe) => {
+      const name = basename(appExe).replace(/[^A-Za-z0-9 ._-]/g, '');
+      const r = powershell(`Get-CimInstance Win32_Process -Filter "Name='${name}'" | ForEach-Object { "$($_.ExecutablePath)|$($_.CommandLine)" }`);
+      // Unknown counts as not running: starting it again is harmless (one instance).
+      return r.code === 0 && windowsAppRunningIn(r.out, appExe);
+    },
+    launchApp: (appExe) => {
+      // `--login`: in the tray, as at sign-in; it brings this PC online.
+      const child = spawn(appExe, ['--login'], { detached: true, stdio: 'ignore', env: appEnv(), cwd: dirname(appExe) });
+      child.on('error', (err) => log(`  starting ${appExe}: ${err.message}`));
+      child.unref();
+    },
+    status: (cli) => {
+      try {
+        const j = JSON.parse(runCli(cli, ['status', '--json'], 20_000).out) as { version?: string; daemon?: WindowsAppStatus };
+        return { ...(j.daemon ?? {}), version: j.version ?? null };
+      } catch { return {}; }
+    },
+    appVersion: (appExe) => {
+      const m = loadManagedBy();
+      return m?.by === WINDOWS_APP_OWNER && m.appPath && sameWindowsPath(m.appPath, appExe) ? m.appVersion : undefined;
+    },
+    sleep,
+    now: Date.now,
+  };
+}
+
+/** What the installer and the app it starts inherit: no worker state, never run as Node. */
+function appEnv(): NodeJS.ProcessEnv {
+  const env = applierEnv();
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
+}
+
+async function waitWindowsAppOnline(plan: UpdatePlan, deps: WindowsApplierDeps): Promise<boolean> {
+  const deadline = deps.now() + plan.deadlineSeconds * 1000;
+  let last = '';
+  while (deps.now() < deadline) {
+    const s = deps.status(plan.cli);
+    const app = deps.appVersion(plan.target);
+    const line = `running=${s.running} relay=${s.relayState} daemon=${s.daemonVersion} installed=${s.version} app=${app}`;
+    if (line !== last) { log(`  ${line}`); last = line; }
+    // The new app recorded its version, and its own kraki.exe is the one online.
+    if (s.running && s.relayState === 'connected' && app === plan.to && (!s.version || s.daemonVersion === s.version)) return true;
+    await deps.sleep(2000);
+  }
+  return false;
+}
+
+export async function applyWindowsApp(plan: UpdatePlan, deps: WindowsApplierDeps = defaultWindowsApplierDeps()): Promise<void> {
+  const t0 = deps.now();
+  log(`applier: windows-app ${plan.from} → ${plan.to} (${plan.target})`);
+  try {
+    // Stops Kraki for Windows and its kraki.exe (this applier runs from a
+    // copy outside the install), replaces them, and starts the app again in
+    // the tray when this PC starts Kraki at sign-in.
+    const code = deps.runInstaller(plan.staged, plan.installerArgs ?? [...WINDOWS_INSTALLER_ARGS]);
+    log(`  installer → ${code}`);
+    if (code !== 0) throw new Error(code === null ? 'the installer didn’t finish' : `the installer exited with code ${code}`);
+    let running = deps.appRunning(plan.target);
+    for (const until = deps.now() + WINDOWS_APP_RETURN_MS; !running && deps.now() < until;) {
+      await deps.sleep(1000);
+      running = deps.appRunning(plan.target);
+    }
+    if (!running) { log('  Kraki for Windows is not running; starting it'); deps.launchApp(plan.target); }
+    if (await waitWindowsAppOnline(plan, deps)) {
+      const offline = Math.round((deps.now() - t0) / 100) / 10;
+      log(`✔ Kraki for Windows ${plan.to} online; ${offline}s since the installer started`);
+      writeResult({ requestId: plan.requestId, phase: 'updated', from: plan.from, to: plan.to, method: 'windows-app', offlineSeconds: offline });
+      return;
+    }
+    throw new Error(`Kraki for Windows ${plan.to} didn’t come online within ${plan.deadlineSeconds}s`);
+  } catch (err) {
+    const reason = (err as Error).message;
+    log(`✘ ${reason}`);
+    // Nothing to roll back to (the old installer isn't kept): make sure the
+    // app runs, so this PC comes back online on whatever is installed.
+    try {
+      if (!deps.appRunning(plan.target)) { log('  starting Kraki for Windows'); deps.launchApp(plan.target); }
+    } catch (e2) { log(`✘ starting Kraki for Windows failed: ${(e2 as Error).message}`); }
+    writeResult({ requestId: plan.requestId, phase: 'failed', from: plan.from, to: plan.to, method: 'windows-app', error: reason });
+  } finally {
+    try { rmSync(plan.staged, { force: true }); } catch { /* the next daemon removes it */ }
+  }
+}
+
 // ── Daemon-side coordinator ─────────────────────────────
 
 export interface RemoteUpdaterOptions {
@@ -561,9 +766,18 @@ export interface RemoteUpdaterOptions {
 /** One update at a time; validates, waits for idle if asked, stages, hands off. */
 export class RemoteUpdater {
   private busy = false;
+  /** requestId of the plan given to the applier. */
+  private handedOff: string | undefined;
   constructor(private readonly o: RemoteUpdaterOptions) {}
 
   get inProgress(): boolean { return this.busy; }
+
+  /** The applier of the update this daemon handed off finished without
+   *  replacing it (Kraki for Windows' installer can fail before it stops it):
+   *  accept requests again. */
+  applierFinished(requestId: string | undefined): void {
+    if (this.busy && requestId && requestId === this.handedOff) { this.busy = false; this.handedOff = undefined; }
+  }
 
   async request(requestId: string, when?: 'now' | 'idle', fromDeviceId?: string): Promise<void> {
     // The periodic check may be hours old: install the newest release, not
@@ -604,6 +818,7 @@ export class RemoteUpdater {
       // 'now' with turns running: the restart ends them. Say which.
       const interrupted = this.o.runningSessionIds?.() ?? [];
       if (interrupted.length > 0) log(`request ${requestId}: restarting interrupts ${interrupted.length} running session(s): ${interrupted.join(', ')}`);
+      this.handedOff = plan.requestId;
       (this.o.launch ?? launchApplier)(plan);
       // The applier stops this daemon shortly; stay busy until then.
     } catch (err) {

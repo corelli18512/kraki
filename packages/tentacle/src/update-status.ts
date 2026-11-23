@@ -17,8 +17,12 @@
  * (`0.2.92-dev.28`). Semver puts `0.2.92-dev.28` below `0.2.92` and below
  * `0.2.93-dev.35`, as Sparkle does with builds 93.28 < 94 < 94.35, so
  * released iPhone/Mac apps (prerelease-aware `KrakiVersion.isNewer`) compare
- * them correctly without knowing about builds. The Web app ignores the
- * prerelease part until it learns semver order.
+ * them correctly without knowing about builds. Web apps before 2026-11 ignore
+ * the prerelease part.
+ *
+ * Kraki for Windows' built-in tentacle is likewise updated with the app: the
+ * comparison is between Windows app versions (the version the app records in
+ * managed-by.json against the newest formal `win-v*` release).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -28,6 +32,7 @@ import { isSea } from 'node:sea';
 import type { DeviceUpdateInfo, KrakiInstallMethod } from '@kraki/protocol';
 import { getVersion } from './config.js';
 import { createLogger } from './logger.js';
+import { loadManagedBy, sameWindowsPath, WINDOWS_APP_OWNER, type ManagedByMarker } from './managed.js';
 
 const logger = createLogger('update-status');
 
@@ -40,9 +45,11 @@ export const UPDATE_CHECK_INTERVAL_MS = 6 * 3600_000;
 
 export interface InstallInfo {
   method: KrakiInstallMethod;
-  /** What an update replaces: binary, .app bundle, npm package dir, or the Mac app. */
+  /** What an update replaces: binary, .app bundle, npm package dir, the Mac
+   *  app, or Kraki for Windows' `Kraki.exe` (its directory is the install). */
   target?: string;
-  /** Kraki for Mac's version as reported (`0.2.92`, or `0.2.92-dev.28` for a dogfood build), for `mac-app`. */
+  /** Kraki for Mac's version as reported (`0.2.92`, or `0.2.92-dev.28` for a
+   *  dogfood build), for `mac-app`; Kraki for Windows' version, for `windows-app`. */
   appVersion?: string;
   /** Kraki for Mac's CFBundleVersion (`94`, or `93.28` for a dogfood build). */
   appBuild?: string;
@@ -91,6 +98,32 @@ export interface DetectInputs {
   readAppVersion?: (appPath: string) => string | undefined;
   readAppBuild?: (appPath: string) => string | undefined;
   readAppBundleId?: (appPath: string) => string | undefined;
+  readManagedBy?: () => ManagedByMarker | null;
+}
+
+/** `…\Kraki\resources\kraki\kraki.exe` → `…\Kraki\Kraki.exe`. */
+export function windowsAppFromDaemon(exe: string): string | undefined {
+  const m = exe.match(/^(.+)([\\/])resources\2kraki\2kraki\.exe$/i);
+  return m ? `${m[1]}${m[2]}Kraki.exe` : undefined;
+}
+
+/** The built-in kraki.exe of a Kraki for Windows install. */
+export function windowsAppDaemon(appExe: string): string {
+  const m = appExe.match(/^(.+)([\\/])[^\\/]+$/);
+  return m ? [m[1], 'resources', 'kraki', 'kraki.exe'].join(m[2]) : appExe;
+}
+
+/**
+ * Kraki for Windows records its path and version in managed-by.json
+ * (packages/desktop src/tentacle.cjs). The version counts only when the marker
+ * names the app this kraki.exe belongs to.
+ */
+function detectWindowsApp(exe: string, marker: ManagedByMarker | null): InstallInfo {
+  const owned = marker?.by === WINDOWS_APP_OWNER ? marker : null;
+  const target = windowsAppFromDaemon(exe) ?? owned?.appPath;
+  const appVersion = owned?.appPath && owned.appVersion && target && sameWindowsPath(owned.appPath, target)
+    ? owned.appVersion : undefined;
+  return { method: 'windows-app', ...(target ? { target } : {}), ...(appVersion ? { appVersion } : {}) };
 }
 
 function defaultPackageName(dir: string): string | undefined {
@@ -133,7 +166,7 @@ export function detectInstall(inputs: DetectInputs = {}): InstallInfo {
   }
   // …\Kraki\resources\kraki\kraki.exe, run by Kraki for Windows.
   if (env.KRAKI_MANAGED_BY === 'kraki-windows' || (sea && plat === 'win32' && /[\\/]resources[\\/]kraki[\\/]kraki\.exe$/i.test(exe))) {
-    return { method: 'windows-app', target: exe };
+    return detectWindowsApp(exe, (inputs.readManagedBy ?? (() => loadManagedBy()))());
   }
   if (sea) {
     if (plat === 'darwin') {
@@ -215,6 +248,8 @@ export interface CheckDeps {
   isNewer: (a: string, b: string) => boolean;
   /** Kraki for Mac's update channel (default: read from its defaults). */
   macChannel?: (bundleId: string | undefined) => MacUpdateChannel;
+  /** Newest formal Kraki for Windows version (`win-v*` releases). */
+  fetchLatestWindowsApp?: () => Promise<string | null>;
 }
 
 async function defaultDeps(): Promise<CheckDeps> {
@@ -227,6 +262,7 @@ async function defaultDeps(): Promise<CheckDeps> {
       ?? (await u.fetchJson<{ version?: string }>('https://registry.npmjs.org/@kraki/tentacle/latest').then((j) => j.version ?? null, () => null)),
     fetchText: u.fetchText,
     isNewer: u.isNewer,
+    fetchLatestWindowsApp: () => u.fetchLatestWindowsAppVersion(),
   };
 }
 
@@ -267,6 +303,21 @@ export async function checkUpdateStatus(
       installedVia: 'mac-app',
       current,
       ...(latest ? { latest } : {}),
+      ...(latestTentacle ? { latestTentacle } : {}),
+      ...remote,
+      checkedAt: now().toISOString(),
+    };
+  }
+  // Without the app's version (no managed-by.json for this install), report
+  // tentacle versions as tentacles before 0.39 did; it can't be updated remotely then.
+  if (install.method === 'windows-app' && install.appVersion) {
+    const current = install.appVersion;
+    const newest = (await d.fetchLatestWindowsApp?.().catch(() => null)) ?? undefined;
+    if (!newest && !latestTentacle) return null;
+    return {
+      installedVia: 'windows-app',
+      current,
+      ...(newest && d.isNewer(newest, current) ? { latest: newest } : {}),
       ...(latestTentacle ? { latestTentacle } : {}),
       ...remote,
       checkedAt: now().toISOString(),

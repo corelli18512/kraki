@@ -19,8 +19,29 @@ afterEach(() => {
 });
 
 describe('remoteUpdateBlock', () => {
-  it('never replaces the kraki.exe built into Kraki for Windows', () => {
-    expect(remoteUpdateBlock({ method: 'windows-app', target: 'C:\\K\\resources\\kraki\\kraki.exe' }, null, () => true)).toBe('unsupported');
+  it('Kraki for Windows: updated by its installer when this user may write the install directory', () => {
+    const app = { method: 'windows-app' as const, target: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe', appVersion: '0.1.11' };
+    const probed: string[] = [];
+    expect(remoteUpdateBlock(app, null, (p) => { probed.push(p); return true; })).toBeNull();
+    expect(probed).toEqual(['C:\\Users\\a\\AppData\\Local\\Programs\\Kraki']);
+    // Per-machine (Program Files): needs an administrator, never tried.
+    expect(remoteUpdateBlock({ ...app, target: 'C:\\Program Files\\Kraki\\Kraki.exe' }, null, () => false)).toBe('not_writable');
+    expect(remoteUpdateBlock(app, { remoteUpdate: false }, () => true)).toBe('disabled');
+    // The app's version is what an update compares; unknown → unsupported.
+    expect(remoteUpdateBlock({ method: 'windows-app', target: app.target }, null, () => true)).toBe('unsupported');
+  });
+  it('dirAcceptsNewFiles creates (and removes) a file to find out', async () => {
+    const { dirAcceptsNewFiles } = await import('../remote-update.js');
+    const { readdirSync, chmodSync } = await import('node:fs');
+    const dir = join(home, 'install');
+    mkdirSync(dir);
+    expect(dirAcceptsNewFiles(dir)).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(dirAcceptsNewFiles(join(home, 'missing'))).toBe(false);
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      chmodSync(dir, 0o555);
+      try { expect(dirAcceptsNewFiles(dir)).toBe(false); } finally { chmodSync(dir, 0o755); }
+    }
   });
 
   const ok = () => true;
@@ -144,6 +165,109 @@ describe('stageUpdate', () => {
   });
 });
 
+describe('stageUpdate: Kraki for Windows', () => {
+  const app = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+  const input = { ...stageBase, latestApp: '0.1.12', currentVersion: '0.1.11', install: { method: 'windows-app' as const, target: app, appVersion: '0.1.11' } };
+  it('downloads the installer of win-v<version>, verified against that release\'s SHA256SUMS.txt', async () => {
+    const d = fakeDeps({ 'Kraki-Setup-0.1.12-x64.exe': 'SETUP' }, 'sha-SETUP Kraki-Setup-0.1.12-x64.exe');
+    const fetched: string[] = [];
+    const fetchText = d.fetchText;
+    d.fetchText = async (u) => { fetched.push(u); return fetchText(u); };
+    const plan = await stageUpdate(input, () => {}, d);
+    expect(fetched).toEqual(['https://github.com/corelli18512/kraki/releases/download/win-v0.1.12/SHA256SUMS.txt']);
+    const { workDir } = await import('../remote-update.js');
+    expect(plan).toMatchObject({
+      method: 'windows-app', target: app, from: '0.1.11', to: '0.1.12',
+      staged: join(workDir(), 'Kraki-Setup-0.1.12-x64.exe'),
+      installerArgs: ['/S', '/currentuser'],
+      cli: ['C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe'],
+    });
+    expect(readFileSync(plan.staged, 'utf8')).toBe('SETUP');
+  });
+  it('refuses a tampered installer, and a version that is not a release', async () => {
+    const d = fakeDeps({ 'Kraki-Setup-0.1.12-x64.exe': 'EVIL' }, 'sha-SETUP Kraki-Setup-0.1.12-x64.exe');
+    await expect(stageUpdate(input, () => {}, d)).rejects.toThrow(/checksum mismatch/);
+    await expect(stageUpdate({ ...input, latestApp: '0.1.12/../../x' }, () => {}, d)).rejects.toThrow(/not a Kraki for Windows release/);
+    await expect(stageUpdate({ ...input, latestApp: undefined }, () => {}, d)).rejects.toThrow(/no newer Kraki for Windows/);
+  });
+});
+
+describe('applyWindowsApp', () => {
+  const app = 'C:\\K\\Kraki.exe';
+  async function run(o: {
+    installer?: number | null; appBack?: boolean; appStartsWhenLaunched?: boolean; online?: boolean; appVersion?: string;
+  } = {}) {
+    const { applyWindowsApp, workDir } = await import('../remote-update.js');
+    const staged = join(workDir(), 'Kraki-Setup-0.1.12-x64.exe');
+    writeFileSync(staged, 'SETUP');
+    writeFileSync(join(workDir(), 'plan.json'), '{}');
+    let t = 0;
+    let appRunning = false;
+    const calls: string[] = [];
+    const installs: Array<[string, string[]]> = [];
+    await applyWindowsApp({
+      requestId: 'rw', method: 'windows-app', target: app, staged, cli: ['C:\\K\\resources\\kraki\\kraki.exe'],
+      from: '0.1.11', to: '0.1.12', installerArgs: ['/S', '/currentuser'], deadlineSeconds: 30,
+    }, {
+      runInstaller: (i, args) => { installs.push([i, args]); appRunning = o.appBack ?? true; return o.installer === undefined ? 0 : o.installer; },
+      appRunning: () => appRunning,
+      launchApp: (exe) => { calls.push(`launch ${exe}`); if (o.appStartsWhenLaunched ?? true) appRunning = true; },
+      status: () => (appRunning && (o.online ?? true)
+        ? { running: true, relayState: 'connected', daemonVersion: '0.39.1', version: '0.39.1' }
+        : { running: false }),
+      appVersion: () => (appRunning ? (o.appVersion ?? '0.1.12') : '0.1.11'),
+      sleep: async (ms) => { t += ms; },
+      now: () => t,
+    });
+    const result = JSON.parse(readFileSync(join(workDir(), 'result.json'), 'utf8'));
+    const { existsSync } = await import('node:fs');
+    return { installs, calls, result, stagedLeft: existsSync(staged), planLeft: existsSync(join(workDir(), 'plan.json')) };
+  }
+
+  it('runs the installer silently; the installer starts the app again; updated once the new version is online', async () => {
+    const r = await run();
+    expect(r.installs).toEqual([[expect.stringMatching(/Kraki-Setup-0\.1\.12-x64\.exe$/), ['/S', '/currentuser']]]);
+    expect(r.calls).toEqual([]);
+    expect(r.result).toMatchObject({ requestId: 'rw', phase: 'updated', from: '0.1.11', to: '0.1.12', method: 'windows-app' });
+    expect(r.stagedLeft).toBe(false);
+    expect(r.planLeft).toBe(false);
+  });
+  it('starts Kraki for Windows itself when the installer didn\'t (no login entry)', async () => {
+    const r = await run({ appBack: false });
+    expect(r.calls).toEqual([`launch ${app}`]);
+    expect(r.result.phase).toBe('updated');
+  });
+  it('a failed installer: reports failed and makes sure the app runs', async () => {
+    const r = await run({ installer: 2, appBack: false });
+    expect(r.calls).toEqual([`launch ${app}`]);
+    expect(r.result).toMatchObject({ phase: 'failed', error: 'the installer exited with code 2' });
+    expect(r.stagedLeft).toBe(false);
+    expect(r.planLeft).toBe(false);
+  });
+  it('the new version not online in time: failed, never rolled back', async () => {
+    const offline = await run({ online: false });
+    expect(offline.result).toMatchObject({ phase: 'failed', error: expect.stringMatching(/0\.1\.12 didn.t come online within 30s/) });
+    // Online, but the app still records the old version: not this update.
+    const old = await run({ appVersion: '0.1.11' });
+    expect(old.result.phase).toBe('failed');
+  });
+});
+
+describe('windowsAppRunningIn', () => {
+  it('sees the app itself, not its children, the watchdog or the built-in kraki.exe', async () => {
+    const { windowsAppRunningIn } = await import('../remote-update.js');
+    const app = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+    const children = [
+      `${app}|"${app}" --type=renderer --user-data-dir=x`,
+      `${app}|"${app}" C:\\K\\resources\\app.asar\\src\\voice-volume-watchdog.cjs 1 2`,
+      `C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe|kraki.exe __daemon-worker --managed-by=kraki-windows`,
+    ].join('\r\n');
+    expect(windowsAppRunningIn(children, app)).toBe(false);
+    expect(windowsAppRunningIn(`${children}\r\n${app.toLowerCase()}|"${app}" --login`, app)).toBe(true);
+    expect(windowsAppRunningIn('', app)).toBe(false);
+  });
+});
+
 function updater(over: Partial<DeviceUpdateInfo> = {}, running = 0) {
   const events: UpdateProgress[] = [];
   let sessions = running;
@@ -239,6 +363,15 @@ describe('RemoteUpdater', () => {
     await twice.u.request('d');
     expect(twice.events.at(-1)).toMatchObject({ phase: 'failed', requestId: 'd' });
   });
+  it('accepts requests again when its own applier finished without replacing it', async () => {
+    const t = updater();
+    await t.u.request('r1');
+    expect(t.u.inProgress).toBe(true);
+    t.u.applierFinished('other');            // an older update's result
+    expect(t.u.inProgress).toBe(true);
+    t.u.applierFinished('r');                // the plan this daemon handed off
+    expect(t.u.inProgress).toBe(false);
+  });
   it('reports a staging failure and can try again', async () => {
     const t = updater();
     t.stage.mockRejectedValueOnce(new Error('checksum mismatch'));
@@ -286,6 +419,21 @@ describe('cleanup during an update', () => {
     cleanupAfterUpdate(target);
     const { existsSync } = await import('node:fs');
     expect(existsSync(`${target}.old`)).toBe(false);
+  });
+});
+
+describe('cleanup of a Kraki for Windows installer', () => {
+  it('removes an installer an applier left behind, once no update runs', async () => {
+    const { cleanupAfterUpdate, workDir } = await import('../remote-update.js');
+    const { existsSync } = await import('node:fs');
+    const left = join(workDir(), 'Kraki-Setup-0.1.12-x64.exe');
+    writeFileSync(left, 'SETUP');
+    writeFileSync(join(workDir(), 'plan.json'), '{}');
+    cleanupAfterUpdate('C:\\K\\Kraki.exe');
+    expect(existsSync(left)).toBe(true);
+    rmSync(join(workDir(), 'plan.json'));
+    cleanupAfterUpdate('C:\\K\\Kraki.exe');
+    expect(existsSync(left)).toBe(false);
   });
 });
 

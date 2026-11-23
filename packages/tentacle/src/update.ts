@@ -47,7 +47,7 @@ export function detectInstallMethod(): InstallMethod {
 
 // ── Latest version fetching ─────────────────────────────
 
-interface GitHubRelease {
+export interface GitHubRelease {
   tag_name: string;
   draft?: boolean;
   prerelease?: boolean;
@@ -197,7 +197,7 @@ function followRedirect(from: URL, location: string, redirects: number): Promise
   return sendRequest(next.toString(), redirects + 1);
 }
 
-function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
+function sendRequest(url: string, redirects = 0, follow = true): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     if (redirects > MAX_REDIRECTS) {
       reject(new Error(`Too many redirects while fetching ${url}`));
@@ -208,7 +208,7 @@ function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
     const proxyUrl = getProxyForUrl(url);
     const req = proxyUrl ? createProxiedRequest(target, proxyUrl, (res) => {
       const location = getLocation(res.headers.location);
-      if (isRedirect(res.statusCode) && location) {
+      if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
         followRedirect(target, location, redirects).then(resolve, reject);
         return;
@@ -216,7 +216,7 @@ function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
       resolve(res);
     }, reject) : createDirectRequest(target, (res) => {
       const location = getLocation(res.headers.location);
-      if (isRedirect(res.statusCode) && location) {
+      if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
         followRedirect(target, location, redirects).then(resolve, reject);
         return;
@@ -292,6 +292,67 @@ export async function fetchLatestVersion(): Promise<string | null> {
       if (version) return version;
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Kraki for Windows releases ──────────────────────────
+
+export const WINDOWS_APP_DOWNLOAD_URL = 'https://kraki.chat/download/windows';
+
+/** The Kraki for Windows installer of a version (release `win-v<version>`). */
+export function windowsAppInstallerAsset(version: string): string {
+  return `Kraki-Setup-${version}-x64.exe`;
+}
+
+/** The app version of a formal Kraki for Windows release, or null. */
+export function windowsAppReleaseVersion(r: GitHubRelease): string | null {
+  if (r.draft || r.prerelease || typeof r.tag_name !== 'string') return null;
+  const version = r.tag_name.match(/^win-v(\d+\.\d+\.\d+)$/)?.[1];
+  if (!version) return null;
+  return r.assets?.some((a) => a.name === windowsAppInstallerAsset(version)) ? version : null;
+}
+
+/** `…/releases/download/win-v0.1.11/Kraki-Setup-0.1.11-x64.exe` → `0.1.11`. */
+export function windowsAppVersionFromDownloadUrl(url: string | null | undefined): string | null {
+  const m = url?.match(/^https:\/\/github\.com\/corelli18512\/kraki\/releases\/download\/win-v(\d+\.\d+\.\d+)\/Kraki-Setup-(\d+\.\d+\.\d+)-x64\.exe$/);
+  return m && m[1] === m[2] ? m[1] : null;
+}
+
+/** Where a URL redirects to (not followed), or null when it doesn't. */
+export async function fetchRedirectLocation(url: string): Promise<string | null> {
+  const res = await sendRequest(url, 0, false);
+  res.resume();
+  const location = getLocation(res.headers.location);
+  return isRedirect(res.statusCode) && location ? new URL(location, url).toString() : null;
+}
+
+export interface WindowsAppReleaseDeps {
+  fetchReleases: () => Promise<GitHubRelease[]>;
+  fetchRedirectLocation: (url: string) => Promise<string | null>;
+}
+
+/**
+ * Newest formal Kraki for Windows version: the highest `win-v*` release on the
+ * first page of releases (no draft, no pre-release, with its installer). When
+ * GitHub's API refuses (60 unauthenticated requests an hour per IP), the
+ * download link kraki.chat redirects to names it.
+ */
+export async function fetchLatestWindowsAppVersion(deps: WindowsAppReleaseDeps = {
+  fetchReleases: () => fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`),
+  fetchRedirectLocation,
+}): Promise<string | null> {
+  try {
+    let best: string | null = null;
+    for (const r of await deps.fetchReleases()) {
+      const v = windowsAppReleaseVersion(r);
+      if (v && (!best || isNewer(v, best))) best = v;
+    }
+    if (best) return best;
+  } catch { /* fall back to the download link */ }
+  try {
+    return windowsAppVersionFromDownloadUrl(await deps.fetchRedirectLocation(WINDOWS_APP_DOWNLOAD_URL));
   } catch {
     return null;
   }

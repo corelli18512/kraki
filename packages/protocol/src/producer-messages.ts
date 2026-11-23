@@ -495,13 +495,14 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
  *  `mac-app` = built into Kraki for Mac (the app is the unit of update),
  *  `app-bundle` = the CLI's macOS Kraki.app, `binary` = single executable,
  *  `npm` = `npm i -g @kraki/tentacle`, `windows-app` = built into Kraki for
- *  Windows (updated with the app, never in place). */
+ *  Windows (updated with the app, by its installer). */
 export type KrakiInstallMethod = 'mac-app' | 'windows-app' | 'app-bundle' | 'binary' | 'npm' | 'unknown';
 
 export interface DeviceUpdateInfo {
   installedVia: KrakiInstallMethod;
   /** Version of what an update replaces: the Mac app's version for
-   *  `mac-app`, otherwise the tentacle's. */
+   *  `mac-app`, the Windows app's for `windows-app` (tentacles before 0.39
+   *  reported their own there), otherwise the tentacle's. */
   current: string;
   /** Set only when a newer version than `current` is available. */
   latest?: string;
