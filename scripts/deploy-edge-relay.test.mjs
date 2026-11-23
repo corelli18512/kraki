@@ -61,13 +61,18 @@ echo "{\\"name\\":\\"@kraki/head\\",\\"version\\":\\"$v\\"}" > "$m/@kraki/head/p
 echo 'module.exports = class { prepare() { return { get() { return 1; } }; } };' > "$m/better-sqlite3/index.js"`, join(root, 'opt/node/bin'));
   // Reads stdin, as any child could: over `bash -s` that would be the script.
   sh('kraki-watch', 'echo "kraki-watch $*" >> "$S/log"; cat >> "$S/kraki-watch-stdin"', join(root, 'usr/local/bin'));
-  // FAKE_SIGNAL_AT_RESTART="<version> <signal>": the deploy gets <signal> while that version restarts.
+  // FAKE_SIGNAL_AT_RESTART="<version> <signal>": the deploy gets <signal> while that version restarts
+  // (SIGINT as from Ctrl-C, which reaches the child too).
   sh('systemctl', `echo "systemctl $*" >> "$S/log"
 case "$1" in
   restart)
     v=$(sed -nE 's#.*/releases/([^/]+)/node_modules/@kraki/head/dist/cli.js.*#\\1#p' ${JSON.stringify(dropin)} | tail -1)
     echo "$v" > "$S/running"
-    [ "$v" != "\${FAKE_SIGNAL_AT_RESTART%% *}" ] || kill -s "\${FAKE_SIGNAL_AT_RESTART#* }" $PPID
+    sig=\${FAKE_SIGNAL_AT_RESTART:-}
+    if [ -n "$sig" ] && [ "$v" = "\${sig%% *}" ]; then
+      kill -s "\${sig#* }" $PPID
+      [ "\${sig#* }" != INT ] || kill -s INT $$
+    fi
     [ "$v" = "\${FAKE_SCHEMA_BUMP:-}" ] && echo 16 > "$S/user_version"
     [ "$v" != "\${FAKE_RESTART_FAILS:-}" ] ;;
   is-active) [ "$(cat "$S/running")" != "\${FAKE_RESTART_FAILS:-}" ] ;;
