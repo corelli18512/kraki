@@ -189,7 +189,10 @@ export async function stageUpdate(
       case 'mac-app': {
         const to = input.latestApp;
         if (!to) throw new Error('no newer Kraki for Mac');
-        await downloadVerified(d, `mac-v${to}`, 'Kraki.app.zip', tmp, onProgress);
+        // The release the checked feed named (dogfood builds live in `dogfood-mac`).
+        const { macAppDownload } = await import('./update-status.js');
+        const source = macAppDownload(to);
+        await downloadVerified(d, source.tag, source.asset, tmp, onProgress);
         const out = `${target}.new`;
         rmSync(out, { recursive: true, force: true });
         mkdirSync(out, { recursive: true });
@@ -201,6 +204,11 @@ export async function stageUpdate(
         if (d.run('spctl', ['-a', '-t', 'exec', staged]).code !== 0) throw new Error('the new app is not notarized');
         const mine = teamId(d, target);
         if (!mine || teamId(d, staged) !== mine) throw new Error('the new app is signed by someone else');
+        // The feed names the archive and its build separately: an archive of
+        // another (older) build is refused, never installed as `to`.
+        const { readPlistString: readPlist } = await import('./update-status.js');
+        const build = readPlist(join(staged, 'Contents', 'Info.plist'), 'CFBundleVersion');
+        if (source.build && build !== source.build) throw new Error(`the downloaded app is build ${build ?? 'unknown'}, expected ${source.build}`);
         d.run('xattr', ['-dr', 'com.apple.quarantine', staged]);
         const helper = join(target, 'Contents', 'Library', 'Helpers', 'Kraki.app', 'Contents', 'MacOS', 'kraki');
         const { readPlistString } = await import('./update-status.js');
