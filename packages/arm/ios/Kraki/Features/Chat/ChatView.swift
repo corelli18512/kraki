@@ -236,7 +236,7 @@ struct ChatView: View {
             if let auto = ProcessInfo.processInfo.environment["KRAKI_AUTO_SEND"],
                !auto.isEmpty, !ChatView.autoSendFired {
                 ChatView.autoSendFired = true
-                Task { [weak appState] in
+                Task { [weak appState = self.appState] in
                     guard let appState else { return }
                     // Wait for the owning tentacle device to be greeted (Pulse up).
                     for _ in 0..<60 {

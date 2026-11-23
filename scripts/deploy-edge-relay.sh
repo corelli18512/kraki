@@ -1,186 +1,274 @@
 #!/usr/bin/env bash
-# Deploy a new version of @kraki/head to this relay host.
+# Deploy a new @kraki/head on a relay host, or roll back to an earlier one.
 #
-# Idempotent and safe to re-run. Snapshots the live state before touching
-# anything, and auto-rolls-back if the restarted relay doesn't come up
-# healthy.
+# Host layout (Kraki's relays):
+#   /opt/kraki-head/releases/<version>/   one `npm --prefix` install per release
+#   /etc/systemd/system/kraki-relay.service.d/zzz-head-release.conf
+#       systemd drop-in that selects the release:
+#       ExecStart="<node>" "/opt/kraki-head/releases/<version>/node_modules/@kraki/head/dist/cli.js" ... "--db" "<db>"
+#   /opt/kraki-head/backups/   database snapshots, and the drop-in of each replaced release
+#   /usr/local/bin/kraki-watch optional; told about the planned restart
 #
-# Usage (run as root on the relay host):
-#   deploy-edge-relay.sh <version>      # e.g. deploy-edge-relay.sh 0.12.0
+# Usage, as root on the relay host:
+#   deploy-edge-relay.sh <version>           back up the database and the drop-in, install
+#                                            <version>, point the drop-in at it, restart and verify;
+#                                            on any failure after the switch, or on HUP/INT/TERM/PIPE
+#                                            (e.g. the ssh session drops), restore the previous drop-in
+#   deploy-edge-relay.sh rollback <version>  switch back to the saved drop-in of <version>
+# Only one deploy or rollback runs at a time (flock on /opt/kraki-head/backups/.deploy.lock).
 #
-# Assumptions about the host layout (see SELF-HOSTING.md):
-#   - systemd unit:         /etc/systemd/system/kraki-relay.service
-#   - canonical env file:   /etc/kraki/relay.env  (referenced by unit's EnvironmentFile=)
-#   - SQLite DB:            /var/lib/kraki/kraki-relay.db
-#   - npm global install of @kraki/head provides /usr/local/bin/kraki-relay
-#   - relay listens on 127.0.0.1:4000 (nginx in front handles TLS)
+# Pass the environment after sudo: its env_reset drops variables set before it.
+#   sudo KRAKI_PUBLIC_URL=https://cn.relay.kraki.chat bash scripts/deploy-edge-relay.sh 0.22.0
+#   ssh <host> 'sudo KRAKI_PUBLIC_URL=https://cn.relay.kraki.chat bash -s 0.22.0' < scripts/deploy-edge-relay.sh
+#
+# Verification: the service is active, http://127.0.0.1:<port>/ reports the version, and a
+# WebSocket upgrade is answered with 101. With KRAKI_PUBLIC_URL set, the same version and
+# upgrade through the proxy. (Head's / reports its version; it is not a readiness check.)
+#
+# Environment:
+#   NPM_REGISTRY       registry for the install (default https://registry.npmjs.org; China
+#                      mirrors lag new versions by hours)
+#   KRAKI_PUBLIC_URL   see above
+#   KRAKI_DEPLOY_ROOT  prefix for every host path, so scripts/deploy-edge-relay.test.mjs can run
+#                      this against a fake root with fake systemctl/curl/npm (and without flock
+#                      if the test machine has none). Never set on a relay.
 
 set -euo pipefail
 
-VERSION="${1:-}"
-if [ -z "$VERSION" ]; then
-  echo "usage: $0 <version>" >&2
-  echo "  example: $0 0.12.0" >&2
+ROOT="${KRAKI_DEPLOY_ROOT:-}"
+DROPIN="$ROOT/etc/systemd/system/kraki-relay.service.d/zzz-head-release.conf"
+REL="$ROOT/opt/kraki-head/releases"
+BK="$ROOT/opt/kraki-head/backups"
+# Full path: sudo's PATH on some relays lacks /usr/local/bin.
+KRAKI_WATCH="$ROOT/usr/local/bin/kraki-watch"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
+UNIT=kraki-relay
+HEAD_CLI=node_modules/@kraki/head/dist/cli.js
+
+die() { echo "error: $*" >&2; exit 2; }
+valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; }
+usage() {
+  echo "usage: deploy-edge-relay.sh <version> | deploy-edge-relay.sh rollback <version>" >&2
   exit 2
-fi
+}
 
-UNIT=/etc/systemd/system/kraki-relay.service
-ENV_FILE=/etc/kraki/relay.env
-DB=/var/lib/kraki/kraki-relay.db
-BACKUP_ROOT=/root/kraki-backups
-RELAY_BIN=/usr/local/bin/kraki-relay
-HEALTH_URL=http://127.0.0.1:4000/
+# Holds $BK/.deploy.lock on fd 9 until the script exits.
+lock_deploys() {
+  [ -d "$BK" ] || install -d -m 700 "$BK"
+  exec 9>"$BK/.deploy.lock"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || die "another deploy or rollback is running on this host ($BK/.deploy.lock)"
+  elif [ -n "$ROOT" ]; then
+    echo "note: no flock on this machine; running unlocked against the test root" >&2
+  else
+    die "missing required tool: flock"
+  fi
+}
 
-if [ "$(id -u)" -ne 0 ]; then
-  echo "must be run as root" >&2
-  exit 2
-fi
+# Sets CURRENT (release the drop-in runs), NODE, NODE_BIN_DIR, DB and LOCAL_URL.
+read_dropin() {
+  [ -f "$DROPIN" ] || { echo "no $DROPIN: this host does not use the per-release layout" >&2; return 1; }
+  local exec_line cli port
+  exec_line=$(grep '^ExecStart="' "$DROPIN" | tail -1) || { echo "no ExecStart=\"...\" in $DROPIN" >&2; return 1; }
+  NODE=$(sed -E 's/^ExecStart="([^"]+)".*/\1/' <<<"$exec_line")
+  cli=$(sed -nE 's/^ExecStart="[^"]+" "([^"]+)".*/\1/p' <<<"$exec_line")
+  case "$cli" in
+    "$REL"/*/"$HEAD_CLI") ;;
+    *) echo "$DROPIN does not run Head from $REL/<version>: $exec_line" >&2; return 1 ;;
+  esac
+  CURRENT=${cli#"$REL"/}
+  CURRENT=${CURRENT%%/*}
+  valid_version "$CURRENT" || { echo "unexpected release directory in $DROPIN: $cli" >&2; return 1; }
+  DB=$(sed -nE 's/.*"--db" "([^"]+)".*/\1/p' <<<"$exec_line")
+  port=$(sed -nE 's/.*"--port" "([0-9]+)".*/\1/p' <<<"$exec_line")
+  LOCAL_URL="http://127.0.0.1:${port:-4000}"
+  NODE_BIN_DIR=$(dirname "$NODE")
+}
 
-for tool in sqlite3 npm systemctl curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "missing required tool: $tool" >&2
+# Planned restart: keep kraki-watch from paging about it.
+maintenance() {
+  if [ -x "$KRAKI_WATCH" ]; then
+    # 9>&-: a long-lived kraki-watch must not inherit (and hold) the deploy lock.
+    "$KRAKI_WATCH" maintenance 10 9>&- || echo "warning: kraki-watch maintenance failed" >&2
+  fi
+}
+
+reports_version() {  # url version
+  local body=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    body=$(curl -sf --max-time 3 "$1" 2>/dev/null) && break
+    sleep 1
+  done
+  echo "$1: ${body:-no answer}"
+  grep -qF "\"version\":\"$2\"" <<<"$body"
+}
+
+websocket_upgrades() {  # url
+  local key status
+  key=$(head -c 16 /dev/urandom | base64)
+  # The upgraded connection stays open until --max-time; only the status line matters.
+  status=$(curl -sS -i -N --http1.1 --max-time 5 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: $key" "$1" 2>/dev/null | tr -d '\r' | grep -m1 '^HTTP/' || true)
+  echo "$1 WebSocket upgrade: ${status:-no answer}"
+  [[ "$status" == "HTTP/1.1 101"* ]]
+}
+
+verify() {  # version
+  systemctl is-active --quiet "$UNIT" || { echo "$UNIT is not active"; return 1; }
+  reports_version "$LOCAL_URL/" "$1" || return 1
+  websocket_upgrades "$LOCAL_URL/" || return 1
+  if [ -n "${KRAKI_PUBLIC_URL:-}" ]; then
+    reports_version "${KRAKI_PUBLIC_URL%/}/" "$1" || return 1
+    websocket_upgrades "${KRAKI_PUBLIC_URL%/}/" || return 1
+  fi
+}
+
+restart_unit() {
+  maintenance
+  systemctl daemon-reload || return 1
+  systemctl restart "$UNIT" || return 1
+  sleep 3
+}
+
+# Signal handler while the switched drop-in is unverified: put back the saved
+# previous drop-in ($RESTORE_DROPIN) and restart. Output may go nowhere (the
+# ssh session that sent the signal is gone), so nothing here may stop it.
+restore_on_signal() {  # signal exit-status
+  trap '' HUP INT TERM PIPE
+  set +e
+  cp -p "$RESTORE_DROPIN" "$DROPIN"
+  maintenance >/dev/null 2>&1
+  systemctl daemon-reload
+  systemctl restart "$UNIT"
+  echo "SIG$1 after the drop-in switch: restored $RESTORE_DROPIN and restarted $UNIT; check it" >&2
+  exit "$2"
+}
+
+install_release() {  # version
+  local dir="$REL/$1" installed
+  if [ ! -f "$dir/node_modules/@kraki/head/package.json" ]; then
+    rm -rf "$dir.tmp"
+    mkdir -p "$dir.tmp"
+    PATH="$NODE_BIN_DIR:$PATH" "$NODE_BIN_DIR/npm" --prefix "$dir.tmp" install --save-exact --no-audit --no-fund \
+      --omit=dev --registry "$NPM_REGISTRY" "@kraki/head@$1"
+    rm -rf "$dir"
+    mv "$dir.tmp" "$dir"
+  fi
+  installed=$("$NODE" -p "require('$dir/node_modules/@kraki/head/package.json').version")
+  [ "$installed" = "$1" ] || die "$dir has @kraki/head $installed, not $1"
+  # The native module must load under the node the unit runs.
+  (cd "$dir" && "$NODE" -e "new (require('better-sqlite3'))(':memory:').prepare('select 1').get()") \
+    || die "better-sqlite3 in $dir does not load under $NODE"
+  "$NODE" -e "console.log('installed $1:', ['protocol', 'crypto', 'pulse'].map((p) => { try { return p + ' ' + require('$dir/node_modules/@kraki/' + p + '/package.json').version } catch { return p + ' ?' } }).join(', '))"
+}
+
+deploy() {  # version
+  local new=$1 prev snapshot schema_before schema_after ts
+  valid_version "$new" || die "not a version: $new"
+  read_dropin || exit 2
+  prev=$CURRENT
+  [ "$new" != "$prev" ] || die "$UNIT already runs $new"
+  [ -x "$NODE_BIN_DIR/npm" ] || die "no npm next to $NODE"
+  [ -f "$DB" ] || die "no database at $DB"
+  lock_deploys
+  echo "host=$(hostname) running=$prev target=$new node=$NODE ($("$NODE" --version)) db=$DB"
+
+  echo "==> back up the database and the $prev drop-in"
+  [ -d "$BK" ] || install -d -m 700 "$BK"
+  ts=$(date -u +%Y%m%d-%H%M%S)
+  snapshot="$BK/head-pre-$new-$ts.db"
+  sqlite3 "$DB" ".backup '$snapshot'"
+  [ "$(sqlite3 "$snapshot" 'PRAGMA integrity_check;')" = ok ] || die "integrity check of $snapshot failed"
+  schema_before=$(sqlite3 "$DB" 'PRAGMA user_version;')
+  cp -p "$DROPIN" "$BK/zzz-head-release.conf.$prev"
+  echo "snapshot $snapshot (integrity ok, user_version $schema_before); drop-in saved as $BK/zzz-head-release.conf.$prev"
+
+  echo "==> install @kraki/head@$new into $REL/$new"
+  install_release "$new"
+
+  echo "==> switch the drop-in from $prev to $new"
+  sed "s#/releases/${prev//./\\.}/#/releases/$new/#g" "$DROPIN" > "$DROPIN.new"
+  grep -qF "\"$REL/$new/$HEAD_CLI\"" "$DROPIN.new" || { rm -f "$DROPIN.new"; die "could not point the drop-in at $new"; }
+  cat "$DROPIN.new"
+  RESTORE_DROPIN="$BK/zzz-head-release.conf.$prev"
+  trap 'restore_on_signal HUP 129' HUP
+  trap 'restore_on_signal INT 130' INT
+  trap 'restore_on_signal PIPE 141' PIPE
+  trap 'restore_on_signal TERM 143' TERM
+  # No external command between the switch and the restart: a dropped session
+  # could kill it with SIGPIPE before the trap above could restore the old drop-in.
+  mv "$DROPIN.new" "$DROPIN"
+
+  if restart_unit && verify "$new"; then
+    trap - HUP INT TERM PIPE
+    schema_after=$(sqlite3 "$DB" 'PRAGMA user_version;')
+    echo "user_version $schema_before -> $schema_after"
+    echo "deploy OK: $new on $(hostname). Roll back with: deploy-edge-relay.sh rollback $prev"
+    return 0
+  fi
+
+  journalctl -u "$UNIT" -n 30 --no-pager -o cat || true
+  echo "==> ROLLBACK to $prev: $new did not come up healthy"
+  cp -p "$BK/zzz-head-release.conf.$prev" "$DROPIN"
+  if restart_unit && verify "$prev"; then
+    echo "rolled back to $prev"
+  else
+    echo "error: $prev did not come back healthy either; check $UNIT now" >&2
+  fi
+  schema_after=$(sqlite3 "$DB" 'PRAGMA user_version;' || echo '?')
+  if [ "$schema_after" != "$schema_before" ]; then
+    # Never overwrite the live database with an older snapshot as part of a code rollback.
+    echo "warning: $new moved the database schema ($schema_before -> $schema_after); $prev now runs on it." >&2
+    echo "         The pre-deploy snapshot is $snapshot." >&2
+  fi
+  exit 1
+}
+
+rollback() {  # version
+  local target=$1 saved
+  valid_version "$target" || die "not a version: $target"
+  saved="$BK/zzz-head-release.conf.$target"
+  if [ ! -f "$saved" ]; then
+    echo "error: no saved drop-in for $target. Saved:" >&2
+    find "$BK" -maxdepth 1 -name 'zzz-head-release.conf.*' -exec basename {} \; 2>/dev/null | sed 's/^zzz-head-release\.conf\./  /' >&2
     exit 2
   fi
-done
-
-current_version() {
-  if [ -x "$RELAY_BIN" ]; then
-    # dotenv may print advisory text before the version; extract the semver.
-    "$RELAY_BIN" --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true
+  grep -qF "\"$REL/$target/$HEAD_CLI\"" "$saved" || die "$saved does not run $REL/$target"
+  [ -f "$REL/$target/$HEAD_CLI" ] || die "$REL/$target is not installed any more"
+  lock_deploys
+  if read_dropin; then
+    [ "$CURRENT" != "$target" ] || die "$UNIT already runs $target"
+    # Keep the release being left, to roll forward again.
+    cp -p "$DROPIN" "$BK/zzz-head-release.conf.$CURRENT"
+    echo "==> roll back from $CURRENT to $target (saved $BK/zzz-head-release.conf.$CURRENT)"
+  else
+    echo "==> roll back to $target (the current drop-in is not usable)"
   fi
-}
-
-CURRENT_VERSION="$(current_version || true)"
-echo "current installed version: ${CURRENT_VERSION:-unknown}"
-echo "target version:           $VERSION"
-
-TS="$(date +%Y%m%d-%H%M%S)"
-SNAP="$BACKUP_ROOT/pre-$VERSION-$TS"
-mkdir -p "$SNAP"
-chmod 700 "$SNAP"
-
-echo "==> snapshotting to $SNAP"
-
-# WAL-safe DB backup. .backup leaves the live DB untouched.
-sqlite3 "$DB" ".backup '$SNAP/kraki-relay.db'"
-
-# Sanity-check the backup is openable.
-sqlite3 "$SNAP/kraki-relay.db" "PRAGMA integrity_check;" >"$SNAP/integrity_check.txt"
-if ! grep -q '^ok$' "$SNAP/integrity_check.txt"; then
-  echo "DB backup integrity check failed — aborting" >&2
-  cat "$SNAP/integrity_check.txt" >&2
-  exit 1
-fi
-
-# Copy env and unit file. Capture install metadata.
-cp -p "$ENV_FILE" "$SNAP/relay.env" 2>/dev/null || echo "WARN: $ENV_FILE missing"
-cp -p "$UNIT" "$SNAP/kraki-relay.service"
-{ echo "previous_version=${CURRENT_VERSION:-unknown}"; \
-  echo "target_version=$VERSION"; \
-  echo "timestamp=$TS"; \
-  echo "host=$(hostname)"; } >"$SNAP/manifest"
-
-echo "snapshot ready: $SNAP"
-
-# Best-effort retention sweep for full pre-deploy snapshots (keep 30 days).
-find "$BACKUP_ROOT" -maxdepth 1 -type d -name 'pre-*' -mtime +30 -exec rm -rf {} \; 2>/dev/null || true
-
-# ---- install ----
-
-# Pin to the upstream registry. Edge nodes in China often have npm configured
-# for registry.npmmirror.com, which lags behind on new versions by hours.
-# We want the freshly-published @kraki/head@$VERSION right now, not whenever
-# the mirror syncs.
-NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
-echo "==> npm install -g --registry=$NPM_REGISTRY @kraki/head@$VERSION"
-npm install -g --registry="$NPM_REGISTRY" "@kraki/head@$VERSION"
-
-INSTALLED_VERSION="$(current_version || true)"
-if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
-  echo "ERROR: kraki-relay --version reports '$INSTALLED_VERSION', expected '$VERSION'" >&2
-  echo "       (snapshot kept at $SNAP)" >&2
-  exit 1
-fi
-echo "installed binary reports version $INSTALLED_VERSION"
-
-# ---- restart ----
-
-rollback() {
-  local reason="$1"
-  echo "==> ROLLBACK ($reason)"
-  if [ -n "${CURRENT_VERSION:-}" ] && [ "$CURRENT_VERSION" != "$VERSION" ]; then
-    npm install -g --registry="$NPM_REGISTRY" "@kraki/head@$CURRENT_VERSION" || true
+  cp -p "$saved" "$DROPIN"
+  read_dropin || exit 2
+  if restart_unit && verify "$target"; then
+    echo "rollback OK: $target on $(hostname)"
+    return 0
   fi
-  cp -p "$SNAP/kraki-relay.service" "$UNIT"
-  # The new version may have migrated the schema; old code on a newer schema
-  # can fail or corrupt data. Restore the snapshot when user_version moved
-  # (we are seconds after the restart, so little is lost). The migrated DB
-  # is kept next to the snapshot.
-  local snap_schema live_schema
-  snap_schema="$(sqlite3 "$SNAP/kraki-relay.db" 'PRAGMA user_version;' 2>/dev/null || echo '?')"
-  live_schema="$(sqlite3 "$DB" 'PRAGMA user_version;' 2>/dev/null || echo '?')"
-  if [ "$snap_schema" != "$live_schema" ]; then
-    echo "==> schema changed ($snap_schema -> $live_schema): restoring the DB snapshot"
-    systemctl stop kraki-relay || true
-    mv "$DB" "$SNAP/kraki-relay.migrated.db" 2>/dev/null || true
-    rm -f "$DB-wal" "$DB-shm"
-    cp -p "$SNAP/kraki-relay.db" "$DB"
-  fi
-  if [ -f "$SNAP/relay.env" ]; then
-    cp -p "$SNAP/relay.env" "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
-  fi
-  systemctl daemon-reload
-  systemctl restart kraki-relay || true
-  sleep 2
-  systemctl status kraki-relay --no-pager -n 10 || true
-  echo "rolled back. snapshot: $SNAP" >&2
+  journalctl -u "$UNIT" -n 30 --no-pager -o cat || true
+  echo "error: $target did not come up healthy after the rollback; check $UNIT now" >&2
   exit 1
 }
 
-# Planned restart: keep kraki-watch from paging about it (no-op if not installed).
-if command -v kraki-watch >/dev/null 2>&1; then kraki-watch maintenance 10 || true; fi
-
-echo "==> systemctl restart kraki-relay"
-if ! systemctl restart kraki-relay; then
-  rollback "systemctl restart failed"
-fi
-
-sleep 3
-
-if ! systemctl is-active --quiet kraki-relay; then
-  systemctl status kraki-relay --no-pager -n 20 || true
-  rollback "service not active after restart"
-fi
-
-# Health check via local HTTP. New head reports {"name":"@kraki/head","version":"X","status":"ok"}.
-HEALTH_BODY=""
-for attempt in 1 2 3 4 5; do
-  if HEALTH_BODY="$(curl -sf --max-time 3 "$HEALTH_URL" 2>/dev/null)"; then
-    break
-  fi
-  sleep 1
+# deploy/rollback run from the last command, which bash has read to the end
+# of the script before it starts: with `bash -s`, no child process (npm,
+# kraki-watch, ...) can read the rest of the script from stdin.
+case "${1:-}" in
+  ''|-h|--help) usage ;;
+esac
+[ -n "$ROOT" ] || [ "$(id -u)" -eq 0 ] || die "run as root on the relay host"
+for tool in systemctl curl sqlite3; do
+  command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
 done
-
-if [ -z "$HEALTH_BODY" ]; then
-  rollback "health endpoint $HEALTH_URL not responding"
+if [ "$1" = rollback ]; then
+  [ $# -eq 2 ] || usage
+  rollback "$2"
+else
+  [ $# -eq 1 ] || usage
+  deploy "$1"
 fi
-
-if ! echo "$HEALTH_BODY" | grep -q "\"version\":\"$VERSION\""; then
-  echo "health endpoint reports unexpected body:" >&2
-  echo "  $HEALTH_BODY" >&2
-  rollback "health body does not advertise version $VERSION"
-fi
-
-echo
-echo "deploy OK: kraki-relay $VERSION running, /127.0.0.1:4000/ healthy"
-echo "snapshot: $SNAP"
-echo
-echo "manual rollback (within 30 days of snapshot):"
-echo "  systemctl stop kraki-relay"
-echo "  npm install -g @kraki/head@${CURRENT_VERSION:-<prev>}"
-echo "  # only if the new version changed the schema (PRAGMA user_version):"
-echo "  #   mv $DB $SNAP/kraki-relay.migrated.db && rm -f $DB-wal $DB-shm && cp $SNAP/kraki-relay.db $DB"
-echo "  cp $SNAP/kraki-relay.service $UNIT"
-echo "  cp $SNAP/relay.env $ENV_FILE && chmod 600 $ENV_FILE"
-echo "  systemctl daemon-reload && systemctl restart kraki-relay"

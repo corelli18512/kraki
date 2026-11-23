@@ -27,9 +27,16 @@ final class MainTabViewTests: XCTestCase {
             rootView: MainTabView(allowsInitialNavigation: false, forcesLegacyTabs: true).environment(app))
         window.makeKeyAndVisible()
         defer { window.isHidden = true; window.rootViewController = nil }
-        drain(1)
+        // Wait for the real condition: the + tab's interceptor is installed once the
+        // tab screen appears, which a loaded iOS 27 CI simulator can take > 1 s to do.
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline,
+              !(tabBarController(in: window.rootViewController)?.delegate is TabActionInterceptor.DelegateProxy) {
+            drain(0.05)
+        }
 
         let tabs = try XCTUnwrap(tabBarController(in: window.rootViewController))
+        XCTAssertTrue(tabs.delegate is TabActionInterceptor.DelegateProxy, "the + tab interceptor is installed")
         let titles = tabs.tabBar.items?.map { $0.title ?? "" } ?? []
         XCTAssertEqual(titles.last, "New Session", "tabs: \(titles)")
         let selectedBefore = tabs.selectedIndex

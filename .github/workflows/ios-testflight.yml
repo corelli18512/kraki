@@ -59,6 +59,13 @@ jobs:
             echo "::error::iOS SDK $IOS_SDK is older than $MIN_IOS_SDK_MAJOR; App Store Connect would reject the upload (ITMS-90725)"
             exit 1
           fi
+          # The upload step needs altool from this Xcode; fail before the
+          # archive rather than after it.
+          if ! ALTOOL="$(xcrun --find altool)" || [ ! -x "$ALTOOL" ]; then
+            echo "::error::altool is missing from the selected Xcode; the TestFlight upload would fail"
+            exit 1
+          fi
+          echo "altool $ALTOOL"
 
       - name: Resolve release version
         id: version
@@ -164,10 +171,16 @@ jobs:
           APP="$RUNNER_TEMP/Kraki.xcarchive/Products/Applications/Kraki.app"
           test -d "$APP"
           cmp packages/arm/ios/Kraki/Resources/build-info.json "$APP/build-info.json"
-          SDK_NAME="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$APP/Info.plist")"
-          SDK_MAJOR="${SDK_NAME#iphoneos}"
-          echo "Archived with $SDK_NAME"
-          test "${SDK_MAJOR%%.*}" -ge "$MIN_IOS_SDK_MAJOR"
+          # Both shipped bundles must be built with the required iOS SDK.
+          for BUNDLE in "$APP" "$APP/PlugIns/KrakiNotification.appex"; do
+            SDK_NAME="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$BUNDLE/Info.plist")"
+            SDK_MAJOR="${SDK_NAME#iphoneos}"
+            echo "$(basename "$BUNDLE") archived with $SDK_NAME"
+            if ! [ "${SDK_MAJOR%%.*}" -ge "$MIN_IOS_SDK_MAJOR" ]; then
+              echo "::error::$(basename "$BUNDLE") was built with $SDK_NAME, older than iphoneos$MIN_IOS_SDK_MAJOR (ITMS-90725)"
+              exit 1
+            fi
+          done
           if [ '${{ inputs.diagnostics }}' = 'true' ]; then
             bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
           else

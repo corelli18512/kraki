@@ -51,6 +51,7 @@ final class MacLaunchCoordinator {
     @ObservationIgnored private var hasCommittedLaunchActivity = false
     @ObservationIgnored private var isFinishingAuthenticatedSurface = false
     @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored private let minimumVisibleSecondsOverride: TimeInterval?
     /// Debug `KRAKI_MAC_FORCE_SIGNED_OUT=1`: stay on the signed-out page until
     /// the user signs in, also across app activations.
     @ObservationIgnored var forceSignedOut: Bool = {
@@ -60,6 +61,10 @@ final class MacLaunchCoordinator {
         false
         #endif
     }()
+
+    init(minimumVisibleSecondsOverride: TimeInterval? = nil) {
+        self.minimumVisibleSecondsOverride = minimumVisibleSecondsOverride
+    }
 
     /// Startup ran (or is running) for this process.
     var bootstrapStarted: Bool { hasStarted }
@@ -279,12 +284,13 @@ final class MacLaunchCoordinator {
     private func waitForMinimumLaunchVisibility() async {
         let startedAt = launchStartedAt ?? Date()
         #if DEBUG
-        let minimumVisibleSeconds = ProcessInfo.processInfo.environment["KRAKI_MAC_LAUNCH_MIN_MS"]
-            .flatMap(Double.init)
-            .map { max(0, $0 / 1_000) }
+        let minimumVisibleSeconds = minimumVisibleSecondsOverride
+            ?? ProcessInfo.processInfo.environment["KRAKI_MAC_LAUNCH_MIN_MS"]
+                .flatMap(Double.init)
+                .map { max(0, $0 / 1_000) }
             ?? 0.35
         #else
-        let minimumVisibleSeconds = 0.35
+        let minimumVisibleSeconds = minimumVisibleSecondsOverride ?? 0.35
         #endif
         let remaining = minimumVisibleSeconds - Date().timeIntervalSince(startedAt)
         if remaining > 0 {
@@ -522,8 +528,8 @@ struct MacApp: App {
         let installsUsagePeek = true
         #endif
         if installsUsagePeek {
-            Task { @MainActor in
-                UsagePeekController.shared.install(appState: state) { [weak coordinator] in
+            Task { @MainActor [weak coordinator] in
+                UsagePeekController.shared.install(appState: state) {
                     state.sessionStore.activeSessionId ?? coordinator?.lastSelectedSessionId
                 }
             }

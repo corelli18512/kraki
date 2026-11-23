@@ -99,6 +99,9 @@ struct MessageInputView: View {
     /// When a hardware Shift/Option/Control-Return was pressed: the newline
     /// it types next is text (see `isLiteralNewlineFresh`).
     @State private var literalNewlineKeyAt: Date?
+    /// The draft with the newline a Return typed but did not send, until the
+    /// field has been given it (see `dropReturnNewline`).
+    @State private var unsentReturn = UnsentReturnNewline()
     @State private var showVoiceConsent = false
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
@@ -803,10 +806,12 @@ struct MessageInputView: View {
                     // so a draft that is not sent (empty / whitespace) is
                     // written back without it and the field follows; storing
                     // the unchanged text never reached the field.
+                    unsentReturn.returnTyped(old: text, typed: newValue)
                     sessionStore.setDraft(sessionId, newValue)
                     handleModeSubmit()
-                    if text == newValue { dropReturnNewline(newValue) }
+                    if text != newValue { unsentReturn.clear() }
                 } else {
+                    unsentReturn.clear()
                     sessionStore.setDraft(sessionId, newValue)
                 }
             }
@@ -843,17 +848,33 @@ struct MessageInputView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+        .background {
+            ComposerTextApplied(text: text) { applied in
+                guard let typed = unsentReturn.draft, applied == typed else { return }
+                unsentReturn.draft = nil
+                dropReturnNewline(typed)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .accessibilityIdentifier("chat-composer-text")
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }
     }
 
-    /// Return on a draft that was not sent: remove the newline it typed on
-    /// the next update (after SwiftUI has taken the field's text).
+    /// Return on a draft that was not sent: remove the newline it typed, on
+    /// the next main-queue turn after the platform-view update that gave the
+    /// field the typed draft (`ComposerTextApplied`). SwiftUI writes a draft
+    /// into the field only when it differs from the one it last gave it, so
+    /// removing the newline before that update left it in the field (K-154).
+    /// That happened when the edit itself queued the removal: SwiftUI updates
+    /// from a run-loop observer, which the main queue can beat (on iOS 27
+    /// about every other Return). Neither a body evaluation nor
+    /// `onChange(of:)` was a reliable sign of that update on iOS 27.
     private func dropReturnNewline(_ typed: String) {
         DispatchQueue.main.async {
-            guard text == typed else { return }
-            sessionStore.setDraft(sessionId, String(typed.dropLast()))
+            guard text == typed, let base = unsentReturn.takeBase(showing: typed) else { return }
+            sessionStore.setDraft(sessionId, base)
         }
     }
 

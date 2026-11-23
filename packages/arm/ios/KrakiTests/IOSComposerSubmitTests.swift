@@ -108,7 +108,9 @@ import Darwin
         let field = try XCTUnwrap(editor())
         field.becomeFirstResponder()
         field.insertText("\n")
-        drain(0.3)
+        // The newline goes after the update that gives the field the typed
+        // draft; the first focus can hold the main thread for a few hundred ms.
+        drain(until: { (self.editor()?.text ?? "") == "" })
         XCTAssertEqual(sentAttachments.count, 0, "nothing to send")
         XCTAssertEqual(editor()?.text ?? "", "", "the Return newline is not left in an empty field")
 
@@ -116,10 +118,85 @@ import Darwin
         XCTAssertTrue(drain(until: { app.sessionStore.drafts[self.sessionId] == "  " }))
         XCTAssertTrue(drain(until: { !self.accessible("Clear message").isEmpty }), "a whitespace draft can be cleared")
         field.insertText("\n")
-        drain(0.3)
+        drain(until: { self.editor()?.text == "  " && app.sessionStore.drafts[self.sessionId] == "  " })
         XCTAssertEqual(sentAttachments.count, 0)
         XCTAssertEqual(editor()?.text, "  ", "Return on whitespace keeps the draft without the newline")
         XCTAssertEqual(app.sessionStore.drafts[sessionId], "  ")
+    }
+
+    /// The same Return, round after round, each time on a settled composer
+    /// (as when someone pauses before pressing it). Whether the run loop then
+    /// serves the main queue or SwiftUI's view update first varies from key
+    /// to key (on iOS 27 about every other time); the newline must leave the
+    /// field either way.
+    func testRepeatedReturnOnEmptyOrWhitespaceDraftNeverKeepsTheNewline() throws {
+        continueAfterFailure = false
+        let app = try show()
+        let field = try XCTUnwrap(editor())
+        field.becomeFirstResponder()
+        func draft() -> String { app.sessionStore.drafts[sessionId] ?? "" }
+        for round in 1...6 {
+            drain(0.3)
+            field.insertText("\n")
+            XCTAssertTrue(drain(until: { field.text == "" && draft() == "" }),
+                          "round \(round): Return on an empty field left \((field.text ?? "").debugDescription)")
+            field.insertText("  ")
+            XCTAssertTrue(drain(until: { draft() == "  " }))
+            drain(0.3)
+            field.insertText("\n")
+            XCTAssertTrue(drain(until: { field.text == "  " && draft() == "  " }),
+                          "round \(round): Return on whitespace left \((field.text ?? "").debugDescription)")
+            field.deleteBackward()
+            field.deleteBackward()
+            XCTAssertTrue(drain(until: { field.text == "" && draft() == "" }), "round \(round): the field is empty again")
+        }
+        XCTAssertEqual(sentAttachments.count, 0, "nothing to send")
+    }
+
+    /// Two Returns before the first newline was removed (a held or quickly
+    /// repeated key) go back to the draft before the first one, not to "\n".
+    func testQuickRepeatedReturnOnEmptyOrWhitespaceDraftLeavesNoNewline() throws {
+        continueAfterFailure = false
+        let app = try show()
+        let field = try XCTUnwrap(editor())
+        field.becomeFirstResponder()
+        func draft() -> String { app.sessionStore.drafts[sessionId] ?? "" }
+        drain(0.3)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "" && draft() == "" }),
+                      "two Returns on an empty field left \((field.text ?? "").debugDescription)")
+        field.insertText("  ")
+        XCTAssertTrue(drain(until: { draft() == "  " }))
+        drain(0.3)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "  " && draft() == "  " }),
+                      "two Returns on whitespace left \((field.text ?? "").debugDescription)")
+        XCTAssertEqual(sentAttachments.count, 0, "nothing to send")
+    }
+
+    /// Chinese composition is typing, not a Return: the marked pinyin and
+    /// the committed characters stay in the draft, and Return afterwards
+    /// sends what was committed and empties the field.
+    func testCompositionThenReturnSendsTheCommittedText() throws {
+        let app = try show()
+        let field = try XCTUnwrap(editor())
+        field.becomeFirstResponder()
+        field.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0))
+        drain(0.2)
+        field.setMarkedText("ni hao", selectedRange: NSRange(location: 6, length: 0))
+        drain(0.2)
+        field.replace(try XCTUnwrap(field.markedTextRange), withText: "你好")
+        field.unmarkText()
+        XCTAssertTrue(drain(until: { app.sessionStore.drafts[self.sessionId] == "你好" }), "the committed characters are the draft")
+        XCTAssertEqual(field.text, "你好")
+        XCTAssertEqual(sentDelivery.count, 0, "composing sends nothing")
+        drain(0.3)
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { self.sentDelivery == ["prompt"] }), "Return sends the committed text")
+        XCTAssertTrue(drain(until: { field.text == "" && (app.sessionStore.drafts[self.sessionId] ?? "") == "" }),
+                      "the field is empty after the send")
     }
 
     // MARK: K-151

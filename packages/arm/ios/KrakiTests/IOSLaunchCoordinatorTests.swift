@@ -16,7 +16,8 @@ final class IOSLaunchCoordinatorTests: XCTestCase {
     /// still up. The launch must land signed in, not on "Welcome to Kraki".
     func testCredentialsGainedDuringTheMinimumGateWaitLandSignedIn() async throws {
         let app = signedOutHost()
-        let coordinator = IOSLaunchCoordinator(minimumVisibleSecondsOverride: 0.4,
+        // A 1 s gate, so the sign-in at 100 ms is inside it on a loaded machine.
+        let coordinator = IOSLaunchCoordinator(minimumVisibleSecondsOverride: 1,
                                                presentationWatchdogSecondsOverride: 30)
         let launch = Task { await coordinator.bootstrap(appState: app) }
         try await Task.sleep(for: .milliseconds(100))
