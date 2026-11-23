@@ -31,6 +31,18 @@ final class ChatWidthChangeTests: XCTestCase {
         fx.vc.automationUserScrollActive = false
         fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
         drain(300)
+        waitForHeightMeasurements(fx)
+    }
+
+    /// Rows measured after the list appears or scrolls correct their heights
+    /// while the row in the middle of the viewport stays put, so the row at
+    /// the top can still move a few points; the list then keeps that position
+    /// across folds. Read the reading position only once they are done (iOS 27
+    /// CI: read 300 ms after the drag, it was 10 pt off what the list kept).
+    private func waitForHeightMeasurements(_ fx: ChatUXRegressionTests.Fx) {
+        let deadline = Date().addingTimeInterval(10)
+        while !fx.vc.automationHeightMeasurementsSettled, Date() < deadline { drain(10) }
+        XCTAssertTrue(fx.vc.automationHeightMeasurementsSettled, "row heights settled")
     }
 
     /// The list re-lays out for a new width one main-queue turn after the
@@ -133,6 +145,7 @@ final class ChatWidthChangeTests: XCTestCase {
         let cv0 = try chat()
         let vc = try XCTUnwrap(sequence(first: cv0 as UIResponder, next: { $0.next }).first { $0 is ChatPerfListVC } as? ChatPerfListVC)
         let live = ChatUXRegressionTests.Fx(vc: vc, cv: cv0, app: fx.app)
+        waitForHeightMeasurements(live)
         drag(live, to: cv0.contentSize.height * 0.4)
         let start = try XCTUnwrap(anchor(live))
         for (step, size) in [CGSize(width: 951, height: 669), CGSize(width: 466, height: 678), CGSize(width: 951, height: 669), CGSize(width: 466, height: 678)].enumerated() {
