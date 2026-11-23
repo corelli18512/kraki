@@ -19,6 +19,8 @@ struct IOSNewSessionComposer: View {
 
     @FocusState private var focused: Bool
     @State private var showVoiceConsent = false
+    /// See MessageInputView's `dropReturnNewline`.
+    @State private var unsentReturn = MessageInputView.UnsentReturnNewline()
 
     static let draftID = IOSVoiceComposer.newSessionDraftID
     private static let transcriptMaxHeight: CGFloat = 132
@@ -94,9 +96,15 @@ struct IOSNewSessionComposer: View {
                     guard newValue != text else { return }
                     voice.takeOver(sessionID: Self.draftID)
                     if MessageInputView.isReturnKeySubmit(old: text, new: newValue) {
-                        store.setDraft(Self.draftID, String(newValue.dropLast()))
+                        // As in the chat composer (K-154): store the typed
+                        // newline, so a draft that is not sent is written
+                        // back without it and the field follows.
+                        unsentReturn.draft = newValue
+                        store.setDraft(Self.draftID, newValue)
                         send()
+                        if text != newValue { unsentReturn.draft = nil }
                     } else {
+                        unsentReturn.draft = nil
                         store.setDraft(Self.draftID, newValue)
                     }
                 }
@@ -108,6 +116,15 @@ struct IOSNewSessionComposer: View {
             .padding(.trailing, 4)
             .padding(.vertical, 12)
             .focused($focused)
+            .background {
+                MessageInputView.ComposerTextApplied(text: text) { applied in
+                    guard let typed = unsentReturn.draft, applied == typed else { return }
+                    unsentReturn.draft = nil
+                    dropReturnNewline(typed)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .submitLabel(.send)
             .onSubmit(send)
             .accessibilityIdentifier("new-session-text")
@@ -125,6 +142,15 @@ struct IOSNewSessionComposer: View {
             }
         }
         .padding(.trailing, 2)
+    }
+
+    /// Return on a draft that was not sent: remove the newline after the
+    /// update that gave the field the typed draft (see MessageInputView).
+    private func dropReturnNewline(_ typed: String) {
+        DispatchQueue.main.async {
+            guard text == typed else { return }
+            store.setDraft(Self.draftID, String(typed.dropLast()))
+        }
     }
 
     private var transcript: some View {
