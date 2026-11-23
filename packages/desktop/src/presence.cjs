@@ -25,7 +25,7 @@ function resolveStatus(s) {
   return 'offline';
 }
 
-const { statSync } = require('node:fs');
+const { readFileSync, statSync } = require('node:fs');
 const path = require('node:path');
 const { t } = require('./i18n.cjs');
 
@@ -74,17 +74,20 @@ function trayMenu(status, managed, needsYou, act) {
 
 /**
  * An update started from another device (Update in a phone's device details)
- * runs the Kraki for Windows installer, which closes this app: the built-in
- * Kraki keeps `remote-update/plan.json` until it is done (MacPresence
- * remoteUpdateInProgress). Recent only: a plan left by an updater that died
- * never silences Quit.
+ * runs the Kraki for Windows installer, which closes this app. The built-in
+ * Kraki's plan (`remote-update/plan.json`) names a `windows-app` update, and
+ * its applier keeps `remote-update/windows-installer-running` only while the
+ * installer runs (remote-update.ts WINDOWS_INSTALLER_MARKER). Recent only: a
+ * marker left by an updater that died never silences Quit.
  */
-function remoteUpdateInProgress(krakiHome, now = Date.now()) {
+function remoteUpdateInstallerRunning(krakiHome, now = Date.now()) {
+  const dir = path.join(krakiHome, 'remote-update');
   try {
-    return now - statSync(path.join(krakiHome, 'remote-update', 'plan.json')).mtimeMs < 3600_000;
+    if (JSON.parse(readFileSync(path.join(dir, 'plan.json'), 'utf8')).method !== 'windows-app') return false;
+    return now - statSync(path.join(dir, 'windows-installer-running')).mtimeMs < 3600_000;
   } catch {
     return false;
   }
 }
 
-module.exports = { resolveStatus, TITLE, DETAIL, managesPresence, canGoOffline, canGoOnline, trayIcon, trayMenu, remoteUpdateInProgress };
+module.exports = { resolveStatus, TITLE, DETAIL, managesPresence, canGoOffline, canGoOnline, trayIcon, trayMenu, remoteUpdateInstallerRunning };

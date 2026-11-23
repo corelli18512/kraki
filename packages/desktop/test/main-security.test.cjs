@@ -314,7 +314,14 @@ test('a remote update\'s installer closes the app without taking this PC offline
     calls.length = 0;
 
     require('node:fs').mkdirSync(path.join(home, 'remote-update'));
-    writeFileSync(path.join(home, 'remote-update', 'plan.json'), '{}');
+    writeFileSync(path.join(home, 'remote-update', 'plan.json'), JSON.stringify({ method: 'windows-app' }));
+    // Staged, installer not running yet: closing still hides to the tray.
+    let hidden = false;
+    vm.runInContext('win', env.context).hide = () => { hidden = true; };
+    env.main.emitWindow('close', { preventDefault() {} });
+    assert.equal(hidden, true);
+    assert.deepEqual(calls, []);
+    writeFileSync(path.join(home, 'remote-update', 'windows-installer-running'), '{}');
     // The installer closes the window: the app quits, staying online.
     let prevented = false;
     env.main.emitWindow('close', { preventDefault() { prevented = true; } });

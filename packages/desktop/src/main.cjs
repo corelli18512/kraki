@@ -303,7 +303,7 @@ async function goOffline() {
 
 /** An update from another device is replacing Kraki for Windows right now. */
 function installingRemoteUpdate() {
-  return !!builtIn && presence.remoteUpdateInProgress(builtIn.home());
+  return !!builtIn && presence.remoteUpdateInstallerRunning(builtIn.home());
 }
 
 /** Tray › Quit: while this PC is online, quitting takes it offline (asked once).

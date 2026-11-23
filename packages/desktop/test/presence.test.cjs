@@ -37,15 +37,24 @@ test('status opens settings and Needs You limits entries without losing overflow
   assert.equal(menu.filter((item) => item.label === 'New Session — Asked you a question').length, 5);
   assert.ok(menu.some((item) => item.label === '20 more…'));
 });
-test('a remote update in progress: plan.json, recent only', () => {
+test('a remote update\'s installer running: a windows-app plan and the applier\'s marker, recent only', () => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require('node:fs');
   const path = require('node:path');
   const home = mkdtempSync(path.join(require('node:os').tmpdir(), 'kraki-presence-'));
+  const dir = path.join(home, 'remote-update');
   try {
-    assert.equal(p.remoteUpdateInProgress(home), false);
-    mkdirSync(path.join(home, 'remote-update'));
-    writeFileSync(path.join(home, 'remote-update', 'plan.json'), '{}');
-    assert.equal(p.remoteUpdateInProgress(home), true);
-    assert.equal(p.remoteUpdateInProgress(home, Date.now() + 2 * 3600_000), false, 'a plan left by an updater that died');
+    assert.equal(p.remoteUpdateInstallerRunning(home), false);
+    mkdirSync(dir);
+    // The plan alone: staged, or verifying after the installer finished.
+    writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ method: 'windows-app' }));
+    assert.equal(p.remoteUpdateInstallerRunning(home), false);
+    writeFileSync(path.join(dir, 'windows-installer-running'), '{}');
+    assert.equal(p.remoteUpdateInstallerRunning(home), true);
+    assert.equal(p.remoteUpdateInstallerRunning(home, Date.now() + 2 * 3600_000), false, 'a marker left by an updater that died');
+    // Another install's update in the same Kraki home (a standalone CLI).
+    writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ method: 'binary' }));
+    assert.equal(p.remoteUpdateInstallerRunning(home), false);
+    rmSync(path.join(dir, 'plan.json'));
+    assert.equal(p.remoteUpdateInstallerRunning(home), false);
   } finally { rmSync(home, { recursive: true }); }
 });
