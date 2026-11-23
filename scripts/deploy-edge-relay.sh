@@ -9,23 +9,29 @@
 #   /opt/kraki-head/backups/   database snapshots, and the drop-in of each replaced release
 #   /usr/local/bin/kraki-watch optional; told about the planned restart
 #
-# Usage, as root on the relay host (for example
-# `ssh <host> 'sudo bash -s 0.22.0' < scripts/deploy-edge-relay.sh`):
+# Usage, as root on the relay host:
 #   deploy-edge-relay.sh <version>           back up the database and the drop-in, install
 #                                            <version>, point the drop-in at it, restart and verify;
-#                                            on any failure after the switch, restore the previous drop-in
+#                                            on any failure after the switch, or on HUP/INT/TERM/PIPE
+#                                            (e.g. the ssh session drops), restore the previous drop-in
 #   deploy-edge-relay.sh rollback <version>  switch back to the saved drop-in of <version>
+# Only one deploy or rollback runs at a time (flock on /opt/kraki-head/backups/.deploy.lock).
 #
-# Verification: the service is active, http://127.0.0.1:<port>/ and /healthz report the
-# version, and a WebSocket upgrade is answered with 101. With KRAKI_PUBLIC_URL set
-# (e.g. https://cn.relay.kraki.chat), the same /healthz and upgrade through the proxy.
+# Pass the environment after sudo: its env_reset drops variables set before it.
+#   sudo KRAKI_PUBLIC_URL=https://cn.relay.kraki.chat bash scripts/deploy-edge-relay.sh 0.22.0
+#   ssh <host> 'sudo KRAKI_PUBLIC_URL=https://cn.relay.kraki.chat bash -s 0.22.0' < scripts/deploy-edge-relay.sh
+#
+# Verification: the service is active, http://127.0.0.1:<port>/ reports the version, and a
+# WebSocket upgrade is answered with 101. With KRAKI_PUBLIC_URL set, the same version and
+# upgrade through the proxy. (Head's / reports its version; it is not a readiness check.)
 #
 # Environment:
 #   NPM_REGISTRY       registry for the install (default https://registry.npmjs.org; China
 #                      mirrors lag new versions by hours)
 #   KRAKI_PUBLIC_URL   see above
 #   KRAKI_DEPLOY_ROOT  prefix for every host path, so scripts/deploy-edge-relay.test.mjs can run
-#                      this against a fake root with fake systemctl/curl/npm. Never set on a relay.
+#                      this against a fake root with fake systemctl/curl/npm (and without flock
+#                      if the test machine has none). Never set on a relay.
 
 set -euo pipefail
 
@@ -46,7 +52,20 @@ usage() {
   exit 2
 }
 
-# Sets CURRENT (release the drop-in runs), NODE, NODE_BIN_DIR, DB and HEALTH_URL.
+# Holds $BK/.deploy.lock on fd 9 until the script exits.
+lock_deploys() {
+  [ -d "$BK" ] || install -d -m 700 "$BK"
+  exec 9>"$BK/.deploy.lock"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || die "another deploy or rollback is running on this host ($BK/.deploy.lock)"
+  elif [ -n "$ROOT" ]; then
+    echo "note: no flock on this machine; running unlocked against the test root" >&2
+  else
+    die "missing required tool: flock"
+  fi
+}
+
+# Sets CURRENT (release the drop-in runs), NODE, NODE_BIN_DIR, DB and LOCAL_URL.
 read_dropin() {
   [ -f "$DROPIN" ] || { echo "no $DROPIN: this host does not use the per-release layout" >&2; return 1; }
   local exec_line cli port
@@ -62,7 +81,7 @@ read_dropin() {
   valid_version "$CURRENT" || { echo "unexpected release directory in $DROPIN: $cli" >&2; return 1; }
   DB=$(sed -nE 's/.*"--db" "([^"]+)".*/\1/p' <<<"$exec_line")
   port=$(sed -nE 's/.*"--port" "([0-9]+)".*/\1/p' <<<"$exec_line")
-  HEALTH_URL="http://127.0.0.1:${port:-4000}"
+  LOCAL_URL="http://127.0.0.1:${port:-4000}"
   NODE_BIN_DIR=$(dirname "$NODE")
 }
 
@@ -95,11 +114,10 @@ websocket_upgrades() {  # url
 
 verify() {  # version
   systemctl is-active --quiet "$UNIT" || { echo "$UNIT is not active"; return 1; }
-  reports_version "$HEALTH_URL/" "$1" || return 1
-  reports_version "$HEALTH_URL/healthz" "$1" || return 1
-  websocket_upgrades "$HEALTH_URL/" || return 1
+  reports_version "$LOCAL_URL/" "$1" || return 1
+  websocket_upgrades "$LOCAL_URL/" || return 1
   if [ -n "${KRAKI_PUBLIC_URL:-}" ]; then
-    reports_version "${KRAKI_PUBLIC_URL%/}/healthz" "$1" || return 1
+    reports_version "${KRAKI_PUBLIC_URL%/}/" "$1" || return 1
     websocket_upgrades "${KRAKI_PUBLIC_URL%/}/" || return 1
   fi
 }
@@ -109,6 +127,20 @@ restart_unit() {
   systemctl daemon-reload || return 1
   systemctl restart "$UNIT" || return 1
   sleep 3
+}
+
+# Signal handler while the switched drop-in is unverified: put back the saved
+# previous drop-in ($RESTORE_DROPIN) and restart. Output may go nowhere (the
+# ssh session that sent the signal is gone), so nothing here may stop it.
+restore_on_signal() {  # signal exit-status
+  trap '' HUP INT TERM PIPE
+  set +e
+  cp -p "$RESTORE_DROPIN" "$DROPIN"
+  maintenance >/dev/null 2>&1
+  systemctl daemon-reload
+  systemctl restart "$UNIT"
+  echo "SIG$1 after the drop-in switch: restored $RESTORE_DROPIN and restarted $UNIT; check it" >&2
+  exit "$2"
 }
 
 install_release() {  # version
@@ -137,6 +169,7 @@ deploy() {  # version
   [ "$new" != "$prev" ] || die "$UNIT already runs $new"
   [ -x "$NODE_BIN_DIR/npm" ] || die "no npm next to $NODE"
   [ -f "$DB" ] || die "no database at $DB"
+  lock_deploys
   echo "host=$(hostname) running=$prev target=$new node=$NODE ($("$NODE" --version)) db=$DB"
 
   echo "==> back up the database and the $prev drop-in"
@@ -155,10 +188,16 @@ deploy() {  # version
   echo "==> switch the drop-in from $prev to $new"
   sed "s#/releases/${prev//./\\.}/#/releases/$new/#g" "$DROPIN" > "$DROPIN.new"
   grep -qF "\"$REL/$new/$HEAD_CLI\"" "$DROPIN.new" || { rm -f "$DROPIN.new"; die "could not point the drop-in at $new"; }
+  RESTORE_DROPIN="$BK/zzz-head-release.conf.$prev"
+  trap 'restore_on_signal HUP 129' HUP
+  trap 'restore_on_signal INT 130' INT
+  trap 'restore_on_signal PIPE 141' PIPE
+  trap 'restore_on_signal TERM 143' TERM
   mv "$DROPIN.new" "$DROPIN"
   cat "$DROPIN"
 
   if restart_unit && verify "$new"; then
+    trap - HUP INT TERM PIPE
     schema_after=$(sqlite3 "$DB" 'PRAGMA user_version;')
     echo "user_version $schema_before -> $schema_after"
     echo "deploy OK: $new on $(hostname). Roll back with: deploy-edge-relay.sh rollback $prev"
@@ -193,6 +232,7 @@ rollback() {  # version
   fi
   grep -qF "\"$REL/$target/$HEAD_CLI\"" "$saved" || die "$saved does not run $REL/$target"
   [ -f "$REL/$target/$HEAD_CLI" ] || die "$REL/$target is not installed any more"
+  lock_deploys
   if read_dropin; then
     [ "$CURRENT" != "$target" ] || die "$UNIT already runs $target"
     # Keep the release being left, to roll forward again.

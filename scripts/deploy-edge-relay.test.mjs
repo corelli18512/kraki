@@ -3,7 +3,7 @@
 // the script does; nothing touches a real host or service.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -61,11 +61,13 @@ echo "{\\"name\\":\\"@kraki/head\\",\\"version\\":\\"$v\\"}" > "$m/@kraki/head/p
 echo 'module.exports = class { prepare() { return { get() { return 1; } }; } };' > "$m/better-sqlite3/index.js"`, join(root, 'opt/node/bin'));
   // Reads stdin, as any child could: over `bash -s` that would be the script.
   sh('kraki-watch', 'echo "kraki-watch $*" >> "$S/log"; cat >> "$S/kraki-watch-stdin"', join(root, 'usr/local/bin'));
+  // FAKE_SIGNAL_AT_RESTART="<version> <signal>": the deploy gets <signal> while that version restarts.
   sh('systemctl', `echo "systemctl $*" >> "$S/log"
 case "$1" in
   restart)
     v=$(sed -nE 's#.*/releases/([^/]+)/node_modules/@kraki/head/dist/cli.js.*#\\1#p' ${JSON.stringify(dropin)} | tail -1)
     echo "$v" > "$S/running"
+    [ "$v" != "\${FAKE_SIGNAL_AT_RESTART%% *}" ] || kill -s "\${FAKE_SIGNAL_AT_RESTART#* }" $PPID
     [ "$v" = "\${FAKE_SCHEMA_BUMP:-}" ] && echo 16 > "$S/user_version"
     [ "$v" != "\${FAKE_RESTART_FAILS:-}" ] ;;
   is-active) [ "$(cat "$S/running")" != "\${FAKE_RESTART_FAILS:-}" ] ;;
@@ -97,8 +99,9 @@ esac`);
     });
     return { ...r, log: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
   };
-  const backups = () => (existsSync(join(root, 'opt/kraki-head/backups')) ? readdirSync(join(root, 'opt/kraki-head/backups')).sort() : []);
-  return { root, dropin, original, run, backups, running: () => readFileSync(join(state, 'running'), 'utf8').trim(), state };
+  const backups = () => (existsSync(join(root, 'opt/kraki-head/backups'))
+    ? readdirSync(join(root, 'opt/kraki-head/backups')).filter(name => name !== '.deploy.lock').sort() : []);
+  return { root, bin, dropin, original, run, backups, running: () => readFileSync(join(state, 'running'), 'utf8').trim(), state };
 }
 
 const at = (log, prefix) => log.findIndex(line => line.startsWith(prefix));
@@ -126,10 +129,11 @@ test('deploys a new release next to the old one and switches the drop-in', posix
   // kraki-watch hears about the restart first; systemd reloads the drop-in before the restart.
   assert.ok(at(r.log, 'kraki-watch maintenance 10') < at(r.log, 'systemctl daemon-reload'));
   assert.ok(at(r.log, 'systemctl daemon-reload') < at(r.log, 'systemctl restart kraki-relay'));
-  // Verified: active, version on / and /healthz, WebSocket upgrade.
+  // Verified: active, version on /, WebSocket upgrade.
   const after = r.log.slice(at(r.log, 'systemctl restart'));
-  for (const check of ['systemctl is-active --quiet kraki-relay', 'curl http://127.0.0.1:4000/', 'curl http://127.0.0.1:4000/healthz',
+  for (const check of ['systemctl is-active --quiet kraki-relay', 'curl http://127.0.0.1:4000/',
     'curl http://127.0.0.1:4000/ (websocket)']) assert.ok(after.includes(check), check);
+  assert.ok(!r.log.some(line => line.includes('/healthz')), 'Head has no /healthz route');
 });
 
 test('runs piped into bash -s, as over ssh, without a child eating the script', posix, () => {
@@ -144,17 +148,17 @@ test('runs piped into bash -s, as over ssh, without a child eating the script', 
   assert.equal(readFileSync(join(relay.state, 'kraki-watch-stdin'), 'utf8'), '');
 });
 
-test('also checks /healthz and the WebSocket upgrade through the public URL when given', posix, () => {
+test('also checks the version and the WebSocket upgrade through the public URL when given', posix, () => {
   const relay = fakeRelay();
   const r = relay.run(['0.22.0'], { KRAKI_PUBLIC_URL: 'https://cn.relay.example/' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(r.log.includes('curl https://cn.relay.example/healthz'));
+  assert.ok(r.log.includes('curl https://cn.relay.example/'));
   assert.ok(r.log.includes('curl https://cn.relay.example/ (websocket)'));
 });
 
 for (const [name, env] of [
   ['the restart fails', { FAKE_RESTART_FAILS: '0.22.0' }],
-  ['the new version does not answer health checks', { FAKE_UNHEALTHY: '0.22.0' }],
+  ['the new version does not report its version', { FAKE_UNHEALTHY: '0.22.0' }],
   ['the new version refuses WebSocket upgrades', { FAKE_NO_WEBSOCKET: '0.22.0' }],
 ]) {
   test(`rolls back to the previous drop-in when ${name}`, posix, () => {
@@ -197,6 +201,63 @@ for (const [name, args, env, message] of [
   });
 }
 
+for (const [signal, status] of [['HUP', 129], ['INT', 130], ['PIPE', 141], ['TERM', 143]]) {
+  test(`restores the previous drop-in on SIG${signal} after the switch (e.g. the ssh session drops)`, posix, () => {
+    const relay = fakeRelay();
+    const r = relay.run(['0.22.0'], { FAKE_SIGNAL_AT_RESTART: `0.22.0 ${signal}` });
+    assert.equal(r.status, status, r.stdout + r.stderr);
+    assert.match(r.stderr, new RegExp(`SIG${signal} after the drop-in switch: restored .*zzz-head-release\\.conf\\.0\\.21\\.0`));
+    assert.equal(readFileSync(relay.dropin, 'utf8'), relay.original);
+    assert.equal(relay.running(), '0.21.0');
+    assert.equal(r.log.filter(line => line === 'systemctl restart kraki-relay').length, 2);
+    assert.equal(r.log.filter(line => line === 'systemctl daemon-reload').length, 2);
+    assert.ok(!r.stdout.includes('deploy OK'));
+  });
+}
+
+/** util-linux `flock -n <fd>` on test machines without it (macOS), on top of flock(2). */
+function flockShim(relay) {
+  if (spawnSync('sh', ['-c', 'command -v flock']).status === 0) return;
+  put(join(relay.bin, 'flock'), `#!/usr/bin/env bash
+[ "$1" = -n ] || exit 64
+exec perl -MFcntl=:flock -e 'open(my $fh, ">&=", $ARGV[0]) or exit 1; flock($fh, LOCK_EX | LOCK_NB) or exit 1' "$2"
+`, 0o755);
+}
+
+/** Holds the deploy lock, as a running deploy does, until release() is called. */
+async function holdDeployLock(relay) {
+  const lock = join(relay.root, 'opt/kraki-head/backups/.deploy.lock');
+  mkdirSync(dirname(lock), { recursive: true });
+  const holder = spawn('perl', ['-MFcntl=:flock', '-e',
+    'open(my $fh, ">", $ARGV[0]) or die; flock($fh, LOCK_EX) or die; $| = 1; print "locked\n"; sleep 60', lock]);
+  await new Promise((resolve, reject) => {
+    holder.stdout.once('data', resolve);
+    holder.once('exit', code => reject(new Error(`lock holder exited ${code}`)));
+  });
+  return () => holder.kill();
+}
+
+test('refuses to deploy or roll back while another deploy holds the lock', posix, async () => {
+  const relay = fakeRelay();
+  flockShim(relay);
+  assert.equal(relay.run(['0.22.0']).status, 0, 'deploys while nobody holds the lock');
+  const deployed = readFileSync(relay.dropin, 'utf8');
+  const release = await holdDeployLock(relay);
+  try {
+    for (const args of [['0.23.0'], ['rollback', '0.21.0']]) {
+      writeFileSync(join(relay.state, 'log'), '');
+      const r = relay.run(args);
+      assert.equal(r.status, 2, args.join(' '));
+      assert.match(r.stderr, /another deploy or rollback is running on this host/);
+      assert.equal(readFileSync(relay.dropin, 'utf8'), deployed);
+      assert.ok(!r.log.some(line => /^(systemctl|kraki-watch|npm|sqlite3 .*\.backup)/.test(line)), r.log.join('\n'));
+    }
+  } finally {
+    release();
+  }
+  assert.equal(relay.run(['rollback', '0.21.0']).status, 0, 'runs once the lock is free');
+});
+
 test('refuses a host without the per-release drop-in', posix, () => {
   const relay = fakeRelay();
   put(relay.dropin, '[Service]\nExecStart=\nExecStart=/usr/local/bin/kraki-relay --port 4000\n');
@@ -217,7 +278,7 @@ test('rollback switches back to a saved release and keeps the one it leaves', po
   assert.equal(relay.running(), '0.21.0');
   assert.equal(readFileSync(join(relay.root, 'opt/kraki-head/backups/zzz-head-release.conf.0.22.0'), 'utf8'), deployed);
   assert.ok(at(r.log, 'kraki-watch maintenance 10') < at(r.log, 'systemctl restart kraki-relay'));
-  assert.ok(r.log.includes('curl http://127.0.0.1:4000/healthz'));
+  assert.ok(r.log.includes('curl http://127.0.0.1:4000/'));
   // And forward again.
   assert.equal(relay.run(['rollback', '0.22.0']).status, 0);
   assert.equal(readFileSync(relay.dropin, 'utf8'), deployed);

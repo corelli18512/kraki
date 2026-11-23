@@ -118,10 +118,12 @@ The relay listens on `127.0.0.1:<port>` (4000 when the drop-in has no `--port`),
 Run on the relay host, as root:
 
 ```bash
-sudo bash scripts/deploy-edge-relay.sh <version>        # e.g. 0.22.0
+sudo KRAKI_PUBLIC_URL=https://<your relay> bash scripts/deploy-edge-relay.sh <version>   # e.g. 0.22.0
 # or from your machine, without a checkout on the host:
-ssh <host> 'sudo bash -s <version>' < scripts/deploy-edge-relay.sh
+ssh <host> 'sudo KRAKI_PUBLIC_URL=https://<your relay> bash -s <version>' < scripts/deploy-edge-relay.sh
 ```
+
+Put `KRAKI_PUBLIC_URL` (and `NPM_REGISTRY`, if you use it) after `sudo`, as above: sudo's default `env_reset` drops variables set before it, and the public check would be skipped without a word.
 
 It:
 
@@ -129,22 +131,22 @@ It:
 2. Takes a WAL-safe snapshot of the live DB (`sqlite3 .backup`) to `/opt/kraki-head/backups/head-pre-<version>-<timestamp>.db`, checks it with `PRAGMA integrity_check`, and saves the current drop-in as `/opt/kraki-head/backups/zzz-head-release.conf.<previous version>`.
 3. Installs `@kraki/head@<version>` into `/opt/kraki-head/releases/<version>` with `npm --prefix`, checks the installed version and that `better-sqlite3` loads under the unit's node. The previous release directory stays.
 4. Points the drop-in's `ExecStart` at the new release, tells `/usr/local/bin/kraki-watch` (if installed) about the planned restart, then `systemctl daemon-reload` and `systemctl restart kraki-relay`.
-5. Verifies that the service is active, that `http://127.0.0.1:<port>/` and `/healthz` report the new version, and that a WebSocket upgrade gets `101`. With `KRAKI_PUBLIC_URL=https://<your relay>` it also checks `/healthz` and the upgrade through the proxy.
-6. If the restart or any check fails, restores the previous drop-in, restarts and verifies the previous version. It doesn't restore the database: if the new version changed the schema (`PRAGMA user_version`), it says so and names the snapshot.
+5. Verifies that the service is active, that `http://127.0.0.1:<port>/` reports the new version, and that a WebSocket upgrade gets `101`. With `KRAKI_PUBLIC_URL=https://<your relay>` it also checks the version and the upgrade through the proxy. Head's `/` reports its version; it is not a readiness check (that is `/health/ready`, which the script doesn't use: it answers 503 on a relay without push providers).
+6. If the restart or any check fails, or the script gets `SIGHUP`, `SIGINT`, `SIGTERM` or `SIGPIPE` before the check passes (for example, the ssh session drops), restores the previous drop-in and restarts. After a failed check it also verifies the previous version. It doesn't restore the database: if the new version changed the schema (`PRAGMA user_version`), it says so and names the snapshot.
 
-Nothing on the service changes until the snapshot, the integrity check and the install have succeeded.
+Nothing on the service changes until the snapshot, the integrity check and the install have succeeded. Only one deploy or rollback runs at a time on a host: a second one stops at once (`flock` on `/opt/kraki-head/backups/.deploy.lock`).
 
 The script pins `npm install` to `https://registry.npmjs.org` so it doesn't see stale versions from mirrors (e.g. `registry.npmmirror.com`, common on Chinese edge hosts, can lag the upstream registry by hours). Override via `NPM_REGISTRY=...` if you need to install from a different source.
 
 ### Rolling back
 
 ```bash
-sudo bash scripts/deploy-edge-relay.sh rollback <version>   # e.g. 0.21.0
+sudo KRAKI_PUBLIC_URL=https://<your relay> bash scripts/deploy-edge-relay.sh rollback <version>   # e.g. 0.21.0
 ```
 
 Switches back to the saved drop-in of a release that is still installed, restarts and verifies it the same way. The drop-in it replaces is saved too, so you can roll forward again with `rollback <newer version>`. Without a saved drop-in for that version it lists the saved ones.
 
-`scripts/deploy-edge-relay.test.mjs` runs the script against a fake root (`KRAKI_DEPLOY_ROOT`) with fake `systemctl`, `curl`, `sqlite3` and `npm`; CI runs it and `shellcheck` on every change. Never set `KRAKI_DEPLOY_ROOT` on a relay.
+`scripts/deploy-edge-relay.test.mjs` runs the script against a fake root (`KRAKI_DEPLOY_ROOT`) with fake `systemctl`, `curl`, `sqlite3` and `npm` (and a `flock` shim on machines without one); CI runs it and `shellcheck` on every change. Never set `KRAKI_DEPLOY_ROOT` on a relay.
 
 ### Daily database backups
 
