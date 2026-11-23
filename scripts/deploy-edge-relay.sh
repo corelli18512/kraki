@@ -88,7 +88,8 @@ read_dropin() {
 # Planned restart: keep kraki-watch from paging about it.
 maintenance() {
   if [ -x "$KRAKI_WATCH" ]; then
-    "$KRAKI_WATCH" maintenance 10 || echo "warning: kraki-watch maintenance failed" >&2
+    # 9>&-: a long-lived kraki-watch must not inherit (and hold) the deploy lock.
+    "$KRAKI_WATCH" maintenance 10 9>&- || echo "warning: kraki-watch maintenance failed" >&2
   fi
 }
 
@@ -188,13 +189,15 @@ deploy() {  # version
   echo "==> switch the drop-in from $prev to $new"
   sed "s#/releases/${prev//./\\.}/#/releases/$new/#g" "$DROPIN" > "$DROPIN.new"
   grep -qF "\"$REL/$new/$HEAD_CLI\"" "$DROPIN.new" || { rm -f "$DROPIN.new"; die "could not point the drop-in at $new"; }
+  cat "$DROPIN.new"
   RESTORE_DROPIN="$BK/zzz-head-release.conf.$prev"
   trap 'restore_on_signal HUP 129' HUP
   trap 'restore_on_signal INT 130' INT
   trap 'restore_on_signal PIPE 141' PIPE
   trap 'restore_on_signal TERM 143' TERM
+  # No external command between the switch and the restart: a dropped session
+  # could kill it with SIGPIPE before the trap above could restore the old drop-in.
   mv "$DROPIN.new" "$DROPIN"
-  cat "$DROPIN"
 
   if restart_unit && verify "$new"; then
     trap - HUP INT TERM PIPE
