@@ -97,7 +97,7 @@ function fakeDeps(files: Record<string, string>, sums: string): StageDeps & { ru
       onProgress(5, 10); onProgress(10, 10);
     },
     fetchText: async () => sums,
-    hashFile: (p) => `sha-${readFileSync(p, 'utf8')}`,
+    hashFile: async (p) => `sha-${readFileSync(p, 'utf8')}`,
     parseChecksum: (s, asset) => s.split('\n').find((l) => l.endsWith(` ${asset}`))?.split(' ')[0] ?? null,
     run: (cmd, args) => { runs.push([cmd, ...args]); return { code: 0, out: '' }; },
   };

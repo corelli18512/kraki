@@ -138,10 +138,60 @@ it('Kraki for Windows back online after the wait: decided from the app version i
     useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
     useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.1.11', to: '0.1.12', at: Date.now() });
     render(<DeviceUpdateBox device={device} />);
+    // The restarted computer greets again with the app version it runs.
+    act(() => {
+      useStore.getState().setDeviceVersion('pc', '0.39.0');
+      useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
+    });
     act(() => { vi.advanceTimersByTime(185_000); });
     expect(screen.getByText('Update didn’t work, so nothing changed')).toBeInTheDocument();
     expect(screen.getByText('The new version didn’t start on My PC, so it went back to 0.1.11.', { exact: false })).toBeInTheDocument();
     expect(screen.queryByText(/didn’t say whether the update finished/)).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+// Re-review P2-3: the app version known from before the update isn't news.
+// A restarted computer whose update check fails greets without `update`, so
+// the old daemon's `current` (the version updated from) is all there is.
+it('Kraki for Windows back online after the wait, no app version reported since: doesn\'t claim a rollback', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setDeviceVersion('pc', '0.39.0');
+    useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.1.11', to: '0.1.12', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    // The restarted computer greets with its tentacle version only.
+    act(() => { useStore.getState().setDeviceVersion('pc', '0.39.1'); });
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.queryByText('Update didn’t work, so nothing changed')).not.toBeInTheDocument();
+    expect(screen.getByText('My PC is back online, but didn’t say whether the update finished. Check the version it shows.')).toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+it('Kraki for Windows: an app version reported before the installing status doesn\'t count', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true });
+    useStore.getState().setUpdateProgress('pc', { phase: 'downloading', from: '0.1.11', to: '0.1.12', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    // The old daemon greets again while it downloads, then the installing status.
+    act(() => { useStore.getState().setDeviceUpdate('pc', { installedVia: 'windows-app', current: '0.1.11', latest: '0.1.12', remote: true }); });
+    act(() => { useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.1.11', to: '0.1.12', at: Date.now() }); });
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.queryByText('Update didn’t work, so nothing changed')).not.toBeInTheDocument();
+    expect(screen.getByText(/didn’t say whether the update finished/)).toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+it('Kraki: a tentacle version known from before the update doesn\'t claim a rollback either', () => {
+  vi.useFakeTimers();
+  try {
+    useStore.getState().setDeviceVersion('pc', '0.40.0');
+    useStore.getState().setUpdateProgress('pc', { phase: 'installing', from: '0.40.0', to: '0.41.0', at: Date.now() });
+    render(<DeviceUpdateBox device={device} />);
+    act(() => { vi.advanceTimersByTime(185_000); });
+    expect(screen.queryByText('Update didn’t work, so nothing changed')).not.toBeInTheDocument();
+    expect(screen.getByText(/didn’t say whether the update finished/)).toBeInTheDocument();
   } finally { vi.useRealTimers(); }
 });
 

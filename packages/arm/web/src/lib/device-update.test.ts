@@ -74,11 +74,24 @@ describe('Kraki for Windows', () => {
       ['c', { installedVia: 'binary', current: '0.39.0', remote: true }],
       ['old', { installedVia: 'windows-app', current: '0.38.11', remote: false }],
     ]);
-    expect(reportedVersion('w', u, v)).toBe('0.1.11');
-    expect(reportedVersion('m', u, v)).toBe('0.2.92');
-    expect(reportedVersion('c', u, v)).toBe('0.39.0');
-    expect(reportedVersion('old', u, v)).toBe('0.38.11');
-    expect(reportedVersion('none', u, new Map([['none', '0.35.0']]))).toBe('0.35.0');
+    expect(reportedVersion('w', u, v).version).toBe('0.1.11');
+    expect(reportedVersion('m', u, v).version).toBe('0.2.92');
+    expect(reportedVersion('c', u, v).version).toBe('0.39.0');
+    expect(reportedVersion('old', u, v).version).toBe('0.38.11');
+    expect(reportedVersion('none', u, new Map([['none', '0.35.0']])).version).toBe('0.35.0');
+  });
+  it('reportedVersion: fresh only when a greeting reported that version since the last status', () => {
+    const v = new Map([['w', '0.39.0'], ['c', '0.39.0']]);
+    const u = new Map<string, DeviceUpdateInfo>([
+      ['w', { installedVia: 'windows-app', current: '0.1.11', remote: true }],
+      ['c', { installedVia: 'binary', current: '0.39.0', remote: true }],
+    ]);
+    const p = { phase: 'installing' as const, at: 0 };
+    expect(reportedVersion('w', u, v).fresh).toBe(false);
+    expect(reportedVersion('w', u, v, { ...p, versionReported: true }).fresh).toBe(false);
+    expect(reportedVersion('w', u, v, { ...p, updateReported: true }).fresh).toBe(true);
+    expect(reportedVersion('c', u, v, { ...p, updateReported: true }).fresh).toBe(false);
+    expect(reportedVersion('c', u, v, { ...p, versionReported: true }).fresh).toBe(true);
   });
 });
 

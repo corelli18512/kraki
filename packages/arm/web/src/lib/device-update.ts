@@ -100,12 +100,17 @@ export function displayVersion(deviceId: string, updates: Map<string, DeviceUpda
 
 /** The version an update's `from`/`to` name: Kraki for Mac and Kraki for
  *  Windows report the app's (`current`), every other install its tentacle's
- *  (the greeting's `version`). */
-export function reportedVersion(deviceId: string, updates: Map<string, DeviceUpdateInfo>, versions: Map<string, string>): string | undefined {
+ *  (the greeting's `version`). `fresh`: a greeting reported it since the
+ *  update's last status, so it isn't the version from before the restart. */
+export function reportedVersion(
+  deviceId: string, updates: Map<string, DeviceUpdateInfo>, versions: Map<string, string>, p?: UpdateProgress,
+): { version: string | undefined; fresh: boolean } {
   const info = updates.get(deviceId);
   const v = versions.get(deviceId);
-  if (info && productName(info.installedVia, reportsTentacleVersion(info, v)) !== 'Kraki') return info.current;
-  return v;
+  if (info && productName(info.installedVia, reportsTentacleVersion(info, v)) !== 'Kraki') {
+    return { version: info.current, fresh: p?.updateReported === true };
+  }
+  return { version: v, fresh: p?.versionReported === true };
 }
 
 export function updateTitle(u: AvailableUpdate): string {
@@ -130,6 +135,10 @@ export interface UpdateProgress {
   progress?: number;
   runningSessions?: number;
   error?: string;
+  /** A greeting reported the tentacle's version (`version`) since this status. */
+  versionReported?: boolean;
+  /** A greeting reported `update` (with the app's version) since this status. */
+  updateReported?: boolean;
   at: number;
 }
 

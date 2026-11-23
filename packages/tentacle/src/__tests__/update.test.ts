@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { downloadFile, fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
+import { downloadFile, downloadSpinner, fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -194,6 +194,27 @@ describe('update daemon stop gate', () => {
       isDaemonRunning: () => probes++ < 2,
       stopDaemon: () => true,
     }, 1, 3)).resolves.toBeUndefined();
+  });
+});
+
+describe('kraki update download spinner', () => {
+  it('says a dropped download is resuming, then shows progress again', () => {
+    const spinner = { text: '' };
+    const { onProgress, onRetry } = downloadSpinner(spinner);
+    onProgress(45 * 1024 * 1024, 100 * 1024 * 1024);
+    expect(spinner.text).toBe('Downloading 45% (45.0 MB / 100.0 MB)…');
+
+    onRetry({ attempt: 1, received: 45 * 1024 * 1024, total: 100 * 1024 * 1024, delayMs: 20_000, error: new Error('aborted') });
+    expect(spinner.text).toBe('Download interrupted at 45%; resuming in 20s…');
+
+    onProgress(46 * 1024 * 1024, 100 * 1024 * 1024);
+    expect(spinner.text).toBe('Downloading 46% (46.0 MB / 100.0 MB)…');
+  });
+
+  it('shows the bytes so far when the size is unknown', () => {
+    const spinner = { text: '' };
+    downloadSpinner(spinner).onRetry({ attempt: 2, received: 2048, total: 0, delayMs: 10_000, error: new Error('aborted') });
+    expect(spinner.text).toBe('Download interrupted at 2 KB; resuming in 10s…');
   });
 });
 

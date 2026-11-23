@@ -217,7 +217,7 @@ export function remoteUpdateBlock(
 export interface StageDeps {
   download: (url: string, dest: string, onProgress: (received: number, total: number) => void) => Promise<void>;
   fetchText: (url: string) => Promise<string>;
-  hashFile: (path: string) => string;
+  hashFile: (path: string) => Promise<string>;
   parseChecksum: (sums: string, asset: string) => string | null;
   run: (cmd: string, args: string[], opts?: { timeoutMs?: number; shell?: boolean }) => { code: number | null; out: string };
 }
@@ -243,7 +243,7 @@ async function downloadVerified(
   const expected = d.parseChecksum(sums, asset);
   if (!expected) throw new Error(`no checksum for ${asset} in ${tag}`);
   await d.download(`${GITHUB}/${tag}/${asset}`, dest, (got, total) => { if (total > 0) onProgress(got / total); });
-  const actual = d.hashFile(dest);
+  const actual = await d.hashFile(dest);
   if (actual !== expected) throw new Error(`checksum mismatch for ${asset}`);
 }
 

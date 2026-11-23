@@ -24,7 +24,7 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
   }, []);
 
   // Compared with the update's from/to: the app's version for Kraki for Mac/Windows.
-  const version = reportedVersion(device.id, deviceUpdates, deviceVersions);
+  const reported = reportedVersion(device.id, deviceUpdates, deviceVersions, progress);
   const update = availableUpdate(device, deviceUpdates, deviceVersions);
   const visible = progress && (isActivePhase(progress.phase) || progress.phase === 'busy' || now - progress.at < 600_000);
   if (!visible && !update) return null;
@@ -105,9 +105,11 @@ export function DeviceUpdateBox({ device }: { device: DeviceSummary }) {
           return box('info', device.online ? t('update.installing', { version: to }) : t('update.restarting', { name: device.name }), t('update.backSoon'));
         }
         // Decide from the version the computer reports; a greeting from the
-        // new version may come without any update status.
-        if (p.to && version === p.to) return box('ok', t('update.updated', { version: to }));
-        if (device.online && p.from && version === p.from) {
+        // new version may come without any update status. Back on the old
+        // version only counts when a greeting said so since: a restarted
+        // computer whose update check fails greets without its app version.
+        if (p.to && reported.version === p.to) return box('ok', t('update.updated', { version: to }));
+        if (device.online && p.from && reported.fresh && reported.version === p.from) {
           return box('warn', t('update.rolledBack'), (
             <span>{t('update.rolledBackDetail', { name: device.name, from: p.from })} {dismiss}</span>
           ));

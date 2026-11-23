@@ -4,12 +4,13 @@
  * after 47 minutes) resumes with `Range` instead of failing the update.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { downloadFile } from '../update.js';
+import { downloadFile, hashFile } from '../update.js';
 
 const BODY = Buffer.from(Array.from({ length: 64 * 1024 }, (_, i) => i % 251));
 const FAST = { retryDelayMs: 1, maxRetryDelayMs: 5, stallTimeoutMs: 300 };
@@ -133,6 +134,47 @@ describe('downloadFile resumes a dropped download', () => {
     expect(requests[2].headers.range).toBeUndefined();
   });
 
+  it('restarts from scratch when the 206 reports a different total size', async () => {
+    const { url, requests } = await serve((req, res, n) => {
+      if (n === 1) { sendThenDrop(res, 10_000); return; }
+      if (n === 2) {
+        // Continues at the right byte, but of a file of another size.
+        const from = rangeStart(req) ?? 0;
+        res.writeHead(206, {
+          'Content-Length': BODY.length - from,
+          'Content-Range': `bytes ${from}-${BODY.length - 1}/${BODY.length + 5}`,
+        });
+        res.end(BODY.subarray(from));
+        return;
+      }
+      sendRanged(req, res);
+    });
+    const dest = join(dir, 'asset');
+    await downloadFile(`${url}/asset`, dest, undefined, FAST);
+
+    expect(readFileSync(dest).equals(BODY)).toBe(true);
+    expect(requests).toHaveLength(3);
+    expect(rangeStart(requests[1])).toBeGreaterThan(0);
+    expect(requests[2].headers.range).toBeUndefined();
+  });
+
+  it('appends a 206 whose Content-Range has an unknown total (…/*) and checks it against the first length', async () => {
+    const { url, requests } = await serve((req, res, n) => {
+      if (n === 1) { sendThenDrop(res, 20_000); return; }
+      const from = rangeStart(req) ?? 0;
+      res.writeHead(206, { 'Content-Range': `bytes ${from}-${BODY.length - 1}/*` });
+      res.end(BODY.subarray(from));
+    });
+    const dest = join(dir, 'asset');
+    const p = progressRecorder();
+    await downloadFile(`${url}/asset`, dest, p.onProgress, FAST);
+
+    expect(readFileSync(dest).equals(BODY)).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(rangeStart(requests[1])).toBeGreaterThan(0);
+    expectMonotonic(p.calls);
+  });
+
   it('aborts a stalled attempt and resumes it', async () => {
     const { url, requests } = await serve((req, res, n) => {
       if (n === 1) {
@@ -149,6 +191,40 @@ describe('downloadFile resumes a dropped download', () => {
     expect(readFileSync(dest).equals(BODY)).toBe(true);
     expect(rangeStart(requests[1])).toBe(16_000);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('lets the stall timeout, not the request timeout, govern a pause in the body', async () => {
+    const { url, requests } = await serve((_req, res) => {
+      res.writeHead(200, { 'Content-Length': BODY.length });
+      res.write(BODY.subarray(0, 16_000));
+      // Longer than the request timeout, shorter than the stall timeout.
+      setTimeout(() => res.end(BODY.subarray(16_000)), 600);
+    });
+    const dest = join(dir, 'asset');
+    const retries: Error[] = [];
+    await downloadFile(`${url}/asset`, dest, undefined, {
+      ...FAST, requestTimeoutMs: 200, stallTimeoutMs: 2_000, onRetry: (r) => retries.push(r.error),
+    });
+
+    expect(readFileSync(dest).equals(BODY)).toBe(true);
+    expect(retries).toEqual([]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('still times out a request whose response headers don\'t arrive', async () => {
+    const { url, requests } = await serve((req, res, n) => {
+      if (n === 1) return; // never answers
+      sendRanged(req, res);
+    });
+    const dest = join(dir, 'asset');
+    const retries: Error[] = [];
+    await downloadFile(`${url}/asset`, dest, undefined, {
+      ...FAST, requestTimeoutMs: 200, stallTimeoutMs: 2_000, onRetry: (r) => retries.push(r.error),
+    });
+
+    expect(readFileSync(dest).equals(BODY)).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(retries.map((e) => e.message)).toEqual(['Request timed out after 200ms']);
   });
 
   it('re-resolves the redirect each attempt (the signed CDN URL is single-use)', async () => {
@@ -245,5 +321,21 @@ describe('downloadFile resumes a dropped download', () => {
     expect(requests.length).toBeGreaterThan(3);
     expect(retries.length).toBe(requests.length - 1);
     for (let i = 1; i < retries.length; i++) expect(retries[i]).toBeGreaterThan(retries[i - 1]);
+  });
+});
+
+describe('hashFile', () => {
+  it('streams the file (a Promise) and returns its SHA-256', async () => {
+    const path = join(dir, 'installer.exe');
+    const data = Buffer.concat([BODY, BODY, BODY]);
+    writeFileSync(path, data);
+    const pending = hashFile(path);
+
+    expect(pending).toBeInstanceOf(Promise);
+    expect(await pending).toBe(createHash('sha256').update(data).digest('hex'));
+  });
+
+  it('rejects for a missing file', async () => {
+    await expect(hashFile(join(dir, 'missing'))).rejects.toThrow(/ENOENT/);
   });
 });

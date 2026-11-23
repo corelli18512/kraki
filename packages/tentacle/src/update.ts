@@ -9,7 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, statSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createReadStream, createWriteStream, unlinkSync, statSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { basename, join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
@@ -109,15 +109,15 @@ function getLocation(location: string | string[] | undefined): string | undefine
   return location;
 }
 
-function createDirectRequest(target: URL, headers: Record<string, string>, onResponse: (res: IncomingMessage) => void) {
+function createDirectRequest(target: URL, headers: Record<string, string>, timeoutMs: number, onResponse: (res: IncomingMessage) => void) {
   const requestFn = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const req = requestFn(target, {
     headers: { 'User-Agent': 'kraki-updater', ...headers },
     method: 'GET',
   }, onResponse);
 
-  req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-    req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  req.setTimeout(timeoutMs, () => {
+    req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
   });
 
   return req;
@@ -127,6 +127,7 @@ function createProxiedRequest(
   target: URL,
   proxyUrl: URL,
   headers: Record<string, string>,
+  timeoutMs: number,
   onResponse: (res: IncomingMessage) => void,
   onError: (err: Error) => void,
 ) {
@@ -148,8 +149,8 @@ function createProxiedRequest(
   };
 
   const connectReq = (proxyUrl.protocol === 'https:' ? httpsRequest : httpRequest)(options);
-  connectReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
-    connectReq.destroy(new Error(`Proxy connection timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  connectReq.setTimeout(timeoutMs, () => {
+    connectReq.destroy(new Error(`Proxy connection timed out after ${timeoutMs}ms`));
   });
 
   connectReq.on('connect', (res, socket, head) => {
@@ -175,8 +176,8 @@ function createProxiedRequest(
     };
     const tunneledReq = httpsRequest(tunneledOptions, onResponse);
 
-    tunneledReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
-      tunneledReq.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    tunneledReq.setTimeout(timeoutMs, () => {
+      tunneledReq.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
     });
     tunneledReq.on('error', (err) => {
       socket.destroy();
@@ -193,16 +194,24 @@ class RedirectPolicyError extends Error {}
 
 /** Follow a redirect, never from https to plain http (update downloads are
  *  installed as executables). */
-function followRedirect(from: URL, location: string, redirects: number, headers: Record<string, string>): Promise<IncomingMessage> {
+function followRedirect(
+  from: URL, location: string, redirects: number, headers: Record<string, string>, timeoutMs: number,
+): Promise<IncomingMessage> {
   const next = new URL(location, from);
   if (from.protocol === 'https:' && next.protocol !== 'https:') {
     return Promise.reject(new RedirectPolicyError(`Refusing insecure redirect to ${next.origin}`));
   }
-  return sendRequest(next.toString(), redirects + 1, true, headers);
+  return sendRequest(next.toString(), redirects + 1, true, headers, timeoutMs);
 }
 
-/** `headers` (e.g. `Range`) go to every hop of the redirect chain. */
-function sendRequest(url: string, redirects = 0, follow = true, headers: Record<string, string> = {}): Promise<IncomingMessage> {
+/**
+ * `headers` (e.g. `Range`) go to every hop of the redirect chain.
+ * `timeoutMs` is an idle timeout on the connection; it stays armed while the
+ * body is read unless the caller clears it (`res.socket.setTimeout(0)`).
+ */
+function sendRequest(
+  url: string, redirects = 0, follow = true, headers: Record<string, string> = {}, timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     if (redirects > MAX_REDIRECTS) {
       reject(new RedirectPolicyError(`Too many redirects while fetching ${url}`));
@@ -211,19 +220,19 @@ function sendRequest(url: string, redirects = 0, follow = true, headers: Record<
 
     const target = new URL(url);
     const proxyUrl = getProxyForUrl(url);
-    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, headers, (res) => {
+    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, headers, timeoutMs, (res) => {
       const location = getLocation(res.headers.location);
       if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects, headers).then(resolve, reject);
+        followRedirect(target, location, redirects, headers, timeoutMs).then(resolve, reject);
         return;
       }
       resolve(res);
-    }, reject) : createDirectRequest(target, headers, (res) => {
+    }, reject) : createDirectRequest(target, headers, timeoutMs, (res) => {
       const location = getLocation(res.headers.location);
       if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects, headers).then(resolve, reject);
+        followRedirect(target, location, redirects, headers, timeoutMs).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -507,14 +516,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   let installStaged: (() => void) | undefined;
   if (method === 'sea') {
     try {
-      installStaged = await prepareBinaryUpdate(latest, (received, total) => {
-        if (total > 0) {
-          const pct = Math.floor((received / total) * 100);
-          spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
-        } else {
-          spinner.text = `Downloading ${formatBytes(received)}…`;
-        }
-      });
+      installStaged = await prepareBinaryUpdate(latest, downloadSpinner(spinner));
     } catch (err) {
       spinner.fail((err as Error).message);
       throw err;
@@ -710,14 +712,34 @@ export function getAppBundleAssetName(): string {
   return `kraki-macos-${process.arch}.app.tar.gz`;
 }
 
+/** `kraki update`'s download progress and retries, shown on its spinner. */
+export function downloadSpinner(spinner: { text: string }): DownloadReporter {
+  return {
+    onProgress: (received, total) => {
+      if (total > 0) {
+        const pct = Math.floor((received / total) * 100);
+        spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
+      } else {
+        spinner.text = `Downloading ${formatBytes(received)}…`;
+      }
+    },
+    onRetry: ({ received, total, delayMs }) => {
+      const at = total > 0 ? `${Math.floor((received / total) * 100)}%` : formatBytes(received);
+      spinner.text = `Download interrupted at ${at}; resuming in ${Math.round(delayMs / 1000)}s…`;
+    },
+  };
+}
+
+export interface DownloadReporter {
+  onProgress: (received: number, total: number) => void;
+  onRetry: (retry: DownloadRetry) => void;
+}
+
 /**
  * Download and verify the release for this platform into a private temp
  * directory. Returns the step that installs it (run after the daemon stops).
  */
-async function prepareBinaryUpdate(
-  version: string,
-  onProgress?: (received: number, total: number) => void,
-): Promise<() => void> {
+async function prepareBinaryUpdate(version: string, reporter: DownloadReporter): Promise<() => void> {
   // Try v* tag first, fall back to tentacle-v*
   let release: GitHubRelease;
   try {
@@ -731,7 +753,7 @@ async function prepareBinaryUpdate(
     const appBundleName = getAppBundleAssetName();
     const appAsset = release.assets?.find((a) => a.name === appBundleName);
     if (appAsset) {
-      return prepareAppBundleUpdate(release, appAsset, onProgress);
+      return prepareAppBundleUpdate(release, appAsset, reporter);
     }
     // Fall through to standalone binary update if .app asset not found
   }
@@ -750,7 +772,7 @@ async function prepareBinaryUpdate(
   const workDir = mkdtempSync(join(tmpdir(), 'kraki-update-'));
   const tmpPath = join(workDir, assetName);
   try {
-    await downloadFile(downloadUrl, tmpPath, onProgress);
+    await downloadFile(downloadUrl, tmpPath, reporter.onProgress, { onRetry: reporter.onRetry });
     await verifyReleaseChecksum(release, assetName, tmpPath);
 
     if (process.platform !== 'win32') chmodSync(tmpPath, 0o755);
@@ -781,7 +803,7 @@ async function verifyReleaseChecksum(release: GitHubRelease, assetName: string, 
   if (!checksumAsset) throw new Error(`Release ${release.tag_name} has no SHA256SUMS.txt; refusing to install`);
   const expectedHash = parseChecksum(await fetchText(checksumAsset.browser_download_url), assetName);
   if (!expectedHash) throw new Error(`SHA256SUMS.txt has no entry for ${assetName}; refusing to install`);
-  const actualHash = hashFile(path);
+  const actualHash = await hashFile(path);
   if (actualHash !== expectedHash) {
     throw new Error(`Checksum mismatch for ${assetName}: expected ${expectedHash.slice(0, 12)}…, got ${actualHash.slice(0, 12)}…`);
   }
@@ -792,13 +814,13 @@ async function verifyReleaseChecksum(release: GitHubRelease, assetName: string, 
 async function prepareAppBundleUpdate(
   release: GitHubRelease,
   appAsset: { name: string; browser_download_url: string },
-  onProgress?: (received: number, total: number) => void,
+  reporter: DownloadReporter,
 ): Promise<() => void> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'kraki-app-update-'));
   const tarPath = join(tmpDir, appAsset.name);
   let extractedApp: string;
   try {
-    await downloadFile(appAsset.browser_download_url, tarPath, onProgress);
+    await downloadFile(appAsset.browser_download_url, tarPath, reporter.onProgress, { onRetry: reporter.onRetry });
     await verifyReleaseChecksum(release, appAsset.name, tarPath);
     execSync(`tar -xzf "${tarPath}" -C "${tmpDir}"`, { stdio: 'ignore' });
     extractedApp = join(tmpDir, 'Kraki.app');
@@ -958,9 +980,11 @@ function stripProvenance(filePath: string): void {
   } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
-export function hashFile(path: string): string {
-  const data = readFileSync(path);
-  return createHash('sha256').update(data).digest('hex');
+/** SHA-256 of a file, streamed (a Windows installer is ~150 MB). */
+export async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
 }
 
 export function parseChecksum(checksumData: string, assetName: string): string | null {
@@ -988,6 +1012,8 @@ export interface DownloadOptions {
   /** Delay before the first retry; doubles per fruitless attempt up to `maxRetryDelayMs`. */
   retryDelayMs?: number;
   maxRetryDelayMs?: number;
+  /** No response headers for this long (from connecting on) ends the attempt. */
+  requestTimeoutMs?: number;
   /** No body bytes for this long ends the attempt; the next one resumes. */
   stallTimeoutMs?: number;
   onRetry?: (retry: DownloadRetry) => void;
@@ -1033,13 +1059,13 @@ async function downloadAttempt(
   url: string,
   dest: string,
   file: { total: number },
-  stallTimeoutMs: number,
+  timeouts: { requestMs: number; stallMs: number },
   onBytes: (received: number) => void,
 ): Promise<void> {
   const offset = fileSize(dest);
   // Every attempt starts from `url`: a signed CDN URL it redirected to
   // earlier may have expired.
-  const res = await sendRequest(url, 0, true, offset > 0 ? { Range: `bytes=${offset}-` } : {});
+  const res = await sendRequest(url, 0, true, offset > 0 ? { Range: `bytes=${offset}-` } : {}, timeouts.requestMs);
   const status = res.statusCode ?? 0;
   const range = parseContentRange(res.headers['content-range']);
 
@@ -1073,6 +1099,10 @@ async function downloadAttempt(
     file.total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
   }
 
+  // The request timeout covers connecting and the response headers; from here
+  // the stall timer governs the body.
+  res.socket?.setTimeout(0);
+
   const out = createWriteStream(dest, { flags: start > 0 ? 'a' : 'w' });
   const closed = new Promise<void>((resolve) => out.once('close', () => resolve()));
   // pipeline() passes either side's error to the other: remember which failed first.
@@ -1084,8 +1114,8 @@ async function downloadAttempt(
   const armStall = () => {
     clearTimeout(stall);
     stall = setTimeout(() => {
-      res.destroy(new Error(`No data for ${stallTimeoutMs / 1000}s`));
-    }, stallTimeoutMs);
+      res.destroy(new Error(`No data for ${timeouts.stallMs / 1000}s`));
+    }, timeouts.stallMs);
   };
   let received = start;
   res.on('data', (chunk: Buffer) => {
@@ -1116,7 +1146,8 @@ async function downloadAttempt(
  * Download `url` to `dest`. A dropped, reset or stalled connection doesn't
  * fail the download: it retries with backoff and resumes with `Range` from
  * the bytes already written (a server that ignores Range sends it all again).
- * It gives up after `maxAttempts` attempts in a row that add no new bytes, at
+ * An attempt ends when the response headers take over 30 s or the body sends
+ * nothing for 60 s. It gives up after `maxAttempts` attempts in a row that add no new bytes, at
  * once on a 4xx. `onProgress` never goes backwards. Callers verify the
  * SHA-256 of the result.
  */
@@ -1129,7 +1160,10 @@ export async function downloadFile(
   const maxAttempts = options.maxAttempts ?? DOWNLOAD_MAX_ATTEMPTS;
   const retryDelayMs = options.retryDelayMs ?? DOWNLOAD_RETRY_DELAY_MS;
   const maxRetryDelayMs = options.maxRetryDelayMs ?? DOWNLOAD_MAX_RETRY_DELAY_MS;
-  const stallTimeoutMs = options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS;
+  const timeouts = {
+    requestMs: options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+    stallMs: options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS,
+  };
   const file = { total: 0 };
 
   let reported = 0;
@@ -1151,7 +1185,7 @@ export async function downloadFile(
   let fruitless = 0;
   for (let attempt = 1; ; attempt++) {
     try {
-      await downloadAttempt(url, dest, file, stallTimeoutMs, (received) => report(received));
+      await downloadAttempt(url, dest, file, timeouts, (received) => report(received));
       report(fileSize(dest), true);
       return;
     } catch (err) {
