@@ -24,7 +24,7 @@ struct AvailableUpdateNotice: View {
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(Color.krakiPrimary)
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(update.isMacApp ? String(localized: "Kraki for Mac") : "Kraki") \(update.latest) is available")
+                Text("\(update.productName) \(update.latest) is available")
                     .font(.system(size: 13, weight: .medium))
                 if let checkForUpdates {
                     Button("Check for Updates…", action: checkForUpdates)
@@ -91,7 +91,7 @@ struct DeviceUpdateControl: View {
     }
 
     private func label(_ u: AvailableUpdate) -> String {
-        String(localized: "\(u.isMacApp ? String(localized: "Kraki for Mac") : "Kraki") \(u.latest) is available")
+        String(localized: "\(u.productName) \(u.latest) is available")
     }
 
     @ViewBuilder
@@ -129,7 +129,9 @@ struct DeviceUpdateControl: View {
     private func blockedText(_ u: AvailableUpdate) -> String {
         switch store.deviceUpdates[device.id]?.remoteBlock {
         case "disabled": return String(localized: "Updating from other devices is turned off on that computer. \(u.howTo)")
-        case "not_writable": return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
+        // `kraki update` can't help a Kraki for Windows installed for all users.
+        case "not_writable" where u.installedVia != "windows-app":
+            return String(localized: "Kraki is installed where only an administrator can change it. Run `kraki update` on that computer.")
         default: return u.howTo
         }
     }

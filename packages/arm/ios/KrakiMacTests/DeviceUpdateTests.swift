@@ -110,6 +110,38 @@ final class DeviceUpdateTests: XCTestCase {
         XCTAssertEqual(store.deviceVersions["m"], "0.38.9")
     }
 
+    /// Kraki for Windows reports its app version (tentacle 0.39+): name the
+    /// app with it; a success keeps the CLI version as is.
+    func testWindowsAppNamesTheApp() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["w"] = tentacle("w")
+        store.setDeviceVersion("w", version: "0.39.0")
+        store.setDeviceUpdate("w", update: DeviceUpdateInfo(installedVia: "windows-app", current: "0.1.11", latest: "0.1.12",
+                                                            latestTentacle: "0.39.0", remote: true))
+        let u = store.availableUpdate(for: "w")
+        XCTAssertEqual(u?.latest, "0.1.12")
+        XCTAssertTrue(u?.isWindowsApp == true)
+        XCTAssertEqual(u?.productName, String(localized: "Kraki for Windows"))
+        XCTAssertEqual(store.displayVersion(for: "w"), "\(String(localized: "Kraki for Windows")) 0.1.11")
+        store.setUpdateProgress("w", DeviceUpdateProgress(phase: .updated, from: "0.1.11", to: "0.1.12"))
+        XCTAssertEqual(store.deviceUpdates["w"]?.current, "0.1.12")
+        XCTAssertEqual(store.deviceVersions["w"], "0.39.0")
+    }
+
+    /// Its older built-in tentacles reported their own version: still "Kraki".
+    func testOlderWindowsAppTentacleKeepsKrakiVersions() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["w"] = tentacle("w")
+        store.setDeviceVersion("w", version: "0.38.11")
+        store.setDeviceUpdate("w", update: DeviceUpdateInfo(installedVia: "windows-app", current: "0.38.11", latest: "0.39.0",
+                                                            latestTentacle: "0.39.0", remote: false))
+        let u = store.availableUpdate(for: "w")
+        XCTAssertEqual(u?.isWindowsApp, false)
+        XCTAssertEqual(u?.productName, "Kraki")
+        XCTAssertEqual(u?.howTo, String(localized: "Install the latest Kraki for Windows on that PC. Kraki updates with the app."))
+        XCTAssertEqual(store.displayVersion(for: "w"), "Kraki 0.38.11")
+    }
+
     /// Finished outcomes clear themselves, so nothing lingers in an empty
     /// section; a newer status is never cleared by an older timer. Awaits the
     /// scheduled expiries instead of racing a sleep against them.

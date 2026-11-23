@@ -469,18 +469,22 @@ final class DeviceStore {
             if let latest = info.latest, !KrakiVersion.isNewer(latest, than: version) { info.latest = nil }
             deviceUpdates[id] = info
         }
-        // Kraki for Mac reports its app version; `deviceVersions` is the CLI's.
-        if deviceUpdates[id]?.installedVia != "mac-app",
+        // Kraki for Mac and Windows report their app version; `deviceVersions` is the CLI's.
+        if !["mac-app", "windows-app"].contains(deviceUpdates[id]?.installedVia),
            deviceVersions[id].map({ KrakiVersion.isNewer(version, than: $0) }) ?? true {
             deviceVersions[id] = version
         }
         scheduleSave()
     }
 
-    /// The version a user recognises: Kraki for Mac's own version for its
-    /// built-in tentacle, the tentacle version otherwise.
+    /// The version a user recognises: Kraki for Mac's or Kraki for Windows'
+    /// own version for its built-in tentacle, the tentacle version otherwise.
     func displayVersion(for id: String) -> String? {
         if let u = deviceUpdates[id], u.installedVia == "mac-app" { return "Kraki for Mac \(u.current)" }
+        if let u = deviceUpdates[id], u.installedVia == "windows-app",
+           !AvailableUpdate.reportedTentacleVersion(u, tentacleVersion: deviceVersions[id]) {
+            return "\(String(localized: "Kraki for Windows")) \(u.current)"
+        }
         return deviceVersions[id].map { "Kraki \($0)" }
     }
 
@@ -495,7 +499,8 @@ final class DeviceStore {
     func availableUpdate(for id: String) -> AvailableUpdate? {
         if let info = deviceUpdates[id] {
             guard let latest = info.latest, KrakiVersion.isNewer(latest, than: info.current) else { return nil }
-            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true)
+            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true,
+                                   reportsTentacleVersion: AvailableUpdate.reportedTentacleVersion(info, tentacleVersion: deviceVersions[id]))
         }
         guard devices[id]?.role == .tentacle,
               let version = deviceVersions[id], let newest = knownLatestTentacle,
