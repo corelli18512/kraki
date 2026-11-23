@@ -9,7 +9,8 @@
 //   • Quitting Kraki (tray › Quit…) takes this PC offline, confirmed once.
 //     Opening Kraki brings it back online.
 //   • Sign-out, restart, shutdown and app updates end the app without going
-//     offline, so the PC comes back online by itself.
+//     offline, so the PC comes back online by itself. That includes an update
+//     started from another device: its installer closes the app.
 //
 // A standalone CLI install keeps its own daemon: quitting the app never stops it.
 
@@ -24,6 +25,8 @@ function resolveStatus(s) {
   return 'offline';
 }
 
+const { statSync } = require('node:fs');
+const path = require('node:path');
 const { t } = require('./i18n.cjs');
 
 const STATUSES = ['checking', 'online', 'goingOnline', 'goingOffline', 'offline', 'cli', 'controlsOthersOnly'];
@@ -69,4 +72,19 @@ function trayMenu(status, managed, needsYou, act) {
   return items;
 }
 
-module.exports = { resolveStatus, TITLE, DETAIL, managesPresence, canGoOffline, canGoOnline, trayIcon, trayMenu };
+/**
+ * An update started from another device (Update in a phone's device details)
+ * runs the Kraki for Windows installer, which closes this app: the built-in
+ * Kraki keeps `remote-update/plan.json` until it is done (MacPresence
+ * remoteUpdateInProgress). Recent only: a plan left by an updater that died
+ * never silences Quit.
+ */
+function remoteUpdateInProgress(krakiHome, now = Date.now()) {
+  try {
+    return now - statSync(path.join(krakiHome, 'remote-update', 'plan.json')).mtimeMs < 3600_000;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { resolveStatus, TITLE, DETAIL, managesPresence, canGoOffline, canGoOnline, trayIcon, trayMenu, remoteUpdateInProgress };

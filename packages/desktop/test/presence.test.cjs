@@ -37,3 +37,15 @@ test('status opens settings and Needs You limits entries without losing overflow
   assert.equal(menu.filter((item) => item.label === 'New Session — Asked you a question').length, 5);
   assert.ok(menu.some((item) => item.label === '20 more…'));
 });
+test('a remote update in progress: plan.json, recent only', () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require('node:fs');
+  const path = require('node:path');
+  const home = mkdtempSync(path.join(require('node:os').tmpdir(), 'kraki-presence-'));
+  try {
+    assert.equal(p.remoteUpdateInProgress(home), false);
+    mkdirSync(path.join(home, 'remote-update'));
+    writeFileSync(path.join(home, 'remote-update', 'plan.json'), '{}');
+    assert.equal(p.remoteUpdateInProgress(home), true);
+    assert.equal(p.remoteUpdateInProgress(home, Date.now() + 2 * 3600_000), false, 'a plan left by an updater that died');
+  } finally { rmSync(home, { recursive: true }); }
+});
