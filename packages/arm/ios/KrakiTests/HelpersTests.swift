@@ -34,6 +34,27 @@ final class HelpersTests: XCTestCase {
         XCTAssertFalse(MessageInputView.isLiteralNewlineFresh(nil, now: now))
     }
 
+    /// A Return that sent nothing gives back the draft before it; quick
+    /// repeated Returns give back the draft before the first one.
+    func testUnsentReturnRestoresTheDraftBeforeTheFirstPendingReturn() {
+        let unsent = MessageInputView.UnsentReturnNewline()
+        unsent.returnTyped(old: "  ", typed: "  \n")
+        XCTAssertEqual(unsent.draft, "  \n")
+        unsent.returnTyped(old: "  \n", typed: "  \n\n")
+        XCTAssertNil(unsent.takeBase(showing: "  \n"), "the first removal gave way to the second Return")
+        XCTAssertEqual(unsent.takeBase(showing: "  \n\n"), "  ")
+        XCTAssertNil(unsent.takeBase(showing: "  \n\n"), "removed once")
+        // A Return on text that was changed some other way starts afresh.
+        unsent.returnTyped(old: "", typed: "\n")
+        unsent.returnTyped(old: "dictated", typed: "dictated\n")
+        XCTAssertEqual(unsent.takeBase(showing: "dictated\n"), "dictated")
+        // Typing or a send in between: nothing to remove.
+        unsent.returnTyped(old: "", typed: "\n")
+        unsent.clear()
+        XCTAssertNil(unsent.draft)
+        XCTAssertNil(unsent.takeBase(showing: "\n"))
+    }
+
     func testAccountUsagePercentIsClampedAtDecode() throws {
         let json = #"{"id":"w","kind":"weekly","remainingPercent":1e300}"#
         let window = try JSONDecoder().decode(AccountUsageWindow.self, from: Data(json.utf8))

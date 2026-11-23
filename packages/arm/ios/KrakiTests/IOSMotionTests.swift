@@ -28,13 +28,15 @@ final class IOSMotionTests: XCTestCase {
         try await super.tearDown()
     }
 
-    struct Sample { let t: CFTimeInterval; let y: CGFloat }
+    /// `y`: where the bubble is on screen; `restingY`: where the current
+    /// layout puts it once every animation has finished.
+    struct Sample { let t: CFTimeInterval; let y: CGFloat; let restingY: CGFloat }
 
     final class Sampler: NSObject {
         private(set) var samples: [Sample] = []
         private var link: CADisplayLink?
-        let read: () -> CGFloat?
-        init(_ read: @escaping () -> CGFloat?) { self.read = read }
+        let read: () -> (y: CGFloat, restingY: CGFloat)?
+        init(_ read: @escaping () -> (y: CGFloat, restingY: CGFloat)?) { self.read = read }
         func start() {
             let link = CADisplayLink(target: self, selector: #selector(tick))
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
@@ -43,13 +45,26 @@ final class IOSMotionTests: XCTestCase {
         }
         func stop() { link?.invalidate(); link = nil }
         @objc private func tick() {
-            if let y = read() { samples.append(Sample(t: CACurrentMediaTime(), y: y)) }
+            if let read = read() { samples.append(Sample(t: CACurrentMediaTime(), y: read.y, restingY: read.restingY)) }
         }
         /// Largest move between two consecutive on-time frames (a stall —
         /// a gap over 25 ms — is counted apart).
         var worstFrameStep: CGFloat {
             samples.indices.dropFirst().reduce(0) { worst, i in
                 samples[i].t - samples[i - 1].t > 0.025 ? worst : max(worst, abs(samples[i].y - samples[i - 1].y))
+            }
+        }
+        /// Largest share of its remaining way (to where the layout puts it in
+        /// that frame) covered in one on-time frame. A jump lands at once
+        /// (1.0); an ease-out covers a fraction of it every frame. Moves of
+        /// 2 pt or less (a tenth of a line) are left out: they are a glide
+        /// settling, whose last frames cover most of the little that is left.
+        var worstShareOfRemainingWay: CGFloat {
+            samples.indices.dropFirst().reduce(0) { worst, i in
+                let step = abs(samples[i].y - samples[i - 1].y)
+                let remaining = abs(samples[i].restingY - samples[i - 1].y)
+                guard samples[i].t - samples[i - 1].t <= 0.025, step > 2, remaining > 0 else { return worst }
+                return max(worst, step / remaining)
             }
         }
         var worstReversal: CGFloat {
@@ -63,8 +78,9 @@ final class IOSMotionTests: XCTestCase {
     struct Fx { let vc: ChatPerfListVC; let cv: UICollectionView; let app: AppState }
 
     /// On-screen position of a message's cell as composited (scroll offset
-    /// and the arrival glide's additive transform included).
-    private func screenY(_ fx: Fx, seq: Int) -> () -> CGFloat? {
+    /// and the arrival glide's additive transform included), and where the
+    /// layout puts it (model frame and offset).
+    private func screenY(_ fx: Fx, seq: Int) -> () -> (y: CGFloat, restingY: CGFloat)? {
         { [weak cv = fx.cv] in
             guard let cv else { return nil }
             for ip in cv.indexPathsForVisibleItems {
@@ -76,7 +92,8 @@ final class IOSMotionTests: XCTestCase {
                 // read a half-applied layout as a jump on slow CI machines.
                 let layer = cv.layer.presentation() ?? cv.layer
                 let cellLayer = cell.layer.presentation() ?? cell.layer
-                return cellLayer.frame.minY - layer.bounds.minY + layer.sublayerTransform.m42
+                return (cellLayer.frame.minY - layer.bounds.minY + layer.sublayerTransform.m42,
+                        cell.frame.minY - cv.contentOffset.y)
             }
             return nil
         }
@@ -101,10 +118,17 @@ final class IOSMotionTests: XCTestCase {
         }
         drain(600)
         sampler.stop()
-        print(String(format: "IOSMOTION stream frames=%d worstFrameStep=%.1f reversal=%.1f stalls=%d dist=%.1f",
-                     sampler.samples.count, sampler.worstFrameStep, sampler.worstReversal, sampler.stalls, distanceToBottom(fx.cv)))
-        // ~2–4 pt a frame; a jump moves a whole line (≥ 18 pt) in one frame.
-        XCTAssertLessThanOrEqual(sampler.worstFrameStep, 16, "a new line glides the conversation up, it never jumps")
+        print(String(format: "IOSMOTION stream frames=%d worstFrameStep=%.1f worstShare=%.2f reversal=%.1f stalls=%d dist=%.1f",
+                     sampler.samples.count, sampler.worstFrameStep, sampler.worstShareOfRemainingWay,
+                     sampler.worstReversal, sampler.stalls, distanceToBottom(fx.cv)))
+        // Every rendered line re-targets the glide (UIView.animate from the
+        // current state): the conversation holds for a frame, then covers
+        // ~30% of its remaining way in the next. At this streaming rate that
+        // is up to ~20 pt, a whole line, in one 60 Hz frame (iOS 26.5 and 27),
+        // so the size of a frame's move cannot tell a glide from a jump. Its
+        // share of the remaining way can: growth applied without animation
+        // covers all of it (1.0) in one frame.
+        XCTAssertLessThanOrEqual(sampler.worstShareOfRemainingWay, 0.5, "a new line glides the conversation up, it never jumps")
         XCTAssertLessThanOrEqual(sampler.worstReversal, 0.5, "never pulled back down")
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1.5, "settles at the bottom")
     }

@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import SwiftUI
 
 /// Device detail › Update: a native grouped section. One status row (icon or

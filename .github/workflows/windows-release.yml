@@ -73,9 +73,8 @@ jobs:
             test "$GITHUB_REF" = "refs/tags/win-v$VERSION" || { echo "Select the matching win-v$VERSION tag"; exit 1; }
             git fetch origin main
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            STATUS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
-              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
-            test "$STATUS" = success || { echo "Required Validate check has not passed"; exit 1; }
+            # Waits for CI like release.yml (the newest Validate run, up to 5 minutes).
+            node scripts/release/wait-for-validate.mjs "$GITHUB_SHA"
           fi
 
       - name: Install locked dependencies

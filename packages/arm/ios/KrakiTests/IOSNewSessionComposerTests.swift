@@ -12,6 +12,7 @@ final class IOSNewSessionComposerTests: XCTestCase {
     private var driver: IOSVoiceHoldScenarioDriver!
     private let key = IOSVoiceComposer.newSessionDraftID
     private var inputs: [(session: String, text: String)] = []
+    private var window: UIWindow?
 
     override func setUp() async throws {
         driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
@@ -27,6 +28,7 @@ final class IOSNewSessionComposerTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        window?.isHidden = true; window?.rootViewController = nil; window = nil
         app?.iosVoiceComposer.discard()
         app?.voiceInputController.forgetLease()
         app?.sessionStore.setDraft(key, "")
@@ -140,6 +142,105 @@ final class IOSNewSessionComposerTests: XCTestCase {
         sender.resolveCreateRequest(request, sessionId: "late")
         XCTAssertEqual(app.sessionStore.drafts[key], "修一下登录，顺便看看注册")
         XCTAssertEqual(app.sessionStore.drafts["late"], "修一下登录")
+    }
+
+    // MARK: Return in the field (K-154)
+
+    private func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
+    @discardableResult
+    private func drain(until condition: () -> Bool, timeout: Double = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { drain(20) }
+        return condition()
+    }
+
+    /// Shows the composer in a window; returns its text view, focused, and
+    /// what it sent.
+    private func showComposer(canStart: Bool) throws -> (field: UITextView, sent: () -> [String]) {
+        try requireForegroundUITests()
+        var sent: [String] = []
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: IOSNewSessionComposer(
+            canStart: canStart,
+            voiceContext: { VoiceSessionContextBuilder.buildNewSession(agent: "pi", model: "m", deviceName: "PC") },
+            onSendText: { sent.append($0) }, onSendVoice: {}
+        ).environment(app))
+        window.makeKeyAndVisible()
+        self.window = window
+        var field: UITextView?
+        XCTAssertTrue(drain(until: {
+            field = self.all(window).compactMap { $0 as? UITextView }.first(where: \.isEditable)
+            return field != nil
+        }), "the composer is shown")
+        let editor = try XCTUnwrap(field)
+        editor.becomeFirstResponder()
+        drain(300)
+        return (editor, { sent })
+    }
+
+    private var draft: String { app.sessionStore.drafts[key] ?? "" }
+
+    /// Return on an empty or whitespace draft starts nothing, and the newline
+    /// it typed leaves the field (SwiftUI only writes a draft that differs
+    /// from the one it last gave the field), round after round.
+    func testReturnOnEmptyOrWhitespaceDraftLeavesNoNewline() throws {
+        continueAfterFailure = false
+        let (field, sent) = try showComposer(canStart: true)
+        for round in 1...6 {
+            drain(300)
+            field.insertText("\n")
+            XCTAssertTrue(drain(until: { field.text == "" && self.draft == "" }),
+                          "round \(round): Return on an empty field left \((field.text ?? "").debugDescription)")
+            field.insertText("  ")
+            XCTAssertTrue(drain(until: { self.draft == "  " }))
+            drain(300)
+            field.insertText("\n")
+            XCTAssertTrue(drain(until: { field.text == "  " && self.draft == "  " }),
+                          "round \(round): Return on whitespace left \((field.text ?? "").debugDescription)")
+            field.deleteBackward()
+            field.deleteBackward()
+            XCTAssertTrue(drain(until: { field.text == "" && self.draft == "" }), "round \(round): the field is empty again")
+        }
+        XCTAssertEqual(sent(), [], "nothing to start")
+    }
+
+    /// Two Returns before the first newline was removed go back to the draft
+    /// before the first one, not to "\n".
+    func testQuickRepeatedReturnOnEmptyDraftLeavesNoNewline() throws {
+        let (field, sent) = try showComposer(canStart: true)
+        field.insertText("\n")
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "" && self.draft == "" }),
+                      "two Returns on an empty field left \((field.text ?? "").debugDescription)")
+        XCTAssertEqual(sent(), [])
+    }
+
+    /// Before a computer, agent and model are chosen, Return keeps the typed
+    /// message as the draft, without the newline.
+    func testReturnBeforeTheSessionCanStartKeepsTheMessage() throws {
+        let (field, sent) = try showComposer(canStart: false)
+        field.insertText("fix login")
+        XCTAssertTrue(drain(until: { self.draft == "fix login" }))
+        drain(300)
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { field.text == "fix login" && self.draft == "fix login" }),
+                      "Return left \((field.text ?? "").debugDescription)")
+        XCTAssertEqual(sent(), [])
+    }
+
+    /// Return with a message starts the Session with it (the sheet then
+    /// closes) and leaves no draft.
+    func testReturnStartsTheSessionWithTheTypedMessage() throws {
+        let (field, sent) = try showComposer(canStart: true)
+        field.insertText("fix login")
+        XCTAssertTrue(drain(until: { self.draft == "fix login" }))
+        drain(300)
+        field.insertText("\n")
+        XCTAssertTrue(drain(until: { sent() == ["fix login"] }), "Return sends the message")
+        drain(300)
+        XCTAssertEqual(sent(), ["fix login"], "sent once")
+        XCTAssertEqual(draft, "")
     }
 
     func testNothingStartsWithoutDictation() {

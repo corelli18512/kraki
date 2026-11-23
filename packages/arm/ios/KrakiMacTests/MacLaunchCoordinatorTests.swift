@@ -20,7 +20,8 @@ final class MacLaunchCoordinatorTests: XCTestCase {
     /// launching), or the window stays on the signed-out page.
     func testSignInDuringTheMinimumGateWaitLandsSignedIn() async throws {
         let app = try makeHost(hasStoredCredentials: false)
-        let coordinator = MacLaunchCoordinator()
+        // A 1 s gate, so the sign-in at 100 ms is inside it on a loaded machine.
+        let coordinator = MacLaunchCoordinator(minimumVisibleSecondsOverride: 1)
         let finish = Task { await coordinator.finishLaunchWithoutAuthenticatedRoot(appState: app,
                                                                                    ownerChoicePending: { false }) }
         try await Task.sleep(for: .milliseconds(100))
@@ -55,7 +56,7 @@ final class MacLaunchCoordinatorTests: XCTestCase {
     /// not skip that question (reconcileAuthentication waits for it too).
     func testSignInDuringTheWaitWaitsForAPendingOwnerChoice() async throws {
         let app = try makeHost(hasStoredCredentials: false)
-        let coordinator = MacLaunchCoordinator()
+        let coordinator = MacLaunchCoordinator(minimumVisibleSecondsOverride: 1)
         let finish = Task { await coordinator.finishLaunchWithoutAuthenticatedRoot(appState: app,
                                                                                    ownerChoicePending: { true }) }
         try await Task.sleep(for: .milliseconds(100))

@@ -56,12 +56,19 @@ final class PerformanceNoticeTests: XCTestCase {
     func testAPermissionPromptLeftOpenDefersTheNoticeToTheNextSignIn() async {
         var pending = true
         let n = notice(pending: { pending })
+        let started = Date()
         n.authenticated()
-        await wait(62)
+        // It gives up after 60 one-second polls. A fixed 62 s wait raced that
+        // on a loaded CI simulator, where the polls run late (iOS 27 CI: the
+        // wait ended first, the next sign-in was ignored as still scheduled).
+        while n.scheduled, Date().timeIntervalSince(started) < 120 { await wait(0.1) }
+        XCTAssertFalse(n.scheduled, "gave up while the prompt stayed open")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 60, "waited a minute for an answer")
         XCTAssertFalse(n.isVisible, "never shown while the prompt is still open")
         pending = false
         n.authenticated() // next reconnect / foreground
-        await wait(0.3)
+        let shown = Date()
+        while !n.isVisible, Date().timeIntervalSince(shown) < 5 { await wait(0.05) }
         XCTAssertTrue(n.isVisible)
     }
 

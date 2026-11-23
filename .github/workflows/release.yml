@@ -182,35 +182,13 @@ jobs:
 
       - name: Ensure CI passed for this commit
         if: steps.meta.outputs.publish_mode == 'publish' || steps.meta.outputs.publish_mode == 'prerelease'
+        # The newest Validate check run must pass; waits up to 5 minutes.
+        # Asked for by name across pages (a busy commit has more than the 30
+        # check runs of one unfiltered page).
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
-        run: |
-          set -euo pipefail
-          echo "Checking CI status for ${RELEASE_SHA}..."
-
-          for i in $(seq 1 30); do
-            status=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs" \
-              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' 2>/dev/null | head -1 || true)
-
-            if [ "${status}" = "success" ]; then
-              echo "CI passed ✅"
-              exit 0
-            fi
-
-            case "${status}" in
-              failure|cancelled|timed_out|action_required)
-                echo "CI status is ${status}. Refusing to release."
-                exit 1
-                ;;
-            esac
-
-            echo "CI status: ${status:-pending}. Waiting 10s... (attempt ${i}/30)"
-            sleep 10
-          done
-
-          echo "CI did not complete within 5 minutes. Refusing to release."
-          exit 1
+        run: node scripts/release/wait-for-validate.mjs "$RELEASE_SHA"
 
       - name: Verify tag matches package version
         if: steps.meta.outputs.publish_mode == 'publish'

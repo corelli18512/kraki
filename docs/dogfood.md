@@ -48,7 +48,9 @@ older CLIs read (`per_page=20` up to 0.38.11).
    - `prepare` refuses the run unless all of these hold:
      - the run is on `refs/heads/main`;
      - the commit is the one that was planned and is on `origin/main`;
-     - the CI `Validate` check passed for it.
+     - the CI `Validate` check passed for it (its newest run, waiting up to
+       5 minutes; `scripts/release/wait-for-validate.mjs`, which formal and
+       Windows releases use too).
    - The same jobs as a formal release build, sign, notarize, staple, attest
      and verify the artifacts.
    - Only the formal-only checks are skipped: tag equals package version,

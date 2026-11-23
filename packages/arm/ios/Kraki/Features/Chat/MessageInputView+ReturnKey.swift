@@ -25,5 +25,53 @@ extension MessageInputView {
         let age = now.timeIntervalSince(keyAt)
         return age >= 0 && age < literalNewlineWindow
     }
+
+    /// A Return that typed a newline but sent nothing. A plain reference
+    /// rather than @State: the edit sets it and a view update reads it,
+    /// outside SwiftUI's state transactions.
+    final class UnsentReturnNewline {
+        /// The typed draft, until the field has been given it.
+        var draft: String?
+        /// The latest typed draft whose newline is still to be removed, and
+        /// the text before the earliest of the Returns that led to it: two
+        /// quick Returns on an empty draft go back to empty, not to "\n".
+        private var pending: (typed: String, base: String)?
+
+        /// A Return turned `old` into `typed` and sent nothing.
+        func returnTyped(old: String, typed: String) {
+            let base = pending.flatMap { $0.typed == old ? $0.base : nil } ?? old
+            pending = (typed, base)
+            draft = typed
+        }
+
+        /// The draft was sent or edited: no newline to remove.
+        func clear() {
+            draft = nil
+            pending = nil
+        }
+
+        /// The text to restore once the field shows `typed`; nil if a later
+        /// edit took over.
+        func takeBase(showing typed: String) -> String? {
+            guard let pending, pending.typed == typed else { return nil }
+            self.pending = nil
+            return pending.base
+        }
+    }
+
+    /// Reports each draft SwiftUI applies to the native views, from the same
+    /// platform-view update that gives the text field its text.
+    struct ComposerTextApplied: UIViewRepresentable {
+        let text: String
+        let applied: (String) -> Void
+
+        func makeUIView(context: Context) -> UIView {
+            let view = UIView()
+            view.isUserInteractionEnabled = false
+            return view
+        }
+
+        func updateUIView(_ view: UIView, context: Context) { applied(text) }
+    }
 }
 #endif
