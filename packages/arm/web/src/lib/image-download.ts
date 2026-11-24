@@ -39,9 +39,15 @@ export function imageFileName(label: string | undefined, mimeType: string): stri
   return `${base || DEFAULT_IMAGE_FILE_NAME}.${imageExtension(mimeType)}`;
 }
 
-/** The bytes of an inline (base64) image attachment. */
-export function base64ImageBlob(data: string, mimeType: string): Blob {
-  const binary = atob(data);
+/** The bytes of an inline (base64) image attachment; null when `data` is
+ *  not valid base64 (there is nothing to save, but the viewer still opens). */
+export function base64ImageBlob(data: string, mimeType: string): Blob | null {
+  let binary: string;
+  try {
+    binary = atob(data);
+  } catch {
+    return null;
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mimeType });

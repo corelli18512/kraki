@@ -40,8 +40,12 @@ describe('imageFileName', () => {
 describe('base64ImageBlob', () => {
   it('is the original bytes with the original type', async () => {
     const blob = base64ImageBlob(GIF_BASE64, 'image/gif');
-    expect(blob.type).toBe('image/gif');
-    expect(await bytes(blob)).toEqual(GIF_BYTES);
+    expect(blob?.type).toBe('image/gif');
+    expect(await bytes(blob!)).toEqual(GIF_BYTES);
+  });
+
+  it('is null for malformed base64 instead of throwing', () => {
+    expect(base64ImageBlob('not base64!*', 'image/gif')).toBeNull();
   });
 });
 
@@ -49,7 +53,7 @@ describe('downloadImage', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('saves exactly the given blob under the given name', () => {
-    const blob = base64ImageBlob(GIF_BASE64, 'image/gif');
+    const blob = base64ImageBlob(GIF_BASE64, 'image/gif')!;
     const created: Blob[] = [];
     URL.createObjectURL = vi.fn((b: Blob) => { created.push(b); return 'blob:kraki/1'; });
     URL.revokeObjectURL = vi.fn();

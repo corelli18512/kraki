@@ -129,6 +129,18 @@ describe('Saving images', () => {
     expect(tile).toHaveFocus();
   });
 
+  it('opens the viewer without Download, and keeps the browser menu, for malformed inline base64', () => {
+    render(<ImagePreviewProvider><ImageAttachments attachments={[{ ...gif, data: 'not base64!*' }]} /></ImagePreviewProvider>);
+    const tile = screen.getByRole('button', { name: 'Open image preview' });
+    const event = createEvent.contextMenu(tile);
+    fireEvent(tile, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    fireEvent.click(tile);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download image' })).not.toBeInTheDocument();
+  });
+
   it('saves a loaded agent image under its name with its real type', async () => {
     const blob = new Blob([Uint8Array.from(atob(GIF), (c) => c.charCodeAt(0))], { type: 'image/gif' });
     stored.set('anim', { kind: 'ready', mimeType: 'image/gif', blob });
