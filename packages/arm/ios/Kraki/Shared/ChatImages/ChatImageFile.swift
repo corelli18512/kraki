@@ -105,19 +105,25 @@ struct ChatImageFile {
 }
 
 extension ChatImageFile {
-    /// The original bytes of an inline (base64) image attachment.
+    /// The original bytes of an inline (base64) image attachment, labelled
+    /// like an agent image.
     init?(inline attachment: ImageAttachment, id: String) {
         guard let data = Data(base64Encoded: attachment.data) else { return nil }
-        self.init(id: id, data: data, mimeType: attachment.mimeType, label: nil)
+        self.init(id: id, data: data, mimeType: attachment.mimeType,
+                  label: Self.label(name: attachment.name, caption: attachment.caption))
     }
 
-    /// An agent image whose bytes have arrived. The label is the name, else
-    /// the caption (the Web client's rule).
+    /// An agent image whose bytes have arrived.
     init(ref: ContentRef, mimeType: String, data: Data) {
-        let label = [ref.name, ref.caption]
+        self.init(id: ref.id, data: data, mimeType: mimeType.isEmpty ? ref.mimeType : mimeType,
+                  label: Self.label(name: ref.name, caption: ref.caption))
+    }
+
+    /// The name, else the caption, blank ones skipped (the Web client's rule).
+    static func label(name: String?, caption: String?) -> String? {
+        [name, caption]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
-        self.init(id: ref.id, data: data, mimeType: mimeType.isEmpty ? ref.mimeType : mimeType, label: label)
     }
 
     /// The bytes of an agent image from the attachment store, once ready.

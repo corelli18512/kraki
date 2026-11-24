@@ -401,6 +401,10 @@ struct ImageAttachment: Codable, Sendable {
     let type: String
     let mimeType: String
     let data: String // base64-encoded
+    /// Optional file name and caption (protocol `ImageAttachment`): the
+    /// name a saved image gets.
+    var name: String?
+    var caption: String?
 }
 
 /// Reference to lazy content (image, tool args, tool result) stored on

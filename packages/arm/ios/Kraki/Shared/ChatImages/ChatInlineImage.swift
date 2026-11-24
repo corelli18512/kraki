@@ -31,7 +31,14 @@ final class ChatInlineImage {
         return attachments.compactMap { attachment in
             guard attachment.type == "image" else { return nil }
             let key = attachment.data as NSString
-            if let cached = cache.object(forKey: key) { return cached }
+            if let cached = cache.object(forKey: key) {
+                // The same bytes sent again under another name or caption.
+                let label = ChatImageFile.label(name: attachment.name, caption: attachment.caption)
+                guard label != cached.file.label else { return cached }
+                let file = cached.file
+                return ChatInlineImage(image: cached.image,
+                                       file: ChatImageFile(id: file.id, data: file.data, mimeType: file.mimeType, label: label))
+            }
             guard let file = ChatImageFile(inline: attachment, id: "inline-\(UUID().uuidString)"),
                   let image = AttachmentImageCache.decode(file.data) else { return nil }
             let decoded = ChatInlineImage(image: image, file: file)

@@ -238,7 +238,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
                   let type = dict["type"]?.stringValue,
                   let mimeType = dict["mimeType"]?.stringValue,
                   let data = dict["data"]?.stringValue else { return nil }
-            return ImageAttachment(type: type, mimeType: mimeType, data: data)
+            return ImageAttachment(type: type, mimeType: mimeType, data: data,
+                                   name: dict["name"]?.stringValue, caption: dict["caption"]?.stringValue)
         }
     }
 

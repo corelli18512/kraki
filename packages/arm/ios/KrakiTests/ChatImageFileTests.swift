@@ -61,6 +61,25 @@ final class ChatImageFileTests: XCTestCase {
         XCTAssertTrue(ChatInlineImage.decode([ImageAttachment(type: "image", mimeType: "image/png", data: "not base64")]).isEmpty)
     }
 
+    /// The protocol's inline image has an optional name and caption, which
+    /// the Web client already saves under: same rule here.
+    func testInlineImageIsNamedAfterItsNameElseCaption() throws {
+        let gif = try ChatGIFFixture.gif(frames: 2, width: 12).base64EncodedString()
+        let png = try ChatGIFFixture.png(width: 12).base64EncodedString()
+        let message = ChatMessage(
+            type: "user_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: "2026-09-01T00:00:00.000Z",
+            payload: ["attachments": AnyCodable([
+                ["type": "image", "mimeType": "image/gif", "data": gif, "name": "party.png", "caption": "Party"],
+                ["type": "image", "mimeType": "image/png", "data": png, "name": "  ", "caption": "Chart"],
+            ])])
+        let attachments = try XCTUnwrap(message.attachments)
+        XCTAssertEqual(attachments.compactMap { ChatImageFile(inline: $0, id: "x")?.fileName }, ["party.gif", "Chart.png"])
+        XCTAssertEqual(ChatInlineImage.decode(attachments).map(\.file.fileName), ["party.gif", "Chart.png"])
+        // The same bytes again under another name (decoded once, named anew).
+        let renamed = ImageAttachment(type: "image", mimeType: "image/gif", data: gif, name: "again.gif")
+        XCTAssertEqual(ChatInlineImage.decode([renamed]).first?.file.fileName, "again.gif")
+    }
+
     func testTemporaryCopyForTheShareSheetIsTheOriginalFile() throws {
         let gif = try ChatGIFFixture.gif(frames: 2)
         let url = try file("party", "image/gif", data: gif).writeTemporaryCopy()
