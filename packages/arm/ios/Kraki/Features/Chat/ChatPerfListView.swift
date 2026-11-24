@@ -788,13 +788,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var isSettlingInitialVisibleGeometry = false
     var pendingHeightRefreshIDs = Set<String>()
     var heightRefreshScheduled = false
-    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
-                        forItemAt indexPath: IndexPath) {
-        // A reused cell must not carry another row's unfinished entrance.
-        cell.layer.removeAnimation(forKey: "kraki.entrance")
-        guard !pendingEntrances.isEmpty, indexPath.item < items.count else { return }
-        runEntranceIfPending(cell, id: items[indexPath.item])
-    }
     // MARK: Streaming render pacing
 
     var liveRenderScheduled = false
@@ -937,6 +930,26 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     var lastApplyMs: Double = 0
     var lastReason: String = "initial"
+}
+
+// MARK: - Cell display
+
+extension ChatPerfListVC {
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        BubbleImageHostView.setImagesDisplayed(true, in: cell)
+        // A reused cell must not carry another row's unfinished entrance.
+        cell.layer.removeAnimation(forKey: "kraki.entrance")
+        guard !pendingEntrances.isEmpty, indexPath.item < items.count else { return }
+        runEntranceIfPending(cell, id: items[indexPath.item])
+    }
+
+    /// The collection view keeps a cell that scrolled off screen for reuse,
+    /// still in the window: its GIFs stop ticking until displayed again.
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        BubbleImageHostView.setImagesDisplayed(false, in: cell)
+    }
 }
 
 // MARK: - SwiftUI bridge

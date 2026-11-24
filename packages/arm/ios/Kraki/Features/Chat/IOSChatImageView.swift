@@ -26,6 +26,13 @@ final class ChatAnimatedImageView: UIImageView {
     /// Called when the GIF turns out animated and on play / pause.
     var onPlaybackChange: (() -> Void)?
 
+    /// False while this image is in a window but not shown: a viewer page
+    /// swiped away. A list cell that scrolled off screen (kept by the
+    /// collection view for reuse) says so through its `BubbleImageHostView`.
+    var isDisplayed = true {
+        didSet { if isDisplayed != oldValue { updatePlayerVisibility() } }
+    }
+
     var file: ChatImageFile? { player.file }
     var isPausedBadgeVisible: Bool { !pausedBadge.isHidden }
     var isAnimated: Bool { player.isAnimated }
@@ -71,7 +78,22 @@ final class ChatAnimatedImageView: UIImageView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        player.setVisible(window != nil)
+        updatePlayerVisibility()
+    }
+
+    /// The GIF ticks only while shown: in a window, displayed, and not in a
+    /// chat cell the list stopped displaying.
+    func updatePlayerVisibility() {
+        player.setVisible(window != nil && isDisplayed && enclosingImageHost?.imagesDisplayed != false)
+    }
+
+    private var enclosingImageHost: BubbleImageHostView? {
+        var view = superview
+        while let current = view {
+            if let host = current as? BubbleImageHostView { return host }
+            view = current.superview
+        }
+        return nil
     }
 
     override func layoutSubviews() {

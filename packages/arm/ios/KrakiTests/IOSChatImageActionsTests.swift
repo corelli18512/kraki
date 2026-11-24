@@ -171,6 +171,79 @@ final class IOSChatImageActionsTests: XCTestCase {
         XCTAssertTrue(tree.elements(label: "Save to Photos").isEmpty)
     }
 
+    /// The collection view keeps a cell that scrolled off screen for reuse,
+    /// still in the window: `didEndDisplaying` stops its GIFs; displayed
+    /// again, they play on.
+    func testGIFInACellTheListStoppedDisplayingStopsTicking() async throws {
+        try requireForegroundUITests()
+        ChatGIFPlayer.reduceMotionOverride = false
+        let selector = #selector(UICollectionViewDelegate.collectionView(_:didEndDisplaying:forItemAt:))
+        XCTAssertTrue(ChatPerfListVC.instancesRespond(to: selector), "the chat list tells cells it stopped displaying them")
+        let gif = try ChatGIFFixture.gif(frames: 3, delays: [0.03, 0.03, 0.03])
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let cell = UICollectionViewCell(frame: window.bounds)
+        let host = BubbleImageHostView(frame: cell.contentView.bounds)
+        cell.contentView.addSubview(host)
+        window.addSubview(cell)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.configure(images: [try XCTUnwrap(UIImage(data: gif))], imageFiles: [ChatGIFFixture.file(gif)], refs: [],
+                       sessionId: "s", maxWidth: 300, alignment: .leading, attachmentStore: nil, onOpenImage: { _ in })
+        try await waitBriefly(seconds: 5) {
+            host.layoutIfNeeded()
+            return !BubbleImageHostView.animatedImageViews(in: host).isEmpty
+        }
+        let image = try XCTUnwrap(BubbleImageHostView.animatedImageViews(in: host).first)
+        var frames = 0
+        let shown = image.player.onFrame
+        image.player.onFrame = { frames += 1; shown($0) }
+        try await waitBriefly(seconds: 10) { frames >= 3 }
+        XCTAssertTrue(image.isPlaying)
+
+        BubbleImageHostView.setImagesDisplayed(false, in: cell) // didEndDisplaying
+        let parked = frames
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(frames, parked, "a GIF in a cell the list stopped displaying kept ticking")
+
+        BubbleImageHostView.setImagesDisplayed(true, in: cell) // willDisplay
+        try await waitBriefly(seconds: 10) { frames >= parked + 3 }
+        XCTAssertGreaterThanOrEqual(frames, parked + 3, "the GIF plays again once displayed")
+        image.player.pause()
+    }
+
+    /// All viewer pages exist up front: only the page looked at plays.
+    func testViewerPlaysOnlyTheGIFOnThePageShown() async throws {
+        try requireForegroundUITests()
+        ChatGIFPlayer.reduceMotionOverride = false
+        let tree = try AccessibilityTreeHost()
+        defer { tree.tearDown() }
+        let first = try ChatGIFFixture.gif(frames: 3, delays: [0.03, 0.03, 0.03])
+        let second = try ChatGIFFixture.gif(frames: 2, delays: [0.03, 0.03])
+        let items = [
+            IOSImagePreviewItem(id: "inline-0", image: try XCTUnwrap(UIImage(data: first)), title: "Image 1", file: ChatGIFFixture.file(first)),
+            IOSImagePreviewItem(id: "inline-1", image: try XCTUnwrap(UIImage(data: second)), title: "Image 2", file: ChatGIFFixture.file(second)),
+        ]
+        _ = try tree.show(IOSImagePreviewGallery(selection: IOSImagePreviewSelection(items: items)))
+        let window = try XCTUnwrap(tree.window)
+        var views: [ChatAnimatedImageView] = []
+        try await waitBriefly(seconds: 10) {
+            views = BubbleImageHostView.animatedImageViews(in: window)
+            return views.count == 2 && views.allSatisfy(\.isAnimated)
+        }
+        XCTAssertEqual(views.count, 2)
+        let shown = try XCTUnwrap(views.first { $0.file?.data == first })
+        let other = try XCTUnwrap(views.first { $0.file?.data == second })
+        XCTAssertTrue(shown.isDisplayed)
+        XCTAssertFalse(other.isDisplayed, "the page not looked at is not displayed")
+        var shownFrames = 0, otherFrames = 0
+        let showShown = shown.player.onFrame, showOther = other.player.onFrame
+        shown.player.onFrame = { shownFrames += 1; showShown($0) }
+        other.player.onFrame = { otherFrames += 1; showOther($0) }
+        try await waitBriefly(seconds: 10) { shownFrames >= 3 }
+        XCTAssertGreaterThanOrEqual(shownFrames, 3, "the page shown plays")
+        XCTAssertEqual(otherFrames, 0, "the page not shown does not tick")
+    }
+
     /// 0 red, 1 green, 2 blue: the strongest channel at the image's centre.
     private func dominantChannel(_ image: UIImage?) -> Int? {
         guard let cgImage = image?.cgImage else { return nil }

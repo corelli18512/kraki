@@ -385,6 +385,30 @@ struct BubbleImageGallery: View {
 
 final class BubbleImageHostView: UIView {
     private var hostingController: UIHostingController<BubbleImageGallery?>?
+    /// False while the chat list is not displaying this cell (scrolled off
+    /// screen, kept for reuse): its GIFs stop ticking until displayed again.
+    var imagesDisplayed = true {
+        didSet {
+            guard imagesDisplayed != oldValue else { return }
+            Self.animatedImageViews(in: self).forEach { $0.updatePlayerVisibility() }
+        }
+    }
+
+    /// The chat list started (true) or stopped displaying `cell`.
+    static func setImagesDisplayed(_ displayed: Bool, in cell: UIView) {
+        if let host = cell as? BubbleImageHostView {
+            host.imagesDisplayed = displayed
+            return
+        }
+        cell.subviews.forEach { setImagesDisplayed(displayed, in: $0) }
+    }
+
+    static func animatedImageViews(in view: UIView) -> [ChatAnimatedImageView] {
+        view.subviews.flatMap { subview -> [ChatAnimatedImageView] in
+            if let image = subview as? ChatAnimatedImageView { return [image] }
+            return animatedImageViews(in: subview)
+        }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)

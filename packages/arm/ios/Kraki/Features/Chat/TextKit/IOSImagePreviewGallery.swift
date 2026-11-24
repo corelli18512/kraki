@@ -54,7 +54,7 @@ struct IOSImagePreviewGallery: View {
                     // the scroll position as late pages appear.
                     HStack(spacing: 0) {
                         ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, item in
-                            IOSImagePreviewPage(item: item, selection: selection, onBackdropTap: { dismiss() })
+                            IOSImagePreviewPage(item: item, selection: selection, isShown: offset == index, onBackdropTap: { dismiss() })
                                 .padding(.top, 52)
                                 .padding(.bottom, selection.items.count > 1 ? 54 : 18)
                                 .padding(.horizontal, 12)
@@ -217,16 +217,19 @@ struct IOSImagePreviewGallery: View {
 private struct IOSImagePreviewPage: View {
     let item: IOSImagePreviewItem
     let selection: IOSImagePreviewSelection
+    /// The page looked at: only its GIF plays (all pages exist up front).
+    let isShown: Bool
     let onBackdropTap: () -> Void
 
     var body: some View {
         if let image = item.image {
-            IOSZoomableImageCanvas(image: image, file: item.file, onBackdropTap: onBackdropTap)
+            IOSZoomableImageCanvas(image: image, file: item.file, isShown: isShown, onBackdropTap: onBackdropTap)
         } else if let id = item.attachmentID {
             switch selection.attachmentStore?.state(for: id) {
             case .ready(_, let data):
                 if let image = AttachmentImageCache.image(id: id, data: data) {
-                    IOSZoomableImageCanvas(image: image, file: item.file(in: selection.attachmentStore), onBackdropTap: onBackdropTap)
+                    IOSZoomableImageCanvas(image: image, file: item.file(in: selection.attachmentStore), isShown: isShown,
+                                           onBackdropTap: onBackdropTap)
                 } else {
                     message(String(localized: "Invalid image"), retry: false)
                 }
@@ -287,17 +290,20 @@ private struct IOSImagePreviewPage: View {
 private struct IOSZoomableImageCanvas: UIViewRepresentable {
     let image: UIImage
     let file: ChatImageFile?
+    let isShown: Bool
     let onBackdropTap: () -> Void
 
     func makeUIView(context: Context) -> IOSZoomableImageView {
         let view = IOSZoomableImageView()
         view.onBackdropTap = onBackdropTap
+        view.imageView.isDisplayed = isShown
         view.show(image, file: file)
         return view
     }
 
     func updateUIView(_ uiView: IOSZoomableImageView, context: Context) {
         uiView.onBackdropTap = onBackdropTap
+        uiView.imageView.isDisplayed = isShown
         uiView.show(image, file: file)
     }
 }
