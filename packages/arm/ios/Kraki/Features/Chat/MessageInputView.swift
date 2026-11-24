@@ -1042,13 +1042,13 @@ struct MessageInputView: View {
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         let data = try? await item.loadTransferable(type: Data.self)
-        let outcome = PhotoAttachmentLoad.jpeg(from: data)
+        let outcome = PhotoAttachmentLoad.attachment(from: data)
         // A newer pick, a removal or a send since this load started wins: a
         // late (e.g. iCloud) load must not attach to the next message.
         guard selectedPhoto == item else { return }
         switch outcome {
-        case .image(let jpeg):
-            sessionStore.setStagedImage(sessionId, StagedComposerImage(data: jpeg, mimeType: "image/jpeg"))
+        case .image(let bytes, let mimeType):
+            sessionStore.setStagedImage(sessionId, StagedComposerImage(data: bytes, mimeType: mimeType))
         case .unreadable:
             imageAttachError = String(localized: "Couldn't read that image."); selectedPhoto = nil
         case .unsupported:

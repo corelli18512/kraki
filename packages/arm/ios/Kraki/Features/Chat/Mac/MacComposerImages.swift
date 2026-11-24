@@ -1,8 +1,54 @@
 #if os(macOS)
 import AppKit
+import ImageIO
 
 enum MacComposerImages {
     private static let previews = NSCache<NSUUID, NSImage>()
+
+    /// Largest file and longest side the composer sends (after compression).
+    static let maxSize = 3 * 1024 * 1024
+    static let maxDimension: CGFloat = 1024
+
+    /// The GIF bytes an image was read from (picked file, pasted or dropped
+    /// file or data), so it can be sent as is and stay animated.
+    private static let gifSources = NSMapTable<NSImage, NSData>.weakToStrongObjects()
+
+    /// An image file to attach; remembers a GIF's bytes.
+    static func image(contentsOf url: URL) -> NSImage? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return image(data: data)
+    }
+
+    /// Image data to attach (pasteboard); remembers a GIF's bytes.
+    static func image(data: Data) -> NSImage? {
+        guard let image = NSImage(data: data) else { return nil }
+        if ChatGIFAnimation.isGIF(data) { gifSources.setObject(data as NSData, forKey: image) }
+        return image
+    }
+
+    /// What the composer stages for `image`: a GIF within the limits as it
+    /// is (re-encoding keeps only its first frame), anything else as a JPEG
+    /// of at most `maxDimension`; nil when even that is over `maxSize`.
+    static func staged(_ image: NSImage) -> StagedComposerImage? {
+        if let gif = gifSources.object(forKey: image) as Data?, gif.count <= maxSize,
+           let size = pixelSize(gif), max(size.width, size.height) <= maxDimension {
+            return StagedComposerImage(data: gif, mimeType: "image/gif")
+        }
+        for quality in [0.8, 0.6] {
+            if let data = jpegData(from: image, maxDimension: maxDimension, quality: quality), data.count <= maxSize {
+                return StagedComposerImage(data: data, mimeType: "image/jpeg")
+            }
+        }
+        return nil
+    }
+
+    private static func pixelSize(_ data: Data) -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue else { return nil }
+        return CGSize(width: width, height: height)
+    }
 
     /// The thumbnail of a staged image, decoded once per attachment rather
     /// than on every composer update.

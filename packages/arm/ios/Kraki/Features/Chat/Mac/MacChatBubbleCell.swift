@@ -557,7 +557,7 @@ final class MacChatBubbleCell: NSView {
         imageHost.rootView = (content.inlineImages.isEmpty && content.imageRefs.isEmpty)
             ? nil
             : MacBubbleImageGrid(
-                inlineImages: content.inlineImages,
+                inlineImages: content.inlineImages, inlineImageFiles: content.inlineImageFiles,
                 refs: content.imageRefs,
                 sessionId: content.sessionId,
                 maxWidth: content.attachmentWidth,

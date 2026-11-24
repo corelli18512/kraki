@@ -619,7 +619,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         let hasImages = !content.images.isEmpty || !content.imageRefs.isEmpty
         let galleryAlignment: Alignment = content.kind == .user ? .trailing : .leading
         imageHost.configure(
-            images: content.images,
+            images: content.images, imageFiles: content.imageFiles,
             refs: content.imageRefs,
             sessionId: sessionId,
             maxWidth: content.attachmentWidth(cellWidth: cellWidth),
