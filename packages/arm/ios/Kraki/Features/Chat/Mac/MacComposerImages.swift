@@ -9,9 +9,10 @@ enum MacComposerImages {
     static let maxSize = 3 * 1024 * 1024
     static let maxDimension: CGFloat = 1024
 
-    /// The GIF bytes an image was read from (picked file, pasted or dropped
-    /// file or data), so it can be sent as is and stay animated.
-    private static let gifSources = NSMapTable<NSImage, NSData>.weakToStrongObjects()
+    /// Key of the GIF bytes an image was read from (picked file, pasted or
+    /// dropped file or data), kept on the image itself so they go with it
+    /// and it can be sent as is, still animated.
+    private static var gifSourceKey: UInt8 = 0
 
     /// An image file to attach; remembers a GIF's bytes.
     static func image(contentsOf url: URL) -> NSImage? {
@@ -19,19 +20,27 @@ enum MacComposerImages {
         return image(data: data)
     }
 
-    /// Image data to attach (pasteboard); remembers a GIF's bytes.
+    /// Image data to attach (pasteboard); remembers a GIF's bytes when it
+    /// can be sent as is (a larger GIF becomes a still JPEG anyway).
     static func image(data: Data) -> NSImage? {
         guard let image = NSImage(data: data) else { return nil }
-        if ChatGIFAnimation.isGIF(data) { gifSources.setObject(data as NSData, forKey: image) }
+        if ChatGIFAnimation.isGIF(data), data.count <= maxSize,
+           let size = pixelSize(data), max(size.width, size.height) <= maxDimension {
+            objc_setAssociatedObject(image, &gifSourceKey, data as NSData, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
         return image
+    }
+
+    /// The GIF bytes `image` was read from, when it is sent as is.
+    static func gifSource(of image: NSImage) -> NSData? {
+        objc_getAssociatedObject(image, &gifSourceKey) as? NSData
     }
 
     /// What the composer stages for `image`: a GIF within the limits as it
     /// is (re-encoding keeps only its first frame), anything else as a JPEG
     /// of at most `maxDimension`; nil when even that is over `maxSize`.
     static func staged(_ image: NSImage) -> StagedComposerImage? {
-        if let gif = gifSources.object(forKey: image) as Data?, gif.count <= maxSize,
-           let size = pixelSize(gif), max(size.width, size.height) <= maxDimension {
+        if let gif = gifSource(of: image) as Data? {
             return StagedComposerImage(data: gif, mimeType: "image/gif")
         }
         for quality in [0.8, 0.6] {

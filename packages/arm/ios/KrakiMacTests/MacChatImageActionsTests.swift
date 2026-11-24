@@ -179,6 +179,24 @@ final class MacChatImageActionsTests: XCTestCase {
         XCTAssertEqual(png.mimeType, "image/jpeg")
     }
 
+    /// The GIF bytes are kept on the image only when it is sent as is, and
+    /// go away with it (no table holding every pasted GIF).
+    func testComposerKeepsGIFBytesOnlyWithinTheLimitsAndOnlyWhileTheImageLives() throws {
+        let wide = try ChatGIFFixture.gif(frames: 2, width: 1600, height: 100)
+        let over = try XCTUnwrap(MacComposerImages.image(data: wide))
+        XCTAssertNil(MacComposerImages.gifSource(of: over), "an over-limit GIF is sent as a JPEG: its bytes are not kept")
+
+        // Native Swift bytes: the image's copy is the only NSData of them.
+        let gif = Data([UInt8](try ChatGIFFixture.gif(frames: 2)))
+        weak var kept: NSData?
+        try autoreleasepool {
+            let image = try XCTUnwrap(MacComposerImages.image(data: gif))
+            kept = MacComposerImages.gifSource(of: image)
+            XCTAssertEqual(kept as Data?, gif)
+        }
+        XCTAssertNil(kept, "the GIF bytes outlived the image")
+    }
+
     func testPastedGIFDataIsPreferredSoItStaysAnimated() throws {
         let gif = try ChatGIFFixture.gif(frames: 2)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("test-\(UUID().uuidString)"))
