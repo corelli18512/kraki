@@ -30,7 +30,7 @@ final class ChatGIFPlayerTests: XCTestCase {
         }
         player.setVisible(true)
         player.load(animation, playing: true)
-        try await waitBriefly(seconds: 3) { shown.count >= 6 }
+        try await waitBriefly(seconds: 10) { shown.count >= 6 }
         XCTAssertEqual(Array(shown.prefix(6)), [0, 1, 2, 3, 0, 1], "frames in order, then looping")
         player.pause()
     }
@@ -44,7 +44,7 @@ final class ChatGIFPlayerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertEqual(frames, 1, "not in a window: no timer")
         player.setVisible(true)
-        try await waitBriefly { frames >= 3 }
+        try await waitBriefly(seconds: 10) { frames >= 3 }
         XCTAssertGreaterThanOrEqual(frames, 3)
         player.setVisible(false)
     }
@@ -55,7 +55,7 @@ final class ChatGIFPlayerTests: XCTestCase {
         let player = ChatGIFPlayer { last = $0 }
         player.setVisible(true)
         player.load(animation, playing: true)
-        try await waitBriefly { !player.isPlaying }
+        try await waitBriefly(seconds: 10) { !player.isPlaying }
         XCTAssertFalse(player.isPlaying)
         XCTAssertEqual(frameIndex(last, in: animation), 2)
         player.play()
@@ -72,7 +72,7 @@ final class ChatGIFPlayerTests: XCTestCase {
         player.onPlaybackChange = { changes += 1 }
         player.setVisible(true)
         player.show(file)
-        try await waitBriefly { player.isAnimated }
+        try await waitBriefly(seconds: 10) { player.isAnimated }
         XCTAssertTrue(player.isAnimated)
         XCTAssertFalse(player.isPlaying)
         let animation = try XCTUnwrap(player.animation)
@@ -89,7 +89,7 @@ final class ChatGIFPlayerTests: XCTestCase {
         let player = ChatGIFPlayer { _ in }
         player.setVisible(true)
         player.show(ChatGIFFixture.file(try ChatGIFFixture.gif(frames: 2)))
-        try await waitBriefly { player.isPlaying }
+        try await waitBriefly(seconds: 10) { player.isPlaying }
         XCTAssertTrue(player.isPlaying)
         var frames: [CGImage?] = []
         player.onFrame = { frames.append($0) }

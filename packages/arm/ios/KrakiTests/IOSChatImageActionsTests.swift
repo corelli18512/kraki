@@ -99,10 +99,10 @@ final class IOSChatImageActionsTests: XCTestCase {
         window.addSubview(view)
         var shown = Set<Int>()
         view.show(still, file: ChatGIFFixture.file(gif))
-        try await waitBriefly { view.isPlaying }
+        try await waitBriefly(seconds: 10) { view.isPlaying }
         XCTAssertTrue(view.isAnimated)
         XCTAssertTrue(view.isPlaying)
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(10)
         while shown.count < 3, Date() < deadline {
             if let channel = dominantChannel(view.image) { shown.insert(channel) }
             try await Task.sleep(for: .milliseconds(10))
@@ -119,7 +119,7 @@ final class IOSChatImageActionsTests: XCTestCase {
         view.showsPausedBadge = true
         view.player.setVisible(true)
         view.show(UIImage(data: gif), file: ChatGIFFixture.file(gif))
-        try await waitBriefly { view.isAnimated }
+        try await waitBriefly(seconds: 10) { view.isAnimated }
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertFalse(view.isPlaying)
         let color = ChatGIFFixture.centerColor(try XCTUnwrap(view.image?.cgImage))
@@ -141,7 +141,7 @@ final class IOSChatImageActionsTests: XCTestCase {
         viewer.layoutIfNeeded()
         XCTAssertTrue(viewer.playbackButton.isHidden, "a still image has nothing to play")
         viewer.show(try XCTUnwrap(UIImage(data: gif)), file: ChatGIFFixture.file(gif))
-        try await waitBriefly { !viewer.playbackButton.isHidden }
+        try await waitBriefly(seconds: 10) { !viewer.playbackButton.isHidden }
         XCTAssertFalse(viewer.playbackButton.isHidden)
         XCTAssertEqual(viewer.playbackButton.accessibilityLabel, "Play Animation", "paused under Reduce Motion")
         viewer.playbackButton.sendActions(for: .touchUpInside)

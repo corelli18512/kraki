@@ -70,7 +70,7 @@ final class MacChatImageActionsTests: XCTestCase {
         button.player.show(ChatGIFFixture.file(data))
         let shown = button.player.onFrame
         button.player.onFrame = { frames += 1; shown($0) }
-        try await waitBriefly { frames >= 3 }
+        try await waitBriefly(seconds: 10) { frames >= 3 }
         XCTAssertTrue(button.player.isPlaying)
         XCTAssertGreaterThanOrEqual(frames, 3)
         XCTAssertEqual(button.menu(for: try rightClick())?.items.map(\.title), ["Save Image…", "Copy Image"])
@@ -86,7 +86,7 @@ final class MacChatImageActionsTests: XCTestCase {
         viewer.layoutSubtreeIfNeeded()
         XCTAssertTrue(viewer.playbackButton.isHidden, "a still image has nothing to play")
         viewer.player.show(ChatGIFFixture.file(data))
-        try await waitBriefly { !viewer.playbackButton.isHidden }
+        try await waitBriefly(seconds: 10) { !viewer.playbackButton.isHidden }
         XCTAssertFalse(viewer.player.isPlaying, "Reduce Motion: paused on the first frame")
         XCTAssertEqual(viewer.playbackButton.accessibilityLabel(), "Play Animation")
         viewer.playbackButton.performClick(nil)

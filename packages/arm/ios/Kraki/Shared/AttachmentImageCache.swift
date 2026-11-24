@@ -78,7 +78,8 @@ enum AttachmentImageCache {
         guard ChatGIFAnimation.isGIF(data) else { return nil }
         if let entry = animations.object(forKey: id as NSString) { return entry.animation }
         if let running = decodingAnimations[id] { return await running.value }
-        let task = Task.detached(priority: .utility) { ChatGIFAnimation.decode(data) }
+        // On screen now: decoded at user priority, off the main thread.
+        let task = Task.detached(priority: .userInitiated) { ChatGIFAnimation.decode(data) }
         decodingAnimations[id] = task
         let animation = await task.value
         decodingAnimations[id] = nil
