@@ -99,4 +99,22 @@ final class ChatGIFPlayerTests: XCTestCase {
         XCTAssertEqual(frames.count, 1)
         XCTAssertNil(frames.first ?? nil, "back to the still image")
     }
+
+    /// The same bytes shown again under another name (a reused bubble): the
+    /// GIF plays on, and the player holds the new name for Save Image….
+    func testSameImageUnderAnotherNameKeepsPlayingWithTheNewName() async throws {
+        ChatGIFPlayer.reduceMotionOverride = false
+        let first = ChatGIFFixture.file(try ChatGIFFixture.gif(frames: 2), label: "first")
+        let player = ChatGIFPlayer { _ in }
+        player.setVisible(true)
+        player.show(first)
+        try await waitBriefly(seconds: 10) { player.isPlaying }
+        var stills = 0
+        player.onFrame = { if $0 == nil { stills += 1 } }
+        player.show(ChatImageFile(id: first.id, data: first.data, mimeType: first.mimeType, label: "second"))
+        XCTAssertEqual(player.file?.fileName, "second.gif")
+        XCTAssertTrue(player.isPlaying, "the same image plays on")
+        XCTAssertEqual(stills, 0, "not reloaded")
+        player.pause()
+    }
 }

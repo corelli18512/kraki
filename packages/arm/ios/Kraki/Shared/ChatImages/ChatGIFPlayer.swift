@@ -54,9 +54,11 @@ final class ChatGIFPlayer {
     var isAnimated: Bool { animation != nil }
 
     /// The chat image to animate (nil, or not an animated GIF: nothing to
-    /// play, the view shows its still image). The same image keeps playing.
+    /// play, the view shows its still image). The same image keeps playing;
+    /// its file is still replaced, as the same bytes can come under another
+    /// name (Save Image… suggests the current one).
     func show(_ file: ChatImageFile?) {
-        guard file?.id != self.file?.id else { return }
+        guard file?.id != self.file?.id else { self.file = file; return }
         self.file = file
         loadTask?.cancel()
         loadTask = nil

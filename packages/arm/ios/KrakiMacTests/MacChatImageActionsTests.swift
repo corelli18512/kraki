@@ -94,19 +94,8 @@ final class MacChatImageActionsTests: XCTestCase {
         window.contentView = list
         let cell = NSView(frame: list.bounds)
         list.addSubview(cell)
-        let host = NSHostingView(rootView: MacBubbleImageGrid(
-            inlineImages: [try XCTUnwrap(NSImage(data: data))], inlineImageFiles: [ChatGIFFixture.file(data)],
-            refs: [], sessionId: "s", maxWidth: 200, alignment: .leading, attachmentStore: nil))
-        host.frame = cell.bounds
-        cell.addSubview(host)
         MacGIFScreenPresence.windowShownOverride = true
-        var found: MacPreviewImageNativeButton?
-        try await waitBriefly(seconds: 5) {
-            host.layoutSubtreeIfNeeded()
-            found = Self.descendant(MacPreviewImageNativeButton.self, of: host)
-            return found != nil
-        }
-        let button = try XCTUnwrap(found)
+        let button = try await hostedGIFButton(data, in: cell)
         var frames = 0
         let shown = button.player.onFrame
         button.player.onFrame = { frames += 1; shown($0) }
@@ -133,6 +122,70 @@ final class MacChatImageActionsTests: XCTestCase {
         try await waitBriefly(seconds: 10) { frames >= covered + 3 }
         XCTAssertGreaterThanOrEqual(frames, covered + 3)
         button.player.pause()
+    }
+
+    /// A new pooled cell is created hidden and its bubble (with the GIF) is
+    /// built before it is shown (`MacChatDocumentView.dequeueCell`, then
+    /// `installPlaceholderCellIfNeeded`): the GIF starts once it is shown.
+    func testGIFBuiltInACellCreatedHiddenPlaysOnceShown() async throws {
+        try requireForegroundUITests()
+        ChatGIFPlayer.reduceMotionOverride = false
+        let data = try ChatGIFFixture.gif(frames: 3, delays: [0.03, 0.03, 0.03])
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 300, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil }
+        let list = NSView(frame: window.contentLayoutRect)
+        window.contentView = list
+        let cell = NSView(frame: list.bounds)
+        cell.isHidden = true // what dequeueCell() does with a new cell
+        list.addSubview(cell)
+        MacGIFScreenPresence.windowShownOverride = true
+        let button = try await hostedGIFButton(data, in: cell)
+        var frames = 0
+        let shown = button.player.onFrame
+        button.player.onFrame = { frames += 1; shown($0) }
+        try await waitBriefly(seconds: 10) { button.player.isAnimated }
+        XCTAssertTrue(button.player.isAnimated)
+        let built = frames
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(frames, built, "a GIF in a cell not shown yet ticked")
+
+        cell.isHidden = false // configured, then shown
+        try await waitBriefly(seconds: 10) { frames >= built + 3 }
+        XCTAssertGreaterThanOrEqual(frames, built + 3, "the GIF plays once its new cell is shown")
+        button.player.pause()
+    }
+
+    /// The chat list reuses a thumbnail for another message with the same
+    /// inline bytes under another name: Save Image… suggests the new name.
+    func testReusedThumbnailSavesTheSameBytesUnderTheirNewName() throws {
+        let gif = try ChatGIFFixture.gif(frames: 2, width: 13).base64EncodedString()
+        let first = try XCTUnwrap(ChatInlineImage.decode([ImageAttachment(type: "image", mimeType: "image/gif", data: gif, name: "first.gif")]).first)
+        let second = try XCTUnwrap(ChatInlineImage.decode([ImageAttachment(type: "image", mimeType: "image/gif", data: gif, name: "second.gif")]).first)
+        XCTAssertEqual(first.file.id, second.file.id, "the same bytes are the same image")
+        let button = MacPreviewImageNativeButton(frame: NSRect(x: 0, y: 0, width: 80, height: 40))
+        button.player.show(first.file)
+        button.player.show(second.file) // the cell configured for the next message
+        let file = try XCTUnwrap(button.player.file)
+        XCTAssertEqual(MacChatImageActions.savePanel(for: file).nameFieldStringValue, "second.gif")
+    }
+
+    /// A chat bubble's image grid showing `data`, hosted in `cell`, and its
+    /// thumbnail button.
+    private func hostedGIFButton(_ data: Data, in cell: NSView) async throws -> MacPreviewImageNativeButton {
+        let host = NSHostingView(rootView: MacBubbleImageGrid(
+            inlineImages: [try XCTUnwrap(NSImage(data: data))], inlineImageFiles: [ChatGIFFixture.file(data)],
+            refs: [], sessionId: "s", maxWidth: 200, alignment: .leading, attachmentStore: nil))
+        host.frame = cell.bounds
+        cell.addSubview(host)
+        var found: MacPreviewImageNativeButton?
+        try await waitBriefly(seconds: 5) {
+            host.layoutSubtreeIfNeeded()
+            found = Self.descendant(MacPreviewImageNativeButton.self, of: host)
+            return found != nil
+        }
+        return try XCTUnwrap(found)
     }
 
     private static func descendant<View: NSView>(_ type: View.Type, of view: NSView) -> View? {
