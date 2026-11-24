@@ -8,6 +8,8 @@ import { useState, type CSSProperties } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { getState } from '../../lib/attachments';
 import { useOpenImagePreview } from './ImageViewer';
+import { useImageContextMenu, type ImageFile } from './ImageContextMenu';
+import { base64ImageBlob, imageFileName } from '../../lib/image-download';
 
 const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sid, ref));
@@ -53,8 +55,8 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
   const open = (index: number) => {
     const resolved = images.flatMap((attachment, i) => {
       const url = attachment.type === 'image' ? `data:${attachment.mimeType};base64,${attachment.data}` : resolvedRefs[attachment.id];
-      const state = attachment.type === 'content_ref' ? getState(attachment.id) : undefined;
-      return url ? [{ url, blob: state?.kind === 'ready' ? state.blob : undefined, title: attachment.type === 'image' ? t('attachments.numberedImage', { number: formatNumber(i + 1) }) : attachment.caption ?? attachment.name ?? t('attachments.image'), originalIndex: i }] : [];
+      const file = url ? imageFile(attachment) : null;
+      return url ? [{ url, blob: file?.blob, fileName: file?.fileName, title: attachment.type === 'image' ? t('attachments.numberedImage', { number: formatNumber(i + 1) }) : attachment.caption ?? attachment.name ?? t('attachments.image'), originalIndex: i }] : [];
     });
     if (resolved.length) openPreview?.({ items: resolved, initialIndex: Math.max(0, resolved.findIndex((item) => item.originalIndex === index)) });
   };
@@ -67,6 +69,14 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
     </div>)}
     {gallery && <span className="kimage-count" style={{ top: offset + 9, zIndex: depth + 1 }}>{images.length}</span>}
   </div>;
+}
+
+/** The original bytes of an image attachment (null until a ref has loaded). */
+function imageFile(attachment: ImageAttachment): ImageFile | null {
+  const label = attachment.name ?? attachment.caption;
+  if (attachment.type === 'image') return { blob: base64ImageBlob(attachment.data, attachment.mimeType), fileName: imageFileName(label, attachment.mimeType) };
+  const state = getState(attachment.id);
+  return state?.kind === 'ready' ? { blob: state.blob, fileName: imageFileName(label, state.mimeType) } : null;
 }
 
 export function refImageSize(ref: ContentRef): CSSProperties {
@@ -89,10 +99,20 @@ function AttachmentTile({ attachment, sessionId, gallery, onReady, onExpand }: {
   if (attachment.type === 'content_ref') {
     return sessionId ? <RefImageTile ref_={attachment} sessionId={sessionId} gallery={gallery} onReady={onReady} onExpand={onExpand} /> : <div className="kimage-placeholder" style={gallery ? undefined : refImageSize(attachment)}><span className="kspinner" aria-label={t('attachments.loading')} /></div>;
   }
+  return <InlineImageTile attachment={attachment} gallery={gallery} onExpand={onExpand} />;
+}
+
+function InlineImageTile({ attachment, gallery, onExpand }: { attachment: ImageAttachment & { type: 'image' }; gallery: boolean; onExpand: () => void }) {
+  const { t } = useTranslation('chat');
+  const { handlers, menu } = useImageContextMenu(() => imageFile(attachment));
   const src = `data:${attachment.mimeType};base64,${attachment.data}`;
-  return <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-binary'}`} onClick={onExpand}>
-    <img src={src} alt={attachment.caption ?? attachment.name ?? t('attachments.attachment')} onLoad={onImageLoad} />
-  </button>;
+  // The menu is a sibling: React events from its portal would reach the tile's click.
+  return <>
+    <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-binary'}`} onClick={onExpand} {...handlers}>
+      <img src={src} alt={attachment.caption ?? attachment.name ?? t('attachments.attachment')} onLoad={onImageLoad} />
+    </button>
+    {menu}
+  </>;
 }
 
 function RefImageTile({ ref_, sessionId, gallery, onReady, onExpand }: {
@@ -101,12 +121,16 @@ function RefImageTile({ ref_, sessionId, gallery, onReady, onExpand }: {
   const { t } = useTranslation('chat');
   const { status, url, error, retry } = useAttachment(ref_, sessionId, ATTACHMENT_PULL);
   const [invalidUrl, setInvalidUrl] = useState<string | null>(null);
+  const { handlers, menu } = useImageContextMenu(() => imageFile(ref_));
   const style = gallery ? undefined : refImageSize(ref_);
   if (status === 'error' || (url && invalidUrl === url)) return <button type="button" className={`kimage-placeholder is-error ${gallery ? 'is-gallery' : ''}`} style={style} onClick={() => { setInvalidUrl(null); retry(); }}>
     <AlertTriangle /><span>{error || t('attachments.invalidImage')}</span><small>{t('attachments.retry')}</small>
   </button>;
-  if (status === 'ready' && url) return <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-ref'}`} style={style} onClick={onExpand}>
-    <img src={url} alt={ref_.caption ?? ref_.name ?? t('attachments.attachment')} onLoad={(event) => { onReady(url); onImageLoad(event); }} onError={() => setInvalidUrl(url)} />
-  </button>;
+  if (status === 'ready' && url) return <>
+    <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-ref'}`} style={style} onClick={onExpand} {...handlers}>
+      <img src={url} alt={ref_.caption ?? ref_.name ?? t('attachments.attachment')} onLoad={(event) => { onReady(url); onImageLoad(event); }} onError={() => setInvalidUrl(url)} />
+    </button>
+    {menu}
+  </>;
   return <div className={`kimage-placeholder ${gallery ? 'is-gallery' : ''}`} style={style}><span className="kspinner" aria-label={t('attachments.loading')} /></div>;
 }

@@ -1,13 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { HtmlArtifactCards, ImageAttachments, refImageSize, htmlArtifactTitle } from './Attachments';
 import { ImagePreviewProvider } from './ImageViewer';
 
 const state = vi.hoisted(() => ({ status: 'loading', url: null as string | null, error: null as string | null, retry: vi.fn() }));
 vi.mock('../../hooks/useAttachment', () => ({ useAttachment: () => state }));
+const stored = vi.hoisted(() => new Map<string, { kind: 'ready'; mimeType: string; blob: Blob }>());
+vi.mock('../../lib/attachments', async (original) => ({ ...await original<object>(), getState: (id: string) => stored.get(id) }));
 const ref = { type: 'content_ref' as const, id: 'image', mimeType: 'image/png', size: 2048, width: 800, height: 400, name: 'Image' };
 const image = { type: 'image' as const, mimeType: 'image/png', data: 'AAAA' };
-beforeEach(() => { state.status = 'loading'; state.url = null; state.error = null; state.retry.mockClear(); });
+beforeEach(() => {
+  state.status = 'loading'; state.url = null; state.error = null; state.retry.mockClear();
+  // The viewer shows each image from its own object URL (jsdom has none).
+  URL.createObjectURL = vi.fn(() => 'blob:viewer');
+  URL.revokeObjectURL = vi.fn();
+});
 
 describe('ImageAttachments', () => {
   it('uses proportional metadata sizes and a square fallback, never exceeds 192px', () => {
@@ -62,5 +69,83 @@ describe('HtmlArtifactCards', () => {
     expect(screen.getByText('Report · 167 KB')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open report Report title' }));
     expect(open).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Saving images', () => {
+  const GIF = 'R0lGODlhAQABAAAAACw=';
+  const gif = { type: 'image' as const, mimeType: 'image/gif', data: GIF };
+  let saved: Array<{ blob: Blob; name: string }>;
+  beforeEach(() => {
+    saved = [];
+    stored.clear();
+    let made: Blob | undefined;
+    URL.createObjectURL = vi.fn((blob: Blob) => { made = blob; return `blob:test/${saved.length}`; });
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      if (this.download && made) saved.push({ blob: made, name: this.download });
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function read(blob: Blob): Promise<string> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1]);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  it('shows a GIF from its original bytes, so it animates', () => {
+    render(<ImageAttachments attachments={[gif]} />);
+    expect(screen.getByRole('img')).toHaveAttribute('src', `data:image/gif;base64,${GIF}`);
+  });
+
+  it('downloads the original GIF from the viewer', async () => {
+    render(<ImagePreviewProvider><ImageAttachments attachments={[gif]} /></ImagePreviewProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open image preview' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download image' }));
+    expect(saved.map((s) => s.name)).toEqual(['kraki-image.gif']);
+    expect(saved[0].blob.type).toBe('image/gif');
+    expect(await read(saved[0].blob)).toBe(GIF);
+  });
+
+  it('right-click on an image offers Download Image, without opening the viewer', async () => {
+    render(<ImagePreviewProvider><ImageAttachments attachments={[{ ...gif, name: 'party.png' }]} /></ImagePreviewProvider>);
+    const tile = screen.getByRole('button', { name: 'Open image preview' });
+    const event = createEvent.contextMenu(tile, { clientX: 20, clientY: 30 });
+    fireEvent(tile, event);
+    expect(event.defaultPrevented).toBe(true);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download Image' }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(saved.map((s) => s.name)).toEqual(['party.gif']);
+    expect(await read(saved[0].blob)).toBe(GIF);
+    // Keyboard: the menu key on the focused image.
+    fireEvent.keyDown(tile, { key: 'ContextMenu' });
+    expect(screen.getByRole('menuitem', { name: 'Download Image' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(tile).toHaveFocus();
+  });
+
+  it('saves a loaded agent image under its name with its real type', async () => {
+    const blob = new Blob([Uint8Array.from(atob(GIF), (c) => c.charCodeAt(0))], { type: 'image/gif' });
+    stored.set('anim', { kind: 'ready', mimeType: 'image/gif', blob });
+    state.status = 'ready'; state.url = 'blob:tile';
+    render(<ImageAttachments attachments={[{ ...ref, id: 'anim', mimeType: 'image/gif', name: undefined, caption: 'Build status' }]} sessionId="s1" />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open image preview' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download Image' }));
+    expect(saved).toEqual([{ blob, name: 'Build status.gif' }]);
+  });
+
+  it('leaves the browser menu alone until an agent image has loaded', () => {
+    state.status = 'ready'; state.url = 'blob:tile';
+    render(<ImageAttachments attachments={[ref]} sessionId="s1" />);
+    const tile = screen.getByRole('button', { name: 'Open image preview' });
+    const event = createEvent.contextMenu(tile);
+    fireEvent(tile, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 });

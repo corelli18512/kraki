@@ -37,6 +37,8 @@
     "openReport": "Open report {{title}}",
     "reportSize": "Report · {{size}}",
     "numberedImage": "Image {{number}}",
+    "imageActions": "Image actions",
+    "downloadImage": "Download Image",
     "errors": {
       "metadataUnavailable": "Attachment metadata unavailable",
       "invalidIndex": "Invalid attachment chunk index",
@@ -182,6 +184,7 @@
     "zoomOut": "Zoom out",
     "zoomIn": "Zoom in",
     "fit": "Fit to window",
+    "download": "Download image",
     "close": "Close image preview"
   },
   "message": {
