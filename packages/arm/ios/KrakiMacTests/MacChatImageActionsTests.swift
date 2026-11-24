@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 import XCTest
 @testable import Kraki_Dev
@@ -20,6 +21,7 @@ final class MacChatImageActionsTests: XCTestCase {
 
     override func tearDown() {
         ChatGIFPlayer.reduceMotionOverride = nil
+        MacGIFScreenPresence.windowShownOverride = nil
         if let directory { try? FileManager.default.removeItem(at: directory) }
         super.tearDown()
     }
@@ -75,6 +77,68 @@ final class MacChatImageActionsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frames, 3)
         XCTAssertEqual(button.menu(for: try rightClick())?.items.map(\.title), ["Save Image…", "Copy Image"])
         button.player.pause()
+    }
+
+    /// The chat list parks a recycled cell hidden in its reuse pool, still in
+    /// the window (`MacChatDocumentView.recycle`): its GIF must stop ticking,
+    /// and play on when the cell is shown again.
+    func testGIFInAHiddenPooledCellStopsTickingAndResumesWhenShown() async throws {
+        try requireForegroundUITests()
+        ChatGIFPlayer.reduceMotionOverride = false
+        let data = try ChatGIFFixture.gif(frames: 3, delays: [0.03, 0.03, 0.03])
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 300, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil }
+        let list = NSView(frame: window.contentLayoutRect)
+        window.contentView = list
+        let cell = NSView(frame: list.bounds)
+        list.addSubview(cell)
+        let host = NSHostingView(rootView: MacBubbleImageGrid(
+            inlineImages: [try XCTUnwrap(NSImage(data: data))], inlineImageFiles: [ChatGIFFixture.file(data)],
+            refs: [], sessionId: "s", maxWidth: 200, alignment: .leading, attachmentStore: nil))
+        host.frame = cell.bounds
+        cell.addSubview(host)
+        MacGIFScreenPresence.windowShownOverride = true
+        var found: MacPreviewImageNativeButton?
+        try await waitBriefly(seconds: 5) {
+            host.layoutSubtreeIfNeeded()
+            found = Self.descendant(MacPreviewImageNativeButton.self, of: host)
+            return found != nil
+        }
+        let button = try XCTUnwrap(found)
+        var frames = 0
+        let shown = button.player.onFrame
+        button.player.onFrame = { frames += 1; shown($0) }
+        try await waitBriefly(seconds: 10) { frames >= 3 }
+        XCTAssertTrue(button.player.isPlaying)
+
+        cell.isHidden = true // what recycle() does
+        let parked = frames
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(frames, parked, "a GIF in a hidden pooled cell kept ticking")
+
+        cell.isHidden = false // dequeued and shown again
+        try await waitBriefly(seconds: 10) { frames >= parked + 3 }
+        XCTAssertGreaterThanOrEqual(frames, parked + 3, "the GIF plays again once shown")
+
+        // The window minimised or covered: AppKit reports the occlusion change.
+        MacGIFScreenPresence.windowShownOverride = false
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        let covered = frames
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(frames, covered, "a GIF in a covered or minimised window kept ticking")
+        MacGIFScreenPresence.windowShownOverride = true
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        try await waitBriefly(seconds: 10) { frames >= covered + 3 }
+        XCTAssertGreaterThanOrEqual(frames, covered + 3)
+        button.player.pause()
+    }
+
+    private static func descendant<View: NSView>(_ type: View.Type, of view: NSView) -> View? {
+        if let match = view as? View { return match }
+        for subview in view.subviews { if let match = descendant(type, of: subview) { return match } }
+        return nil
     }
 
     func testViewerPlayPauseFollowsReduceMotion() async throws {

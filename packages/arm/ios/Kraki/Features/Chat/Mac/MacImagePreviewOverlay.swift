@@ -252,6 +252,8 @@ final class MacZoomableImageView: NSView {
         player.onPlaybackChange = { [weak self] in self?.updatePlaybackButton() }
         return player
     }()
+    /// Ticks the GIF only while on screen.
+    private lazy var screenPresence = MacGIFScreenPresence(view: self, player: player)
     /// Play / Pause for an animated GIF, bottom-right of the canvas.
     private(set) lazy var playbackButton: NSButton = {
         let button = NSButton(title: "", target: self, action: #selector(togglePlayback))
@@ -287,9 +289,19 @@ final class MacZoomableImageView: NSView {
     /// image) passes it on. Any other previous responder is left alone.
     private(set) weak var composerToRefocus: MacComposerTextView?
 
+    override func viewDidHide() {
+        super.viewDidHide()
+        screenPresence.update()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        screenPresence.update()
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        player.setVisible(window != nil)
+        screenPresence.update()
         guard let window else { return }
         let previous = window.firstResponder
         composerToRefocus = previous as? MacComposerTextView

@@ -197,3 +197,56 @@ final class ChatGIFPlayer {
         onFrame(animation.frames[min(currentFrameIndex, animation.frames.count - 1)])
     }
 }
+
+#if os(macOS)
+/// Keeps a Mac GIF view's player ticking only while the view is on screen:
+/// in a window, not hidden itself or through an ancestor (the chat list
+/// parks recycled cells hidden in its reuse pool, still in the window), and
+/// its window shown, not minimised or fully covered. The view calls
+/// `update()` from `viewDidMoveToWindow`, `viewDidHide` and `viewDidUnhide`;
+/// window occlusion changes are followed here.
+@MainActor
+final class MacGIFScreenPresence {
+    private weak var view: NSView?
+    private let player: ChatGIFPlayer
+    private weak var observedWindow: NSWindow?
+    private var occlusionObserver: NSObjectProtocol?
+
+    init(view: NSView, player: ChatGIFPlayer) {
+        self.view = view
+        self.player = player
+    }
+
+    deinit {
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+    }
+
+    func update() {
+        let window = view?.window
+        if window !== observedWindow { observe(window) }
+        player.setVisible(view.map(Self.isOnScreen) ?? false)
+    }
+
+    static func isOnScreen(_ view: NSView) -> Bool {
+        guard let window = view.window, !view.isHiddenOrHasHiddenAncestor else { return false }
+        if let windowShownOverride { return windowShownOverride }
+        return window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+    }
+
+    /// Tests pin whether a window counts as shown (a locked test machine
+    /// reports every window occluded).
+    static var windowShownOverride: Bool?
+
+    private func observe(_ window: NSWindow?) {
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
+        observedWindow = window
+        guard let window else { return }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.update() }
+        }
+    }
+}
+#endif

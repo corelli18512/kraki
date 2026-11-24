@@ -438,12 +438,24 @@ final class MacPreviewImageNativeButton: NSButton {
         player.onPlaybackChange = { [weak self] in self?.needsDisplay = true }
         return player
     }()
+    /// Ticks the GIF only while on screen (not in a hidden, pooled cell).
+    private lazy var screenPresence = MacGIFScreenPresence(view: self, player: player)
 
     override var isOpaque: Bool { false }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        player.setVisible(window != nil)
+        screenPresence.update()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        screenPresence.update()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        screenPresence.update()
     }
 
     /// Right click: Save Image… / Copy Image, once the bytes are here.
