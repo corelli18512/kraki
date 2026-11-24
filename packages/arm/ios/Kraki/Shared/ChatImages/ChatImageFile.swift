@@ -93,14 +93,33 @@ struct ChatImageFile {
 
     /// Writes the bytes to `<tmp>/kraki-images/<uuid>/<fileName>` for the
     /// share sheet, which then offers the file with its real name and type.
+    /// Removed when the share ends (`removeTemporaryCopy`), or at the next
+    /// launch (`removeTemporaryCopies`).
     func writeTemporaryCopy() throws -> URL {
-        let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kraki-images", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = Self.temporaryCopiesFolder.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent(fileName)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// Where the share sheet's copies are written.
+    static var temporaryCopiesFolder: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("kraki-images", isDirectory: true)
+    }
+
+    /// Removes one share copy (its `<uuid>` folder) once the share is over.
+    /// Anything outside `temporaryCopiesFolder` is left alone.
+    static func removeTemporaryCopy(_ url: URL) {
+        let folder = url.deletingLastPathComponent().standardizedFileURL
+        guard folder.deletingLastPathComponent().path == temporaryCopiesFolder.standardizedFileURL.path else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    /// Removes every share copy: at launch no share is under way, so any
+    /// left (the app quit while sharing) are stale.
+    static func removeTemporaryCopies() {
+        try? FileManager.default.removeItem(at: temporaryCopiesFolder)
     }
 }
 

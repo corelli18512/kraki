@@ -88,6 +88,18 @@ final class IOSChatImageActionsTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), gif)
     }
 
+    func testShareSheetRemovesItsCopyWhenTheShareEnds() throws {
+        func copies() -> Set<String> {
+            Set((try? FileManager.default.contentsOfDirectory(atPath: ChatImageFile.temporaryCopiesFolder.path)) ?? [])
+        }
+        let before = copies()
+        let controller = try XCTUnwrap(IOSChatImageActions.shareController(ChatGIFFixture.file(try ChatGIFFixture.gif(frames: 2))))
+        let added = copies().subtracting(before)
+        XCTAssertEqual(added.count, 1, "one copy for the share sheet")
+        controller.completionWithItemsHandler?(nil, false, nil, nil) // shared or cancelled
+        XCTAssertTrue(copies().isDisjoint(with: added), "the share copy outlived the share")
+    }
+
     func testThumbnailAnimatesAGIF() async throws {
         ChatGIFPlayer.reduceMotionOverride = false
         let gif = try ChatGIFFixture.gif(frames: 3, delays: [0.04, 0.04, 0.04])

@@ -45,6 +45,11 @@ struct KrakiApp: App {
         _appState = State(initialValue: AppState())
         #endif
         TKMarkdown.prewarmSyntaxHighlighter()
+        // Share sheet copies of chat images left by a previous run (not in
+        // a test host, whose tests write their own).
+        if !NativeTestRuntime.isRunningTests {
+            Task.detached(priority: .utility) { ChatImageFile.removeTemporaryCopies() }
+        }
         UIScrollView.appearance().showsVerticalScrollIndicator = false
         UIScrollView.appearance().showsHorizontalScrollIndicator = false
     }

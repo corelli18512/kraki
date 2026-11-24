@@ -112,7 +112,12 @@ enum IOSChatImageActions {
 
     static func shareController(_ file: ChatImageFile) -> UIActivityViewController? {
         guard let items = shareItems(file) else { return nil }
-        return UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        // Shared or cancelled: the temporary copy is no longer needed.
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            items.forEach(ChatImageFile.removeTemporaryCopy)
+        }
+        return controller
     }
 
     /// The image as a file named after it, with its real extension.

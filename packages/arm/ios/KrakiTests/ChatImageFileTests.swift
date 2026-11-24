@@ -80,6 +80,28 @@ final class ChatImageFileTests: XCTestCase {
         XCTAssertEqual(ChatInlineImage.decode([renamed]).first?.file.fileName, "again.gif")
     }
 
+    /// Share copies go when the share ends, and stale ones at launch; files
+    /// outside the share folder are never touched.
+    func testTemporaryCopiesAreRemoved() throws {
+        let gif = try ChatGIFFixture.gif(frames: 2)
+        let first = try file("one", "image/gif", data: gif).writeTemporaryCopy()
+        let second = try file("two", "image/gif", data: gif).writeTemporaryCopy()
+        ChatImageFile.removeTemporaryCopy(first)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.deletingLastPathComponent().path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path), "only the shared copy goes")
+
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-not-a-share-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let keep = outside.appendingPathComponent("keep.gif")
+        try gif.write(to: keep)
+        ChatImageFile.removeTemporaryCopy(keep)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keep.path), "not a share copy: left alone")
+
+        ChatImageFile.removeTemporaryCopies()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ChatImageFile.temporaryCopiesFolder.path))
+    }
+
     func testTemporaryCopyForTheShareSheetIsTheOriginalFile() throws {
         let gif = try ChatGIFFixture.gif(frames: 2)
         let url = try file("party", "image/gif", data: gif).writeTemporaryCopy()
