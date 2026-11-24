@@ -73,7 +73,8 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
 
 /** The original bytes of an image attachment (null until a ref has loaded). */
 function imageFile(attachment: ImageAttachment): ImageFile | null {
-  const label = attachment.name ?? attachment.caption;
+  // The name, else the caption (blank ones skipped): the Apple clients' rule.
+  const label = attachment.name?.trim() || attachment.caption?.trim();
   if (attachment.type === 'image') return { blob: base64ImageBlob(attachment.data, attachment.mimeType), fileName: imageFileName(label, attachment.mimeType) };
   const state = getState(attachment.id);
   return state?.kind === 'ready' ? { blob: state.blob, fileName: imageFileName(label, state.mimeType) } : null;
