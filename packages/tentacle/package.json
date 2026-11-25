@@ -1,6 +1,6 @@
 {
   "name": "@kraki/tentacle",
-  "version": "0.39.0",
+  "version": "0.39.1",
   "description": "Kraki: chat with the coding agents on your computers (Claude Code, Codex, GitHub Copilot, Pi) from your phone, Mac or browser",
   "repository": {
     "type": "git",
