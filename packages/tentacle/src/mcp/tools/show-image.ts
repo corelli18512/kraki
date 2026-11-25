@@ -4,6 +4,7 @@ import { extname, isAbsolute } from 'node:path';
 import type { McpToolResult } from '../protocol.js';
 import type { RegisteredTool, ToolHandler } from './index.js';
 import { fitToMaxDimension } from '../../image-resize.js';
+import { imageMimeType } from '../../image-type.js';
 
 /** Hard cap on a single image's raw bytes. Stays well under the relay 10 MB
  *  frame cap once base64 + JSON wrapping + RSA-OAEP per-recipient keys are
@@ -58,8 +59,7 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
   }
 
   const ext = extname(path).toLowerCase();
-  const mimeType = SHOW_IMAGE_MIME_BY_EXT[ext];
-  if (!mimeType) {
+  if (!SHOW_IMAGE_MIME_BY_EXT[ext]) {
     return errorResult(
       `Unsupported image type "${ext || '(no extension)'}". ` +
         `Supported: ${Object.keys(SHOW_IMAGE_MIME_BY_EXT).join(', ')}`,
@@ -71,6 +71,13 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
     bytes = readFileSync(path);
   } catch (err) {
     return errorResult(`Failed to read file: ${(err as Error).message}`);
+  }
+
+  // The bytes decide the type, not the file name: a PNG named .gif sent as
+  // image/gif would be refused by the model, and shown under the wrong type.
+  const mimeType = imageMimeType(bytes);
+  if (!mimeType) {
+    return errorResult(`Not a PNG, JPEG, GIF or WebP image: ${path}`);
   }
 
   let outBytes: Buffer;
@@ -113,7 +120,7 @@ export const showImageTool: RegisteredTool = {
         path: {
           type: 'string',
           description:
-            'Absolute path to the image file on disk. Supported formats: PNG, JPEG, WebP, GIF (non-animated).',
+            'Absolute path to the image file on disk. Supported formats: PNG, JPEG, WebP, GIF (an animated GIF plays in the chat).',
         },
         caption: {
           type: 'string',

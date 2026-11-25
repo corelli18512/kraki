@@ -11,7 +11,8 @@ vi.mock('node:path', async (importOriginal) => {
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => true),
   statSync: vi.fn(() => ({ isFile: () => true, size: 5 })),
-  readFileSync: vi.fn(() => Buffer.from('image')),
+  // A PNG's signature: show_image goes by the bytes.
+  readFileSync: vi.fn(() => Buffer.from('\x89PNG\r\n\x1a\nimage', 'latin1')),
 }));
 
 vi.mock('../../image-resize.js', () => ({
@@ -31,7 +32,7 @@ describe('show_image — Windows absolute paths (#114)', () => {
     expect(result.content[0]).toEqual({
       type: 'image',
       mimeType: 'image/png',
-      data: Buffer.from('image').toString('base64'),
+      data: Buffer.from('\x89PNG\r\n\x1a\nimage', 'latin1').toString('base64'),
     });
   });
 
