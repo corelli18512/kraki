@@ -115,7 +115,7 @@ struct MessageInputView: View {
     private static let clearWidth: CGFloat = 30
 
     /// Any draft, whitespace included, can be cleared.
-    private var showsClear: Bool { !text.isEmpty || hasImage }
+    private var showsClear: Bool { !text.isEmpty || hasImage || preparingImage }
 
     /// Multi-line drafts use two rows: the text spans the box, the controls
     /// sit in a row below. Decided from the one-row width only, so it
@@ -155,6 +155,9 @@ struct MessageInputView: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { stagedImage != nil }
+    /// A picked photo still loading (or a large GIF being fitted): shown
+    /// loading, Send waits for it (`loadPhoto`).
+    private var preparingImage: Bool { sessionStore.isPreparingImage(sessionId) }
     private var liveTarget: ComposerDraftTarget {
         ComposerDraftTarget(permissionID: pendingPermission?.id, questionID: pendingQuestion?.id)
     }
@@ -174,7 +177,7 @@ struct MessageInputView: View {
         return false
     }
     private var canSend: Bool {
-        guard !isRecordingHere, !voiceSendPending else { return false }
+        guard !isRecordingHere, !voiceSendPending, !preparingImage else { return false }
         if submissionIntent == .answerQuestion {
             return ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
         }
@@ -274,7 +277,7 @@ struct MessageInputView: View {
                                     awaitingActive: $awaitingActive, abortPending: $abortPending,
                                     onStopRejected: { showSubmitFailure($0, seconds: 6) })
             .onChange(of: selectedPhoto) { _, newItem in
-                Task { await loadPhoto(newItem) }
+                loadPhoto(newItem)
             }
             .alert("Couldn't attach image",
                 isPresented: Binding(
@@ -532,7 +535,9 @@ struct MessageInputView: View {
     /// structured reply (answer / deny reason) is reviewed in the field first.
     private func sendVoice() {
         guard isRecordingHere else { return }
-        guard confirmDraftTarget() else {
+        // Send waits for a photo still loading: the text stays in the field,
+        // to go with it.
+        guard !preparingImage, confirmDraftTarget() else {
             withAnimation(Self.expandAnimation) { voice.finishToDraft() }
             return
         }
@@ -689,7 +694,15 @@ struct MessageInputView: View {
     @ViewBuilder
     private var imageSlot: some View {
         Group {
-            if let uiImage = stagedImage.flatMap(IOSComposerImages.preview) {
+            if preparingImage {
+                ZStack(alignment: .topTrailing) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 44, height: Self.inputBoxHeight)
+                        .accessibilityLabel("Loading image")
+                    removeImageButton
+                }
+            } else if let uiImage = stagedImage.flatMap(IOSComposerImages.preview) {
                 ZStack(alignment: .topTrailing) {
                     PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
                         Image(uiImage: uiImage)
@@ -704,21 +717,7 @@ struct MessageInputView: View {
                     // its own (offset) shape around the picker label.
                     .buttonStyle(.plain)
                     .accessibilityLabel("Replace image")
-                    Button { clearImage() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 15))
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, Color.black.opacity(0.6))
-                            .frame(width: 22, height: 22)
-                            // The glyph stays put; its touch target grows to
-                            // 32 pt into the free space right of the thumbnail
-                            // instead of being only the 22 pt glyph.
-                            .padding(EdgeInsets(top: 3, leading: 0, bottom: 7, trailing: 10))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: 9)
-                    .accessibilityLabel("Remove image")
+                    removeImageButton
                 }
             } else {
                 PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
@@ -733,6 +732,25 @@ struct MessageInputView: View {
         .padding(.leading, 4)
         .disabled(!canAttachImage)
         .opacity(canAttachImage ? 1 : 0.4)
+    }
+
+    /// × on the thumbnail: removes the image, or cancels one still loading.
+    private var removeImageButton: some View {
+        Button { clearImage() } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.black.opacity(0.6))
+                .frame(width: 22, height: 22)
+                // The glyph stays put; its touch target grows to
+                // 32 pt into the free space right of the thumbnail
+                // instead of being only the 22 pt glyph.
+                .padding(EdgeInsets(top: 3, leading: 0, bottom: 7, trailing: 10))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: 9)
+        .accessibilityLabel("Remove image")
     }
 
     private var imageAttachments: [ImageAttachment]? {
@@ -909,7 +927,7 @@ struct MessageInputView: View {
     // MARK: - Mode Submit Handlers
 
     private func handleModeSubmit() {
-        guard !isRecordingHere, !voiceSendPending else { return }
+        guard !isRecordingHere, !voiceSendPending, !preparingImage else { return }
         // A correction still flowing into this draft stops at what is visible.
         if voice.sessionID == sessionId, voice.operation?.phase == .toDraft { voice.retireKeepingDraft() }
         guard confirmDraftTarget() else { return }
@@ -1039,17 +1057,26 @@ struct MessageInputView: View {
         selectedPhoto = nil
     }
 
-    private func loadPhoto(_ item: PhotosPickerItem?) async {
+    /// Loads the picked photo (from iCloud, maybe) and fits a large GIF, off
+    /// the main thread. Meanwhile the image slot shows it loading (× cancels)
+    /// and Send waits for it: a text sent meanwhile used to go alone, and
+    /// the photo then attached to the next message. A newer pick or a
+    /// removal since wins (`SessionStore.prepareStagedImage`).
+    private func loadPhoto(_ item: PhotosPickerItem?) {
         guard let item else { return }
-        let data = try? await item.loadTransferable(type: Data.self)
-        // Off the main thread: fitting a large GIF redraws all its frames.
-        let outcome = await Task.detached(priority: .userInitiated) { PhotoAttachmentLoad.attachment(from: data) }.value
-        // A newer pick, a removal or a send since this load started wins: a
-        // late (e.g. iCloud) load must not attach to the next message.
-        guard selectedPhoto == item else { return }
+        let session = sessionId
+        sessionStore.prepareStagedImage(session, {
+            let data = try? await item.loadTransferable(type: Data.self)
+            return PhotoAttachmentLoad.attachment(from: data)
+        }) { outcome in
+            stagePhoto(outcome, in: session)
+        }
+    }
+
+    private func stagePhoto(_ outcome: PhotoAttachmentLoad.Outcome, in session: String) {
         switch outcome {
         case .image(let bytes, let mimeType):
-            sessionStore.setStagedImage(sessionId, StagedComposerImage(data: bytes, mimeType: mimeType))
+            sessionStore.setStagedImage(session, StagedComposerImage(data: bytes, mimeType: mimeType))
         case .unreadable:
             imageAttachError = String(localized: "Couldn't read that image."); selectedPhoto = nil
         case .unsupported:
@@ -1058,7 +1085,8 @@ struct MessageInputView: View {
             // Reset the picker so the user can pick a smaller / different
             // image instead of sending with a silently missing attachment.
             imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
-            clearImage()
+            sessionStore.setStagedImage(session, nil)
+            selectedPhoto = nil
         }
     }
 }
