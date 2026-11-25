@@ -79,6 +79,57 @@ The relay only sends to subscriptions on the browser push services (https on FCM
 
 For local web development, put browser-only overrides like `VITE_WS_URL=ws://localhost:4000` in `packages/arm/web/.env.development.local`, not `packages/arm/web/.env`. Vite loads `.env` during production builds too, so using the dev-only filename avoids accidentally baking localhost into a deploy.
 
+## Multi-region: signup region and test accounts
+
+In a multi-region deployment (a main head plus edges joined with `kraki-relay register-edge` / `kraki-relay join`), the main head gives each new account a region once, at its first sign-in, from the country of its IP address. Existing accounts keep theirs.
+
+- China, Hong Kong, Macau and Taiwan → `china`.
+- The rest of Asia-Pacific, the Middle East, South and Central Asia, and Oceania → `us` (the legacy code of the Tokyo relay).
+- Everything else (the Americas, Europe, Africa) and unknown countries → `DEFAULT_SIGNUP_REGION` (main head env; default `us`), for example `DEFAULT_SIGNUP_REGION=uswest`.
+
+A region is only assigned when it is an enabled region of the main head's regions table (`kraki-relay list-regions`). Otherwise, for example before the edge has joined, the account gets the main head's own `REGION`, as before.
+
+### Operator test accounts
+
+`TEST_ACCOUNTS` (main head env only; off when unset) adds QA accounts that sign in without GitHub, each pinned to a region. Use them to check sign-in, sessions and voice in each region with the released apps and CLI:
+
+```bash
+# One token per account. Keep the token in a password manager; only its hash goes on the relay.
+TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+HASH=$(printf %s "$TOKEN" | shasum -a 256 | cut -d' ' -f1)   # sha256sum on Linux
+echo "$TOKEN"; echo "$HASH"
+```
+
+```bash
+# /etc/kraki/relay.env on the main head
+TEST_ACCOUNTS=[{"login":"qa-uswest","region":"uswest","tokenSha256":"<HASH>"},{"login":"qa-us","region":"us","tokenSha256":"<HASH2>"}]
+```
+
+- Logins must start with `qa-` (lowercase letters, digits, dashes). The account's user id is `test:<login>` and its provider `test`, so it can't collide with a GitHub account. The relay refuses to start with a malformed list.
+- The account gets the configured region on its first sign-in, whatever the IP; after that it keeps it, like any account. The region must be enabled in the regions table, or the first sign-in is refused.
+- Test accounts are not offered in sign-in options (`/api/config`, `auth_info`). Tokens are compared by hash in constant time, failed tokens are throttled per IP (5 per minute), and tokens are never logged. `/internal/metrics` counts `auth.testAccount.ok` / `auth.testAccount.fail`.
+- A test account is deleted from an app like any other account; signing in again with the token creates it afresh.
+
+Sign in with the released apps (no client changes):
+
+- **Web app, iPhone, Mac**: ask the main head for a one-time pairing link (valid 5 minutes) and open it, or show it as a QR code and scan it:
+
+  ```bash
+  curl -s https://<main head>/api/test-login -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\"}"
+  # {"ok":true,"userId":"test:qa-uswest","region":"uswest","relayUrl":"wss://…","pairingToken":"pt_…","pairingUrl":"https://app.kraki.chat?relay=…&token=pt_…",…}
+  ```
+
+  The link opens the web app (`TEST_LOGIN_APP_URL`, default `https://app.kraki.chat`) against the account's region relay.
+- **CLI**: set the computer up with the token as an API key, against the account's region relay:
+
+  ```bash
+  kraki setup --headless --relay wss://<region relay> --auth apikey --api-key "$TOKEN"
+  ```
+
+  then `kraki start`. This replaces the computer's Kraki setup, so use a dedicated machine or user. `kraki connect` there shows pairing QR codes for the test account.
+
+On an edge `TEST_ACCOUNTS` and `DEFAULT_SIGNUP_REGION` are ignored (with a warning): edges ask the main head.
+
 ## Updating a running relay
 
 When you're hosting `@kraki/head` long-term as a systemd service, `scripts/deploy-edge-relay.sh` updates it and rolls it back safely. It is what Kraki's own relays use.

@@ -71,6 +71,7 @@ export function loopDelayFromHistogram(
 /** Every counter the relay keeps. A fixed list: a typo fails to compile. */
 export const COUNTERS = [
   'auth.ok', 'auth.fail', 'auth.localChallenge', 'auth.localVerify', 'auth.localRevoked',
+  'auth.testAccount.ok', 'auth.testAccount.fail',
   'conn.opened', 'conn.closed', 'conn.stalledClosed', 'conn.pongTimeout',
   'pulse.frames.in', 'pulse.bytes.in', 'pulse.frames.out', 'pulse.bytes.out',
   'pulse.forwarded', 'pulse.deliveredToHead',

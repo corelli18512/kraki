@@ -39,7 +39,12 @@ export interface AccountApiOptions {
   /** Caps the info lines of unauthorized / rate-limited requests (an outsider
    *  can send them at will). Default: 5 per IP and 60 in total per minute. */
   rejectedRequestLog?: LogThrottle;
+  /** Web app the POST /api/test-login pairing link opens. */
+  appUrl?: string;
 }
+
+/** Kraki's web app; also the base of `kraki connect` pairing links. */
+export const DEFAULT_APP_URL = 'https://app.kraki.chat';
 
 type ServiceCaller = { admin: true } | { admin: false; region: string };
 
@@ -48,8 +53,10 @@ export class AccountApi {
   private serviceKey?: string;
   private publicLimiter: IpRateLimiter;
   private rejectedRequestLog: LogThrottle;
+  private appUrl: string;
 
   constructor(options: AccountApiOptions) {
+    this.appUrl = options.appUrl ?? DEFAULT_APP_URL;
     this.rejectedRequestLog = options.rejectedRequestLog ?? new LogThrottle();
     this.backend = options.authBackend;
     this.serviceKey = options.serviceKey;
@@ -85,7 +92,9 @@ export class AccountApi {
       // WebSocket auth_info exposes. Clients behind an HTTP proxy can't use
       // that WebSocket probe before they are set up, so they read it here.
       || (path === '/api/config' && req.method === 'GET')
-      || (path === '/api/edge/join' && req.method === 'POST');
+      || (path === '/api/edge/join' && req.method === 'POST')
+      // Operator test accounts (TEST_ACCOUNTS); 404 when none are configured.
+      || (path === '/api/test-login' && req.method === 'POST');
 
     let caller: ServiceCaller | null = null;
     if (!publicRoute) {
@@ -146,6 +155,9 @@ export class AccountApi {
           break;
         case '/api/edge/announce':
           if (req.method === 'POST') return await this.handleEdgeAnnounce(req, res);
+          break;
+        case '/api/test-login':
+          if (req.method === 'POST') return await this.handleTestLogin(req, res);
           break;
       }
     } catch (err) {
@@ -408,6 +420,32 @@ export class AccountApi {
       return true;
     }
     this.json(res, 200, { ok: true, token: result.token });
+    return true;
+  }
+
+  /**
+   * Operator test account sign-in (public route, rate limited, and failed
+   * tokens throttled per IP): `{ token }` → a one-time pairing token and link
+   * for the account's region relay, which released apps pair with as usual.
+   */
+  private async handleTestLogin(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    if (!this.backend.testAccountsEnabled) {
+      this.json(res, 404, { ok: false, code: 'not_found', message: 'Not found' });
+      return true;
+    }
+    const body = await readBody(req);
+    if (typeof body?.token !== 'string' || !body.token) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'token is required' });
+      return true;
+    }
+    const ip = clientIp(req);
+    const result = await this.backend.createTestLoginPairing(body.token, ip === 'unknown' ? undefined : ip);
+    if (!result.ok) {
+      this.json(res, 401, result);
+      return true;
+    }
+    const params = new URLSearchParams({ relay: result.relayUrl, token: result.pairingToken });
+    this.json(res, 200, { ...result, pairingUrl: `${this.appUrl}?${params.toString()}` });
     return true;
   }
 

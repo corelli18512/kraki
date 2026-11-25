@@ -16,7 +16,8 @@ import { GitHubAuthProvider } from './auth.js';
 import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
 import { authLogField, getLogger } from './logger.js';
-import { suggestRegionForIp } from './ip-geo.js';
+import { DEFAULT_SIGNUP_REGION, suggestRegionForIp } from './ip-geo.js';
+import { TEST_ACCOUNT_PROVIDER } from './test-accounts.js';
 
 export interface LocalAuthBackendOptions {
   storage: Storage;
@@ -28,7 +29,14 @@ export interface LocalAuthBackendOptions {
   region?: string;
   /** Map of region name → relay URL for wrong_region redirects. */
   regionUrls?: Record<string, string>;
+  /** Region for new accounts from countries outside the IP-geo table
+   *  (DEFAULT_SIGNUP_REGION). Default `us`. */
+  defaultSignupRegion?: string;
 }
+
+export type TestLoginOutcome =
+  | { ok: true; userId: string; login: string; region: string; relayUrl: string; pairingToken: string; expiresIn: number }
+  | { ok: false; code: string; message: string };
 
 export interface RegionDirectoryEntry {
   code: string;
@@ -84,6 +92,7 @@ export class LocalAuthBackend implements AuthBackend {
   private pushManager?: PushManager;
   private region?: string;
   private regionUrls: Record<string, string>;
+  private defaultSignupRegion: string;
   private pairingTokens = new Map<string, { userId: string; expiresAt: number }>();
   /** Challenge nonces issued by startChallenge: verifyChallenge only accepts
    *  one of these, for its device, once. Issuing stores nothing, so other
@@ -98,6 +107,7 @@ export class LocalAuthBackend implements AuthBackend {
     this.pushManager = options.pushManager;
     this.region = options.region;
     this.regionUrls = options.regionUrls ?? {};
+    this.defaultSignupRegion = options.defaultSignupRegion ?? DEFAULT_SIGNUP_REGION;
   }
 
   async authenticate(
@@ -301,17 +311,21 @@ export class LocalAuthBackend implements AuthBackend {
   ): Promise<{ ok: true; userId: string; pairingToken: string; expiresIn: number } | { ok: false; code: string; message: string }> {
     // Try all providers; but the open shared key (sent by `kraki pair` on an
     // open computer) only to the open provider, never to GitHub.
+    // Test accounts likewise only see their own tokens.
     const owner = [...this.authProviders.values()].find((provider) => provider.isOwnSecret?.(token));
     let unavailable: string | undefined;
     // Each provider's own reason ("Invalid API key", the keyless-remote
     // refusal, …): the generic line alone said nothing about what to fix.
     const reasons: string[] = [];
-    for (const provider of owner ? [owner] : this.authProviders.values()) {
+    const candidates = owner ? [owner] : [...this.authProviders.values()].filter((p) => p.name !== TEST_ACCOUNT_PROVIDER);
+    for (const provider of candidates) {
       const result = await provider.authenticate({ token, ip, remoteClient });
       if (!result.ok && result.retryable) unavailable = result.message;
       if (!result.ok && !reasons.includes(result.message)) reasons.push(result.message);
       if (result.ok) {
-        this.storage.upsertUser(result.user.id, result.user.login, result.user.provider, result.user.email);
+        const unavailableRegion = this.checkPinnedRegion(result.user);
+        if (unavailableRegion) return unavailableRegion;
+        this.storage.upsertUser(result.user.id, result.user.login, result.user.provider, result.user.email, result.user.region);
         const pairing = this.createPairingToken(result.user.id);
         return { ok: true, userId: result.user.id, pairingToken: pairing.token, expiresIn: pairing.expiresIn };
       }
@@ -321,6 +335,32 @@ export class LocalAuthBackend implements AuthBackend {
       : reasons.length > 1 ? `No auth provider accepted the token (${reasons.join('; ')})`
       : 'No auth provider accepted the token';
     return { ok: false, code: 'auth_rejected', message };
+  }
+
+  get testAccountsEnabled(): boolean {
+    return this.authProviders.has(TEST_ACCOUNT_PROVIDER);
+  }
+
+  /**
+   * Operator test account sign-in (POST /api/test-login): checks the token
+   * against TEST_ACCOUNTS only and returns a one-time pairing token for the
+   * account, which keeps the region it was configured with on first use.
+   */
+  async createTestLoginPairing(token: string, ip?: string): Promise<TestLoginOutcome> {
+    const provider = this.authProviders.get(TEST_ACCOUNT_PROVIDER);
+    if (!provider) return { ok: false, code: 'not_found', message: 'Not found' };
+    const result = await provider.authenticate({ token, ip });
+    if (!result.ok) return { ok: false, code: 'auth_rejected', message: result.message };
+    const unavailableRegion = this.checkPinnedRegion(result.user);
+    if (unavailableRegion) return unavailableRegion;
+    const { id, login, provider: providerName, email, region: configuredRegion } = result.user;
+    const user = this.storage.upsertUser(id, login, providerName, email, configuredRegion);
+    const region = user.region ?? configuredRegion!;
+    if (!user.region) this.storage.setUserRegion(id, region);
+    const relayUrl = this.getRelayUrlForRegion(region);
+    if (!relayUrl) return { ok: false, code: 'auth_rejected', message: `Region '${region}' has no relay URL` };
+    const pairing = this.createPairingToken(id);
+    return { ok: true, userId: id, login, region, relayUrl, pairingToken: pairing.token, expiresIn: pairing.expiresIn };
   }
 
   getAuthInfo(): AuthInfoConfig {
@@ -365,11 +405,12 @@ export class LocalAuthBackend implements AuthBackend {
       };
     }
 
-    // New user — auto-assign region from preferred, IP geo, or first available
-    let targetRegion = preferredRegion;
+    // New user — auto-assign region from the account's own (test accounts),
+    // preferred, IP geo, or first available
+    let targetRegion = resolved.region ?? preferredRegion;
 
     if (!targetRegion && clientIp) {
-      const geoRegion = await suggestRegionForIp(clientIp);
+      const geoRegion = await suggestRegionForIp(clientIp, this.defaultSignupRegion);
       if (geoRegion && regions.some(r => r.code === geoRegion)) {
         targetRegion = geoRegion;
       }
@@ -535,7 +576,7 @@ export class LocalAuthBackend implements AuthBackend {
 
     // Upsert user — assign region on first auth if not yet set
     const existingUser = this.storage.getUser(authUser.id);
-    const userRegion = existingUser?.region ?? headRegion ?? this.region;
+    const userRegion = existingUser?.region ?? authUser.region ?? headRegion ?? this.region;
     this.storage.upsertUser(authUser.id, authUser.login, authUser.provider, authUser.email, userRegion);
 
     // If user already has a region and it doesn't match, set it now
@@ -623,10 +664,13 @@ export class LocalAuthBackend implements AuthBackend {
         };
         break;
       }
-      case 'apikey':
-        provider = this.getProviderForMode('apikey');
+      case 'apikey': {
+        // A test account's token, sent the way released CLIs send an API key.
+        const testAccounts = this.authProviders.get(TEST_ACCOUNT_PROVIDER);
+        provider = testAccounts?.isOwnSecret?.(auth.key) ? testAccounts : this.getProviderForMode('apikey');
         credentials = { token: auth.key };
         break;
+      }
       case 'open':
         provider = this.getProviderForMode('open');
         credentials = { token: auth.sharedKey };
@@ -643,7 +687,16 @@ export class LocalAuthBackend implements AuthBackend {
     if (!result.ok) {
       return { ok: false, code: result.retryable ? 'service_unavailable' : 'auth_rejected', message: result.message };
     }
-    return result.user;
+    return this.checkPinnedRegion(result.user) ?? result.user;
+  }
+
+  /** An account with its own region (test accounts) signs up only into an
+   *  enabled region of the regions table; once assigned it keeps it. */
+  private checkPinnedRegion(user: AuthUser): { ok: false; code: string; message: string } | null {
+    if (!user.region || this.storage.getUser(user.id)?.region) return null;
+    if (this.storage.getRegion(user.region)?.enabled) return null;
+    getLogger().warn('Account region is not an enabled region', { login: user.login, region: user.region });
+    return { ok: false, code: 'auth_rejected', message: `Region '${user.region}' of this account is not available` };
   }
 
   private isAuthError(result: AuthUser | { ok: false; code: string; message: string }): result is { ok: false; code: string; message: string } {
