@@ -26,6 +26,7 @@ import type { ContentRef } from '@kraki/protocol';
 import { openDB, type IDBPDatabase } from 'idb';
 
 import { createLogger } from './logger';
+import { displayImageBlob } from './gif-loop';
 
 const logger = createLogger('attachments');
 
@@ -91,7 +92,9 @@ export async function effectiveCapBytes(): Promise<number> {
 export type AttachmentState =
   | { kind: 'awaiting-chunks'; received: Map<number, string>; total: number | null; mimeType: string | null; startedAt: number }
   | { kind: 'fetching' }
-  | { kind: 'ready'; mimeType: string; blob: Blob }
+  /** `blob`: the original bytes; `display`, when set, the bytes to show
+   *  instead (a GIF without a loop count, made to loop: gif-loop.ts). */
+  | { kind: 'ready'; mimeType: string; blob: Blob; display?: Blob }
   | { kind: 'error'; reason: string };
 
 export type AttachmentChunkIngestResult = 'accepted' | 'ignored' | 'terminal-error';
@@ -261,13 +264,13 @@ export async function ingestChunk(
         offset += bytes.length;
       }
       const blob = new Blob([buf], { type: mimeType });
-      const validationError = await validateBlob(ref, mimeType, blob);
-      if (validationError) {
+      const validated = await validateBlob(ref, mimeType, blob);
+      if ('code' in validated) {
         void deleteFromIDB(id);
-        setAttachmentError(id, validationError);
+        setAttachmentError(id, validated);
         return 'terminal-error';
       }
-      states.set(id, { kind: 'ready', mimeType, blob });
+      states.set(id, readyState(mimeType, blob, validated));
       clearPushTimeout(id);
       void persistToIDB({ id, mimeType, size: blob.size, blob, lastAccessed: Date.now() });
       notify(id);
@@ -304,7 +307,13 @@ export function failAttachment(ref: ContentRef, reason: string): void {
   setAttachmentError(ref.id, reason);
 }
 
-async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<LocalAttachmentError | null> {
+function readyState(mimeType: string, blob: Blob, bytes: Uint8Array): AttachmentState {
+  const display = displayImageBlob(bytes, blob);
+  return display === blob ? { kind: 'ready', mimeType, blob } : { kind: 'ready', mimeType, blob, display };
+}
+
+/** The verified bytes, or why they are rejected. */
+async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<LocalAttachmentError | Uint8Array> {
   if (!/^[0-9a-f]{32}$/i.test(ref.id)) {
     return attachmentError('invalidHash');
   }
@@ -320,7 +329,7 @@ async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Prom
   if (!hex.startsWith(ref.id.toLowerCase())) {
     return attachmentError('checksumMismatch');
   }
-  return null;
+  return new Uint8Array(bytes);
 }
 
 function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
@@ -356,13 +365,13 @@ export async function hydrateFromIDB(ref: ContentRef): Promise<boolean> {
     const db = await getDB();
     const got = (await db.get(STORE_NAME, ref.id)) as StoredAttachment | undefined;
     if (!got) return false;
-    const validationError = await validateBlob(ref, got.mimeType, got.blob);
-    if (validationError) {
+    const validated = await validateBlob(ref, got.mimeType, got.blob);
+    if ('code' in validated) {
       await db.delete(STORE_NAME, ref.id);
-      logger.warn('discarded invalid attachment cache entry', { id: ref.id, reason: validationError.code });
+      logger.warn('discarded invalid attachment cache entry', { id: ref.id, reason: validated.code });
       return false;
     }
-    states.set(ref.id, { kind: 'ready', mimeType: got.mimeType, blob: got.blob });
+    states.set(ref.id, readyState(got.mimeType, got.blob, validated));
     // Update lastAccessed in the background; ignore errors
     void db.put(STORE_NAME, { ...got, size: got.blob.size, lastAccessed: Date.now() });
     notify(ref.id);

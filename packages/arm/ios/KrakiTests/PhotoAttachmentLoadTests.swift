@@ -28,8 +28,17 @@ final class PhotoAttachmentLoadTests: XCTestCase {
         XCTAssertEqual(PhotoAttachmentLoad.attachment(from: gif), .image(gif, mimeType: "image/gif"))
     }
 
-    func testGIFOverTheDimensionLimitIsSentAsAStillJPEG() throws {
+    func testGIFOverTheLimitsIsRedrawnToFitAndStaysAnimated() throws {
         let gif = try ChatGIFFixture.gif(frames: 2, width: 2000, height: 100)
+        guard case .image(let data, let mimeType) = PhotoAttachmentLoad.attachment(from: gif) else { return XCTFail("not attached") }
+        XCTAssertEqual(mimeType, "image/gif")
+        let animation = try XCTUnwrap(ChatGIFAnimation.decode(data), "still animated")
+        XCTAssertEqual(animation.frames.count, 2)
+        XCTAssertEqual(animation.frames[0].width, 1568, "long side capped in pixels")
+    }
+
+    func testGIFThatCannotBeFittedIsSentAsAStillJPEG() throws {
+        let gif = try ChatGIFFixture.gif(frames: 1, width: 2000, height: 100)
         guard case .image(let data, let mimeType) = PhotoAttachmentLoad.attachment(from: gif) else { return XCTFail("not attached") }
         XCTAssertEqual(mimeType, "image/jpeg")
         XCTAssertNotEqual(data, gif)

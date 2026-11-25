@@ -107,7 +107,7 @@ struct MacChatComposer: View {
     @State private var textInputWidth: CGFloat = 0
     /// Width of the resting box (constant while typing).
     @State private var restingWidth: CGFloat = 0
-    private var showsClear: Bool { hasText || hasImage }
+    private var showsClear: Bool { hasText || hasImage || preparingImage }
     /// What the editor shows: the draft, or while composing the native text
     /// including the marked part, so a wrapping composition grows the box.
     /// Layout only; the draft never holds marked text.
@@ -181,6 +181,8 @@ struct MacChatComposer: View {
     private var stagedImage: StagedComposerImage? { sessionStore.stagedImages[sessionId] }
     private var previewImage: NSImage? { stagedImage.flatMap(MacComposerImages.preview) }
     private var hasImage: Bool { stagedImage != nil }
+    /// A large GIF being fitted (`attachImage`): shown loading, Send waits.
+    private var preparingImage: Bool { sessionStore.isPreparingImage(sessionId) }
     private var stagedImageAttachments: [ImageAttachment]? {
         stagedImage.map { [ImageAttachment(type: "image", mimeType: $0.mimeType, data: $0.data.base64EncodedString())] }
     }
@@ -193,7 +195,7 @@ struct MacChatComposer: View {
         return true
     }
     private var canSend: Bool {
-        if sessionStore.isPending(sessionId) { return false }
+        if sessionStore.isPending(sessionId) || preparingImage { return false }
         if voiceOwnsComposer { return true }
         if submissionIntent == .answerQuestion {
             return !voiceSendPending && ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
@@ -672,20 +674,25 @@ struct MacChatComposer: View {
     /// replace, small × to remove).
     private var imageSlot: some View {
         Group {
-            if let previewImage {
+            if preparingImage || previewImage != nil {
                 ZStack(alignment: .topTrailing) {
-                    Button(action: chooseImage) {
-                        Image(nsImage: previewImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    if let previewImage {
+                        Button(action: chooseImage) {
+                            Image(nsImage: previewImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 28, height: 28)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .frame(width: MacComposerMetrics.attachButtonWidth, height: Self.inputBoxHeight)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canUseImageSlot)
+                        .controlHelp(attachHelp)
+                    } else { // a large GIF being fitted (`attachImage`); × cancels it
+                        ProgressView().controlSize(.small).accessibilityLabel("Loading image")
                             .frame(width: MacComposerMetrics.attachButtonWidth, height: Self.inputBoxHeight)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canUseImageSlot)
-                    .controlHelp(attachHelp)
                     Button(action: clearImage) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
@@ -696,6 +703,9 @@ struct MacChatComposer: View {
                     .offset(x: -1, y: 4)
                     .disabled(!canUseImageSlot)
                     .labelAndHelp(MacControlHelp.removeImage)
+                    #if DEBUG
+                    .background { MacComposerControlGeometryProbe(identifier: "chat-remove-image") }
+                    #endif
                 }
             } else {
                 Button(action: chooseImage) {
@@ -747,7 +757,7 @@ struct MacChatComposer: View {
         let attachments = message.attachments ?? []
         // Never discard an image if the single-image composer already has
         // another one, or cannot decode it. Keep the complete staged bubble.
-        guard attachments.count <= 1, attachments.isEmpty || !hasImage else { NSSound.beep(); return }
+        guard attachments.count <= 1, attachments.isEmpty || !(hasImage || preparingImage) else { NSSound.beep(); return }
         if let attachment = attachments.first {
             guard let data = Data(base64Encoded: attachment.data), NSImage(data: data) != nil else { NSSound.beep(); return }
             sessionStore.setStagedImage(sessionId, StagedComposerImage(data: data, mimeType: attachment.mimeType))
@@ -759,6 +769,9 @@ struct MacChatComposer: View {
     }
 
     private func handleModeSubmit() {
+        // Send waits for the GIF being fitted (× cancels it): sending now
+        // would leave it out of this message.
+        guard !preparingImage else { NSSound.beep(); return }
         guard confirmDraftTarget() else {
             if voiceOwnsComposer { voiceComposer.finishToDraft() }
             return
@@ -899,20 +912,38 @@ struct MacChatComposer: View {
         return true
     }
 
-    /// A GIF within the limits keeps its bytes (and its animation).
-    private func attachImage(_ image: NSImage) {
-        if let staged = MacComposerImages.staged(image) {
-            sessionStore.setStagedImage(sessionId, staged)
-            return
-        }
-        imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
-        clearImage()
-    }
-
     private func clearImage() {
         sessionStore.setStagedImage(sessionId, nil)
     }
 
+}
+
+// MARK: - Attaching images (same file: shares the view's private state)
+
+extension MacChatComposer {
+    /// A GIF within the limits keeps its bytes (and its animation); a
+    /// larger one is redrawn to fit off the main thread, still animated.
+    /// While it is, the image slot shows it loading (× cancels) and Send
+    /// waits (`SessionStore.prepareStagedImage`).
+    fileprivate func attachImage(_ image: NSImage) {
+        guard let gif = MacComposerImages.gifToFit(image) else {
+            stage(MacComposerImages.staged(image), in: sessionId)
+            return
+        }
+        let session = sessionId
+        sessionStore.prepareStagedImage(session, { ComposerGIFFit.fitted(gif, limits: MacComposerImages.gifFit) }) { fitted in
+            stage(fitted.map { StagedComposerImage(data: $0, mimeType: "image/gif") } ?? MacComposerImages.staged(image), in: session)
+        }
+    }
+
+    private func stage(_ staged: StagedComposerImage?, in session: String) {
+        if let staged {
+            sessionStore.setStagedImage(session, staged)
+            return
+        }
+        imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
+        sessionStore.setStagedImage(session, nil)
+    }
 }
 
 // MARK: - Draft target (same file: shares the view's private state)

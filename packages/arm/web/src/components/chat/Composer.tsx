@@ -10,6 +10,7 @@ import { sessionContext } from '../../lib/voice/context';
 import type { PendingInput } from '../../lib/chat/outbox';
 import { mergeVoiceDraft, stagedVoice } from '../../lib/voice/staged-input';
 import { isImeComposing } from '../../lib/ime';
+import { displayImageDataUrl } from '../../lib/gif-loop';
 
 /** Text worth mining for spelling terms (never sent whole). */
 function messageText(m: unknown): string {
@@ -93,6 +94,22 @@ function readDataUrl(file: Blob): Promise<string> {
   });
 }
 
+/** Whether the file's bytes are a GIF ("GIF87a"/"GIF89a"), whatever its
+ *  name and type say: a PNG named .gif must not go out as image/gif (an
+ *  agent's model rejects an image that is not the type it is told), and a
+ *  GIF named .png keeps its animation. */
+function isGifFile(file: Blob): Promise<boolean> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const head = new Uint8Array(reader.result as ArrayBuffer);
+      resolve(String.fromCharCode(...head) === 'GIF87a' || String.fromCharCode(...head) === 'GIF89a');
+    };
+    reader.onerror = () => resolve(false);
+    reader.readAsArrayBuffer(file.slice(0, 6));
+  });
+}
+
 /** The image to stage, or why it cannot be: `unreadable` when this browser
  *  cannot decode it (corrupt, or HEIC outside Safari), `tooLarge` when even
  *  the compressed copy exceeds the limit (K-200). */
@@ -105,10 +122,11 @@ async function compressImage(file: File): Promise<StagedImage | 'unreadable' | '
   let { width, height } = img;
   if (!width || !height) return 'unreadable';
   // A canvas keeps only the first frame: a GIF within the limits goes as is.
-  if (file.type === 'image/gif' && file.size <= MAX_IMAGE_SIZE && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+  if (file.size <= MAX_IMAGE_SIZE && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION && await isGifFile(file)) {
     const dataUrl = await readDataUrl(file).catch(() => null);
     if (!dataUrl) return 'unreadable';
-    return { attachment: { type: 'image', mimeType: 'image/gif', data: dataUrl.split(',')[1] }, preview: dataUrl };
+    const data = dataUrl.split(',')[1];
+    return { attachment: { type: 'image', mimeType: 'image/gif', data }, preview: displayImageDataUrl('image/gif', data) };
   }
   if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
     const scale = MAX_IMAGE_DIMENSION / Math.max(width, height);
@@ -160,7 +178,7 @@ function readStagedImage(sessionId: string): StagedImage | null {
     }
     const attachment = stored?.attachment;
     return attachment?.type === 'image' && attachment.data && attachment.mimeType
-      ? { attachment, preview: `data:${attachment.mimeType};base64,${attachment.data}` }
+      ? { attachment, preview: displayImageDataUrl(attachment.mimeType, attachment.data) }
       : null;
   } catch {
     return null;
@@ -288,7 +306,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       if (attachments.length > 1 || (attachments.length && image)) return false;
       const attachment = attachments[0];
       if (attachment && attachment.type !== 'image') return false;
-      if (attachment?.type === 'image') setImage({ attachment, preview: `data:${attachment.mimeType};base64,${attachment.data}` });
+      if (attachment?.type === 'image') setImage({ attachment, preview: displayImageDataUrl(attachment.mimeType, attachment.data) });
       setDraft(sessionId, mergeVoiceDraft(useStore.getState().drafts.get(sessionId) ?? '', entry.originalText ?? entry.text));
       fieldRef.current?.focus();
       return true;

@@ -126,11 +126,14 @@ import Darwin
         XCTAssertTrue(drain(until: { self.sentAttachments.count == sends + 1 }), "Return sent the message")
     }
 
-    private func stage(_ sessionId: String) throws -> StagedComposerImage {
-        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+    private func png() throws -> Data {
+        try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
             UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
         }.pngData())
-        let image = StagedComposerImage(data: png, mimeType: "image/png")
+    }
+
+    private func stage(_ sessionId: String) throws -> StagedComposerImage {
+        let image = StagedComposerImage(data: try png(), mimeType: "image/png")
         app?.sessionStore.setStagedImage(sessionId, image)
         return image
     }
@@ -199,6 +202,54 @@ import Darwin
         XCTAssertNil(app.sessionStore.stagedImages[sessionA], "Clear removes the staged image")
         try typeAndReturn("text only", sessionId: sessionA)
         XCTAssertEqual(sentAttachments, [0])
+    }
+
+    /// PR #669 review P2: while a picked photo loads (from iCloud, or a
+    /// large GIF being fitted) the image slot shows it loading with its ×,
+    /// and Send waits. A text sent meanwhile used to go alone, and the photo
+    /// then attached to the next message.
+    func testRemoveCancelsAPhotoStillLoading() throws {
+        let app = makeApp()
+        _ = try stage(sessionA)
+        try show(sessionA)
+        let (held, cancel) = AsyncStream<Void>.makeStream()
+        var stagedLate = false
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in held {} }) { _ in stagedLate = true }
+        XCTAssertNil(app.sessionStore.stagedImages[sessionA], "the photo loading replaces the image staged before")
+        XCTAssertTrue(drain(until: { !self.accessible("Loading image").isEmpty }), "the image slot shows the photo loading")
+        try activate("Remove image")
+        XCTAssertFalse(app.sessionStore.isPreparingImage(sessionA), "× cancels the photo still loading")
+        cancel.finish()
+        drain(0.3)
+        XCTAssertFalse(stagedLate)
+        XCTAssertNil(app.sessionStore.stagedImages[sessionA])
+    }
+
+    func testSendWaitsForAPhotoStillLoading() throws {
+        let app = makeApp()
+        _ = try stage(sessionA)
+        try show(sessionA)
+        let (hold, release) = AsyncStream<Void>.makeStream()
+        let photo = StagedComposerImage(data: try png(), mimeType: "image/png")
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in hold {} }) { _ in
+            app.sessionStore.setStagedImage(self.sessionA, photo)
+        }
+        XCTAssertNil(app.sessionStore.stagedImages[sessionA], "the photo loading replaces the image staged before")
+        let field = try XCTUnwrap(editor())
+        field.becomeFirstResponder()
+        field.insertText("hello")
+        XCTAssertTrue(drain(until: { app.sessionStore.drafts[self.sessionA] == "hello" }))
+        field.insertText("\n")
+        drain(0.3)
+        XCTAssertEqual(sentAttachments, [], "Send waits for the photo")
+        XCTAssertEqual(app.sessionStore.drafts[sessionA], "hello", "the text stays to go with it")
+
+        release.finish()
+        XCTAssertTrue(drain(until: { app.sessionStore.stagedImages[self.sessionA] == photo }), "the loaded photo is staged")
+        XCTAssertTrue(showsThumbnail(true))
+        try typeAndReturn("", sessionId: sessionA)
+        XCTAssertEqual(sentTexts, ["hello"])
+        XCTAssertEqual(sentAttachments, [1], "the photo goes with the text sent after it loaded")
     }
 
     func testAnswerCarriesTheImageOnlyWhenTheAgentTakesImages() throws {

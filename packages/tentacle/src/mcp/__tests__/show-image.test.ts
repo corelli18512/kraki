@@ -154,17 +154,33 @@ describe('show_image handler — happy paths', () => {
     expect(textOf(r)).toBe('Image displayed to user.');
   });
 
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 0]);
+  const GIF = Buffer.from('GIF89a\u0001\u0000\u0001\u0000\u0000\u0000\u0000;', 'latin1');
+  const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x24, 0, 0, 0]), Buffer.from('WEBPVP8 ')]);
   it.each([
-    ['image.jpg', 'image/jpeg'],
-    ['image.jpeg', 'image/jpeg'],
-    ['image.webp', 'image/webp'],
-    ['image.gif', 'image/gif'],
-  ])('detects mime for %s as %s', async (name, expected) => {
+    ['image.jpg', 'image/jpeg', JPEG],
+    ['image.jpeg', 'image/jpeg', JPEG],
+    ['image.webp', 'image/webp', WEBP],
+    ['image.gif', 'image/gif', GIF],
+    // The bytes decide, not the extension (a model refuses an image that is
+    // not the type it is told).
+    ['really-png.gif', 'image/png', PNG_1X1_BYTES],
+    ['really-gif.png', 'image/gif', GIF],
+    ['really-webp.gif', 'image/webp', WEBP],
+  ])('shows %s as %s', async (name, expected, bytes) => {
     const p = join(dir, name);
-    writeFileSync(p, PNG_1X1_BYTES); // bytes content doesn't matter for mime detection
+    writeFileSync(p, bytes);
     const r = await showImageHandler({ path: p }, ctx);
     expect(r.isError).toBeFalsy();
     expect((r.content[0] as { mimeType: string }).mimeType).toBe(expected);
+  });
+
+  it('refuses a file with an image name that is not an image', async () => {
+    const p = join(dir, 'notes.gif');
+    writeFileSync(p, 'just text');
+    const r = await showImageHandler({ path: p }, ctx);
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`Not a PNG, JPEG, GIF or WebP image: ${p}`);
   });
 
   it('honors PNG extension case-insensitively', async () => {

@@ -29,7 +29,8 @@ final class ChatGIFAnimation: @unchecked Sendable {
     let frames: [CGImage]
     /// How long each frame stays, in seconds.
     let delays: [TimeInterval]
-    /// How many times the animation plays; 0 means forever.
+    /// How many times the animation plays; 0 means forever
+    /// (`playCount(_:)`).
     let loopCount: Int
     /// One pass through all frames.
     let duration: TimeInterval
@@ -76,11 +77,67 @@ final class ChatGIFAnimation: @unchecked Sendable {
             let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
             delays.append(frameDelay(properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]))
         }
-        let container = CGImageSourceCopyProperties(source, nil) as? [CFString: Any]
-        let gif = container?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
-        // No loop count in the file: browsers play it once.
-        let loops = (gif?[kCGImagePropertyGIFLoopCount] as? Int) ?? 1
-        return ChatGIFAnimation(frames: frames, delays: delays, loopCount: loops)
+        return ChatGIFAnimation(frames: frames, delays: delays, loopCount: playCount(data))
+    }
+
+    /// How many times a GIF plays (0: forever), from its loop block
+    /// (NETSCAPE2.0, or its ANIMEXTS1.0 twin): a count of 0 loops forever,
+    /// a count n plays the animation n more times after the first pass, so
+    /// n + 1 times (as Chromium, WebKit and Firefox play it; ImageIO's
+    /// kCGImagePropertyGIFLoopCount reports the same). A GIF without a loop
+    /// block loops forever in Kraki on every client (browsers would play it
+    /// once; the web client gives it a loop-forever block to show it).
+    ///
+    /// Read from the bytes, not from ImageIO, which reports a missing block
+    /// as one pass and takes NETSCAPE2.0's buffering sub-block (id 2) for a
+    /// loop count.
+    static func playCount(_ data: Data) -> Int {
+        guard let count = loopBlockCount(data), count > 0 else { return 0 }
+        return count + 1
+    }
+
+    /// The count in the GIF's loop block (sub-block 1 of NETSCAPE2.0 or
+    /// ANIMEXTS1.0, wherever it is among the block's sub-blocks), nil when
+    /// it has none. Walks the GIF's blocks, never its
+    /// compressed pixels; a damaged GIF is read up to where it breaks.
+    static func loopBlockCount(_ data: Data) -> Int? {
+        data.withUnsafeBytes { raw -> Int? in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            guard isGIF(data), bytes.count >= 13 else { return nil }
+            func colorTableSize(_ packed: UInt8) -> Int { packed & 0x80 != 0 ? 3 << (Int(packed & 0x07) + 1) : 0 }
+            /// Index after the data sub-blocks starting at `index`.
+            func skipSubBlocks(_ index: Int) -> Int {
+                var index = index
+                while index < bytes.count, bytes[index] != 0 { index += Int(bytes[index]) + 1 }
+                return index + 1
+            }
+            var index = 13 + colorTableSize(bytes[10])
+            while index < bytes.count {
+                switch bytes[index] {
+                case 0x21: // extension
+                    if index + 14 <= bytes.count, bytes[index + 1] == 0xFF, bytes[index + 2] == 0x0B,
+                       let identifier = String(bytes: bytes[(index + 3)..<(index + 14)], encoding: .ascii),
+                       identifier == "NETSCAPE2.0" || identifier == "ANIMEXTS1.0" {
+                        // Its sub-blocks: id 1 (03 01 <count u16>) is the loop
+                        // count; id 2 (buffering) may come first.
+                        var sub = index + 14
+                        while sub + 3 < bytes.count, bytes[sub] != 0 {
+                            if bytes[sub] >= 3, bytes[sub + 1] == 0x01 {
+                                return Int(bytes[sub + 2]) | Int(bytes[sub + 3]) << 8
+                            }
+                            sub += Int(bytes[sub]) + 1
+                        }
+                    }
+                    index = skipSubBlocks(index + 2)
+                case 0x2C: // image: descriptor, local colour table, LZW code size, pixels
+                    guard index + 10 <= bytes.count else { return nil }
+                    index = skipSubBlocks(index + 10 + colorTableSize(bytes[index + 9]) + 1)
+                default: // trailer, or not a GIF block
+                    return nil
+                }
+            }
+            return nil
+        }
     }
 
     /// The longest side to decode frames at: the GIF's own (capped), or

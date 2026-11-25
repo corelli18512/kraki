@@ -39,6 +39,8 @@
     "numberedImage": "Image {{number}}",
     "imageActions": "Image actions",
     "downloadImage": "Download Image",
+    "copyImage": "Copy Image",
+    "copyImageFailed": "Couldn’t copy the image.",
     "errors": {
       "metadataUnavailable": "Attachment metadata unavailable",
       "invalidIndex": "Invalid attachment chunk index",

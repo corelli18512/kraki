@@ -284,6 +284,7 @@ targets:
       - path: KrakiTests/MessageStoreUnreadEntryWindowTests.swift
       - path: KrakiTests/ChatGIFFixture.swift
       - path: KrakiTests/ChatGIFAnimationTests.swift
+      - path: KrakiTests/ComposerGIFFitTests.swift
       - path: KrakiTests/ChatGIFPlayerTests.swift
       - path: KrakiTests/ChatImageFileTests.swift
     settings:

@@ -23,6 +23,7 @@
  */
 
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,9 +38,11 @@ const { WebSocket } = createRequire(new URL('../packages/tentacle/package.json',
 // main() before this matters.
 import { RelayClient, SessionManager, AgentAdapter, KeyManager, AttachmentStore } from '../packages/tentacle/dist/index.js';
 import { beginAdapterTurn } from '../packages/tentacle/dist/relay/turns.js';
+import { showImageHandler } from '../packages/tentacle/dist/mcp/tools/show-image.js';
 import type {
   CreateSessionConfig, SessionInfo, SessionContext, PermissionDecision,
 } from '../packages/tentacle/dist/index.js';
+import type { Attachment } from '@kraki/protocol';
 
 // ── Ports (isolated from the other session) ─────────────
 const RELAY_PORT = Number(process.env.REALSTACK_RELAY_PORT ?? 4700);
@@ -70,7 +73,7 @@ class MockAdapter extends AgentAdapter {
   readonly killed: string[] = [];
   /** Records inbound-from-browser calls (over pulse) so the spec can prove the
    *  browser's reliable sends actually reached the tentacle adapter. */
-  readonly receivedMessages: Array<{ sid: string; text: string }> = [];
+  readonly receivedMessages: Array<{ sid: string; text: string; images?: Array<{ mimeType: string; bytes: number; sha256: string }> }> = [];
   private readonly activeToolCalls = new Map<string, string>();
   readonly permissionResponses: Array<{ sid: string; pid: string; decision: string }> = [];
   readonly questionAnswers: Array<{ sid: string; qid: string; answer: string; freeform: boolean }> = [];
@@ -89,7 +92,16 @@ class MockAdapter extends AgentAdapter {
     this.onSessionCreated?.({ sessionId, agent: 'mock-agent', model: 'mock-v1' });
     return { sessionId };
   }
-  async sendMessage(sid: string, text: string) { this.receivedMessages.push({ sid, text }); }
+  /** Inline images are recorded by type, size and hash, so a spec can prove
+   *  the bytes the agent got are the ones the user sent. */
+  async sendMessage(sid: string, text: string, attachments?: Attachment[]) {
+    const images = attachments?.flatMap((a) => a.type === 'image' ? [{
+      mimeType: a.mimeType,
+      bytes: Buffer.from(a.data, 'base64').length,
+      sha256: createHash('sha256').update(Buffer.from(a.data, 'base64')).digest('hex'),
+    }] : []);
+    this.receivedMessages.push({ sid, text, ...(images?.length && { images }) });
+  }
   async respondToPermission(sid: string, pid: string, d: PermissionDecision) { this.permissionResponses.push({ sid, pid, decision: d }); }
   async respondToQuestion(sid: string, qid: string, answer: { text: string } | string, freeform: boolean) {
     this.questionAnswers.push({ sid, qid, answer: typeof answer === 'string' ? answer : answer.text, freeform });
@@ -773,6 +785,23 @@ async function main(): Promise<void> {
           adapter.msg(sid, q.get('reply') ?? 'Here is the animation.');
           adapter.idle(sid);
           return json(200, { ok: true, id: ref.id, name: ref.name, base64: gif.toString('base64') });
+        }
+        // An agent turn that runs the real show_image tool on an image file
+        // (size cap, extension → type, fitToMaxDimension) and stores what it
+        // returns the way the Claude adapter does.
+        case '/showImage': {
+          const sid = q.get('sid')!;
+          const result = await showImageHandler({ path: q.get('path')!, ...(q.get('caption') && { caption: q.get('caption')! }) }, {} as never);
+          const refs = result.isError ? [] : result.content.flatMap((block) => block.type === 'image'
+            ? [attachmentStore.put(sid, Buffer.from(block.data, 'base64'), block.mimeType, q.get('name') ? { name: q.get('name')! } : {})]
+            : []);
+          const text = result.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n');
+          const tcid = `tc-show-${sid}-${Date.now().toString(36)}`;
+          adapter.toolStart(sid, 'show_image', { path: q.get('path')! }, tcid);
+          adapter.toolComplete(sid, 'show_image', text, tcid, refs.length ? refs : undefined);
+          if (q.get('reply')) adapter.msg(sid, q.get('reply')!);
+          adapter.idle(sid);
+          return json(200, { ok: !result.isError, text, refs: refs.map((ref) => ({ id: ref.id, mimeType: ref.mimeType, size: ref.size, width: ref.width, height: ref.height })) });
         }
         case '/shutdown': json(200, { ok: true }); cleanup(); process.exit(0); return;
         default: return json(404, { error: 'unknown control endpoint' });
