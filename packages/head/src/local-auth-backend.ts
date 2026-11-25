@@ -84,6 +84,12 @@ const ACCOUNT_DELETED = {
   message: 'This Kraki account was deleted.',
 };
 
+const PAIRING_DISABLED = {
+  ok: false as const,
+  code: 'pairing_disabled',
+  message: 'Pairing is disabled.',
+};
+
 export class LocalAuthBackend implements AuthBackend {
   private storage: Storage;
   private authProviders: Map<string, AuthProvider>;
@@ -122,7 +128,7 @@ export class LocalAuthBackend implements AuthBackend {
     if (device.deviceId && this.storage.isDeletedDevice(device.deviceId)) return ACCOUNT_DELETED;
 
     if (auth.method === 'pairing') {
-      return this.handlePairingAuth(auth.token, device, headRegion);
+      return this.handlePairingAuth(auth.token, device, headRegion, clientIp);
     }
 
     if (auth.method === 'challenge') {
@@ -135,7 +141,7 @@ export class LocalAuthBackend implements AuthBackend {
       return resolved;
     }
 
-    return this.completeAuth(resolved, device, auth.method, headRegion);
+    return this.completeAuth(resolved, device, auth.method, headRegion, clientIp);
   }
 
   async startChallenge(
@@ -349,6 +355,8 @@ export class LocalAuthBackend implements AuthBackend {
   async createTestLoginPairing(token: string, ip?: string): Promise<TestLoginOutcome> {
     const provider = this.authProviders.get(TEST_ACCOUNT_PROVIDER);
     if (!provider) return { ok: false, code: 'not_found', message: 'Not found' };
+    // The link's pairing token could never be used.
+    if (!this.pairingEnabled) return PAIRING_DISABLED;
     const result = await provider.authenticate({ token, ip });
     if (!result.ok) return { ok: false, code: 'auth_rejected', message: result.message };
     const unavailableRegion = this.checkPinnedRegion(result.user);
@@ -407,18 +415,9 @@ export class LocalAuthBackend implements AuthBackend {
 
     // New user — auto-assign region from the account's own (test accounts),
     // preferred, IP geo, or first available
-    let targetRegion = resolved.region ?? preferredRegion;
-
-    if (!targetRegion && clientIp) {
-      const geoRegion = await suggestRegionForIp(clientIp, this.defaultSignupRegion);
-      if (geoRegion && regions.some(r => r.code === geoRegion)) {
-        targetRegion = geoRegion;
-      }
-    }
-
-    if (!targetRegion) {
-      targetRegion = this.region ?? regions[0]?.code;
-    }
+    const targetRegion = resolved.region ?? preferredRegion
+      ?? await this.ipSignupRegion(clientIp, regions)
+      ?? this.region ?? regions[0]?.code;
 
     if (targetRegion) {
       const regionInfo = this.storage.getRegion(targetRegion);
@@ -537,15 +536,14 @@ export class LocalAuthBackend implements AuthBackend {
 
   // ── Private helpers ───────────────────────────────────
 
-  private handlePairingAuth(
+  private async handlePairingAuth(
     pairingToken: string,
     device: DeviceInfo,
     headRegion?: string,
-  ): AuthOutcome {
+    clientIp?: string,
+  ): Promise<AuthOutcome> {
     const logger = getLogger();
-    if (!this.pairingEnabled) {
-      return { ok: false, code: 'pairing_disabled', message: 'Pairing is disabled.' };
-    }
+    if (!this.pairingEnabled) return PAIRING_DISABLED;
 
     const tokenData = this.pairingTokens.get(pairingToken);
     if (!tokenData || tokenData.expiresAt < Date.now()) {
@@ -563,20 +561,31 @@ export class LocalAuthBackend implements AuthBackend {
     }
 
     const authUser: AuthUser = { id: user.userId, login: user.username, provider: user.provider, email: user.email };
-    return this.completeAuth(authUser, device, 'pairing', headRegion);
+    return this.completeAuth(authUser, device, 'pairing', headRegion, clientIp);
   }
 
-  private completeAuth(
+  private async completeAuth(
     authUser: AuthUser,
     device: DeviceInfo,
     authMethod: AuthMethod['method'],
     headRegion?: string,
-  ): AuthOutcome {
+    clientIp?: string,
+  ): Promise<AuthOutcome> {
     const logger = getLogger();
 
-    // Upsert user — assign region on first auth if not yet set
+    // A first sign-in straight at this head (the web app, iPhone and Mac
+    // apps connect to the main relay) gets its region the way resolveLogin
+    // picks one; the region check below then redirects the device there. A
+    // first sign-in at an edge keeps that edge's region.
+    const signupRegion = headRegion !== undefined && headRegion === this.region
+      && !authUser.region && !this.storage.getUser(authUser.id)?.region
+      ? await this.ipSignupRegion(clientIp)
+      : undefined;
+
+    // Upsert user — assign region on first auth if not yet set (read after
+    // the lookup: a concurrent sign-in may have assigned it meanwhile)
     const existingUser = this.storage.getUser(authUser.id);
-    const userRegion = existingUser?.region ?? authUser.region ?? headRegion ?? this.region;
+    const userRegion = existingUser?.region ?? authUser.region ?? signupRegion ?? headRegion ?? this.region;
     this.storage.upsertUser(authUser.id, authUser.login, authUser.provider, authUser.email, userRegion);
 
     // If user already has a region and it doesn't match, set it now
@@ -645,6 +654,20 @@ export class LocalAuthBackend implements AuthBackend {
     };
   }
 
+  /**
+   * Region for a new account from its IP: the country table (countries
+   * outside it get DEFAULT_SIGNUP_REGION), if that region is enabled.
+   * Undefined when the lookup fails or the region is not enabled; callers
+   * then fall back to this head's REGION. No lookup when this head's region
+   * is the only enabled one, as the answer could not differ.
+   */
+  private async ipSignupRegion(clientIp: string | undefined, regions = this.getRegions()): Promise<string | undefined> {
+    if (!clientIp || clientIp === 'unknown') return undefined;
+    if (regions.every((r) => r.code === this.region)) return undefined;
+    const geoRegion = await suggestRegionForIp(clientIp, this.defaultSignupRegion);
+    return geoRegion && regions.some((r) => r.code === geoRegion) ? geoRegion : undefined;
+  }
+
   private async resolveAuthUser(auth: AuthMethod, clientIp?: string, remoteClient?: boolean): Promise<AuthUser | { ok: false; code: string; message: string }> {
     let provider: AuthProvider | undefined;
     let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string } = {};
@@ -666,8 +689,11 @@ export class LocalAuthBackend implements AuthBackend {
       }
       case 'apikey': {
         // A test account's token, sent the way released CLIs send an API key.
+        // Without an apikey provider every key goes to the (throttled) test
+        // accounts, so wrong test tokens are throttled and counted too.
         const testAccounts = this.authProviders.get(TEST_ACCOUNT_PROVIDER);
-        provider = testAccounts?.isOwnSecret?.(auth.key) ? testAccounts : this.getProviderForMode('apikey');
+        const apiKeys = this.getProviderForMode('apikey');
+        provider = testAccounts && (!apiKeys || testAccounts.isOwnSecret?.(auth.key)) ? testAccounts : apiKeys;
         credentials = { token: auth.key };
         break;
       }

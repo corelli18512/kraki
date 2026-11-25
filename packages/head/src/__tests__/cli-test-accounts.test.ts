@@ -78,6 +78,23 @@ describe('kraki-relay TEST_ACCOUNTS (cli.ts)', () => {
     expect(head.output()).toMatch(/TEST_ACCOUNTS\[0\]\.login must start with "qa-"/);
   }, 30_000);
 
+  it('refuses to start with test accounts and a TEST_LOGIN_APP_URL that is not https', async () => {
+    const head = await startHead({
+      AUTH_MODE: 'github',
+      TEST_ACCOUNTS: JSON.stringify([{ login: 'qa-us', region: 'us', tokenSha256: 'a'.repeat(64) }]),
+      TEST_LOGIN_APP_URL: 'http://app.example.com',
+    });
+    expect(await head.exited).toBe(1);
+    expect(head.output()).toMatch(/TEST_LOGIN_APP_URL must be an https URL/);
+  }, 30_000);
+
+  it('ignores TEST_LOGIN_APP_URL without test accounts', async () => {
+    const head = await startHead({ AUTH_MODE: 'github', TEST_LOGIN_APP_URL: 'https://app.example.com?x=1' });
+    await waitForListening(head);
+    const res = await fetch(`http://127.0.0.1:${head.port}/api/test-login`, { method: 'POST', body: '{}' });
+    expect(res.status).toBe(404);
+  }, 30_000);
+
   it('serves /api/test-login for the configured account, without logging the token', async () => {
     const token = randomBytes(32).toString('base64url');
     const head = await startHead({

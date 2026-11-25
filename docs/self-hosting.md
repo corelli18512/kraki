@@ -81,13 +81,20 @@ For local web development, put browser-only overrides like `VITE_WS_URL=ws://loc
 
 ## Multi-region: signup region and test accounts
 
-In a multi-region deployment (a main head plus edges joined with `kraki-relay register-edge` / `kraki-relay join`), the main head gives each new account a region once, at its first sign-in, from the country of its IP address. Existing accounts keep theirs.
+In a multi-region deployment (a main head plus edges joined with `kraki-relay register-edge` / `kraki-relay join`), the main head gives a new account a region once, at its first sign-in, from the country of its IP address. Existing accounts keep theirs. This applies to first sign-ins that reach the main head:
+
+- `kraki setup` and Kraki for Mac's setup, which ask the main head's login API (`/api/login/resolve`) for the account's relay before connecting;
+- the web app, iPhone and Mac apps signing in at the main relay (GitHub sign-in or a pairing link of the main relay). The main head assigns the region, registers the device and answers `wrong_region` with the region's relay URL; the apps reconnect there and sign in with the device key they just registered (or, for the Mac app and the CLI, the GitHub token they hold). A GitHub sign-in code is used once, on the main head.
+
+A first sign-in at an edge (a CLI set up with `--relay` of an edge, a pairing link of an edge) gets that edge's region, and test accounts get their configured region.
 
 - China, Hong Kong, Macau and Taiwan → `china`.
 - The rest of Asia-Pacific, the Middle East, South and Central Asia, and Oceania → `us` (the legacy code of the Tokyo relay).
 - Everything else (the Americas, Europe, Africa) and unknown countries → `DEFAULT_SIGNUP_REGION` (main head env; default `us`), for example `DEFAULT_SIGNUP_REGION=uswest`.
 
-A region is only assigned when it is an enabled region of the main head's regions table (`kraki-relay list-regions`). Otherwise, for example before the edge has joined, the account gets the main head's own `REGION`, as before.
+A region is only assigned when it is an enabled region of the main head's regions table (`kraki-relay list-regions`). Otherwise, for example before the edge has joined, the account gets the main head's own `REGION`, as before. The country comes from ip-api.com (free tier, plain HTTP, 45 lookups a minute, 3 s timeout); when the lookup fails the account also gets the main head's `REGION`, not `DEFAULT_SIGNUP_REGION`. While the main head's region is the only enabled one, no lookup is made.
+
+The iPhone and Mac apps only follow a `wrong_region` redirect to a `wss://` relay under `kraki.chat`. With your own domains, new iPhone/Mac users whose country maps to another region than the main head's cannot finish their first sign-in at the main relay; have them use a pairing link of their region's relay, or keep a single region.
 
 ### Operator test accounts
 
@@ -107,7 +114,8 @@ TEST_ACCOUNTS=[{"login":"qa-uswest","region":"uswest","tokenSha256":"<HASH>"},{"
 
 - Logins must start with `qa-` (lowercase letters, digits, dashes). The account's user id is `test:<login>` and its provider `test`, so it can't collide with a GitHub account. The relay refuses to start with a malformed list.
 - The account gets the configured region on its first sign-in, whatever the IP; after that it keeps it, like any account. The region must be enabled in the regions table, or the first sign-in is refused.
-- Test accounts are not offered in sign-in options (`/api/config`, `auth_info`). Tokens are compared by hash in constant time, failed tokens are throttled per IP (5 per minute), and tokens are never logged. `/internal/metrics` counts `auth.testAccount.ok` / `auth.testAccount.fail`.
+- Test accounts are not offered in sign-in options (`/api/config`, `auth_info`). Tokens are compared by hash in constant time and never logged. Wrong tokens are throttled per IP (5 per minute) and counted (`/internal/metrics`: `auth.testAccount.ok` / `auth.testAccount.fail`) on `/api/test-login`, and on `apikey` sign-ins (WebSocket, through an edge, `/api/login/resolve`) as long as the main head has no `apikey` auth mode; with `AUTH_MODE` including `apikey`, a key that is not a test token goes to the API key check, which has its own per-IP throttle.
+- `/api/test-login` needs pairing on (the default) and returns `pairing_disabled` otherwise. `TEST_LOGIN_APP_URL` must be an `https` URL without a query or fragment; with `TEST_ACCOUNTS` set, the relay refuses to start otherwise.
 - A test account is deleted from an app like any other account; signing in again with the token creates it afresh.
 
 Sign in with the released apps (no client changes):

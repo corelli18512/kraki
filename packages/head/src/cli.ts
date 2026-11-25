@@ -54,7 +54,7 @@ import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { EdgeAuthCache } from './edge-auth-cache.js';
 import { AccountApi } from './account-api.js';
 import { InflightRequests } from './http-drain.js';
-import { parseTestAccounts, TestAccountAuthProvider, TEST_ACCOUNT_PROVIDER } from './test-accounts.js';
+import { parseTestAccounts, parseTestLoginAppUrl, TestAccountAuthProvider, TEST_ACCOUNT_PROVIDER } from './test-accounts.js';
 
 /** Shutdown waits this long for HTTP requests still being answered. */
 const SHUTDOWN_DRAIN_MS = 2_000;
@@ -125,7 +125,9 @@ if (args.includes('--help') || args.includes('-h')) {
                            POST /api/test-login {"token":…} (returns a pairing link)
                            or a CLI set up with --auth apikey --api-key <token>.
     TEST_LOGIN_APP_URL     Web app of the /api/test-login pairing link
-                           (default: https://app.kraki.chat).
+                           (default: https://app.kraki.chat). https, no query
+                           or fragment; with TEST_ACCOUNTS set, anything else
+                           stops the relay at start.
 
   Voice broker leases:
     VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
@@ -426,6 +428,8 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
   let testAccounts;
   try {
     testAccounts = parseTestAccounts(TEST_ACCOUNTS_RAW);
+    // The pairing link is only served with test accounts on.
+    if (testAccounts.length > 0) parseTestLoginAppUrl(TEST_LOGIN_APP_URL);
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     process.exit(1);

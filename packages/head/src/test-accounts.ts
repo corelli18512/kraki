@@ -62,6 +62,25 @@ export function parseTestAccounts(raw: string | undefined): TestAccount[] {
   return accounts;
 }
 
+/** Check TEST_LOGIN_APP_URL, the web app of the /api/test-login pairing
+ *  link (`<url>?relay=…&token=…`): https, without a query or fragment.
+ *  Unset or blank: undefined (the default app). Throws otherwise. */
+export function parseTestLoginAppUrl(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('TEST_LOGIN_APP_URL must be an https URL');
+  }
+  if (url.protocol !== 'https:') throw new Error('TEST_LOGIN_APP_URL must be an https URL');
+  if (url.search || url.hash || value.includes('?') || value.includes('#')) {
+    throw new Error('TEST_LOGIN_APP_URL must not have a query or fragment');
+  }
+  return value;
+}
+
 /**
  * Accepts the token of a configured test account. Never advertised in
  * auth_info; reached through `{ method: 'apikey', key }` (released CLIs),

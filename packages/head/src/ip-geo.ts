@@ -2,7 +2,8 @@
  * Lightweight IP-based country detection for region auto-assignment.
  *
  * Uses ip-api.com (free, no key, 45 req/min) — called only once per new user.
- * Falls back to the default region on error or timeout.
+ * On error or timeout there is no suggestion; callers then use their own
+ * fallback (the main head's REGION).
  */
 
 import { getLogger } from './logger.js';
@@ -62,10 +63,14 @@ const COUNTRY_TO_REGION: Record<string, string> = {
   // West Asia / Middle East
   AE: ASIA_PACIFIC_REGION, SA: ASIA_PACIFIC_REGION, QA: ASIA_PACIFIC_REGION, BH: ASIA_PACIFIC_REGION,
   KW: ASIA_PACIFIC_REGION, OM: ASIA_PACIFIC_REGION, IR: ASIA_PACIFIC_REGION, IQ: ASIA_PACIFIC_REGION,
-  IL: ASIA_PACIFIC_REGION, JO: ASIA_PACIFIC_REGION, LB: ASIA_PACIFIC_REGION, SY: ASIA_PACIFIC_REGION,
-  YE: ASIA_PACIFIC_REGION, AF: ASIA_PACIFIC_REGION,
-  // Oceania
+  IL: ASIA_PACIFIC_REGION, JO: ASIA_PACIFIC_REGION, LB: ASIA_PACIFIC_REGION, PS: ASIA_PACIFIC_REGION,
+  SY: ASIA_PACIFIC_REGION, YE: ASIA_PACIFIC_REGION, AF: ASIA_PACIFIC_REGION,
+  // Oceania (French Polynesia, nearer the Americas, stays on the default)
   AU: ASIA_PACIFIC_REGION, NZ: ASIA_PACIFIC_REGION, FJ: ASIA_PACIFIC_REGION, PG: ASIA_PACIFIC_REGION,
+  GU: ASIA_PACIFIC_REGION, MP: ASIA_PACIFIC_REGION, PW: ASIA_PACIFIC_REGION, FM: ASIA_PACIFIC_REGION,
+  MH: ASIA_PACIFIC_REGION, KI: ASIA_PACIFIC_REGION, NR: ASIA_PACIFIC_REGION, TV: ASIA_PACIFIC_REGION,
+  NC: ASIA_PACIFIC_REGION, VU: ASIA_PACIFIC_REGION, SB: ASIA_PACIFIC_REGION, TO: ASIA_PACIFIC_REGION,
+  WS: ASIA_PACIFIC_REGION,
 };
 
 /**

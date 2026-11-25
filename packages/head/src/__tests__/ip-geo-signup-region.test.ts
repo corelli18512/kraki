@@ -32,10 +32,15 @@ describe('regionForCountry — mapping table', () => {
     const asiaPacific = [
       'JP', 'KR', 'MN', 'SG', 'MY', 'TH', 'VN', 'PH', 'ID', 'MM', 'KH', 'LA', 'BN', 'TL',
       'IN', 'PK', 'BD', 'LK', 'NP', 'BT', 'MV', 'KZ', 'UZ', 'KG', 'TJ', 'TM',
-      'AE', 'SA', 'QA', 'BH', 'KW', 'OM', 'IR', 'IQ', 'IL', 'JO', 'LB', 'SY', 'YE', 'AF',
+      'AE', 'SA', 'QA', 'BH', 'KW', 'OM', 'IR', 'IQ', 'IL', 'JO', 'LB', 'PS', 'SY', 'YE', 'AF',
       'AU', 'NZ', 'FJ', 'PG',
+      'GU', 'MP', 'PW', 'FM', 'MH', 'KI', 'NR', 'TV', 'NC', 'VU', 'SB', 'TO', 'WS',
     ];
     for (const cc of asiaPacific) expect(regionForCountry(cc, 'uswest'), cc).toBe('us');
+  });
+
+  it('leaves French Polynesia, Turkey, Cyprus and the Caucasus on the default signup region', () => {
+    for (const cc of ['PF', 'TR', 'CY', 'GE', 'AM', 'AZ']) expect(regionForCountry(cc, 'uswest'), cc).toBe('uswest');
   });
 
   it('maps the Americas, Europe and Africa to the default signup region', () => {

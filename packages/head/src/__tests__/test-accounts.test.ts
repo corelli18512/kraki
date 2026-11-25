@@ -13,8 +13,8 @@ import { Storage } from '../storage.js';
 import { LocalAuthBackend } from '../local-auth-backend.js';
 import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { AccountApi } from '../account-api.js';
-import { GitHubAuthProvider, ThrottledAuthProvider, type AuthProvider } from '../auth.js';
-import { parseTestAccounts, TestAccountAuthProvider, type TestAccount } from '../test-accounts.js';
+import { ApiKeyAuthProvider, GitHubAuthProvider, ThrottledAuthProvider, type AuthProvider } from '../auth.js';
+import { parseTestAccounts, parseTestLoginAppUrl, TestAccountAuthProvider, type TestAccount } from '../test-accounts.js';
 import { metrics, resetMetricsForTests } from '../metrics.js';
 import { captureLogs, silenceLogs, type CapturingLogger } from './log-capture.js';
 
@@ -63,6 +63,30 @@ describe('parseTestAccounts', () => {
   });
 });
 
+describe('parseTestLoginAppUrl', () => {
+  it('is the default app when unset or blank', () => {
+    expect(parseTestLoginAppUrl(undefined)).toBeUndefined();
+    expect(parseTestLoginAppUrl('  ')).toBeUndefined();
+  });
+
+  it('accepts an https URL, with or without a path', () => {
+    expect(parseTestLoginAppUrl(' https://app.example.com ')).toBe('https://app.example.com');
+    expect(parseTestLoginAppUrl('https://app.example.com/qa/')).toBe('https://app.example.com/qa/');
+  });
+
+  it('rejects a URL that is not https', () => {
+    expect(() => parseTestLoginAppUrl('http://app.example.com')).toThrow(/https/);
+    expect(() => parseTestLoginAppUrl('app.example.com')).toThrow(/https/);
+    expect(() => parseTestLoginAppUrl('wss://app.example.com')).toThrow(/https/);
+  });
+
+  it('rejects a query or fragment, which would break the link', () => {
+    expect(() => parseTestLoginAppUrl('https://app.example.com?x=1')).toThrow(/query or fragment/);
+    expect(() => parseTestLoginAppUrl('https://app.example.com/?')).toThrow(/query or fragment/);
+    expect(() => parseTestLoginAppUrl('https://app.example.com/#top')).toThrow(/query or fragment/);
+  });
+});
+
 describe('test accounts on the main head', () => {
   let storage: Storage;
   let server: Server;
@@ -70,7 +94,7 @@ describe('test accounts on the main head', () => {
   let githubFetch: ReturnType<typeof vi.fn>;
   let logs: CapturingLogger;
 
-  function makeBackend(withTestAccounts: boolean): LocalAuthBackend {
+  function makeBackend(withTestAccounts: boolean, opts: { pairingEnabled?: boolean; apiKey?: string } = {}): LocalAuthBackend {
     githubFetch = vi.fn(async (_url: string, init?: RequestInit) => {
       const auth = (init?.headers as Record<string, string>)?.Authorization;
       return auth === `Bearer ${GITHUB_TOKEN}`
@@ -80,8 +104,11 @@ describe('test accounts on the main head', () => {
     const providers = new Map<string, AuthProvider>([
       ['github', new GitHubAuthProvider({ fetcher: githubFetch as unknown as typeof fetch })],
     ]);
+    if (opts.apiKey) providers.set('apikey', new ThrottledAuthProvider(new ApiKeyAuthProvider(opts.apiKey)));
     if (withTestAccounts) providers.set('test', new ThrottledAuthProvider(new TestAccountAuthProvider(ACCOUNTS)));
-    return new LocalAuthBackend({ storage, authProviders: providers, region: 'us', defaultSignupRegion: 'uswest' });
+    return new LocalAuthBackend({
+      storage, authProviders: providers, region: 'us', defaultSignupRegion: 'uswest', pairingEnabled: opts.pairingEnabled,
+    });
   }
 
   async function startApi(backend: LocalAuthBackend): Promise<void> {
@@ -124,7 +151,54 @@ describe('test accounts on the main head', () => {
     expect(data.code).toBe('not_found');
 
     const auth = await backend.authenticate({ method: 'apikey', key: QA_USWEST_TOKEN }, { name: 'CLI', role: 'tentacle' }, 'uswest');
-    expect(auth.ok).toBe(false);
+    expect(auth).toMatchObject({ ok: false, message: 'Auth method apikey not configured' });
+    expect(storage.getUser('test:qa-uswest')).toBeUndefined();
+  });
+
+  it('throttles and counts wrong apikey tokens on the WebSocket and /api/login/resolve too', async () => {
+    const backend = makeBackend(true);
+    const cli = { name: 'CLI', role: 'tentacle' as const };
+    const wrong = await backend.authenticate({ method: 'apikey', key: 'wrong-token' }, cli, 'us', '203.0.113.7');
+    expect(wrong).toMatchObject({ ok: false, code: 'auth_rejected' });
+    expect(metrics().get('auth.testAccount.fail')).toBe(1);
+    for (let i = 0; i < 2; i++) await backend.authenticate({ method: 'apikey', key: 'wrong-token' }, cli, 'us', '203.0.113.7');
+    for (let i = 0; i < 2; i++) await backend.resolveLogin({ method: 'apikey', key: 'wrong-token' }, undefined, '203.0.113.7');
+    expect(metrics().get('auth.testAccount.fail')).toBe(5);
+
+    const throttled = await backend.authenticate({ method: 'apikey', key: QA_US_TOKEN }, cli, 'us', '203.0.113.7');
+    expect(throttled).toMatchObject({ ok: false, message: expect.stringMatching(/Too many/) });
+    const resolve = await backend.resolveLogin({ method: 'apikey', key: QA_US_TOKEN }, undefined, '203.0.113.7');
+    expect(resolve).toMatchObject({ ok: false, message: expect.stringMatching(/Too many/) });
+    expect(storage.getUser('test:qa-us')).toBeUndefined();
+    // Another address is not affected.
+    const other = await backend.authenticate({ method: 'apikey', key: QA_US_TOKEN }, cli, 'us', '198.51.100.9');
+    expect(other.ok && other.userId).toBe('test:qa-us');
+  });
+
+  it('with an apikey provider too, other keys still go to it', async () => {
+    const backend = makeBackend(true, { apiKey: 'operator-api-key' });
+    const cli = { name: 'CLI', role: 'tentacle' as const };
+    // The operator key's account is new: its region comes from the IP.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ status: 'success', countryCode: 'JP' }))));
+    try {
+      const operator = await backend.authenticate({ method: 'apikey', key: 'operator-api-key' }, cli, 'us', '203.0.113.7');
+      expect(operator.ok).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const test = await backend.authenticate({ method: 'apikey', key: QA_US_TOKEN }, cli, 'us', '203.0.113.7');
+    expect(test.ok && test.userId).toBe('test:qa-us');
+    const wrong = await backend.authenticate({ method: 'apikey', key: 'wrong-token' }, cli, 'us', '203.0.113.7');
+    expect(wrong).toMatchObject({ ok: false, message: 'Invalid API key' });
+    expect(metrics().get('auth.testAccount.fail')).toBe(0);
+  });
+
+  it('refuses a test login link when pairing is disabled', async () => {
+    await startApi(makeBackend(true, { pairingEnabled: false }));
+    const { status, data } = await testLogin(QA_USWEST_TOKEN);
+    expect(status).toBe(401);
+    expect(data.code).toBe('pairing_disabled');
+    expect(data.pairingToken).toBeUndefined();
     expect(storage.getUser('test:qa-uswest')).toBeUndefined();
   });
 
