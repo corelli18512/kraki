@@ -92,9 +92,17 @@ final class ChatGIFAnimation: @unchecked Sendable {
     /// as one pass and takes NETSCAPE2.0's buffering sub-block (id 2) for a
     /// loop count.
     static func playCount(_ data: Data) -> Int {
-        data.withUnsafeBytes { raw -> Int in
+        guard let count = loopBlockCount(data), count > 0 else { return 0 }
+        return count + 1
+    }
+
+    /// The count in the GIF's loop block (sub-block 1 of NETSCAPE2.0 or
+    /// ANIMEXTS1.0), nil when it has none. Walks the GIF's blocks, never its
+    /// compressed pixels; a damaged GIF is read up to where it breaks.
+    static func loopBlockCount(_ data: Data) -> Int? {
+        data.withUnsafeBytes { raw -> Int? in
             let bytes = raw.bindMemory(to: UInt8.self)
-            guard isGIF(data), bytes.count >= 13 else { return 0 }
+            guard isGIF(data), bytes.count >= 13 else { return nil }
             func colorTableSize(_ packed: UInt8) -> Int { packed & 0x80 != 0 ? 3 << (Int(packed & 0x07) + 1) : 0 }
             /// Index after the data sub-blocks starting at `index`.
             func skipSubBlocks(_ index: Int) -> Int {
@@ -110,18 +118,17 @@ final class ChatGIFAnimation: @unchecked Sendable {
                        let identifier = String(bytes: bytes[(index + 3)..<(index + 14)], encoding: .ascii),
                        identifier == "NETSCAPE2.0" || identifier == "ANIMEXTS1.0",
                        bytes[index + 14] >= 3, bytes[index + 15] == 0x01, index + 18 <= bytes.count {
-                        let count = Int(bytes[index + 16]) | Int(bytes[index + 17]) << 8
-                        return count == 0 ? 0 : count + 1
+                        return Int(bytes[index + 16]) | Int(bytes[index + 17]) << 8
                     }
                     index = skipSubBlocks(index + 2)
                 case 0x2C: // image: descriptor, local colour table, LZW code size, pixels
-                    guard index + 10 <= bytes.count else { return 0 }
+                    guard index + 10 <= bytes.count else { return nil }
                     index = skipSubBlocks(index + 10 + colorTableSize(bytes[index + 9]) + 1)
                 default: // trailer, or not a GIF block
-                    return 0
+                    return nil
                 }
             }
-            return 0
+            return nil
         }
     }
 

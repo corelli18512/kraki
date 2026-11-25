@@ -1042,7 +1042,8 @@ struct MessageInputView: View {
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         let data = try? await item.loadTransferable(type: Data.self)
-        let outcome = PhotoAttachmentLoad.attachment(from: data)
+        // Off the main thread: fitting a large GIF redraws all its frames.
+        let outcome = await Task.detached(priority: .userInitiated) { PhotoAttachmentLoad.attachment(from: data) }.value
         // A newer pick, a removal or a send since this load started wins: a
         // late (e.g. iCloud) load must not attach to the next message.
         guard selectedPhoto == item else { return }

@@ -89,6 +89,9 @@ struct MacChatComposer: View {
 
     @Environment(AppState.self) private var appState
     @State private var imageAttachError: String?
+    /// A large GIF being fitted to the limits; a newer image, a removal or
+    /// a send since it was attached drops it.
+    @State private var fittingImage: UUID?
     @State private var awaitingActive = false
     @State private var abortPending = false
     /// What the draft was started for (see ComposerDraftTarget).
@@ -899,20 +902,45 @@ struct MacChatComposer: View {
         return true
     }
 
-    /// A GIF within the limits keeps its bytes (and its animation).
-    private func attachImage(_ image: NSImage) {
-        if let staged = MacComposerImages.staged(image) {
-            sessionStore.setStagedImage(sessionId, staged)
-            return
-        }
-        imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
-        clearImage()
-    }
-
     private func clearImage() {
+        fittingImage = nil
         sessionStore.setStagedImage(sessionId, nil)
     }
 
+}
+
+// MARK: - Attaching images (same file: shares the view's private state)
+
+extension MacChatComposer {
+    /// A GIF within the limits keeps its bytes (and its animation); a
+    /// larger one is redrawn to fit off the main thread, still animated.
+    fileprivate func attachImage(_ image: NSImage) {
+        fittingImage = nil
+        guard let gif = MacComposerImages.gifToFit(image) else {
+            stage(MacComposerImages.staged(image), in: sessionId)
+            return
+        }
+        let attempt = UUID()
+        let session = sessionId
+        fittingImage = attempt
+        Task {
+            let fitted = await Task.detached(priority: .userInitiated) {
+                ComposerGIFFit.fitted(gif, limits: MacComposerImages.gifFit)
+            }.value
+            guard fittingImage == attempt else { return }
+            fittingImage = nil
+            stage(fitted.map { StagedComposerImage(data: $0, mimeType: "image/gif") } ?? MacComposerImages.staged(image), in: session)
+        }
+    }
+
+    private func stage(_ staged: StagedComposerImage?, in session: String) {
+        if let staged {
+            sessionStore.setStagedImage(session, staged)
+            return
+        }
+        imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
+        sessionStore.setStagedImage(session, nil)
+    }
 }
 
 // MARK: - Draft target (same file: shares the view's private state)

@@ -73,6 +73,23 @@ final class MacComposerDropTests: XCTestCase {
         XCTAssertNotNil(app.sessionStore.stagedImages["voice-a"], "the dropped image is attached")
     }
 
+    func testDroppedGIFOverTheLimitsIsFittedAndStaysAnimated() throws {
+        let (app, editor) = try composer(busy: false)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("drop-\(UUID().uuidString).gif")
+        try ChatGIFFixture.gif(frames: 3, width: 1600, height: 100).write(to: url)
+        files.append(url)
+        let drag = drag([url])
+        XCTAssertTrue(editor.performDragOperation(drag))
+        editor.concludeDragOperation(drag)
+        // Fitted off the main thread, then staged.
+        for _ in 0..<50 where app.sessionStore.stagedImages["voice-a"] == nil { drain(100) }
+        let staged = try XCTUnwrap(app.sessionStore.stagedImages["voice-a"])
+        XCTAssertEqual(staged.mimeType, "image/gif")
+        let animation = try XCTUnwrap(ChatGIFAnimation.decode(staged.data), "still animated")
+        XCTAssertEqual(animation.frames.count, 3)
+        XCTAssertEqual(animation.frames[0].width, 1024)
+    }
+
     func testImageDroppedWhileTheAgentIsBusyIsRefusedWithoutText() throws {
         let (app, editor) = try composer(busy: true)
         let drag = drag([try pngFile()])

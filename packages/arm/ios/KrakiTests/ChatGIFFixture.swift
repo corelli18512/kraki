@@ -47,6 +47,36 @@ enum ChatGIFFixture {
         return data as Data
     }
 
+    /// Frames of random coloured blocks (seeded), so the file is large
+    /// for its size, like a photo-like GIF: its byte size follows its pixels.
+    static func noisyGIF(frames: Int, width: Int, height: Int, delays: [Double]? = nil, loopCount: Int? = 0) throws -> Data {
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.gif.identifier as CFString, frames, nil))
+        if let loopCount {
+            CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: loopCount]] as CFDictionary)
+        }
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        for index in 0..<frames {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            for y in stride(from: 0, to: height, by: 6) {
+                for x in stride(from: 0, to: width, by: 6) {
+                    seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    context.setFillColor(red: CGFloat(seed >> 56) / 255, green: CGFloat((seed >> 48) & 0xFF) / 255,
+                                         blue: CGFloat((seed >> 40) & 0xFF) / 255, alpha: 1)
+                    context.fill(CGRect(x: x, y: y, width: 6, height: 6))
+                }
+            }
+            let delay = delays?[index] ?? 0.1
+            CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), [
+                kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay, kCGImagePropertyGIFUnclampedDelayTime: delay],
+            ] as CFDictionary)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
     static func png(width: Int = 40, height: Int = 20) throws -> Data {
         let data = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))

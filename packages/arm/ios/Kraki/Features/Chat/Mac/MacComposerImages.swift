@@ -9,9 +9,13 @@ enum MacComposerImages {
     static let maxSize = 3 * 1024 * 1024
     static let maxDimension: CGFloat = 1024
 
+    /// A larger GIF is redrawn to fit, still animated
+    /// (`MacChatComposer.attachImage`); one that cannot be goes as a JPEG.
+    static let gifFit = ComposerGIFFit.Limits(maxBytes: maxSize, maxDimension: Int(maxDimension))
+
     /// Key of the GIF bytes an image was read from (picked file, pasted or
     /// dropped file or data), kept on the image itself so they go with it
-    /// and it can be sent as is, still animated.
+    /// and it can be sent animated: as is, or fitted to the limits.
     private static var gifSourceKey: UInt8 = 0
 
     /// An image file to attach; remembers a GIF's bytes.
@@ -20,27 +24,38 @@ enum MacComposerImages {
         return image(data: data)
     }
 
-    /// Image data to attach (pasteboard); remembers a GIF's bytes when it
-    /// can be sent as is (a larger GIF becomes a still JPEG anyway).
+    /// Image data to attach (pasteboard); remembers a GIF's bytes.
     static func image(data: Data) -> NSImage? {
         guard let image = NSImage(data: data) else { return nil }
-        if ChatGIFAnimation.isGIF(data), data.count <= maxSize,
-           let size = pixelSize(data), max(size.width, size.height) <= maxDimension {
+        if ChatGIFAnimation.isGIF(data) {
             objc_setAssociatedObject(image, &gifSourceKey, data as NSData, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
         return image
     }
 
-    /// The GIF bytes `image` was read from, when it is sent as is.
+    /// The GIF bytes `image` was read from.
     static func gifSource(of image: NSImage) -> NSData? {
         objc_getAssociatedObject(image, &gifSourceKey) as? NSData
     }
 
+    /// The GIF bytes of `image` when they are over the limits: fitted off
+    /// the main thread (`ComposerGIFFit`) before the image is staged.
+    static func gifToFit(_ image: NSImage) -> Data? {
+        guard let gif = gifSource(of: image) as Data?, !withinLimits(gif) else { return nil }
+        return gif
+    }
+
+    private static func withinLimits(_ gif: Data) -> Bool {
+        guard gif.count <= maxSize, let size = pixelSize(gif) else { return false }
+        return max(size.width, size.height) <= maxDimension
+    }
+
     /// What the composer stages for `image`: a GIF within the limits as it
-    /// is (re-encoding keeps only its first frame), anything else as a JPEG
-    /// of at most `maxDimension`; nil when even that is over `maxSize`.
+    /// is (re-encoding keeps only its first frame), anything else (a GIF
+    /// that could not be fitted too) as a JPEG of at most `maxDimension`;
+    /// nil when even that is over `maxSize`.
     static func staged(_ image: NSImage) -> StagedComposerImage? {
-        if let gif = gifSource(of: image) as Data? {
+        if let gif = gifSource(of: image) as Data?, withinLimits(gif) {
             return StagedComposerImage(data: gif, mimeType: "image/gif")
         }
         for quality in [0.8, 0.6] {

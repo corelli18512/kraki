@@ -1,5 +1,6 @@
 /// Turns a picked photo into the composer's attachment: a GIF within the
-/// limits as it is (so it stays animated), anything else as a JPEG.
+/// limits as it is, a larger GIF redrawn smaller (both stay animated),
+/// anything else as a JPEG.
 
 #if os(iOS)
 import ImageIO
@@ -22,7 +23,9 @@ enum PhotoAttachmentLoad {
 
     static func attachment(from data: Data?) -> Outcome {
         guard let data else { return .unreadable }
-        if let gif = gifWithinLimits(data) { return .image(gif, mimeType: "image/gif") }
+        if let gif = gifWithinLimits(data) ?? ComposerGIFFit.fitted(data, limits: gifFit) {
+            return .image(gif, mimeType: "image/gif")
+        }
         guard let uiImage = UIImage(data: data) else { return .unsupported }
 
         var targetImage = uiImage
@@ -45,9 +48,12 @@ enum PhotoAttachmentLoad {
         return .tooLarge
     }
 
+    /// A larger GIF is redrawn to fit, still animated; one that cannot be
+    /// (too many frames, or too small once fitted) goes as a still JPEG.
+    static let gifFit = ComposerGIFFit.Limits(maxBytes: maxSize, maxDimension: Int(maxDimension))
+
     /// A GIF already within the size and dimension limits goes unchanged
-    /// (re-encoding keeps only its first frame). Larger GIFs are sent as a
-    /// still JPEG, like any other picture.
+    /// (re-encoding with UIKit keeps only its first frame).
     static func gifWithinLimits(_ data: Data) -> Data? {
         guard ChatGIFAnimation.isGIF(data), data.count <= maxSize,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
