@@ -4,9 +4,10 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { ChevronLeft, ChevronRight, Download, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { downloadImage, imageFileName } from '../../lib/image-download';
 
-/** `blob`: the original bytes (Download saves them as is); `fileName`: the
- *  download name, else one from the title and the blob's type. */
-export interface ImagePreviewItem { url: string; title: string; blob?: Blob; fileName?: string }
+/** `blob`: the original bytes (Download saves them as is); `display`: the
+ *  bytes to show when they differ (a GIF made to loop, gif-loop.ts);
+ *  `fileName`: the download name, else one from the title and the blob's type. */
+export interface ImagePreviewItem { url: string; title: string; blob?: Blob; display?: Blob; fileName?: string }
 export interface ImagePreviewSelection { items: ImagePreviewItem[]; initialIndex: number }
 const ImagePreviewContext = createContext<((selection: ImagePreviewSelection) => void) | undefined>(undefined);
 export const useOpenImagePreview = () => useContext(ImagePreviewContext);
@@ -16,7 +17,7 @@ export function ImagePreviewProvider({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<ImagePreviewSelection | null>(null);
   const open = useCallback((next: ImagePreviewSelection) => {
     // Own ref-image URLs while open, even if virtualized source tiles unmount.
-    setSelection({ ...next, items: next.items.map((item) => item.blob ? { ...item, url: URL.createObjectURL(item.blob) } : item) });
+    setSelection({ ...next, items: next.items.map((item) => item.blob ? { ...item, url: URL.createObjectURL(item.display ?? item.blob) } : item) });
   }, []);
   useEffect(() => () => {
     selection?.items.forEach((item) => { if (item.blob) URL.revokeObjectURL(item.url); });

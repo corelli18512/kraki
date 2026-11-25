@@ -40,8 +40,8 @@ export function imageFileName(label: string | undefined, mimeType: string): stri
 }
 
 /** The bytes of an inline (base64) image attachment; null when `data` is
- *  not valid base64 (there is nothing to save, but the viewer still opens). */
-export function base64ImageBlob(data: string, mimeType: string): Blob | null {
+ *  not valid base64. */
+export function base64ImageBytes(data: string): Uint8Array<ArrayBuffer> | null {
   let binary: string;
   try {
     binary = atob(data);
@@ -50,7 +50,15 @@ export function base64ImageBlob(data: string, mimeType: string): Blob | null {
   }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mimeType });
+  return bytes;
+}
+
+/** The bytes of an inline (base64) image attachment as a Blob; null when
+ *  `data` is not valid base64 (there is nothing to save, but the viewer
+ *  still opens). */
+export function base64ImageBlob(data: string, mimeType: string): Blob | null {
+  const bytes = base64ImageBytes(data);
+  return bytes && new Blob([bytes], { type: mimeType });
 }
 
 /** Saves the blob as is (no re-encoding: a GIF keeps every frame). In the

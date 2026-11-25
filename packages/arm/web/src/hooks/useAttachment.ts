@@ -112,7 +112,8 @@ export function useAttachment(
   useEffect(() => {
     const state = getState(ref.id);
     if (state?.kind === 'ready') {
-      const objUrl = URL.createObjectURL(state.blob);
+      // A GIF without a loop count shows its looping copy (gif-loop.ts).
+      const objUrl = URL.createObjectURL(state.display ?? state.blob);
       setUrl(objUrl);
       return () => {
         URL.revokeObjectURL(objUrl);

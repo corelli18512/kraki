@@ -4,12 +4,13 @@ import { useTranslation } from 'react-i18next';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { AlertTriangle, ArrowUpRight } from 'lucide-react';
 import { RichTextDocumentIcon } from './RichTextDocumentIcon';
-import { useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { getState } from '../../lib/attachments';
 import { useOpenImagePreview } from './ImageViewer';
 import { useImageContextMenu, type ImageFile } from './ImageContextMenu';
 import { base64ImageBlob, imageFileName } from '../../lib/image-download';
+import { displayImageDataUrl, inlineDisplayBlob } from '../../lib/gif-loop';
 
 const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sid, ref));
@@ -56,7 +57,7 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
     const resolved = images.flatMap((attachment, i) => {
       const url = attachment.type === 'image' ? `data:${attachment.mimeType};base64,${attachment.data}` : resolvedRefs[attachment.id];
       const file = url ? imageFile(attachment) : null;
-      return url ? [{ url, blob: file?.blob, fileName: file?.fileName, title: attachment.type === 'image' ? t('attachments.numberedImage', { number: formatNumber(i + 1) }) : attachment.caption ?? attachment.name ?? t('attachments.image'), originalIndex: i }] : [];
+      return url ? [{ url, blob: file?.blob, display: file ? displayBlob(attachment, file.blob) : undefined, fileName: file?.fileName, title: attachment.type === 'image' ? t('attachments.numberedImage', { number: formatNumber(i + 1) }) : attachment.caption ?? attachment.name ?? t('attachments.image'), originalIndex: i }] : [];
     });
     if (resolved.length) openPreview?.({ items: resolved, initialIndex: Math.max(0, resolved.findIndex((item) => item.originalIndex === index)) });
   };
@@ -81,6 +82,14 @@ function imageFile(attachment: ImageAttachment): ImageFile | null {
   }
   const state = getState(attachment.id);
   return state?.kind === 'ready' ? { blob: state.blob, fileName: imageFileName(label, state.mimeType) } : null;
+}
+
+/** The bytes the viewer shows when they are not the original ones: a GIF
+ *  without a loop count, made to loop (gif-loop.ts). */
+function displayBlob(attachment: ImageAttachment, original: Blob): Blob | undefined {
+  if (attachment.type === 'image') return inlineDisplayBlob(attachment.data, original);
+  const state = getState(attachment.id);
+  return state?.kind === 'ready' ? state.display : undefined;
 }
 
 export function refImageSize(ref: ContentRef): CSSProperties {
@@ -109,7 +118,7 @@ function AttachmentTile({ attachment, sessionId, gallery, onReady, onExpand }: {
 function InlineImageTile({ attachment, gallery, onExpand }: { attachment: ImageAttachment & { type: 'image' }; gallery: boolean; onExpand: () => void }) {
   const { t } = useTranslation('chat');
   const { handlers, menu } = useImageContextMenu(() => imageFile(attachment));
-  const src = `data:${attachment.mimeType};base64,${attachment.data}`;
+  const src = useMemo(() => displayImageDataUrl(attachment.mimeType, attachment.data), [attachment.mimeType, attachment.data]);
   // The menu is a sibling: React events from its portal would reach the tile's click.
   return <>
     <button type="button" aria-label={gallery ? t('attachments.openGallery') : t('attachments.openPreview')} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-binary'}`} onClick={onExpand} {...handlers}>
