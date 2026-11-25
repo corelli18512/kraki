@@ -30,7 +30,7 @@
     "tsdown": "^0.22.3",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "repository": {
     "type": "git",
