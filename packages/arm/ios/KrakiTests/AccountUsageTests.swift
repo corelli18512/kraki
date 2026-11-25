@@ -131,6 +131,18 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertTrue(store.devicesNeedingUsageUpdate().isEmpty)
     }
 
+    /// K-084: a computer with account usage turned off is not told to update.
+    func testComputerWithUsageTurnedOffIsNotToldToUpdate() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = app.deviceStore
+        store.setDevices([device("old", "Old Mac"), device("disabled", "Disabled Mac")])
+        for id in ["old", "disabled"] { store.markGreeted(id) }
+        store.setDeviceFeatures("old", features: ["idempotent_input"])
+        store.setDeviceFeatures("disabled", features: ["idempotent_input", "account_usage_off"])
+        XCTAssertEqual(store.devicesNeedingUsageUpdate().map(\.id), ["old"])
+    }
+
     func testShortLabelKeepsTheMaskedLocalPart() {
         var a = account("k", weekly: 50)
         a.label = "co•••ai@gmail.com"

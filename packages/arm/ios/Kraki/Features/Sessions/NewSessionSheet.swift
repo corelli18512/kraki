@@ -2,7 +2,8 @@
 /// NewSessionSheet — Compact glass dialog for creating a new session.
 ///
 /// Design language: **Crossfade replace** (Apple Music / Wallet style).
-/// - Fixed `.height(360)` detent — no sheet resize, glass preserved.
+/// - A `.height` detent hugging the content; the form scrolls when the
+///   sheet is shorter (landscape with the keyboard, largest text sizes).
 /// - Tap a row → form content crossfades to the picker for that field,
 ///   filling the same area. Back chevron + title at top.
 /// - No NavigationStack push, no popover, no detent change ⇒ no flicker.
@@ -84,8 +85,25 @@ struct NewSessionSheet: View {
         return detail.supportedReasoningEfforts
     }
 
+    /// The chosen computer would receive a create now. Like the chat
+    /// composer, a sub-second reconnect does not count as unreachable.
+    private var selectedDeviceReachable: Bool {
+        deviceStore.devices[selectedDeviceId]?.online == true && !appState.showsReconnecting
+    }
+
+    /// Start needs a reachable computer: a create sent to an offline one only
+    /// times out ("Request timed out") and may still be created later.
     private var canSubmit: Bool {
         !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
+            && selectedDeviceReachable
+    }
+
+    /// Changes when a computer comes online or goes offline.
+    private var onlineTentacleIds: [String] { onlineTentacles.map(\.id) }
+
+    /// Changes when the chosen computer's agents or their models arrive.
+    private var agentsSignature: [String] {
+        agentsList.map { "\($0.id):\(($0.models ?? []).joined(separator: ","))" }
     }
 
     // MARK: - Body
@@ -104,9 +122,16 @@ struct NewSessionSheet: View {
                 ZStack {
                     switch screen {
                     case .form:
-                        formCard
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formCardHeight = $0 }
-                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                        // Scrolls only when the sheet is shorter than its
+                        // content (landscape with the keyboard up, the
+                        // largest text sizes): the card gives way, and the
+                        // title and composer stay on screen.
+                        ScrollView {
+                            formCard
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formCardHeight = $0 }
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     case .devicePicker:
                         devicePickerCard
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
@@ -118,6 +143,8 @@ struct NewSessionSheet: View {
                 .animation(.easeInOut(duration: 0.22), value: screen)
                 .padding(.horizontal, 16)
                 .padding(.top, Self.cardTop)
+                // The form's scroll view takes the room, not the spacer below.
+                .layoutPriority(screen == .form ? 1 : 0)
 
                 Spacer(minLength: 0)
 
@@ -134,6 +161,10 @@ struct NewSessionSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, Self.composerGap)
                 .padding(.bottom, Self.composerBottom)
+                // Sized before the form: a multi-line draft grows the
+                // composer, and with it the sheet, rather than the form
+                // keeping the room and the draft staying one line.
+                .layoutPriority(2)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
         }
@@ -142,6 +173,13 @@ struct NewSessionSheet: View {
         .presentationDragIndicator(.hidden)
         .presentationBackground(.clear)
         .onAppear { selectDefaults() }
+        // Computers and their agents can arrive while the sheet is open (the
+        // first computer joins, a greeting lands after the computer was
+        // picked): fill in what is still unset, as reopening the sheet would.
+        .onChange(of: onlineTentacleIds) { _, _ in
+            if selectedDeviceId.isEmpty { selectDefaults() }
+        }
+        .onChange(of: agentsSignature) { _, _ in onDeviceChanged() }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
@@ -236,7 +274,7 @@ struct NewSessionSheet: View {
 
             Divider().padding(.leading, 16)
 
-            if agentsList.isEmpty {
+            if agentsList.isEmpty || !selectedDeviceReachable {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Agent").foregroundStyle(Color.primary)
@@ -273,6 +311,8 @@ struct NewSessionSheet: View {
     }
 
     private var agentStatusText: String {
+        if appState.showsReconnecting { return String(localized: "Connecting…") }
+        if deviceStore.devices[selectedDeviceId]?.online != true { return String(localized: "Device offline") }
         switch deviceStore.agentAvailability(for: selectedDeviceId) {
         case .ready, .connecting: return String(localized: "Connecting…")
         case .offline: return String(localized: "Device offline")
@@ -385,31 +425,11 @@ struct NewSessionSheet: View {
 
     /// Horizontal pill list mirroring the web "Agent" buttons.
     private var agentChipStrip: some View {
-        HStack(spacing: 8) {
-            ForEach(agentsList, id: \.id) { agent in
-                Button {
-                    handleSelectAgent(agent.id)
-                } label: {
-                    Text(AgentInfo.from(agent.id).label)
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(
-                            agent.id == selectedAgentId
-                                ? Color.krakiPrimary
-                                : Color.secondary.opacity(0.18),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(
-                            agent.id == selectedAgentId
-                                ? Color.white
-                                : Color.primary
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
-        }
+        NewSessionAgentChipStrip(
+            agentIds: agentsList.map(\.id),
+            selectedAgentId: selectedAgentId,
+            onSelect: handleSelectAgent
+        )
     }
 
     // MARK: - Create / Empty
@@ -582,6 +602,12 @@ struct ModelPickerCard: View {
     /// Optional — NewSessionSheet uses it to persist the last-used effort.
     var onEffortChange: ((ReasoningEffort) -> Void)? = nil
 
+    /// A row shows the model's name as its agent reports it, like Session
+    /// Info and the session list (K-176); its id when there is none.
+    static func rowTitle(_ model: String, details: [ModelDetail]) -> String {
+        details.first { $0.id == model }?.name ?? model
+    }
+
     private func supportedEfforts(for model: String) -> [ReasoningEffort]? {
         guard let detail = modelDetails.first(where: { $0.id == model }),
               detail.supportsReasoningEffort else { return nil }
@@ -606,7 +632,7 @@ struct ModelPickerCard: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text(model).foregroundStyle(Color.primary)
+                            Text(verbatim: Self.rowTitle(model, details: modelDetails)).foregroundStyle(Color.primary)
                             Spacer()
                             if model == selectedModel {
                                 Image(systemName: "checkmark")
@@ -757,4 +783,44 @@ private struct ScrollMetrics: Equatable {
     var offset: CGFloat
 }
 
+/// Agent chips of the New Session picker. One line each: at large text sizes
+/// the row scrolls sideways instead of breaking names mid-word into tall chips.
+struct NewSessionAgentChipStrip: View {
+    let agentIds: [String]
+    let selectedAgentId: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(agentIds, id: \.self) { agentId in
+                    Button {
+                        onSelect(agentId)
+                    } label: {
+                        Text(AgentInfo.from(agentId).label)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                agentId == selectedAgentId
+                                    ? Color.krakiPrimary
+                                    : Color.secondary.opacity(0.18),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(
+                                agentId == selectedAgentId
+                                    ? Color.white
+                                    : Color.primary
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
 #endif

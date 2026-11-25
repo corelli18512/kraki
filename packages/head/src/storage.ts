@@ -743,7 +743,18 @@ export class Storage {
 
   // --- Devices ---
 
-  upsertDevice(id: string, userId: string, name: string, role: string, kind?: string, publicKey?: string, encryptionKey?: string): StoredDevice {
+  /**
+   * Insert or update a device. By default the device counts as seen now. A
+   * mirrored copy of another device (`seen: false`) keeps its last_seen, or
+   * takes the later `lastSeen` reported by the account service: re-stamping
+   * every device of the account on each sign-in made abandoned browsers look
+   * active (their web push tokens were never pruned) and offline computers
+   * show "today".
+   */
+  upsertDevice(
+    id: string, userId: string, name: string, role: string, kind?: string, publicKey?: string, encryptionKey?: string,
+    options: { seen?: boolean; lastSeen?: string } = {},
+  ): StoredDevice {
     const existing = this.getDevice(id);
     if (existing && existing.userId !== userId) {
       throw new Error(`Device "${id}" belongs to user "${existing.userId}", not "${userId}"`);
@@ -753,17 +764,21 @@ export class Storage {
     if (existing && existing.role !== role) {
       throw new Error(`Device "${id}" is registered as ${existing.role}, not ${role}`);
     }
+    const seen = options.seen ?? true;
+    const reported = !seen && options.lastSeen && /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(options.lastSeen)
+      ? options.lastSeen
+      : null;
     this.db.prepare(`
-      INSERT INTO devices (id, user_id, name, role, kind, public_key, encryption_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO devices (id, user_id, name, role, kind, public_key, encryption_key, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         role = excluded.role,
         kind = excluded.kind,
         public_key = excluded.public_key,
         encryption_key = excluded.encryption_key,
-        last_seen = datetime('now')
-    `).run(id, userId, name, role, kind ?? null, publicKey ?? null, encryptionKey ?? null);
+        last_seen = CASE WHEN ? THEN datetime('now') ELSE MAX(last_seen, COALESCE(?, last_seen)) END
+    `).run(id, userId, name, role, kind ?? null, publicKey ?? null, encryptionKey ?? null, reported, seen ? 1 : 0, reported);
     return this.getDevice(id)!;
   }
 

@@ -19,7 +19,11 @@ struct MacChatView: View {
     @State private var stepsTarget: StepsTarget?
     /// Height the floating Composer rises above its resting footprint.
     @State private var composerOverlay: CGFloat = 0
-    @State private var showInfo = false
+    /// Session Info being shown. Rename… opens it with the title being edited;
+    /// the flag travels with the presentation, so the first sheet a freshly
+    /// mounted chat shows gets it too (a separate @State read only inside the
+    /// sheet's content was still false there, review #91).
+    @State private var sessionInfo: SessionInfoPresentation?
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
     init(
@@ -40,6 +44,11 @@ struct MacChatView: View {
         let id = UUID()
         let seq: Int
         let live: Bool
+    }
+
+    private struct SessionInfoPresentation: Identifiable {
+        let id = UUID()
+        let startsRenaming: Bool
     }
 
     private var session: SessionInfo? { viewModel.session }
@@ -189,10 +198,12 @@ struct MacChatView: View {
             // From the menu (current chat) or a session row's Rename… (that one).
             if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
             _ = MacSessionInfoRequest.take(sessionId)
-            showInfo = true
+            sessionInfo = SessionInfoPresentation(startsRenaming: true)
         }
         .onChange(of: sessionId, initial: true) { _, id in
-            if MacSessionInfoRequest.take(id) { showInfo = true }
+            if MacSessionInfoRequest.take(id) {
+                sessionInfo = SessionInfoPresentation(startsRenaming: true)
+            }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
@@ -215,7 +226,7 @@ struct MacChatView: View {
                 stepsTarget = StepsTarget(seq: seq, live: viewModel.card != nil)
                 viewModel.requestSteps(forBubbleSeq: seq)
             case "info":
-                showInfo = true
+                sessionInfo = SessionInfoPresentation(startsRenaming: false)
             case "jumpLatest":
                 reanchorNewest(viewModel)
             case "pageOlder":
@@ -241,9 +252,9 @@ struct MacChatView: View {
             )
             .environment(appState)
         }
-        .sheet(isPresented: $showInfo) {
+        .sheet(item: $sessionInfo) { presentation in
             if let session {
-                MacSessionInfoSheet(session: session)
+                MacSessionInfoSheet(session: session, startsRenaming: presentation.startsRenaming)
                     .environment(appState)
             }
         }
@@ -283,7 +294,7 @@ struct MacChatView: View {
         ZStack {
             if let session, !modePickerExpanded {
                 Button {
-                    showInfo = true
+                    sessionInfo = SessionInfoPresentation(startsRenaming: false)
                 } label: {
                     Text(showsSyncing ? String(localized: "Syncing…") : session.displayTitle)
                         .font(.system(size: 13, weight: .semibold))
@@ -439,6 +450,9 @@ struct MacChatView: View {
                 guard viewModel.pageNewerRaw() else { break }
                 pages += 1
             }
+            // The page cap stopped the slide short of rows this device already
+            // has: reload the tail, or ↓ and a send stop mid-history (K-016).
+            if viewModel.hasNewerLocalRows { viewModel.jumpToHead() }
         } else {
             viewModel.jumpToHead()
         }
@@ -497,378 +511,6 @@ struct MacChatView: View {
         // Picking a choice is sending a message: return to the newest edge.
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                         userInfo: ["sessionId": sessionId])
-    }
-}
-
-/// Compact Mac presentation of the same information/actions exposed by the iOS
-/// SessionInfoSheet. Kept local to the chat chrome so the More button is not a
-/// dead affordance on macOS.
-private struct MacSessionInfoSheet: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.dismiss) private var dismiss
-    let session: SessionInfo
-
-    @State private var editingTitle = false
-    @State private var titleDraft = ""
-    @State private var showDeleteConfirmation = false
-    @State private var sessionIDCopied = false
-    @State private var sessionIDCopyFeedbackTask: Task<Void, Never>?
-    @State private var selectedModel: String
-    @State private var reasoningEffort: ReasoningEffort?
-    @FocusState private var titleFocused: Bool
-
-    init(session: SessionInfo) {
-        self.session = session
-        _selectedModel = State(initialValue: session.model ?? "")
-        _reasoningEffort = State(initialValue: session.reasoningEffort)
-    }
-
-    private var liveSession: SessionInfo {
-        appState.sessionStore.sessions[session.id] ?? session
-    }
-    private var currentMode: SessionMode {
-        appState.sessionStore.sessionModes[session.id] ?? session.mode
-    }
-    private var usage: SessionUsage? {
-        appState.sessionStore.sessionUsage[session.id] ?? session.usage
-    }
-    private var device: DeviceSummary? {
-        appState.deviceStore.devices[session.deviceId]
-    }
-    private var version: String? {
-        appState.deviceStore.deviceVersions[session.deviceId]
-    }
-    private var availableModels: [String] {
-        appState.deviceStore.models(for: session.deviceId, agentId: session.agent)
-    }
-    private var modelDetails: [ModelDetail] {
-        appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
-    }
-    /// The model's name as the pickers and the session list show it.
-    private func modelName(_ id: String?) -> String? {
-        appState.deviceStore.modelDisplayName(id, deviceId: session.deviceId, agent: session.agent)
-    }
-    private var supportedEfforts: [ReasoningEffort] {
-        guard let detail = modelDetails.first(where: { $0.id == selectedModel }),
-              detail.supportsReasoningEffort else { return [] }
-        return detail.supportedReasoningEfforts ?? []
-    }
-    private var contextWindow: Int? {
-        guard let model = liveSession.model else { return nil }
-        return modelDetails.first(where: { $0.id == model })?.contextWindow
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Session Info").font(.system(size: 17, weight: .semibold))
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Mode lives in the chat header (single entry point, as on iOS).
-                    sessionSection
-                    if let usage { usageSection(usage) }
-                    if let device { deviceSection(device) }
-                    actionsSection
-                }
-                .padding(20)
-            }
-        }
-        .frame(width: 440, height: 580)
-        .background(Color.surfacePrimary)
-        .onAppear { syncModelConfiguration() }
-        .onChange(of: liveSession.model) { _, _ in syncModelConfiguration() }
-        .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
-        .onDisappear {
-            sessionIDCopyFeedbackTask?.cancel()
-            sessionIDCopyFeedbackTask = nil
-        }
-        .confirmationDialog(
-            "Delete Session",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                appState.commandSender?.deleteSession(sessionId: session.id)
-                dismiss()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will permanently delete this session and all its messages.")
-        }
-    }
-
-    private var sessionSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            sectionHeader("Session")
-            infoRow(label: "Title") {
-                if editingTitle {
-                    TextField("Session title", text: $titleDraft)
-                        .multilineTextAlignment(.trailing)
-                        .focused($titleFocused)
-                        .onSubmit { commitTitleEdit() }
-                        .onChange(of: titleFocused) { _, focused in
-                            if !focused && editingTitle { commitTitleEdit() }
-                        }
-                } else {
-                    Button {
-                        titleDraft = session.title ?? session.autoTitle ?? ""
-                        editingTitle = true
-                        DispatchQueue.main.async { titleFocused = true }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(verbatim: session.displayTitle).lineLimit(1).truncationMode(.middle)
-                            LucideIcon(.pencil, size: 11, strokeWidth: 2, color: .secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .help(MacControlHelp.rename)
-                }
-            }
-            sessionIDRow
-            infoRow("Agent", session.agent)
-            infoRow(label: "Model") {
-                if availableModels.isEmpty {
-                    Text(verbatim: modelName(liveSession.model) ?? "—")
-                } else {
-                    Picker("", selection: Binding(
-                        get: { selectedModel },
-                        set: { applyModel($0) }
-                    )) {
-                        ForEach(availableModels, id: \.self) { Text(verbatim: modelName($0) ?? $0).tag($0) }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 250, alignment: .trailing)
-                }
-            }
-            if !supportedEfforts.isEmpty {
-                infoRow(label: "Thinking") {
-                    Picker("", selection: Binding(
-                        get: { reasoningEffort ?? supportedEfforts[0] },
-                        set: { applyReasoningEffort($0) }
-                    )) {
-                        ForEach(supportedEfforts, id: \.rawValue) { effort in
-                            Text(effortLabel(effort)).tag(effort)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 250, alignment: .trailing)
-                }
-            }
-            infoRow("Created", session.createdAt.formatted(date: .abbreviated, time: .shortened))
-        }
-    }
-
-    private func syncModelConfiguration() {
-        selectedModel = liveSession.model ?? availableModels.first ?? ""
-        reasoningEffort = normalizedEffort(
-            for: selectedModel,
-            preferred: liveSession.reasoningEffort
-        )
-    }
-
-    private func normalizedEffort(
-        for model: String,
-        preferred: ReasoningEffort?
-    ) -> ReasoningEffort? {
-        guard let detail = modelDetails.first(where: { $0.id == model }),
-              detail.supportsReasoningEffort,
-              let efforts = detail.supportedReasoningEfforts,
-              !efforts.isEmpty else { return nil }
-        if let preferred, efforts.contains(preferred) { return preferred }
-        if let defaultEffort = detail.defaultReasoningEffort,
-           efforts.contains(defaultEffort) {
-            return defaultEffort
-        }
-        return efforts.first
-    }
-
-    private func applyModel(_ model: String) {
-        selectedModel = model
-        let effort = normalizedEffort(for: model, preferred: nil)
-        reasoningEffort = effort
-        appState.commandSender?.setSessionModel(
-            sessionId: session.id,
-            model: model,
-            reasoningEffort: effort
-        )
-    }
-
-    private func applyReasoningEffort(_ effort: ReasoningEffort) {
-        reasoningEffort = effort
-        appState.commandSender?.setSessionModel(
-            sessionId: session.id,
-            model: selectedModel,
-            reasoningEffort: effort
-        )
-    }
-
-    private func effortLabel(_ effort: ReasoningEffort) -> String {
-        switch effort {
-        case .low: return String(localized: "Low")
-        case .medium: return String(localized: "Medium")
-        case .high: return String(localized: "High")
-        case .xhigh: return String(localized: "XHigh")
-        case .max: return String(localized: "Max")
-        }
-    }
-
-    private var sessionIDRow: some View {
-        infoRow(label: "Session ID") {
-            HStack(spacing: 7) {
-                Text(verbatim: session.id)
-                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                    .help(session.id)
-                    .accessibilityLabel("Session ID \(session.id)")
-
-                Button(action: copySessionID) {
-                    HStack(spacing: 4) {
-                        Image(systemName: sessionIDCopied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .semibold))
-                        if sessionIDCopied {
-                            Text("Copied")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                    .foregroundStyle(sessionIDCopied ? Color.green : Color.textSecondary)
-                    .frame(width: 64, height: 24, alignment: .trailing)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(sessionIDCopied ? String(localized: "Session ID copied") : String(localized: "Copy Session ID"))
-                .accessibilityLabel(sessionIDCopied ? String(localized: "Session ID copied") : String(localized: "Copy Session ID"))
-                .accessibilityHint("Copies the complete Session ID to the clipboard")
-            }
-            .frame(maxWidth: 285, alignment: .trailing)
-        }
-    }
-
-    private func copySessionID() {
-        KrakiPasteboard.setString(session.id)
-        sessionIDCopyFeedbackTask?.cancel()
-        withAnimation(.easeInOut(duration: 0.15)) {
-            sessionIDCopied = true
-        }
-        sessionIDCopyFeedbackTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.15)) {
-                sessionIDCopied = false
-            }
-            sessionIDCopyFeedbackTask = nil
-        }
-    }
-
-    private func usageSection(_ usage: SessionUsage) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            sectionHeader("Usage")
-            if let used = usage.contextTokens {
-                if let ceiling = contextWindow, ceiling > 0 {
-                    let ratio = min(1, Double(used) / Double(ceiling))
-                    let context = "\(MacChatFormat.tokenCount(used)) / \(MacChatFormat.tokenCount(ceiling))  ·  \(ratio.formatted(.percent.precision(.fractionLength(0))))"
-                    VStack(alignment: .leading, spacing: 6) {
-                        infoRow("Context", context)
-                        ProgressView(value: ratio).tint(contextBandColor(ratio))
-                    }
-                } else {
-                    infoRow("Context", MacChatFormat.tokenCount(used))
-                }
-            }
-            infoRow("Input tokens", MacChatFormat.tokenCount(usage.inputTokens))
-            infoRow("Output tokens", MacChatFormat.tokenCount(usage.outputTokens))
-            infoRow("Cache read", MacChatFormat.tokenCount(usage.cacheReadTokens))
-            infoRow("Cache write", MacChatFormat.tokenCount(usage.cacheWriteTokens))
-            Divider()
-            infoRow("Total cost", MacChatFormat.cost(usage.totalCost))
-            infoRow("Duration", MacChatFormat.duration(usage.totalDurationMs))
-        }
-    }
-
-    private func deviceSection(_ device: DeviceSummary) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            sectionHeader("Device")
-            infoRow("Name", device.name)
-            infoRow(label: "Status") {
-                HStack(spacing: 4) {
-                    Circle().fill(device.online ? Color.green : Color.gray).frame(width: 6, height: 6)
-                    Text(device.online ? String(localized: "Online") : String(localized: "Offline"))
-                }
-            }
-            if let version { infoRow("Version", version) }
-        }
-    }
-
-    private var actionsSection: some View {
-        HStack(spacing: 12) {
-            Button {
-                appState.commandSender?.forkSession(sessionId: session.id)
-                dismiss()
-            } label: {
-                HStack(spacing: 5) {
-                    LucideIcon(.gitFork, size: 16, color: .krakiPrimary)
-                    Text("Fork")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(.krakiPrimary)
-
-            Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                Label("Delete", systemImage: "trash").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-        }
-    }
-
-    private func commitTitleEdit() {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.renameSession(sessionId: session.id, title: trimmed)
-        editingTitle = false
-        titleFocused = false
-    }
-
-    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
-    }
-
-    private func infoRow(_ label: LocalizedStringKey, _ value: String) -> some View {
-        infoRow(label: label) { Text(verbatim: value).multilineTextAlignment(.trailing) }
-    }
-
-    private func infoRow<Trailing: View>(
-        label: LocalizedStringKey,
-        @ViewBuilder trailing: () -> Trailing
-    ) -> some View {
-        HStack(spacing: 8) {
-            Text(label).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            trailing()
-        }
-        .font(.system(size: 15))
-        .contentShape(Rectangle())
-    }
-
-    private func contextBandColor(_ ratio: Double) -> Color {
-        if ratio >= 0.85 { return .red }
-        if ratio >= 0.60 { return Color(hex: 0xFBBF24) }
-        return .green
     }
 }
 #endif

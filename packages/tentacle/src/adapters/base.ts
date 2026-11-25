@@ -55,6 +55,8 @@ export interface QuestionRequestEvent extends TurnLifecycleEvent {
   question: string;
   /** Shortcuts only: the human may always answer in free text. */
   choices?: string[];
+  /** Several choices may be given (apps show a hint in their language). */
+  multiSelect?: boolean;
 }
 
 export interface ToolStartEvent extends TurnLifecycleEvent, SubagentTraceFields {

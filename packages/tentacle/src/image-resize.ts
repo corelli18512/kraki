@@ -50,7 +50,9 @@ export async function fitToMaxDimension(
     return (await fitWithSips(bytes, mimeType)) ?? { bytes, mimeType };
   }
   const w = meta.width ?? 0;
-  const h = meta.height ?? 0;
+  // An animated GIF loads as all frames stacked: `height` is the frame
+  // height times the frame count. A small GIF with many frames is not big.
+  const h = (isGif ? meta.pageHeight : undefined) ?? meta.height ?? 0;
   if (w === 0 || h === 0 || Math.max(w, h) <= MAX_DIMENSION) {
     return { bytes, mimeType };
   }

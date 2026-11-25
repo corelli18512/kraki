@@ -181,6 +181,8 @@ function createWindow() {
     // Closing keeps Kraki running in the tray (replies still notify).
     if (!quitting) {
       e.preventDefault();
+      // The installer of a remote update closes the app: let it, staying online.
+      if (installingRemoteUpdate()) { quitting = true; app.quit(); return; }
       if (pref('keepRunningInTray') === false) void quitFromTray();
       else { win.hide(); stillOnlineHintOnce(); }
     }
@@ -299,11 +301,17 @@ async function goOffline() {
   try { await changePresence('stopping', () => builtIn.disable({ keepOwnership: true })); } catch { /* the status shows it */ }
 }
 
-/** Tray › Quit: while this PC is online, quitting takes it offline (asked once). */
+/** An update from another device is replacing Kraki for Windows right now. */
+function installingRemoteUpdate() {
+  return !!builtIn && presence.remoteUpdateInstallerRunning(builtIn.home());
+}
+
+/** Tray › Quit: while this PC is online, quitting takes it offline (asked once).
+ *  Not while a remote update installs: the app comes back online after it. */
 async function quitFromTray() {
   const s = currentState();
   const managed = presence.managesPresence(s);
-  if (managed && presence.canGoOffline(presence.resolveStatus(s))) {
+  if (managed && presence.canGoOffline(presence.resolveStatus(s)) && !installingRemoteUpdate()) {
     if (!pref('quitConfirmSuppressed')) {
       const r = await dialog.showMessageBox(win && win.isVisible() ? win : undefined, {
         type: 'question',

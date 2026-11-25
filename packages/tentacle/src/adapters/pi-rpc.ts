@@ -71,7 +71,7 @@ export class PiRpcProcess {
   private stderrTail = '';
   onEvent: ((e: PiRpcEvent) => void) | null = null;
   /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
-  onExit: ((code: number | null) => void) | null = null;
+  onExit: ((code: number | null, signal?: NodeJS.Signals | null) => void) | null = null;
 
   constructor(private opts: PiRpcOptions) {}
 
@@ -122,12 +122,14 @@ export class PiRpcProcess {
     child.once('exit', () => { exited = true; });
     child.on('error', (err) => {
       this.lastStderr = err.message;
+      // Shown as the crash reason (e.g. "Error: spawn /path/pi ENOENT").
+      this.stderrTail = (this.stderrTail + '\nError: ' + err.message).slice(-4000);
       rpcLogger.warn({ err: err.message }, 'pi process error');
       // A process that never started emits no 'exit' of its own.
       setImmediate(() => { if (!exited && child.pid === undefined) child.emit('exit', null, null); });
     });
     this.child.stdin.on('error', (err) => rpcLogger.debug({ err: err.message }, 'pi stdin error'));
-    this.child.on('exit', (code) => {
+    this.child.on('exit', (code, signal) => {
       const detail = this.lastStderr ? `: ${this.lastStderr}` : '';
       for (const p of this.pending.values()) {
         if (p.timer) clearTimeout(p.timer);
@@ -135,7 +137,7 @@ export class PiRpcProcess {
       }
       this.pending.clear();
       this.child = null;
-      if (!this.intentionalExit) this.onExit?.(code);
+      if (!this.intentionalExit) this.onExit?.(code, signal);
     });
   }
 

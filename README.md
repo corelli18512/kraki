@@ -68,6 +68,23 @@ On first run the command-line version checks the coding agents on this computer,
 GitHub, starts in the background and shows a QR code for your phone. Run `kraki agents` any time to
 recheck your agents. Binaries are also on the [releases page](https://github.com/corelli18512/kraki/releases/latest).
 
+### Uninstall the command-line version
+
+```bash
+kraki stop        # stops Kraki and removes its login item (launchd job / Windows Run entry)
+```
+
+Then remove what the installer put on the computer:
+
+- **macOS:** `rm -rf ~/.local/share/kraki/Kraki.app ~/.local/bin/kraki ~/Library/LaunchAgents/cloud.corelli.kraki.plist` (`kraki stop` removes the login item only while Kraki is running)
+- **Linux:** `rm ~/.local/bin/kraki` (`/usr/local/bin/kraki` for a global install)
+- **Windows:** `Remove-Item -Recurse "$env:LOCALAPPDATA\Kraki"`, and remove that folder from your user `Path`
+- **npm:** `npm uninstall -g @kraki/tentacle`
+
+On macOS and Linux the installer may have added `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`, `~/.bash_profile` or `~/.bashrc`; delete that line if nothing else uses it.
+
+Kraki's data (sessions, sign-in, this computer's identity) stays in `~/.kraki` (Windows: `%USERPROFILE%\.kraki`); delete that folder to remove it too. "Delete all Kraki data…" in `kraki` moves it to the Trash on macOS and to `~/.kraki.deleted-<date>` elsewhere, so it can be recovered; delete that folder to free the space. Your agents' own files are never touched.
+
 More: [install and troubleshooting](https://kraki.chat/docs/) ·
 [run your own relay](./docs/self-hosting.md) · [security model](./docs/security.md)
 

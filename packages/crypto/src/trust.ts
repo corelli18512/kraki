@@ -225,9 +225,10 @@ export type SignedMessageRejection =
 
 /** Persisted {@link ReplayGuard} state. */
 export interface ReplayState {
-  v: 2;
+  v: 3;
+  /** Messages signed before this are refused: nonces at or below it may have
+   *  been accepted and are no longer remembered. */
   notBefore: number;
-  highWater: number;
   entries: Array<[string, number]>;
 }
 
@@ -242,6 +243,14 @@ export interface ReplayGuardOptions {
 /**
  * Remembers nonces it has accepted for as long as their timestamps are
  * acceptable, so a captured ciphertext cannot be delivered twice.
+ *
+ * Replay safety does not depend on the receiver's clock: whenever a nonce is
+ * forgotten (pruned, or left out of a persisted state), every message signed
+ * at or before its timestamp is refused from then on (`notBefore`). A message
+ * signed later whose nonce is not remembered was therefore never accepted,
+ * whatever the clock does. A clock that jumped forward and was corrected only
+ * retires the nonces accepted before the jump, not a whole day of future
+ * messages.
  */
 export class ReplayGuard {
   readonly maxAgeMs: number;
@@ -257,7 +266,6 @@ export class ReplayGuard {
   }
 
   private notBefore = 0;
-  private highWater = 0;
 
   /** Treat everything signed before `ts` as stale (replay state was lost). */
   rejectBefore(ts: number): void {
@@ -272,13 +280,15 @@ export class ReplayGuard {
     return null;
   }
 
-  /** {@link check} without recording (e.g. before knowing the message is worth it). */
-  peek(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): 'stale' | 'from_future' | 'replay' | null {
+  /**
+   * {@link check} without recording (e.g. before knowing the message is worth
+   * it). `ignoreFloor` skips the forgotten-nonce floor for a message whose
+   * replay is harmless (a pairing request), so it is not refused for minutes
+   * after the replay state was lost.
+   */
+  peek(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>, options: { ignoreFloor?: boolean } = {}): 'stale' | 'from_future' | 'replay' | null {
     const now = this.now();
-    // The window never moves back with the clock: nonces older than the
-    // latest time seen may already have been pruned.
-    this.highWater = Math.max(this.highWater, now);
-    if (m.ts < this.highWater - this.maxAgeMs || m.ts < this.notBefore) return 'stale';
+    if (m.ts < now - this.maxAgeMs || (!options.ignoreFloor && m.ts < this.notBefore)) return 'stale';
     if (m.ts > now + this.maxFutureMs) return 'from_future';
     if (this.seen.has(`${m.from}\n${m.nonce}`)) return 'replay';
     return null;
@@ -292,26 +302,27 @@ export class ReplayGuard {
   private prune(now: number): void {
     if (this.seen.size < 1024) return;
     for (const [key, ts] of this.seen) {
-      if (ts < now - this.maxAgeMs) this.seen.delete(key);
+      if (ts < now - this.maxAgeMs) {
+        this.seen.delete(key);
+        this.rejectBefore(ts + 1);
+      }
     }
   }
 
-  /** Persistable state: accepted nonces still inside the window. */
   /**
-   * Persistable state. Besides accepted nonces still inside the window it
-   * carries the rejection floor and the latest receiver time, so a restart —
-   * also after the clock was set back — never reopens a retired interval.
+   * Persistable state: accepted nonces still inside the window, and the
+   * rejection floor raised past every nonce left out, so a restart — also
+   * after the clock was set back — never reopens a forgotten nonce.
    */
   export(): ReplayState {
-    const now = this.now();
-    this.highWater = Math.max(this.highWater, now);
-    const floor = this.highWater - this.maxAgeMs;
-    return {
-      v: 2,
-      notBefore: this.notBefore,
-      highWater: this.highWater,
-      entries: [...this.seen].filter(([, ts]) => ts >= floor),
-    };
+    const floor = this.now() - this.maxAgeMs;
+    let notBefore = this.notBefore;
+    const entries: Array<[string, number]> = [];
+    for (const [key, ts] of this.seen) {
+      if (ts >= floor) entries.push([key, ts]);
+      else notBefore = Math.max(notBefore, ts + 1);
+    }
+    return { v: 3, notBefore, entries };
   }
 
   /**
@@ -327,16 +338,17 @@ export class ReplayGuard {
       for (const [key, ts] of state) this.seen.set(key, ts);
       return;
     }
-    const s = state as Partial<ReplayState> | null;
-    if (!s || s.v !== 2 || !Number.isSafeInteger(s.notBefore) || !Number.isSafeInteger(s.highWater)
+    const s = state as { v?: unknown; notBefore?: unknown; highWater?: unknown; entries?: unknown } | null;
+    if (!s || (s.v !== 2 && s.v !== 3) || !Number.isSafeInteger(s.notBefore)
+      || (s.v === 2 && !Number.isSafeInteger(s.highWater))
       || !Array.isArray(s.entries) || !s.entries.every(valid)) {
       throw new Error('Malformed replay state');
     }
     for (const [key, ts] of s.entries) this.seen.set(key, ts);
-    this.highWater = Math.max(this.highWater, s.highWater!);
-    // Nonces older than the window were dropped at export: whatever is older
-    // than that may have been accepted before, whatever the clock says now.
-    this.rejectBefore(Math.max(s.notBefore!, s.highWater! - this.maxAgeMs));
+    this.rejectBefore(s.notBefore as number);
+    // v2 dropped every nonce older than its high-water mark minus the window
+    // without recording a floor for them.
+    if (s.v === 2) this.rejectBefore((s.highWater as number) - this.maxAgeMs);
   }
 
   /**

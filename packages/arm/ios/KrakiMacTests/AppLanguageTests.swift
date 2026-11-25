@@ -67,6 +67,8 @@ final class AppLanguageTests: XCTestCase {
             open: { url, config, completion in
                 XCTAssertEqual(url, Bundle.main.bundleURL)
                 XCTAssertTrue(config.createsNewApplicationInstance)
+                XCTAssertEqual(config.arguments, [MacSingleInstance.relaunchedFromArgument, String(getpid())],
+                               "K-330: the new copy must replace this one, not hand back to it")
                 completion(nil, CocoaError(.fileNoSuchFile))
             },
             onFailure: { reported.fulfill() }

@@ -42,6 +42,8 @@ const mockExistsSync = vi.fn(() => false);
 const mockUnlinkSync = vi.fn();
 const mockWriteFileSync = vi.fn();
 const mockChmodSync = vi.fn();
+const mockReadFileSync = vi.fn();
+const mockStatSync = vi.fn();
 
 vi.mock('node:fs', () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
@@ -51,6 +53,8 @@ vi.mock('node:fs', () => ({
   unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
   chmodSync: (...args: unknown[]) => mockChmodSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  statSync: (...args: unknown[]) => mockStatSync(...args),
 }));
 
 vi.mock('node:os', () => ({
@@ -89,10 +93,12 @@ vi.mock('../config.js', () => ({
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
   loadDaemonSupervisorPid: (...args: unknown[]) => mockLoadDaemonSupervisorPid(...args),
   clearDaemonSupervisorPid: (...args: unknown[]) => mockClearDaemonSupervisorPid(...args),
+  getDaemonPidPath: vi.fn(() => '/tmp/fake-home/.kraki/daemon.pid'),
 }));
 
 import {
   assertNoUntrackedLaunchdDaemon,
+  daemonStartRefusal,
   isDaemonRunning,
   getDaemonStatus,
   startDaemon,
@@ -258,7 +264,7 @@ describe('isDaemonRunning()', () => {
     });
 
     expect(isDaemonRunning('darwin', TEST_UID)).toBe(true);
-    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null });
+    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null, detail: 'untracked-launchd-job' });
   });
 
   it('does not discard a stale PID while its launchd job remains loaded', () => {
@@ -299,7 +305,7 @@ describe('getDaemonStatus()', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null });
+    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null, detail: 'untracked-launchd-job' });
   });
 
   it('returns running=false and pid=null when no PID file', () => {
@@ -317,6 +323,42 @@ describe('getDaemonStatus()', () => {
     const status = getDaemonStatus();
     expect(status).toEqual({ running: false, pid: null });
     expect(mockClearDaemonPid).toHaveBeenCalled();
+  });
+
+  it('K-030: a supervisor restarting a dead worker is running, not stopped', () => {
+    mockLoadDaemonPid.mockReturnValue(999999999); // the worker that just died
+    mockLoadDaemonSupervisorPid.mockReturnValue(process.pid); // alive, carries the marker (mocked ps)
+    expect(getDaemonStatus('linux')).toEqual({ running: true, pid: null, detail: 'restarting', supervisorPid: process.pid });
+    expect(isDaemonRunning('linux')).toBe(true);
+  });
+
+  it('K-030: a supervisor PID file left behind by a gone supervisor does not count', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockLoadDaemonSupervisorPid.mockReturnValue(999999998);
+    expect(getDaemonStatus('linux')).toEqual({ running: false, pid: null });
+    // Cleared, so later checks do not probe the dead PID again.
+    expect(mockClearDaemonSupervisorPid).toHaveBeenCalled();
+  });
+
+  it('K-266: an alive PID that cannot be verified is reported as such, with the refusal to start', () => {
+    mockLoadDaemonPid.mockReturnValue(1);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      return true;
+    }) as typeof process.kill);
+    const status = getDaemonStatus('linux');
+    killSpy.mockRestore();
+    expect(status).toEqual({ running: true, pid: 1, detail: 'unverified-pid' });
+    expect(daemonStartRefusal(status)).toContain('PID 1 is alive but could not be verified');
+    expect(daemonStartRefusal(status)).toContain('daemon.pid');
+  });
+
+  it('K-266: a loaded launchd job without a PID refuses to start and says how to inspect it', () => {
+    const refusal = daemonStartRefusal({ running: true, pid: null, detail: 'untracked-launchd-job' }, TEST_UID);
+    expect(refusal).toContain('will not risk starting a duplicate daemon');
+    expect(refusal).toContain(`launchctl print gui/${TEST_UID}/cloud.corelli.kraki`);
+    expect(daemonStartRefusal({ running: true, pid: 42 })).toBeNull();
+    expect(daemonStartRefusal({ running: true, pid: null, detail: 'restarting', supervisorPid: 7 })).toBeNull();
   });
 });
 
@@ -520,6 +562,37 @@ describe('startDaemon()', () => {
     expect(mockUnlinkSync).not.toHaveBeenCalled();
     expect(mockClearDaemonPid).not.toHaveBeenCalled();
     expect(mockClearDaemonReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('K-123: refuses while another `kraki start` holds the start lock, so two starts never launch two daemons', async () => {
+    mockWriteFileSync.mockImplementation((path: string, _data: unknown, opts?: { flag?: string }) => {
+      if (String(path).endsWith('daemon-start.lock') && opts?.flag === 'wx') throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+    });
+    mockReadFileSync.mockReturnValue(`${process.ppid}\n`); // a live process
+    mockStatSync.mockReturnValue({ mtimeMs: Date.now() });
+
+    await expect(startDaemon(fakeConfig)).rejects.toThrow(`Another \`kraki start\` (PID ${process.ppid})`);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockUnlinkSync).not.toHaveBeenCalledWith(expect.stringContaining('daemon-start.lock'));
+  });
+
+  it('K-123: takes over a start lock left by a `kraki start` that died, and releases it afterwards', async () => {
+    let lockHeld = true;
+    mockWriteFileSync.mockImplementation((path: string, _data: unknown, opts?: { flag?: string }) => {
+      if (String(path).endsWith('daemon-start.lock') && opts?.flag === 'wx') {
+        if (lockHeld) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+        lockHeld = true;
+      }
+    });
+    mockReadFileSync.mockImplementation(() => (lockHeld && mockSpawn.mock.calls.length === 0 && !mockUnlinkSync.mock.calls.length ? '999999999\n' : `${process.pid}\n`));
+    mockStatSync.mockReturnValue({ mtimeMs: Date.now() });
+    mockUnlinkSync.mockImplementation((path: string) => { if (String(path).endsWith('daemon-start.lock')) lockHeld = false; });
+    mockSpawn.mockImplementation(() => { throw new Error('spawn stopped here'); });
+
+    await expect(startDaemon(fakeConfig)).rejects.toThrow('spawn stopped here');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // Released again after the attempt.
+    expect(lockHeld).toBe(false);
   });
 
   it('launches the worker under a supervisor and returns the worker PID once it is ready', async () => {
@@ -729,7 +802,8 @@ describe('stopDaemon()', () => {
       if (signal === 0 && stopped) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
       return true;
     }) as typeof process.kill);
-    stopDaemon('linux');
+    // K-030: stopping the supervisor stopped Kraki; that is a successful stop.
+    expect(stopDaemon('linux')).toBe(true);
     expect(killSpy).toHaveBeenCalledWith(600, 'SIGTERM');
     expect(mockClearDaemonSupervisorPid).toHaveBeenCalled();
     killSpy.mockRestore();

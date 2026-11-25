@@ -46,6 +46,39 @@ enum ChatEntryLoading {
         }
         return !hasMessages && sessionLoading
     }
+
+    /// "Syncing…" in the chat title: this device has not stored the newest
+    /// message yet and can get it now. With the computer offline nothing can
+    /// arrive, so the title does not claim a sync that never ends.
+    static func isCatchingUp(
+        connected: Bool,
+        deviceOnline: Bool,
+        expectedLastSeq: Int,
+        persistedHead: Int
+    ) -> Bool {
+        connected && deviceOnline && expectedLastSeq > persistedHead
+    }
+
+    enum EmptyChatNote: Equatable {
+        /// Nothing was ever said: where the new session runs.
+        case newSession
+        /// History exists only on the computer, which is offline.
+        case historyOnOfflineComputer
+    }
+
+    /// What an empty chat explains. A session with history is never
+    /// presented as brand new just because this device has none of it.
+    /// Decided by whether this device is missing rows, not by whether the
+    /// session has any: a new session's `session_created` is itself a
+    /// history row (seq 1) that draws nothing.
+    /// Before the first connect nothing is known about presence (every
+    /// computer reads offline): no offline note then, like the composer's
+    /// offline notice (`presenceKnown`).
+    static func emptyChatNote(knownLastSeq: Int, persistedHead: Int, deviceOnline: Bool,
+                              presenceKnown: Bool = true) -> EmptyChatNote? {
+        if knownLastSeq <= max(persistedHead, 0) { return .newSession }
+        return deviceOnline || !presenceKnown ? nil : .historyOnOfflineComputer
+    }
 }
 
 enum ChatBottomObstruction {
@@ -72,14 +105,19 @@ enum ChatBottomObstruction {
         return extra > 0.5 ? extra.rounded(.up) : 0
     }
 
+    /// `offlineNoticeHeight`: the measured "computer is offline" notice above
+    /// the composer (0 when hidden). A persistent status counts as footprint:
+    /// the newest bubble and the ↓ control rest above it instead of under it.
     static func height(
         composerClearance: CGFloat,
         composerVisible: Bool,
-        compacting: Bool
+        compacting: Bool,
+        offlineNoticeHeight: CGFloat = 0
     ) -> CGFloat {
         let composerFloor: CGFloat = composerVisible ? composerClearance : 0
         let compactionFloor: CGFloat = compacting ? 40 : 0
         let spacing: CGFloat = composerVisible && compacting ? 8 : 0
-        return composerFloor + compactionFloor + spacing
+        let notice: CGFloat = composerVisible && offlineNoticeHeight > 0 ? offlineNoticeHeight.rounded(.up) + 8 : 0
+        return composerFloor + compactionFloor + spacing + notice
     }
 }

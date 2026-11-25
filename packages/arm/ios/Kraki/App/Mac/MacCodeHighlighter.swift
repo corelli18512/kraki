@@ -17,6 +17,10 @@ enum MacCodePalette {
         blue: 0xF5 / 255,
         alpha: 1
     )
+    /// Selected code: the code surface is dark in light mode too, where the
+    /// system's light selection color hid the light code text.
+    static let selection = NSColor(srgbRed: 0x26 / 255, green: 0x4F / 255, blue: 0x78 / 255, alpha: 1)
+    static let unemphasizedSelection = NSColor(srgbRed: 0x3A / 255, green: 0x3D / 255, blue: 0x41 / 255, alpha: 1)
 
     static func ensuringReadableForeground(in string: NSMutableAttributedString) {
         guard string.length > 0 else { return }

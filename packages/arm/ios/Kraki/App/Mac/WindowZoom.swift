@@ -313,6 +313,30 @@ enum WindowZoom {
     }
 }
 
+/// ⌘= zooms in too: on a US layout + is ⇧=, and browsers take ⌘= for
+/// Zoom In. The menu item shows ⌘+ (Commands.swift); this app-local monitor
+/// catches the unshifted key. Other layouts type = with Shift, so only a
+/// plain ⌘= counts.
+@MainActor
+enum MacZoomShortcut {
+    private static var monitor: Any?
+
+    static func isZoomInAlias(_ event: NSEvent) -> Bool {
+        event.type == .keyDown
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]) == .command
+            && event.charactersIgnoringModifiers == "="
+    }
+
+    static func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard isZoomInAlias(event) else { return event }
+            NotificationCenter.default.post(name: .macZoomIn, object: nil)
+            return nil
+        }
+    }
+}
+
 extension Notification.Name {
     static let macZoomIn    = Notification.Name("mac.zoomIn")
     static let macZoomOut   = Notification.Name("mac.zoomOut")

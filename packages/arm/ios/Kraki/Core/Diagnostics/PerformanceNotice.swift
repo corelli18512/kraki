@@ -19,7 +19,8 @@ final class PerformanceNotice {
     static let seenKey = "kraki.diag.noticeSeen"
 
     private(set) var isVisible = false
-    @ObservationIgnored private var scheduled = false
+    /// Waiting to show: settling after sign-in, or for the permission answer.
+    @ObservationIgnored private(set) var scheduled = false
     @ObservationIgnored var defaults: UserDefaults = .standard
     /// Turns sharing off ("Don't Share").
     @ObservationIgnored var onDecline: () -> Void = {

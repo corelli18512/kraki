@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
+import { downloadFile, downloadSpinner, fetchLatestVersion, formatBytes, getProxyForUrl, isNewer, npmPrefixForPackageRoot, performUpdate, shouldBypassProxy, stopDaemonForUpdate, summarizeNpmError, updateViaNpm } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -122,6 +122,49 @@ describe('update proxy support', () => {
     expect(mockHttpRequest).toHaveBeenCalledOnce();
     expect(mockHttpsRequest).toHaveBeenCalledOnce();
   });
+
+  it('resumes a dropped download through the proxy with Range', async () => {
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1081';
+    const body = Buffer.from('0123456789');
+
+    mockHttpRequest.mockImplementation(() => {
+      const req = createMockRequest(() => {
+        req._handlers.connect?.({ statusCode: 200, headers: {} }, { destroy: vi.fn(), unshift: vi.fn() }, Buffer.alloc(0));
+      });
+      return req;
+    });
+    const ranges: Array<string | undefined> = [];
+    mockHttpsRequest.mockImplementation((options: { headers: Record<string, string> }, callback: (res: PassThrough) => void) => {
+      const range = options.headers.Range;
+      ranges.push(range);
+      return createMockRequest(() => {
+        const res = new PassThrough() as PassThrough & { statusCode: number; headers: Record<string, string> };
+        if (!range) {
+          res.statusCode = 200;
+          res.headers = { 'content-length': String(body.length) };
+          callback(res);
+          res.write(body.subarray(0, 4));
+          setTimeout(() => res.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 20);
+        } else {
+          const from = Number(/bytes=(\d+)-/.exec(range)![1]);
+          res.statusCode = 206;
+          res.headers = { 'content-length': String(body.length - from), 'content-range': `bytes ${from}-${body.length - 1}/${body.length}` };
+          callback(res);
+          res.end(body.subarray(from));
+        }
+      });
+    });
+
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dest = join(mkdtempSync(join(tmpdir(), 'kraki-proxy-download-')), 'asset');
+    await downloadFile('https://github.com/corelli18512/kraki/releases/download/win-v1/Kraki-Setup-1-x64.exe', dest, undefined, { retryDelayMs: 1 });
+
+    expect(readFileSync(dest, 'utf8')).toBe('0123456789');
+    expect(ranges).toEqual([undefined, 'bytes=4-']);
+    expect(mockHttpRequest).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('update daemon stop gate', () => {
@@ -151,6 +194,27 @@ describe('update daemon stop gate', () => {
       isDaemonRunning: () => probes++ < 2,
       stopDaemon: () => true,
     }, 1, 3)).resolves.toBeUndefined();
+  });
+});
+
+describe('kraki update download spinner', () => {
+  it('says a dropped download is resuming, then shows progress again', () => {
+    const spinner = { text: '' };
+    const { onProgress, onRetry } = downloadSpinner(spinner);
+    onProgress(45 * 1024 * 1024, 100 * 1024 * 1024);
+    expect(spinner.text).toBe('Downloading 45% (45.0 MB / 100.0 MB)…');
+
+    onRetry({ attempt: 1, received: 45 * 1024 * 1024, total: 100 * 1024 * 1024, delayMs: 20_000, error: new Error('aborted') });
+    expect(spinner.text).toBe('Download interrupted at 45%; resuming in 20s…');
+
+    onProgress(46 * 1024 * 1024, 100 * 1024 * 1024);
+    expect(spinner.text).toBe('Downloading 46% (46.0 MB / 100.0 MB)…');
+  });
+
+  it('shows the bytes so far when the size is unknown', () => {
+    const spinner = { text: '' };
+    downloadSpinner(spinner).onRetry({ attempt: 2, received: 2048, total: 0, delayMs: 10_000, error: new Error('aborted') });
+    expect(spinner.text).toBe('Download interrupted at 2 KB; resuming in 10s…');
   });
 });
 
@@ -226,5 +290,83 @@ describe('update ignores dogfood releases', () => {
     expect(isNewer('0.38.12', '0.38.12-dev.57')).toBe(true);
     expect(isNewer('0.38.11', '0.38.12-dev.57')).toBe(false);
     expect(isNewer('0.38.12-dev.57', '0.38.11')).toBe(true);
+  });
+});
+
+describe('performUpdate exit code', () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('exits non-zero when the update check fails (K-267)', async () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    mockHttpsRequest.mockImplementation((_url: URL, _options: unknown, callback: (res: PassThrough) => void) =>
+      createMockRequest(() => callback(createMockResponse(500, '{"message":"down"}'))));
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await performUpdate('0.1.0');
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('npm update targets the running install (K-274)', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  function npmInstall(version: string) {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), 'kraki-npm-prefix-')));
+    const root = join(prefix, 'lib', 'node_modules', '@kraki', 'tentacle');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(join(root, 'dist', 'cli.js'), '');
+    const setVersion = (v: string) => writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@kraki/tentacle', version: v }));
+    setVersion(version);
+    return { prefix, root, script: join(root, 'dist', 'cli.js'), setVersion };
+  }
+
+  it('finds the npm prefix of a global install', () => {
+    expect(npmPrefixForPackageRoot('/opt/homebrew/lib/node_modules/@kraki/tentacle')).toBe('/opt/homebrew');
+    expect(npmPrefixForPackageRoot('/home/u/.nvm/versions/node/v22.1.0/lib/node_modules/@kraki/tentacle')).toBe('/home/u/.nvm/versions/node/v22.1.0');
+    expect(npmPrefixForPackageRoot('/repo/packages/tentacle')).toBeNull();
+  });
+
+  it('installs into the prefix this kraki runs from', async () => {
+    const install = npmInstall('0.1.0');
+    const commands: string[] = [];
+    await updateViaNpm('0.2.0', { scriptPath: install.script, exec: (cmd) => { commands.push(cmd); install.setVersion('0.2.0'); } });
+    expect(commands).toEqual([`npm install -g --prefix ${JSON.stringify(install.prefix)} @kraki/tentacle@0.2.0`]);
+  });
+
+  it('fails instead of reporting success when this kraki was not updated', async () => {
+    const install = npmInstall('0.1.0');
+    await expect(updateViaNpm('0.2.0', { scriptPath: install.script, exec: () => {} }))
+      .rejects.toThrow(/still 0\.1\.0/);
+  });
+
+  it('does not report a pnpm update as failed because the old .pnpm version directory remains', async () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), 'kraki-pnpm-')));
+    const root = join(prefix, '.pnpm', '@kraki+tentacle@0.1.0', 'node_modules', '@kraki', 'tentacle');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(join(root, 'dist', 'cli.js'), '');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@kraki/tentacle', version: '0.1.0' }));
+    const commands: string[] = [];
+    await updateViaNpm('0.2.0', { scriptPath: join(root, 'dist', 'cli.js'), exec: (cmd) => { commands.push(cmd); } });
+    expect(commands).toEqual(['pnpm add -g @kraki/tentacle@0.2.0']);
+  });
+
+  it('turns an EACCES failure into one actionable line', async () => {
+    const install = npmInstall('0.1.0');
+    const stderr = ['npm error code EACCES', 'npm error syscall mkdir', 'npm error path /usr/local/lib/node_modules/@kraki',
+      ...Array.from({ length: 35 }, (_, i) => `npm error line ${i}`), 'npm error A complete log of this run can be found in: /x.log'].join('\n');
+    const failure = await updateViaNpm('0.2.0', {
+      scriptPath: install.script,
+      exec: () => { throw Object.assign(new Error('Command failed'), { stderr }); },
+    }).catch((err: Error) => err);
+    expect((failure as Error).message).toContain('permission denied');
+    expect((failure as Error).message.split('\n')).toHaveLength(1);
+    expect(summarizeNpmError('npm error code E404\nnpm error 404 Not Found\nnpm error A complete log of this run can be found in: /x', null))
+      .toBe('npm error code E404 npm error 404 Not Found');
   });
 });

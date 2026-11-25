@@ -7,6 +7,8 @@ import SwiftUI
 
 struct SessionListView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     /// Opens a Session: a push on iPhone, the detail column in two-column layout.
     private let openSession: (String) -> Void
@@ -144,6 +146,13 @@ struct SessionListView: View {
 
     // MARK: - Empty State
 
+    /// The empty-state arrow ends where the New Session tab sits on a portrait
+    /// iPhone. In landscape or on iPad that tab is elsewhere, so the arrow
+    /// would point at nothing and is left out.
+    static func showsNewSessionArrow(horizontal: UserInterfaceSizeClass?, vertical: UserInterfaceSizeClass?) -> Bool {
+        horizontal == .compact && vertical == .regular
+    }
+
     @ViewBuilder
     private var emptyState: some View {
         if isQuerying {
@@ -203,10 +212,12 @@ struct SessionListView: View {
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomTrailing) {
-                DottedCurvedArrow()
-                    .frame(width: 240, height: 240)
-                    .padding(.trailing, 44)
-                    .allowsHitTesting(false)
+                if Self.showsNewSessionArrow(horizontal: horizontalSizeClass, vertical: verticalSizeClass) {
+                    DottedCurvedArrow()
+                        .frame(width: 240, height: 240)
+                        .padding(.trailing, 44)
+                        .allowsHitTesting(false)
+                }
             }
             .background(Color.surfacePrimary)
         }

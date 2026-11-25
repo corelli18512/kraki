@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { ContentRef } from '@kraki/protocol';
 
 export interface AttachmentChunkProgress {
@@ -163,7 +164,7 @@ export class AttachmentPullQueue {
       this.onFailure?.(
         task.sessionId,
         task.ref,
-        `Timed out receiving attachment chunk ${task.index + 1} after ${task.retries + 1} attempts`,
+        t('chat:attachments.errors.chunkTimeout', { index: task.index + 1, attempts: task.retries + 1 }),
       );
       this.pump();
     }, this.chunkTimeoutMs);

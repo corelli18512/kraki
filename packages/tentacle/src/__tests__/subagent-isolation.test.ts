@@ -226,6 +226,22 @@ describe('Claude subagent messages', () => {
       } finally { vi.useRealTimers(); }
     });
 
+    it('K-284: a background subagent that never reports settles the held turn after the inactivity bound', () => {
+      vi.useFakeTimers();
+      try {
+        launch(P1, 'a1', 'Find codeword'); text('Waiting.'); result();
+        vi.advanceTimersByTime(ClaudeAdapter.SUBAGENT_HOLD_IDLE_MS - 60_000);
+        // Subagent progress restarts the bound.
+        text('still digging', P1);
+        vi.advanceTimersByTime(ClaudeAdapter.SUBAGENT_HOLD_IDLE_MS - 60_000);
+        expect(idles()).toBe(0);
+        expect(claude.isTurnSettled('s')).toBe(false);
+        vi.advanceTimersByTime(60_001);
+        expect(idles()).toBe(1);
+        expect(claude.isTurnSettled('s')).toBe(true);
+      } finally { vi.useRealTimers(); }
+    });
+
     it('stop while held settles silently and stops the running subagents', async () => {
       launch(P1, 'a1', 'Find codeword'); text('Waiting.'); result();
       await claude.abortSession('s');

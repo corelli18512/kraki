@@ -182,35 +182,13 @@ jobs:
 
       - name: Ensure CI passed for this commit
         if: steps.meta.outputs.publish_mode == 'publish' || steps.meta.outputs.publish_mode == 'prerelease'
+        # The newest Validate check run must pass; waits up to 5 minutes.
+        # Asked for by name across pages (a busy commit has more than the 30
+        # check runs of one unfiltered page).
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
-        run: |
-          set -euo pipefail
-          echo "Checking CI status for ${RELEASE_SHA}..."
-
-          for i in $(seq 1 30); do
-            status=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs" \
-              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' 2>/dev/null | head -1 || true)
-
-            if [ "${status}" = "success" ]; then
-              echo "CI passed ✅"
-              exit 0
-            fi
-
-            case "${status}" in
-              failure|cancelled|timed_out|action_required)
-                echo "CI status is ${status}. Refusing to release."
-                exit 1
-                ;;
-            esac
-
-            echo "CI status: ${status:-pending}. Waiting 10s... (attempt ${i}/30)"
-            sleep 10
-          done
-
-          echo "CI did not complete within 5 minutes. Refusing to release."
-          exit 1
+        run: node scripts/release/wait-for-validate.mjs "$RELEASE_SHA"
 
       - name: Verify tag matches package version
         if: steps.meta.outputs.publish_mode == 'publish'
@@ -623,7 +601,7 @@ jobs:
           ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'mac') ||
            (github.event.inputs.mode == 'prerelease' && github.event.inputs.target == 'mac') ||
            startsWith(github.event.inputs.tag, 'mac-v')))
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 75
 
     steps:
@@ -646,7 +624,10 @@ jobs:
         run: node scripts/release/prerelease.mjs stamp-tentacle "${{ needs.prepare.outputs.prerelease_tentacle_version }}"
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        # Pinned to the same Xcode as CI and the iOS TestFlight upload.
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
 
       - name: Resolve Swift packages cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

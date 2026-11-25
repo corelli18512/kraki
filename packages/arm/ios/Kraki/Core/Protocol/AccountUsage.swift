@@ -40,7 +40,7 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
     var label: String?
     var plan: String?
     let windows: [AccountUsageWindow]
-    let fetchedAt: String
+    var fetchedAt: String
     var error: String?
     /// Agents on the reporting machine signed in with this account.
     var agents: [String]?
@@ -126,6 +126,31 @@ struct DeviceUsagePayload: Codable, Sendable {
     var updatedAt: String?
     var requestId: String?
     var refreshError: String?
+
+    /// `fetchedAt` and `retryAt` come from the reporting computer's clock;
+    /// `updatedAt` is that clock's "now" when it sent them. Moved onto this
+    /// device's clock, a computer whose clock is off neither looks stale when
+    /// it is fresh (or fresh when it is stale) nor shows a wrong retry time
+    /// (K-325). Differences under a minute (delivery time) are left alone.
+    func accountsOnLocalClock(receivedAt: Date = Date()) -> [AccountUsage] {
+        guard let sentAt = updatedAt.flatMap(ISO8601.parse) else { return accounts }
+        let offset = receivedAt.timeIntervalSince(sentAt)
+        guard abs(offset) >= 60 else { return accounts }
+        return accounts.map { $0.shifted(by: offset) }
+    }
+}
+
+extension AccountUsage {
+    func shifted(by offset: TimeInterval) -> AccountUsage {
+        func shift(_ value: String) -> String {
+            guard let date = ISO8601.parse(value) else { return value }
+            return ISO8601.withFractional.string(from: date.addingTimeInterval(offset))
+        }
+        var copy = self
+        copy.fetchedAt = shift(fetchedAt)
+        copy.retryAt = retryAt.map(shift)
+        return copy
+    }
 }
 
 /// Latest `device_usage` from one tentacle.

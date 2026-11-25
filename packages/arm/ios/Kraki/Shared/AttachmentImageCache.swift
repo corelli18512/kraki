@@ -49,6 +49,44 @@ enum AttachmentImageCache {
         #endif
     }
 
+    // MARK: Animated GIFs
+
+    /// A decode result, kept also when the image is not animated so it is
+    /// not decoded again.
+    private final class AnimationEntry {
+        let animation: ChatGIFAnimation?
+        init(_ animation: ChatGIFAnimation?) { self.animation = animation }
+    }
+
+    private static let animations: NSCache<NSString, AnimationEntry> = {
+        let cache = NSCache<NSString, AnimationEntry>()
+        cache.totalCostLimit = 256 * 1024 * 1024
+        return cache
+    }()
+
+    @MainActor private static var decodingAnimations: [String: Task<ChatGIFAnimation?, Never>] = [:]
+
+    /// The decoded animation of a GIF, if already known (nil also while
+    /// decoding, and for a still image).
+    @MainActor static func cachedAnimation(id: String) -> ChatGIFAnimation? {
+        animations.object(forKey: id as NSString)?.animation
+    }
+
+    /// The animation of an animated GIF within `ChatGIFAnimation.Limits`,
+    /// decoded off the main thread once per id; nil for anything else.
+    @MainActor static func animation(id: String, data: Data) async -> ChatGIFAnimation? {
+        guard ChatGIFAnimation.isGIF(data) else { return nil }
+        if let entry = animations.object(forKey: id as NSString) { return entry.animation }
+        if let running = decodingAnimations[id] { return await running.value }
+        // On screen now: decoded at user priority, off the main thread.
+        let task = Task.detached(priority: .userInitiated) { ChatGIFAnimation.decode(data) }
+        decodingAnimations[id] = task
+        let animation = await task.value
+        decodingAnimations[id] = nil
+        animations.setObject(AnimationEntry(animation), forKey: id as NSString, cost: animation?.cost ?? 1)
+        return animation
+    }
+
     private static func cost(of image: PlatformImage) -> Int {
         #if canImport(UIKit)
         guard let cg = image.cgImage else { return 1 }

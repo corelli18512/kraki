@@ -33,7 +33,7 @@ function setup(opts: { open?: boolean } = { open: true }) {
   };
   const internal = adapter as unknown as {
     sessions: Map<string, typeof session>;
-    handleProcessExit: (id: string, s: unknown, code: number | null) => void;
+    handleProcessExit: (id: string, s: unknown, code: number | null, signal?: NodeJS.Signals | null) => void;
   };
   internal.sessions.set(sid, session);
   const calls: Array<[string, unknown]> = [];
@@ -41,7 +41,7 @@ function setup(opts: { open?: boolean } = { open: true }) {
     (adapter as unknown as Record<string, unknown>)[k] = (...args: unknown[]) => calls.push([k, args.slice(1)]);
   }
   const of = (k: string) => calls.filter(([c]) => c === k).map(([, a]) => a);
-  const exit = (s: unknown = session, code: number | null = 1) => internal.handleProcessExit(sid, s, code);
+  const exit = (s: unknown = session, code: number | null = 1, signal: NodeJS.Signals | null = null) => internal.handleProcessExit(sid, s, code, signal);
   return { adapter, sid, proc, session, internal, of, exit };
 }
 
@@ -61,6 +61,12 @@ describe('pi process exit', () => {
     t.exit();
     expect(t.of('onError')).toEqual([[{ message: 'Pi stopped unexpectedly (exit code 1)', turnId: 'turn-1' }]]);
     expect(t.of('onIdle')).toEqual([[{ turnId: 'turn-1' }]]);
+  });
+
+  it('K-290: a crash by signal says which signal stopped Pi', () => {
+    const t = setup();
+    t.exit(t.session, null, 'SIGKILL');
+    expect(t.of('onError')).toEqual([[{ message: 'Pi stopped unexpectedly (killed by SIGKILL)', turnId: 'turn-1' }]]);
   });
 
   it('of a process already replaced leaves the replacement alone', () => {

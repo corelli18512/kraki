@@ -6,7 +6,7 @@ import { desktop } from '../lib/desktop';
 import { CONNECT_PHONE_EVENT } from '../components/devices/ConnectPhoneCard';
 
 export function DevicesPage() {
-  const { t } = useTranslation('app');
+  const { t } = useTranslation(['app', 'common']);
   const navigate = useNavigate();
 
   return (
@@ -14,7 +14,9 @@ export function DevicesPage() {
       {/* Header */}
       <div className="sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2 border-b border-border-primary bg-surface-primary px-4">
         <button
+          type="button"
           onClick={() => navigate('/')}
+          aria-label={t('common:action.back')}
           className="mr-1 text-text-secondary hover:text-text-primary md:hidden"
         >
           <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

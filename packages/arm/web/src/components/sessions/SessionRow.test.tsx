@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { i18next } from '../../i18n';
 import { MemoryRouter, useLocation } from 'react-router';
@@ -47,6 +48,12 @@ describe('SessionRow Mac sidebar', () => {
     expect(screen.getByLabelText('Offline')).toBeInTheDocument();
     expect(container.querySelector('.ksr-devdot')).toBeNull();
   });
+  it('lets the title and preview take their own text direction (K-165)', () => {
+    useStore.getState().setSessionPreview('s', { text: 'مرحبا بالعالم.', type: 'agent', timestamp: session.createdAt! });
+    row();
+    expect(screen.getByText('Sidebar test')).toHaveAttribute('dir', 'auto');
+    expect(screen.getByText('مرحبا بالعالم.')).toHaveAttribute('dir', 'auto');
+  });
   it('uses creation time for an invalid preview just like list ordering', () => {
     useStore.getState().setSessionPreview('s', { text: 'Invalid timestamp', type: 'agent', timestamp: 'invalid' });
     row();
@@ -59,7 +66,7 @@ describe('SessionRow Mac sidebar', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual(['Pin', 'Mark Unread', 'Rename…', 'Fork', 'Archive', 'Delete…']);
     expect(within(menu).getByRole('separator')).toBeInTheDocument();
     fireEvent.click(within(menu).getByText('Rename…'));
-    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=1');
+    expect(screen.getByTestId('location')).toHaveTextContent('/session/s?info=rename');
   });
   it('archives and deselects the selected session', () => {
     const archive = vi.spyOn(wsClient, 'archiveSession').mockImplementation(() => {});
@@ -94,5 +101,90 @@ describe('SessionRow Mac sidebar', () => {
     const { container } = row();
     expect(container.querySelector('.ksr-line3.is-draft')).toHaveTextContent('unsent draft');
     expect(container.querySelector('.ksr-status-slot')).toBeInTheDocument();
+  });
+});
+
+// K-212: the row menu opens from the keyboard (Menu key / Shift+F10), focus
+// moves into it, arrows move between items and Escape returns to the row; the
+// row has one spoken name with its unread state.
+describe('SessionRow keyboard and screen reader (K-212)', () => {
+  it('opens its menu from the keyboard and returns focus on Escape', () => {
+    row();
+    const button = screen.getByRole('button', { name: /Sidebar test/ });
+    button.focus();
+    fireEvent.keyDown(button, { key: 'F10', shiftKey: true });
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(items[1], { key: 'ArrowUp' });
+    fireEvent.keyDown(items[0], { key: 'ArrowUp' });
+    expect(items.at(-1)).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+    fireEvent.keyDown(button, { key: 'ContextMenu' });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+  it('names the row with its parts separated and says it is unread', () => {
+    useStore.setState({ unreadCount: new Map([['s', 2]]) });
+    useStore.getState().setSessionPreview('s', { text: 'Done, tests pass', type: 'agent', timestamp: session.createdAt! });
+    row();
+    const button = screen.getByRole('button', { name: /^Sidebar test, Unread, Last message from agent, Local Mac, Done, tests pass/ });
+    // The row opens the session, not a menu; the menu is Shift+F10.
+    expect(button).not.toHaveAttribute('aria-haspopup');
+    expect(button).toHaveAttribute('aria-keyshortcuts', 'Shift+F10');
+    expect(screen.getByRole('img', { name: 'Unread' })).toBeInTheDocument();
+  });
+});
+
+describe('SessionRow narrow swipe tray', () => {
+  function Harness() {
+    const [openId, setOpenId] = useState<string | null>('s');
+    return <MemoryRouter initialEntries={['/']}><SessionRow session={session} selected={false} pinned={false} narrow openSwipeId={openId} setOpenSwipeId={setOpenId} /><Location /></MemoryRouter>;
+  }
+  it('closes an open tray on tap instead of opening the chat (K-106)', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /Sidebar test/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+    // Closed now: the next tap opens the chat.
+    fireEvent.click(screen.getByRole('button', { name: /Sidebar test/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/session/s');
+  });
+  it('Swipe > More shows the row menu and keeps it open (K-106)', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<Harness />);
+      fireEvent.click(screen.getByRole('button', { name: 'More' }));
+      // In a browser React commits the menu (and its effects) while that same
+      // tap is still bubbling; it then reaches window. It must not close it.
+      act(() => { window.dispatchEvent(new MouseEvent('click')); });
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+      act(() => { vi.runAllTimers(); });
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+      // A later tap elsewhere still dismisses it.
+      fireEvent.click(document.body);
+      expect(screen.queryByRole('menu')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('snaps a half-dragged row back when the browser cancels the touch (K-236)', () => {
+    function Closed() {
+      const [openId, setOpenId] = useState<string | null>(null);
+      return <MemoryRouter><SessionRow session={session} selected={false} pinned={false} narrow openSwipeId={openId} setOpenSwipeId={setOpenId} /></MemoryRouter>;
+    }
+    render(<Closed />);
+    const content = screen.getByRole('button', { name: /Sidebar test/ }).parentElement!;
+    fireEvent.touchStart(content, { touches: [{ clientX: 300, clientY: 50 }] });
+    fireEvent.touchMove(content, { touches: [{ clientX: 220, clientY: 52 }] });
+    expect(content.style.transform).toBe('translateX(-80px)');
+    // Safari takes over the edge gesture: touchcancel, never touchend.
+    fireEvent.touchCancel(content, { touches: [] });
+    expect(content.style.transform).toBe('translateX(0px)');
+    // The next ordinary tap opens the chat normally.
+    fireEvent.touchStart(content, { touches: [{ clientX: 100, clientY: 50 }] });
+    fireEvent.touchEnd(content, { changedTouches: [{ clientX: 100, clientY: 50 }] });
+    expect(content.style.transform).toBe('translateX(0px)');
   });
 });

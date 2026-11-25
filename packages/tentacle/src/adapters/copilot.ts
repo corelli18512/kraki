@@ -251,17 +251,11 @@ export class CopilotAdapter extends AgentAdapter {
 
     let cliPath = this.cliPath ?? resolveCopilotCliPath();
     if (!cliPath && isSea()) {
-      // At boot, PATH tools (nvm, copilot) may not be ready yet.
-      // Retry for up to 30s before giving up.
-      const deadline = Date.now() + 30_000;
-      while (!cliPath && Date.now() < deadline) {
-        logger.debug('Copilot CLI not found yet, retrying...');
-        await new Promise(r => setTimeout(r, 2_000));
-        cliPath = resolveCopilotCliPath();
-      }
-      if (!cliPath) {
-        throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
-      }
+      // At boot, PATH tools (nvm, copilot) may not be ready yet. Fail now:
+      // waiting here held the whole daemon's readiness (every agent starts
+      // together) for 30 s. MultiAgentAdapter retries a failed agent in the
+      // background and re-greets the apps when it comes up.
+      throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
     }
 
     // On Windows, resolve the actual .js entry point from the .cmd wrapper.
@@ -588,11 +582,14 @@ export class CopilotAdapter extends AgentAdapter {
     };
     const tempFiles: string[] = [];
 
-    // Convert image attachments to files in the SDK session directory
+    // Convert image attachments to files the SDK attaches by path. They are
+    // kept for the session's life (its history refers to them) in the Kraki
+    // session directory, which deleting the session removes; Copilot's own
+    // session-state directory is never cleaned by Kraki.
     if (attachments?.length) {
       const entry = this.sessions.get(sessionId);
       const sdkFilesDir = entry
-        ? join(homedir(), '.copilot', 'session-state', sessionId, 'files')
+        ? join(getKrakiHome(), 'sessions', sessionId, 'copilot-images')
         : tmpdir();
       const sdkAttachments: Array<{ type: 'file'; path: string; displayName?: string }> = [];
       for (const att of attachments) {

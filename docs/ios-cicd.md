@@ -4,10 +4,11 @@ Kraki has two independent GitHub Actions paths for iOS.
 
 ## Pull-request and main-branch CI
 
-`.github/workflows/ci.yml` runs the `Test iOS (Kraki)` job on `macos-26`.
-It builds the native app and its notification service extension and runs the
-`KrakiTests` suite on an available iPhone Simulator. No Apple credentials or
-code-signing secrets are used.
+`.github/workflows/ci.yml` runs the `Test iOS (Kraki)` job on the `xcode-27`
+runner with Xcode 27.1 selected explicitly (the same Xcode as the TestFlight
+upload). It builds the native app and its notification service extension and
+runs the `KrakiTests` suite on an iPhone Simulator from the newest iOS runtime
+that Xcode can host. No Apple credentials or code-signing secrets are used.
 
 The job uploads its `.xcresult` bundle even when tests fail. Once the workflow
 has run successfully on the default branch, make `Test iOS (Kraki)` a required
@@ -20,6 +21,15 @@ to App Store Connect. It can be triggered in either of two ways:
 
 - Run **iOS TestFlight** manually and enter a semantic version such as `0.1.1`.
 - Push a tag such as `ios-v0.1.1`.
+
+The job runs on `xcode-27` with `/Applications/Xcode_27.1.app` selected and
+fails before archiving if the iOS SDK is older than `MIN_IOS_SDK_MAJOR` (27):
+App Store Connect rejects uploads built with an older SDK (ITMS-90725). It also
+fails there if that Xcode has no `altool` (`xcrun --find altool`), which the
+upload step needs. After archiving it checks the `DTSDKName` of both the app and
+`KrakiNotification.appex` the same way. To move to a newer
+Xcode, change the path in every workflow that selects it (`ci.yml`,
+`ios-testflight.yml`, `release.yml`, `network-resilience.yml`).
 
 The GitHub Actions run number is used as `CFBundleVersion`, so every upload from
 the repository has a monotonically increasing build number. The selected
@@ -92,7 +102,7 @@ xcodebuild \
   -project Kraki.xcodeproj \
   -scheme Kraki \
   -configuration Debug \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=27.0' \
   CODE_SIGNING_ALLOWED=NO \
   test
 ```

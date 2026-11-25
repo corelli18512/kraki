@@ -3,7 +3,7 @@
 import type { SessionUsage } from '@kraki/protocol';
 import { canonicalArtifactToolName } from './tool-name.js';
 import type { ClaudeAdapter } from './claude.js';
-import { armSubagentGrace, resetSubagentPhase, stopAwaitingSubagents, trackSubagentTask } from './claude-subagents.js';
+import { armSubagentGrace, armSubagentHoldTimer, resetSubagentPhase, stopAwaitingSubagents, trackSubagentTask } from './claude-subagents.js';
 import { normalizeClaudeSDKError, preferClaudeError } from './claude-errors.js';
 import { logger, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage, type SDKSystemMessage, type SDKPartialAssistantMessage, type SDKUserMessage, CLAUDE_DISPATCH_TOOLS } from './claude-session.js';
 
@@ -20,6 +20,7 @@ export function handleSDKMessage(adapter: ClaudeAdapter, sessionId: string, msg:
       || ((m.type === 'assistant' || m.type === 'stream_event') && !m.parent_tool_use_id)
       || m.type === 'result';
     if (parentActivity) stopAwaitingSubagents(adapter, held);
+    else armSubagentHoldTimer(adapter, sessionId, held);
   }
   switch (msg.type) {
     case 'system': {
@@ -243,6 +244,7 @@ export function handleSDKMessage(adapter: ClaudeAdapter, sessionId: string, msg:
       if (holdForSubagents && entry) {
         entry.awaitingSubagents = true;
         entry.subagentPhase = true;
+        armSubagentHoldTimer(adapter, sessionId, entry);
         if (!entry.runningSubagents?.size) armSubagentGrace(adapter, sessionId, entry);
         logger.info({ sessionId, running: entry.runningSubagents?.size }, 'Claude turn held open for background subagents');
         break;

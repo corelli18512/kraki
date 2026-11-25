@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceUpdateInfo } from '@kraki/protocol';
 import {
-  RemoteUpdater, remoteUpdateBlock, stageUpdate, takeUnannouncedResult, writeResult,
+  RemoteUpdater, remoteUpdateBlock, stageUpdate, takeUnannouncedResult, writeResult, WINDOWS_INSTALLER_ARGS,
   type StageDeps, type UpdateProgress,
 } from '../remote-update.js';
 
@@ -19,10 +19,59 @@ afterEach(() => {
 });
 
 describe('remoteUpdateBlock', () => {
-  it('never replaces the kraki.exe built into Kraki for Windows', () => {
-    expect(remoteUpdateBlock({ method: 'windows-app', target: 'C:\\K\\resources\\kraki\\kraki.exe' }, null, () => true)).toBe('unsupported');
+  describe('Kraki for Windows', () => {
+    const dir = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki';
+    const app = { method: 'windows-app' as const, target: `${dir}\\Kraki.exe`, appVersion: '0.1.11' };
+    const registry = (r: { HKCU?: string; HKLM?: string }) => (hive: 'HKCU' | 'HKLM') => r[hive];
+    it('updated by its installer when installed for this user, in a folder this user may write', () => {
+      const probed: string[] = [];
+      expect(remoteUpdateBlock(app, null, (p) => { probed.push(p); return true; }, registry({ HKCU: dir }))).toBeNull();
+      expect(probed).toEqual([dir]);
+      // Case and slashes as Windows compares paths; a trailing separator.
+      expect(remoteUpdateBlock(app, null, () => true, registry({ HKCU: 'c:/users/a/appdata/local/programs/kraki\\' }))).toBeNull();
+      expect(remoteUpdateBlock(app, null, () => false, registry({ HKCU: dir }))).toBe('not_writable');
+      expect(remoteUpdateBlock(app, { remoteUpdate: false }, () => true, registry({ HKCU: dir }))).toBe('disabled');
+      // The app's version is what an update compares; unknown → unsupported.
+      expect(remoteUpdateBlock({ method: 'windows-app', target: app.target }, null, () => true, registry({ HKCU: dir }))).toBe('unsupported');
+    });
+    it('installed for all users: never, even in a folder this user may write (/currentuser would install a second copy)', () => {
+      const allUsers = { ...app, target: 'C:\\Kraki\\Kraki.exe' };
+      expect(remoteUpdateBlock(allUsers, null, () => true, registry({ HKLM: 'C:\\Kraki' }))).toBe('not_writable');
+      // Also when this user has a per-user install elsewhere.
+      expect(remoteUpdateBlock(allUsers, null, () => true, registry({ HKLM: 'C:\\Kraki', HKCU: dir }))).toBe('not_writable');
+      expect(remoteUpdateBlock({ ...app, target: 'C:\\Program Files\\Kraki\\Kraki.exe' }, null, () => false,
+        registry({ HKLM: 'C:\\Program Files\\Kraki' }))).toBe('not_writable');
+    });
+    it('a folder the installer recorded for nobody here (another install, or none): not by the installer', () => {
+      expect(remoteUpdateBlock(app, null, () => true, registry({}))).toBe('unsupported');
+      expect(remoteUpdateBlock(app, null, () => true, registry({ HKCU: 'D:\\Apps\\Kraki' }))).toBe('unsupported');
+    });
+    it('the registry key is electron-builder\'s APP_GUID for chat.kraki.desktop', async () => {
+      const { electronBuilderAppGuid, WINDOWS_APP_GUID } = await import('../remote-update.js');
+      // app-builder-lib 26 / builder-util-runtime 9.7.0 UUID.v5('chat.kraki.desktop', ELECTRON_BUILDER_NS_UUID).
+      expect(WINDOWS_APP_GUID).toBe('b6ca6402-ede9-59e4-8c47-50f9fdae7a6b');
+      expect(electronBuilderAppGuid('chat.kraki.desktop')).toBe(WINDOWS_APP_GUID);
+    });
+    it('reads InstallLocation from reg query output', async () => {
+      const { parseRegQueryValue } = await import('../remote-update.js');
+      const out = '\r\nHKEY_LOCAL_MACHINE\\Software\\b6ca6402-ede9-59e4-8c47-50f9fdae7a6b\r\n    InstallLocation    REG_SZ    C:\\Program Files\\Kraki\r\n\r\n';
+      expect(parseRegQueryValue(out, 'InstallLocation')).toBe('C:\\Program Files\\Kraki');
+      expect(parseRegQueryValue(out, 'KeepShortcuts')).toBeUndefined();
+      expect(parseRegQueryValue('', 'InstallLocation')).toBeUndefined();
+    });
   });
-
+  it('dirAcceptsNewFiles: a probe that was created answers yes even when it can\'t be removed yet', async () => {
+    const { dirAcceptsNewFiles } = await import('../remote-update.js');
+    const { readdirSync } = await import('node:fs');
+    const dir = join(home, 'onedrive');
+    mkdirSync(dir);
+    const tried: string[] = [];
+    expect(dirAcceptsNewFiles(dir, (p) => { tried.push(p); throw Object.assign(new Error('locked'), { code: 'EBUSY' }); })).toBe(true);
+    expect(dirAcceptsNewFiles(dir, (p) => { tried.push(p); throw new Error('locked'); })).toBe(true);
+    // Each probe has its own name: a left-behind one never makes the next fail.
+    expect(new Set(tried).size).toBe(2);
+    expect(readdirSync(dir).sort()).toEqual(tried.map((p) => p.slice(dir.length + 1)).sort());
+  });
   const ok = () => true;
   it('allows a writable install', () => {
     expect(remoteUpdateBlock({ method: 'binary', target: '/x/kraki' }, null, ok)).toBeNull();
@@ -48,7 +97,7 @@ function fakeDeps(files: Record<string, string>, sums: string): StageDeps & { ru
       onProgress(5, 10); onProgress(10, 10);
     },
     fetchText: async () => sums,
-    hashFile: (p) => `sha-${readFileSync(p, 'utf8')}`,
+    hashFile: async (p) => `sha-${readFileSync(p, 'utf8')}`,
     parseChecksum: (s, asset) => s.split('\n').find((l) => l.endsWith(` ${asset}`))?.split(' ')[0] ?? null,
     run: (cmd, args) => { runs.push([cmd, ...args]); return { code: 0, out: '' }; },
   };
@@ -110,6 +159,149 @@ describe('stageUpdate', () => {
     };
     await expect(stageUpdate({ ...stageBase, latestApp: '0.2.70', install: { method: 'mac-app', target, appVersion: '0.2.68' } }, () => {}, d))
       .rejects.toThrow(/someone else/);
+  });
+  it('mac-app: a dogfood build downloads its own archive from dogfood-mac', async () => {
+    const { checkUpdateStatus, MAC_DOGFOOD_APPCAST_URL } = await import('../update-status.js');
+    const { isNewer } = await import('../update.js');
+    const feed = '<rss><channel><item><sparkle:version>94.35</sparkle:version><sparkle:shortVersionString>0.2.93</sparkle:shortVersionString>'
+      + '<enclosure url="https://github.com/corelli18512/kraki/releases/download/dogfood-mac/Kraki-94.35.app.zip"/></item></channel></rss>';
+    await checkUpdateStatus({ method: 'mac-app', appVersion: '0.2.92-dev.28', appBuild: '93.28' }, '0.39.0-dev.28', {
+      fetchLatestTentacle: async () => '0.39.0', fetchText: async (u) => (u === MAC_DOGFOOD_APPCAST_URL ? feed : ''), isNewer, macChannel: () => 'dogfood',
+    });
+    const target = join(home, 'Kraki.app');
+    mkdirSync(target, { recursive: true });
+    const d = fakeDeps({ 'Kraki-94.35.app.zip': 'ZIP' }, 'sha-ZIP Kraki-94.35.app.zip');
+    const fetched: string[] = [];
+    const fetchText = d.fetchText;
+    d.fetchText = async (u) => { fetched.push(u); return fetchText(u); };
+    let shippedBuild = '94.35';
+    d.run = (cmd, args) => {
+      if (cmd === 'ditto') {
+        mkdirSync(join(args[3], 'Kraki.app', 'Contents'), { recursive: true });
+        writeFileSync(join(args[3], 'Kraki.app', 'Contents', 'Info.plist'), `<plist><dict><key>CFBundleVersion</key><string>${shippedBuild}</string></dict></plist>`);
+      }
+      if (cmd === 'codesign' && args[0] === '-dv') return { code: 0, out: 'TeamIdentifier=AAA' };
+      return { code: 0, out: '' };
+    };
+    const input = { ...stageBase, latestApp: '0.2.93-dev.35', install: { method: 'mac-app' as const, target, appVersion: '0.2.92-dev.28' } };
+    const plan = await stageUpdate(input, () => {}, d);
+    expect(fetched.some((u) => u.endsWith('/dogfood-mac/SHA256SUMS.txt'))).toBe(true);
+    expect(plan.to).toBe('0.2.93-dev.35');
+    // An archive of another build (an older signed app behind a newer feed entry) is refused.
+    shippedBuild = '90';
+    await expect(stageUpdate(input, () => {}, d)).rejects.toThrow(/build 90, expected 94\.35/);
+  });
+});
+
+describe('stageUpdate: Kraki for Windows', () => {
+  const app = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+  const input = { ...stageBase, latestApp: '0.1.12', currentVersion: '0.1.11', install: { method: 'windows-app' as const, target: app, appVersion: '0.1.11' } };
+  it('downloads the installer of win-v<version>, verified against that release\'s SHA256SUMS.txt', async () => {
+    const d = fakeDeps({ 'Kraki-Setup-0.1.12-x64.exe': 'SETUP' }, 'sha-SETUP Kraki-Setup-0.1.12-x64.exe');
+    const fetched: string[] = [];
+    const fetchText = d.fetchText;
+    d.fetchText = async (u) => { fetched.push(u); return fetchText(u); };
+    const plan = await stageUpdate(input, () => {}, d);
+    expect(fetched).toEqual(['https://github.com/corelli18512/kraki/releases/download/win-v0.1.12/SHA256SUMS.txt']);
+    const { workDir } = await import('../remote-update.js');
+    expect(plan).toMatchObject({
+      method: 'windows-app', target: app, from: '0.1.11', to: '0.1.12',
+      staged: join(workDir(), 'Kraki-Setup-0.1.12-x64.exe'),
+      installerArgs: ['/S', '/currentuser', '--updated'],
+      cli: ['C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe'],
+    });
+    expect(readFileSync(plan.staged, 'utf8')).toBe('SETUP');
+  });
+  it('refuses a tampered installer, and a version that is not a release', async () => {
+    const d = fakeDeps({ 'Kraki-Setup-0.1.12-x64.exe': 'EVIL' }, 'sha-SETUP Kraki-Setup-0.1.12-x64.exe');
+    await expect(stageUpdate(input, () => {}, d)).rejects.toThrow(/checksum mismatch/);
+    await expect(stageUpdate({ ...input, latestApp: '0.1.12/../../x' }, () => {}, d)).rejects.toThrow(/not a Kraki for Windows release/);
+    await expect(stageUpdate({ ...input, latestApp: undefined }, () => {}, d)).rejects.toThrow(/no newer Kraki for Windows/);
+  });
+});
+
+describe('applyWindowsApp', () => {
+  const app = 'C:\\K\\Kraki.exe';
+  async function run(o: {
+    installer?: number | null; appBack?: boolean; appStartsWhenLaunched?: boolean; online?: boolean; appVersion?: string;
+  } = {}) {
+    const { applyWindowsApp, workDir, WINDOWS_INSTALLER_MARKER } = await import('../remote-update.js');
+    const { existsSync } = await import('node:fs');
+    const marker = join(workDir(), WINDOWS_INSTALLER_MARKER);
+    const markerWhileInstalling: boolean[] = [];
+    const staged = join(workDir(), 'Kraki-Setup-0.1.12-x64.exe');
+    writeFileSync(staged, 'SETUP');
+    writeFileSync(join(workDir(), 'plan.json'), '{}');
+    let t = 0;
+    let appRunning = false;
+    const calls: string[] = [];
+    const installs: Array<[string, string[]]> = [];
+    await applyWindowsApp({
+      requestId: 'rw', method: 'windows-app', target: app, staged, cli: ['C:\\K\\resources\\kraki\\kraki.exe'],
+      from: '0.1.11', to: '0.1.12', installerArgs: [...WINDOWS_INSTALLER_ARGS], deadlineSeconds: 30,
+    }, {
+      runInstaller: (i, args) => { installs.push([i, args]); markerWhileInstalling.push(existsSync(marker)); appRunning = o.appBack ?? true; return o.installer === undefined ? 0 : o.installer; },
+      appRunning: () => appRunning,
+      launchApp: (exe) => { calls.push(`launch ${exe}`); if (o.appStartsWhenLaunched ?? true) appRunning = true; },
+      status: () => (appRunning && (o.online ?? true)
+        ? { running: true, relayState: 'connected', daemonVersion: '0.39.1', version: '0.39.1' }
+        : { running: false }),
+      appVersion: () => (appRunning ? (o.appVersion ?? '0.1.12') : '0.1.11'),
+      sleep: async (ms) => { t += ms; },
+      now: () => t,
+    });
+    const result = JSON.parse(readFileSync(join(workDir(), 'result.json'), 'utf8'));
+    return {
+      installs, calls, result, markerWhileInstalling, markerLeft: existsSync(marker),
+      stagedLeft: existsSync(staged), planLeft: existsSync(join(workDir(), 'plan.json')),
+    };
+  }
+
+  it('runs the installer silently; the installer starts the app again; updated once the new version is online', async () => {
+    const r = await run();
+    expect(r.installs).toEqual([[expect.stringMatching(/Kraki-Setup-0\.1\.12-x64\.exe$/), ['/S', '/currentuser', '--updated']]]);
+    expect(r.calls).toEqual([]);
+    // Kraki for Windows quits without going offline only while its installer runs.
+    expect(r.markerWhileInstalling).toEqual([true]);
+    expect(r.markerLeft).toBe(false);
+    expect(r.result).toMatchObject({ requestId: 'rw', phase: 'updated', from: '0.1.11', to: '0.1.12', method: 'windows-app' });
+    expect(r.stagedLeft).toBe(false);
+    expect(r.planLeft).toBe(false);
+  });
+  it('starts Kraki for Windows itself when the installer didn\'t (no login entry)', async () => {
+    const r = await run({ appBack: false });
+    expect(r.calls).toEqual([`launch ${app}`]);
+    expect(r.result.phase).toBe('updated');
+  });
+  it('a failed installer: reports failed and makes sure the app runs', async () => {
+    const r = await run({ installer: 2, appBack: false });
+    expect(r.calls).toEqual([`launch ${app}`]);
+    expect(r.result).toMatchObject({ phase: 'failed', error: 'the installer exited with code 2' });
+    expect(r.markerLeft).toBe(false);
+    expect(r.stagedLeft).toBe(false);
+    expect(r.planLeft).toBe(false);
+  });
+  it('the new version not online in time: failed, never rolled back', async () => {
+    const offline = await run({ online: false });
+    expect(offline.result).toMatchObject({ phase: 'failed', error: expect.stringMatching(/0\.1\.12 didn.t come online within 30s/) });
+    // Online, but the app still records the old version: not this update.
+    const old = await run({ appVersion: '0.1.11' });
+    expect(old.result.phase).toBe('failed');
+  });
+});
+
+describe('windowsAppRunningIn', () => {
+  it('sees the app itself, not its children, the watchdog or the built-in kraki.exe', async () => {
+    const { windowsAppRunningIn } = await import('../remote-update.js');
+    const app = 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+    const children = [
+      `${app}|"${app}" --type=renderer --user-data-dir=x`,
+      `${app}|"${app}" C:\\K\\resources\\app.asar\\src\\voice-volume-watchdog.cjs 1 2`,
+      `C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe|kraki.exe __daemon-worker --managed-by=kraki-windows`,
+    ].join('\r\n');
+    expect(windowsAppRunningIn(children, app)).toBe(false);
+    expect(windowsAppRunningIn(`${children}\r\n${app.toLowerCase()}|"${app}" --login`, app)).toBe(true);
+    expect(windowsAppRunningIn('', app)).toBe(false);
   });
 });
 
@@ -208,6 +400,15 @@ describe('RemoteUpdater', () => {
     await twice.u.request('d');
     expect(twice.events.at(-1)).toMatchObject({ phase: 'failed', requestId: 'd' });
   });
+  it('accepts requests again when its own applier finished without replacing it', async () => {
+    const t = updater();
+    await t.u.request('r1');
+    expect(t.u.inProgress).toBe(true);
+    t.u.applierFinished('other');            // an older update's result
+    expect(t.u.inProgress).toBe(true);
+    t.u.applierFinished('r');                // the plan this daemon handed off
+    expect(t.u.inProgress).toBe(false);
+  });
   it('reports a staging failure and can try again', async () => {
     const t = updater();
     t.stage.mockRejectedValueOnce(new Error('checksum mismatch'));
@@ -222,6 +423,41 @@ describe('result handoff', () => {
     writeResult({ phase: 'updated', from: '0.35.12', to: '0.36.0', requestId: 'r1' });
     expect(takeUnannouncedResult()).toMatchObject({ phase: 'updated', to: '0.36.0' });
     expect(takeUnannouncedResult()).toBeNull();
+  });
+});
+
+describe('watchUpdateResult', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('looks for a while after start, stops when no update is pending, and again while a handed-off one runs', async () => {
+    vi.useFakeTimers();
+    const { watchUpdateResult } = await import('../remote-update.js');
+    let pending = false;
+    let result: { requestId?: string; phase: 'failed'; at: string } | null = null;
+    const announced: string[] = [];
+    const finished: Array<string | undefined> = [];
+    const w = watchUpdateResult({
+      connected: () => true,
+      announce: () => { const r = result; result = null; if (r) announced.push(r.phase); return r; },
+      pending: () => pending,
+      finished: (id) => { finished.push(id); pending = false; },
+      intervalMs: 5000, startChecks: 3,
+    });
+    expect(w.active).toBe(true);
+    vi.advanceTimersByTime(15_000);
+    expect(w.active).toBe(true);
+    vi.advanceTimersByTime(5000);              // past the start checks, nothing pending
+    expect(w.active).toBe(false);
+    // An update handed off: watch until its applier reports.
+    pending = true;
+    w.watch();
+    vi.advanceTimersByTime(60_000);
+    expect(w.active).toBe(true);
+    result = { requestId: 'r', phase: 'failed', at: new Date().toISOString() };
+    vi.advanceTimersByTime(5000);
+    expect(announced).toEqual(['failed']);
+    expect(finished).toEqual(['r']);
+    vi.advanceTimersByTime(5000);
+    expect(w.active).toBe(false);
   });
 });
 
@@ -255,6 +491,21 @@ describe('cleanup during an update', () => {
     cleanupAfterUpdate(target);
     const { existsSync } = await import('node:fs');
     expect(existsSync(`${target}.old`)).toBe(false);
+  });
+});
+
+describe('cleanup of a Kraki for Windows installer', () => {
+  it('removes an installer an applier left behind, once no update runs', async () => {
+    const { cleanupAfterUpdate, workDir } = await import('../remote-update.js');
+    const { existsSync } = await import('node:fs');
+    const left = join(workDir(), 'Kraki-Setup-0.1.12-x64.exe');
+    writeFileSync(left, 'SETUP');
+    writeFileSync(join(workDir(), 'plan.json'), '{}');
+    cleanupAfterUpdate('C:\\K\\Kraki.exe');
+    expect(existsSync(left)).toBe(true);
+    rmSync(join(workDir(), 'plan.json'));
+    cleanupAfterUpdate('C:\\K\\Kraki.exe');
+    expect(existsSync(left)).toBe(false);
   });
 });
 

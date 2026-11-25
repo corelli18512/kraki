@@ -1,26 +1,29 @@
-/// Turns a picked photo into the composer's JPEG attachment.
+/// Turns a picked photo into the composer's attachment: a GIF within the
+/// limits as it is (so it stays animated), anything else as a JPEG.
 
 #if os(iOS)
+import ImageIO
 import UIKit
 
 enum PhotoAttachmentLoad {
     enum Outcome: Equatable {
-        case image(Data)
+        case image(Data, mimeType: String)
         case unreadable
         case unsupported
         /// Still over the 3 MB cap after compression.
         case tooLarge
     }
 
-    static func jpeg(from data: Data?) -> Outcome {
-        guard let data else { return .unreadable }
-        guard let uiImage = UIImage(data: data) else { return .unsupported }
+    // Pixels, not points: the default renderer format uses the screen
+    // scale (3x), which turned a "1024" limit into 3072 px images.
+    // 1568 px is the long side vision models use without downscaling.
+    static let maxDimension: CGFloat = 1568
+    static let maxSize = 3 * 1024 * 1024
 
-        // Pixels, not points: the default renderer format uses the screen
-        // scale (3x), which turned a "1024" limit into 3072 px images.
-        // 1568 px is the long side vision models use without downscaling.
-        let maxDimension: CGFloat = 1568
-        let maxSize = 3 * 1024 * 1024
+    static func attachment(from data: Data?) -> Outcome {
+        guard let data else { return .unreadable }
+        if let gif = gifWithinLimits(data) { return .image(gif, mimeType: "image/gif") }
+        guard let uiImage = UIImage(data: data) else { return .unsupported }
 
         var targetImage = uiImage
         let pixelWidth = uiImage.size.width * uiImage.scale
@@ -36,10 +39,23 @@ enum PhotoAttachmentLoad {
 
         for quality in [0.8, 0.6] as [CGFloat] {
             if let compressed = targetImage.jpegData(compressionQuality: quality), compressed.count <= maxSize {
-                return .image(compressed)
+                return .image(compressed, mimeType: "image/jpeg")
             }
         }
         return .tooLarge
+    }
+
+    /// A GIF already within the size and dimension limits goes unchanged
+    /// (re-encoding keeps only its first frame). Larger GIFs are sent as a
+    /// still JPEG, like any other picture.
+    static func gifWithinLimits(_ data: Data) -> Data? {
+        guard ChatGIFAnimation.isGIF(data), data.count <= maxSize,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              width > 0, height > 0, max(width, height) <= maxDimension else { return nil }
+        return data
     }
 }
 #endif

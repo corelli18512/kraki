@@ -14,11 +14,12 @@
  */
 
 import { platform, uptime as osUptime } from 'node:os';
+import { adoptAccountDataOwner, switchAccountData } from './account-switch.js';
 import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFdaDetailed, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 import { hideChildWindowsByDefault } from './windows-hide.js';
-import { applyProcessProxy } from './proxy.js';
+import { applyProcessProxy, trustSystemCertificates, unsupportedProxy, unsupportedProxyMessage } from './proxy.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -50,7 +51,7 @@ import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
-import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
+import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity, updateRelayIssue } from './status-file.js';
 import { appManagedWorkerOwner, isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
 import { beginRun, endRun, noteRunFda, RUN_HEARTBEAT_MS, touchRun } from './run-record.js';
@@ -307,6 +308,27 @@ export async function startWorker(): Promise<WorkerResult> {
     process.exit(PERMANENT_EXIT_CODE);
   }
 
+  // 1b. Signed in with another account: this computer's identity and
+  // sessions are the previous account's. Move them aside before anything
+  // reads them, so the relay registers a new device for this account.
+  if (config.authMethod === 'github_token' && config.account?.login) {
+    startupPhase = 'account-switch';
+    const change = switchAccountData(config.account.login);
+    if (change.switched) {
+      config = { ...config, device: { ...config.device, id: getOrCreateDeviceId() } };
+      saveConfig(config);
+      logger.info(
+        { from: change.from, to: change.to, restored: change.restored, deviceId: config.device.id },
+        'Signed in with another account — set the previous account\'s device and sessions aside',
+      );
+      if (change.restoreError) {
+        logger.warn({ to: change.to, err: change.restoreError }, 'Could not restore all of this account\'s earlier data; the rest stays in accounts/');
+      }
+    }
+  }
+
+  const signsInWithGitHub = config.authMethod === 'github_token';
+
   // 2. Resolve relay auth token
   let token: string | undefined;
 
@@ -325,6 +347,10 @@ export async function startWorker(): Promise<WorkerResult> {
       logger.debug({ channelKeyPath }, `Loaded channel key from ${channelKeyPath}`);
     }
   }
+
+  // A PAC or SOCKS proxy is not used; say so where support looks (K-328).
+  const ignoredProxy = unsupportedProxy();
+  if (ignoredProxy) logger.warn({ proxy: ignoredProxy }, unsupportedProxyMessage(ignoredProxy));
 
   // 3. Initialize components
   const sessionManager = new SessionManager();
@@ -437,7 +463,11 @@ export async function startWorker(): Promise<WorkerResult> {
     adapter,
     sessionManager,
     {
-      relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
+      // The relay setup saved, always. KRAKI_RELAY_URL is only setup's default
+      // (the user can pick another there); letting it override the saved
+      // relay here connected the daemon to a relay `kraki status` did not
+      // show (K-125).
+      relayUrl: config.relay,
       device: {
         name: config.device.name,
         role: 'tentacle',
@@ -502,8 +532,17 @@ export async function startWorker(): Promise<WorkerResult> {
     if (info.user?.region) {
       updateRegion(info.user.region);
     }
+    updateRelayIssue(null);
+    // Installs set up before account.json: the relay names the account.
+    if (signsInWithGitHub && info.user?.login) {
+      try { adoptAccountDataOwner(info.user.login); } catch { /* recorded next time */ }
+    }
     announceUpdateResult();
   };
+
+  // Another daemon with this device id took the connection; this one stays
+  // offline (see RelayClient.deviceReplaced) and `kraki status` says why.
+  relay.onDeviceReplaced = () => updateRelayIssue('device_replaced');
 
   relay.onAccountDeleted = () => {
     logger.warn('The Kraki account was deleted — signing this computer out and stopping');
@@ -571,6 +610,7 @@ export async function startWorker(): Promise<WorkerResult> {
     runningSessions: () => relay.runningSessionCount(),
     runningSessionIds: () => relay.runningSessionIds(),
     emit: (p) => relay.sendUpdateStatus(p),
+    launch: (plan) => { remoteUpdate.launchApplier(plan); resultWatch.watch(); },
   });
   relay.onUpdateRequest = async (requestId, when, fromDeviceId) => {
     // The updater checks for the newest release itself before acting.
@@ -579,15 +619,17 @@ export async function startWorker(): Promise<WorkerResult> {
   const announceUpdateResult = () => {
     const r = remoteUpdate.takeUnannouncedResult();
     if (r) relay.sendUpdateStatus({ phase: r.phase, requestId: r.requestId, from: r.from, to: r.to, error: r.error });
+    return r;
   };
   // The applier writes the outcome only after this (new) daemon is online,
-  // so look for it for a few minutes after start, not just once.
-  let resultChecks = 0;
-  const resultWatch = setInterval(() => {
-    if (++resultChecks > 36) { clearInterval(resultWatch); return; }
-    if (relay.getState() === 'connected') announceUpdateResult();
-  }, 5000);
-  resultWatch.unref();
+  // so look for it for a few minutes after start, not just once; and while an
+  // update this daemon handed off runs (an installer that fails leaves it up).
+  const resultWatch = remoteUpdate.watchUpdateResult({
+    connected: () => relay.getState() === 'connected',
+    announce: announceUpdateResult,
+    pending: () => updater.inProgress,
+    finished: (requestId) => updater.applierFinished(requestId),
+  });
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {
@@ -598,7 +640,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
-  initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
+  initStatusFile(config.relay, config.device.name);
   const supervisorPid = Number(process.env.KRAKI_SUPERVISED) || undefined;
   updateDaemonIdentity({ managedBy: appManagedWorkerOwner() ?? 'cli', version: getVersion(), pid: process.pid, supervisorPid });
   if (pendingFda) updateFdaStatus(pendingFda);
@@ -655,6 +697,7 @@ const isDirectRun = process.argv[1]?.endsWith('daemon-worker.js') || process.arg
 if (isDirectRun) {
   hideChildWindowsByDefault();
   applyProcessProxy();
+  trustSystemCertificates();
   startWorker().catch((err) => {
     logger.fatal({ err }, 'Daemon failed to start');
     endRun('startup-failed');

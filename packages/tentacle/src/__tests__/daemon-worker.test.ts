@@ -116,6 +116,14 @@ let mockConfig: Record<string, unknown> | null = null;
 let mockChannelKey: string | null = null;
 
 const mockSaveDaemonPid = vi.fn();
+const mockSaveConfig = vi.fn();
+let mockAccountSwitch: Record<string, unknown> = { switched: false };
+const mockSwitchAccountData = vi.fn((_login: string) => mockAccountSwitch);
+const mockAdoptAccountDataOwner = vi.fn();
+vi.mock('../account-switch.js', () => ({
+  switchAccountData: (login: string) => mockSwitchAccountData(login),
+  adoptAccountDataOwner: (...args: unknown[]) => mockAdoptAccountDataOwner(...args),
+}));
 const mockSaveDaemonReady = vi.fn();
 const mockClearDaemonReady = vi.fn();
 const mockClearDaemonIdentity = vi.fn();
@@ -130,6 +138,7 @@ vi.mock('../config.js', () => ({
   getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
   getKrakiHome: vi.fn(() => '/tmp/fake-kraki'),
   getVersion: vi.fn(() => '0.0.0-test'),
+  saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   saveDaemonReady: (...args: unknown[]) => mockSaveDaemonReady(...args),
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
@@ -373,6 +382,28 @@ describe('daemon-worker: startWorker()', () => {
     );
   });
 
+  it('K-028: signed in with another account, sets the previous account\'s data aside before reading sessions', async () => {
+    mockConfig = { ...mockConfig, account: { login: 'bob' }, device: { name: 'test-machine', id: 'dev_accountA' } };
+    mockAccountSwitch = { switched: true, from: 'alice', to: 'bob', restored: false };
+    try {
+      const { SessionManager } = await import('../session-manager.js');
+      await startWorker();
+      expect(mockSwitchAccountData).toHaveBeenCalledWith('bob');
+      expect(mockSwitchAccountData.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(SessionManager).mock.invocationCallOrder[0]);
+      expect(mockSaveConfig).toHaveBeenCalledWith(expect.objectContaining({ device: { name: 'test-machine', id: 'dev_test123' } }));
+    } finally {
+      mockAccountSwitch = { switched: false };
+    }
+  });
+
+  it('K-028: an install set up before the account record names its owner from the relay', async () => {
+    await startWorker();
+    expect(mockSwitchAccountData).not.toHaveBeenCalled();
+    mockRelay.onAuthenticated?.({ deviceId: 'dev_test123', user: { login: 'alice' }, devices: [] });
+    expect(mockAdoptAccountDataOwner).toHaveBeenCalledWith('alice');
+  });
+
   it('sets up relay state change and auth callbacks', async () => {
     await startWorker();
     expect(mockRelay.onStateChange).toBeTypeOf('function');
@@ -395,6 +426,32 @@ describe('daemon-worker: startWorker()', () => {
       expect.objectContaining({ relay: 'wss://relay.kraki.chat', device: 'test-machine' }),
       expect.stringContaining('Daemon running'),
     );
+  });
+
+  it('K-125: connects to the relay saved by setup even when KRAKI_RELAY_URL is set', async () => {
+    const { RelayClient } = await import('../relay-client.js');
+    const prev = process.env.KRAKI_RELAY_URL;
+    process.env.KRAKI_RELAY_URL = 'ws://setup-default.example:4000';
+    try {
+      const { shutdown } = await startWorker();
+      const options = vi.mocked(RelayClient).mock.calls.at(-1)?.[2] as { relayUrl: string };
+      expect(options.relayUrl).toBe('wss://relay.kraki.chat');
+      await shutdown();
+    } finally {
+      if (prev === undefined) delete process.env.KRAKI_RELAY_URL; else process.env.KRAKI_RELAY_URL = prev;
+    }
+  });
+
+  it('K-123: records in status.json why it stays offline after another copy replaced it, until it connects again', async () => {
+    const { readStatusFile } = await import('../status-file.js');
+    const { shutdown } = await startWorker();
+    const relay = mockRelay as unknown as { onDeviceReplaced: (() => void) | null };
+    expect(relay.onDeviceReplaced).toBeTypeOf('function');
+    relay.onDeviceReplaced!();
+    expect(readStatusFile()?.relayIssue).toBe('device_replaced');
+    mockRelay.onAuthenticated!({ deviceId: 'dev_1', devices: [] });
+    expect(readStatusFile()?.relayIssue).toBeUndefined();
+    await shutdown();
   });
 
   it('reports an unclean previous run at startup', async () => {

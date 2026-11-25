@@ -223,7 +223,7 @@ final class ChatUXRegressionTests: XCTestCase {
             let width = content.bodyTextWidth(cellWidth: fx.cv.bounds.width)
             var truth: CGFloat = 0
             if let body = content.body {
-                for chunk in TKBodyChunks.chunks(body) {
+                for chunk in TKBodyChunks.chunks(body, splitCodeBlocks: true) {
                     truth += chunk.gapBefore + TKMeasure.height(body.attributedSubstring(from: chunk.range), width: width)
                 }
             }
@@ -667,7 +667,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
         let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
         XCTAssertEqual(sender.pendingState(pending), .sending)
-        drain(600)
+        drain { sender.pendingInputs(sid).first.map(sender.pendingState) == .unconfirmed }
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed,
                        "missing echo cannot prove delivery failure")
         XCTAssertEqual(sends, 2, "one silent same-clientId resend halfway through the window")
@@ -706,7 +706,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let sender = try XCTUnwrap(fx.app.commandSender)
         XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
         let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
-        drain(600) // silent resend, then shown unconfirmed
+        XCTAssertTrue(drain { sender.pendingInputs(sid).first.map(sender.pendingState) == .unconfirmed }) // silent resend, then shown unconfirmed
         XCTAssertTrue(fx.app.sendMetrics.summaries.isEmpty, "still in flight")
         XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
         drain(50)
@@ -721,7 +721,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(summary.manualRetries, 1)
         XCTAssertFalse(summary.falseAlarm, "the user had to retry")
         XCTAssertGreaterThan(summary.shownMs, 0)
-        XCTAssertGreaterThan(try XCTUnwrap(summary.confirmMs), 400)
+        XCTAssertGreaterThan(try XCTUnwrap(summary.confirmMs), summary.shownMs + 200, "from the send (200 ms window), not the retry")
         XCTAssertEqual(summary.textLength, 5)
     }
 

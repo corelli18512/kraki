@@ -24,6 +24,9 @@ export interface DaemonStatusFile {
   supervisorPid?: number;
   version?: string;
   pid?: number;
+  /** Why the daemon stays disconnected on purpose: another connection with
+   *  this device id replaced it (K-123). Cleared once connected again. */
+  relayIssue?: 'device_replaced';
   updatedAt: number;
 }
 
@@ -52,6 +55,12 @@ export function initStatusFile(relay: string, deviceName: string): void {
 
 export function updateRelayState(state: DaemonStatusFile['relayState']): void {
   _current = { ..._current, relayState: state, updatedAt: Date.now() };
+  writeStatus();
+}
+
+export function updateRelayIssue(relayIssue: DaemonStatusFile['relayIssue'] | null): void {
+  const { relayIssue: _previous, ...rest } = _current;
+  _current = { ...rest, ...(relayIssue && { relayIssue }), updatedAt: Date.now() };
   writeStatus();
 }
 

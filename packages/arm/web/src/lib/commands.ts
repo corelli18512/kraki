@@ -1,5 +1,10 @@
 import { toWireSessionMode, type SessionMode } from '@kraki/protocol';
+import { t } from '../i18n';
 import { getStore } from './store-adapter';
+
+/** No session_created or error for a create/import this long: give up on it
+ *  (iOS/Mac CommandSender.schedulePendingTimeout). */
+export const CREATE_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Instance-scoped tracking for create_session requests. */
 export class CommandState {
@@ -44,6 +49,20 @@ export class CommandState {
     this.pendingPrompts.delete(requestId);
     this.pendingCreateRequests.delete(requestId);
     this.forkSources.delete(requestId);
+  }
+
+  /** A create/import still unanswered after CREATE_REQUEST_TIMEOUT_MS: its
+   *  first message goes back to the draft (clearRequest), an import's pending
+   *  page goes away, and the user is told. A late session_created still adds
+   *  the session to the list, without sending the prompt or navigating. */
+  expireRequestLater(requestId: string, pendingSessionId?: string): void {
+    setTimeout(() => {
+      if (!this.pendingCreateRequests.has(requestId)) return;
+      this.clearRequest(requestId);
+      const store = getStore();
+      if (pendingSessionId) store.removePendingSession(pendingSessionId);
+      store.setLastError(t('app:errors.requestTimedOut'));
+    }, CREATE_REQUEST_TIMEOUT_MS);
   }
 
   /** Track an outgoing mode change so the echo can be suppressed. */
@@ -173,6 +192,7 @@ export function createSession(
   if (opts.prompt) {
     state.pendingPrompts.set(requestId, opts.prompt);
   }
+  state.expireRequestLater(requestId);
   send({
     type: 'create_session',
     payload: {
@@ -225,11 +245,51 @@ export function renameSession(
   });
 }
 
+/** Longest a pin request waits for its `session_pinned` echo; after that a
+ *  lost echo no longer hides pin changes made on other devices. */
+export const PIN_ECHO_TIMEOUT_MS = 10_000;
+
+/** Pin requests sent from this app whose echoes have not all come back. The
+ *  Tentacle echoes every request in order, so under latency rapid toggles
+ *  bring back superseded states that would make the row jump (K-207). */
+const pendingPins = new Map<string, { echoes: number; pinned: boolean; sentAt: number }>();
+
+function livePendingPin(sessionId: string) {
+  const entry = pendingPins.get(sessionId);
+  if (entry && Date.now() - entry.sentAt > PIN_ECHO_TIMEOUT_MS) {
+    pendingPins.delete(sessionId);
+    return undefined;
+  }
+  return entry;
+}
+
+/** The pin state this app last requested while echoes are outstanding. */
+export function pendingPin(sessionId: string): boolean | undefined {
+  return livePendingPin(sessionId)?.pinned;
+}
+
+/** A `session_pinned` arrived: false while it is the echo of a superseded
+ *  request from this app (the last echo, or any other change, applies). */
+export function settlePinEcho(sessionId: string): boolean {
+  const entry = livePendingPin(sessionId);
+  if (!entry) return true;
+  entry.echoes -= 1;
+  if (entry.echoes > 0) return false;
+  pendingPins.delete(sessionId);
+  return true;
+}
+
+export function resetPendingPins(): void {
+  pendingPins.clear();
+}
+
 export function pinSession(
   sessionId: string,
   pinned: boolean,
   send: (msg: Record<string, unknown>) => void,
 ): void {
+  const pending = livePendingPin(sessionId);
+  pendingPins.set(sessionId, { echoes: (pending?.echoes ?? 0) + 1, pinned, sentAt: Date.now() });
   // Optimistically update local store
   const store = getStore();
   const next = new Set(store.pinnedSessions);
@@ -317,6 +377,7 @@ export function importSession(
   const store = getStore();
   store.addPendingSession(localSessionId);
   store.setNavigateToSession(localSessionId);
+  state.expireRequestLater(requestId, localSessionId);
   send({
     type: 'import_session',
     payload: { requestId, localSessionId, targetDeviceId, ...(meta && { meta }) },

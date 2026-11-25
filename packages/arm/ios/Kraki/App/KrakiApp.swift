@@ -45,6 +45,11 @@ struct KrakiApp: App {
         _appState = State(initialValue: AppState())
         #endif
         TKMarkdown.prewarmSyntaxHighlighter()
+        // Share sheet copies of chat images left by a previous run (not in
+        // a test host, whose tests write their own).
+        if !NativeTestRuntime.isRunningTests {
+            Task.detached(priority: .utility) { ChatImageFile.removeTemporaryCopies() }
+        }
         UIScrollView.appearance().showsVerticalScrollIndicator = false
         UIScrollView.appearance().showsHorizontalScrollIndicator = false
     }
@@ -54,15 +59,6 @@ struct KrakiApp: App {
         if voiceHoldScenarioEnabled, ProcessInfo.processInfo.environment["KRAKI_VOICE_TEST_DARK"] == "1" { return .dark }
         #endif
         return selectedScheme.colorScheme
-    }
-
-    private var pairingPromptTitle: String {
-        switch appState.pendingPairingPrompt {
-        case .confirmRelay: return String(localized: "Connect to a Self-Hosted Server?")
-        case .alreadyConnected: return String(localized: "Already Connected")
-        case .replaceComputerKey(_, let name): return String(localized: "New Key for \(name)?")
-        case nil: return ""
-        }
     }
 
     var body: some Scene {
@@ -142,6 +138,8 @@ struct KrakiApp: App {
                 #endif
             }
             .overlay(alignment: .top) { PairingFeedbackToast() }
+            // Over any open sheet: a root `.alert` would dismiss it (K-079).
+            .modifier(PairingPromptAlerts())
             .environment(appState)
             .preferredColorScheme(effectiveColorScheme)
             // Pairing QR scanned with the iPhone Camera (universal link) or
@@ -152,50 +150,6 @@ struct KrakiApp: App {
             .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                 if let url = activity.webpageURL, let link = PairingLink(url: url) {
                     appState.openPairingLink(link)
-                }
-            }
-            .alert(
-                "Computer Key Changed",
-                isPresented: Binding(
-                    get: { appState.keyWarning != nil && appState.pendingPairingPrompt == nil },
-                    set: { if !$0, let ids = appState.keyWarning?.ids { appState.acknowledgedKeyWarnings.formUnion(ids) } }
-                )
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(appState.keyWarning?.message ?? "")
-            }
-            .alert(
-                pairingPromptTitle,
-                isPresented: Binding(
-                    get: { appState.pendingPairingPrompt != nil },
-                    set: { if !$0 { appState.pendingPairingPrompt = nil } }
-                ),
-                presenting: appState.pendingPairingPrompt
-            ) { prompt in
-                switch prompt {
-                case .confirmRelay(let link):
-                    Button("Connect") { appState.openPairingLink(link, relayConfirmed: true) }
-                    Button("Cancel", role: .cancel) { appState.pendingPairingPrompt = nil }
-                case .alreadyConnected(let link, _):
-                    Button("Log Out and Connect", role: .destructive) { appState.logoutAndPair(link) }
-                    Button("Keep Current", role: .cancel) { appState.pendingPairingPrompt = nil }
-                case .replaceComputerKey(let link, _):
-                    Button("Pair Anyway", role: .destructive) {
-                        appState.pendingPairingPrompt = nil
-                        appState.openPairingLink(link, relayConfirmed: true, keyChangeConfirmed: true)
-                    }
-                    Button("Cancel", role: .cancel) { appState.pendingPairingPrompt = nil }
-                }
-            } message: { prompt in
-                switch prompt {
-                case .confirmRelay(let link):
-                    Text("This code connects to \(link.relayHost), which is not a Kraki server. Continue only if you set up this server yourself.")
-                case .alreadyConnected(_, let login):
-                    Text(login.map { String(localized: "This iPhone is already connected as \($0). To connect a different account, log out first.") }
-                        ?? String(localized: "This iPhone is already connected. To connect a different account, log out first."))
-                case .replaceComputerKey(_, let name):
-                    Text("This code has a different key than the one you paired with \(name). Continue only if you reinstalled Kraki there — otherwise someone may be trying to intercept your sessions.")
                 }
             }
         }

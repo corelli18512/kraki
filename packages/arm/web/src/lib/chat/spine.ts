@@ -52,15 +52,17 @@ export interface QuestionSpec {
   id: string;
   text: string;
   choices: string[];
+  /** Several choices may be given (typed, separated by commas). */
+  multiSelect: boolean;
 }
 
 /** `agent_message.payload.question`: the agent asked the human. */
 export function questionSpecOf(message: ChatMessage): QuestionSpec | undefined {
   if (message.type !== 'agent_message') return undefined;
-  const q = payloadOf(message).question as { id?: unknown; text?: unknown; choices?: unknown } | undefined;
+  const q = payloadOf(message).question as { id?: unknown; text?: unknown; choices?: unknown; multiSelect?: unknown } | undefined;
   if (!q || typeof q.id !== 'string') return undefined;
   const choices = Array.isArray(q.choices) ? q.choices.filter((c): c is string => typeof c === 'string') : [];
-  return { id: q.id, text: str(q.text) ?? '', choices };
+  return { id: q.id, text: str(q.text) ?? '', choices, multiSelect: q.multiSelect === true && choices.length > 0 };
 }
 
 export type QuestionState = 'open' | 'answered' | 'unanswered' | 'undetermined';
@@ -108,14 +110,15 @@ export interface SpineItem {
  * - anything else → unanswered. When that is the draft-less terminal status
  *   of the turn, its outcome is drawn inside the question bubble and the empty
  *   status row itself is not rendered (`shouldRender`);
- * - nothing yet: open at the conversation head, otherwise undetermined.
+ * - nothing yet: open at the conversation head, otherwise undetermined;
+ *   unanswered once the agent withdrew it (`withdrawn`, K-022).
  */
 /** Runtime signals that ride beside the spine. They say nothing about a
  *  question: `active` with a broadcast seq can sort after a question the
  *  agent asked later (range merges order by seq), and must not close it. */
 const RUNTIME_SIGNALS = new Set(['active', 'compacting', 'pending_input']);
 
-export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
+export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): SpineItem[] {
   const items: SpineItem[] = raw.map((message) => ({ message }));
   if (!raw.some((m) => questionSpecOf(m))) return items;
   for (let index = 0; index < raw.length; index++) {
@@ -134,6 +137,7 @@ export function presentQuestions(raw: ChatMessage[], pendingAnswerTo: string[], 
     if (!presentation) {
       presentation = pendingAnswerTo.includes(spec.id)
         ? { state: 'answered' }
+        : withdrawn.includes(spec.id) ? { state: 'unanswered' }
         : { state: atHead ? 'open' : 'undetermined' };
     }
     items[index] = { message: raw[index], question: presentation };
@@ -320,9 +324,9 @@ export function shouldRender(item: SpineItem): boolean {
 }
 
 /** The whole pipeline the chat list draws (spine + derived question state). */
-export function spineRows(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
+export function spineRows(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): SpineItem[] {
   const visible: SpineItem[] = [];
-  for (const item of projectTurns(presentQuestions(raw, pendingAnswerTo, atHead))) {
+  for (const item of projectTurns(presentQuestions(raw, pendingAnswerTo, atHead, withdrawn))) {
     if (shouldRender(item)) {
       visible.push(item);
       continue;
@@ -360,8 +364,9 @@ export interface FrozenCard {
 
 /** Body text + action slot of a row drawn as a frozen card (the same bubble
  *  as the live card): a terminal status (its draft + outcome), or a question
- *  (lead-in and **bold** question — identical in every state — plus choices
- *  while open, or the outcome of the turn that ended while it was asked). */
+ *  (lead-in, **bold** question and the multi-select hint — identical in every
+ *  state — plus choices while open, or the outcome of the turn that ended
+ *  while it was asked). */
 export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
   const { message } = item;
   const spec = questionSpecOf(message);
@@ -371,6 +376,7 @@ export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
     if (lead) parts.push(lead);
     const bold = spec.text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => `**${l}**`).join('\n');
     if (bold) parts.push(bold);
+    if (spec.multiSelect) parts.push(t('chat:question.multiSelectHint'));
     let action: CardAction | undefined;
     if (item.question?.state === 'open') action = { type: 'question', id: spec.id, choices: spec.choices };
     else if (item.question?.outcome) action = { ...item.question.outcome };
@@ -382,9 +388,9 @@ export function frozenCardOf(item: SpineItem): FrozenCard | undefined {
 }
 
 /** Open questions (oldest first); the composer answers the newest one. */
-export function openQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): QuestionSpec[] {
+export function openQuestions(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean, withdrawn: string[] = []): QuestionSpec[] {
   if (!raw.some((m) => questionSpecOf(m))) return [];
-  return presentQuestions(raw, pendingAnswerTo, atHead)
+  return presentQuestions(raw, pendingAnswerTo, atHead, withdrawn)
     .filter((item) => item.question?.state === 'open')
     .map((item) => questionSpecOf(item.message)!)
     .filter(Boolean);

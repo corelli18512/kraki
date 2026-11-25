@@ -193,6 +193,15 @@ describe('ApiKeyAuthProvider', () => {
 });
 
 describe('OpenAuthProvider with shared key', () => {
+  it('ignores a trailing newline on the server key, as clients trim theirs (K-279)', async () => {
+    const provider = new OpenAuthProvider('my-shared-secret\n');
+    expect((await provider.authenticate({ token: 'my-shared-secret', remoteClient: true })).ok).toBe(true);
+    expect(provider.isOwnSecret('my-shared-secret')).toBe(true);
+    expect((await provider.authenticate({ token: 'other', remoteClient: true })).ok).toBe(false);
+    // A whitespace-only key is no key: remote clients are still refused.
+    expect((await new OpenAuthProvider(' \n').authenticate({ token: ' \n', remoteClient: true })).ok).toBe(false);
+  });
+
   it('should accept matching shared key', async () => {
     const provider = new OpenAuthProvider('my-shared-secret');
     const result = await provider.authenticate({ token: 'my-shared-secret' });

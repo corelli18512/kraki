@@ -81,4 +81,14 @@ final class MacUpdateChannelTests: XCTestCase {
                        .staysUntilNextFormalRelease(build: "93.57"))
         XCTAssertEqual(MacUpdateChannel.note(for: .stable, bundleVersion: "93"), .formalReleasesOnly)
     }
+
+    /// Dev builds have no updater: "Check for Updates…" is disabled there
+    /// instead of doing nothing (K-360).
+    func testOnlyTheProductionAppOffersCheckForUpdates() {
+        XCTAssertTrue(MacUpdateController.updatesAvailable(bundleIdentifier: "chat.kraki.mac"))
+        XCTAssertFalse(MacUpdateController.updatesAvailable(bundleIdentifier: "chat.kraki.mac.dev"))
+        XCTAssertFalse(MacUpdateController.updatesAvailable(bundleIdentifier: "chat.kraki.mac.diag"))
+        XCTAssertFalse(MacUpdateController.updatesAvailable(bundleIdentifier: nil))
+        XCTAssertFalse(MacUpdateController.updatesAvailable(), "this test host is not the production app")
+    }
 }

@@ -85,6 +85,13 @@ export class InputLedgerStore {
     return this.inputLedgerCache.get(sessionId)!.map((entry) => ({ ...entry }));
   }
 
+  /** The ledger as stored, without caching it or loading the client index:
+   *  for the one look at every session at startup (closeTurnLostInRestart). */
+  peekInputLedger(sessionId: string): InputLedgerEntry[] {
+    const cached = this.inputLedgerCache.get(sessionId);
+    return cached ? cached.map((entry) => ({ ...entry })) : this.loadInputLedger(sessionId);
+  }
+
   getInputLedgerEntry(sessionId: string, clientId: string): InputLedgerEntry | null {
     const current = this.getInputLedger(sessionId).find((entry) => entry.clientId === clientId);
     if (current) return current;

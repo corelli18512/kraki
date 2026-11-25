@@ -172,12 +172,13 @@ extension MacAutomationDriver {
             state.messageProvider?.onDisconnected()
             let afterKinds = state.messageProvider?.outstandingKinds(sessionId) ?? []
             let afterWindowCount = state.messageProvider?.currentWindow(sessionId).count ?? 0
-            let metadataCleared = state.messageProvider?.tentacleLastKnownSeq(sessionId) == nil
+            // K-012: a disconnect keeps the known Tentacle head so an open question stays answerable.
+            let headRetained = state.messageProvider?.tentacleLastKnownSeq(sessionId) == 99
             let loadingCleared = !state.sessionStore.loadingSessions.contains(sessionId)
             let passed = beforeKinds.count == 3
                 && afterKinds.isEmpty
                 && loadingCleared
-                && metadataCleared
+                && headRetained
                 && beforeWindowCount == 1
                 && afterWindowCount == 1
             return [
@@ -185,7 +186,7 @@ extension MacAutomationDriver {
                 "beforeSlots": beforeKinds.map { String(describing: $0) },
                 "afterSlots": afterKinds.map { String(describing: $0) },
                 "loadingCleared": loadingCleared,
-                "metadataCleared": metadataCleared,
+                "headRetained": headRetained,
                 "beforeWindowCount": beforeWindowCount,
                 "afterWindowCount": afterWindowCount,
             ]

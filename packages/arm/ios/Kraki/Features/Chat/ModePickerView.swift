@@ -159,6 +159,17 @@ struct TintedSegmentedControl: UIViewRepresentable {
         }
     }
 
+    /// Take the offered width rather than the sum of the segment titles: long
+    /// localized titles truncate inside their segments instead of pushing the
+    /// control past its row (the chat header's Back button off-screen).
+    /// Unconstrained (`fixedSize`), it keeps its natural width.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
+        let natural = uiView.intrinsicContentSize
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? natural.width
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? natural.height
+        return CGSize(width: width, height: height)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     class Coordinator: NSObject {

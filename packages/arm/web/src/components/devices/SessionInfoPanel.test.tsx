@@ -28,6 +28,11 @@ describe('SessionInfoPanel native sheet parity', () => {
     expect(writeText).toHaveBeenCalledWith('complete-session-id');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Session ID copied' })).toBeInTheDocument());
   });
+  it('K-215: shows "couldn\'t copy" when the Clipboard API is missing (http self-host)', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    open(); fireEvent.click(screen.getByRole('button', { name: 'Copy Session ID' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  });
   it('shows thinking without opening a picker and applies it and model changes immediately', () => {
     open();
     fireEvent.click(screen.getByRole('radio', { name: 'High' }));
@@ -88,6 +93,33 @@ it('keeps USD notation and precision in Chinese for ordinary costs', async () =>
   } finally { await act(async () => { await i18next.changeLanguage('en'); }); }
 });
 
+// K-305 owner choice: the cost symbol is the plain "$", never "US$", in both
+// app languages and whatever the browser's region is.
+it('shows the total cost with a plain $ symbol, never US$, in every language and region (K-305)', async () => {
+  const { i18next } = await import('../../i18n');
+  const { act, cleanup } = await import('@testing-library/react');
+  const languages = vi.spyOn(navigator, 'languages', 'get');
+  const language = vi.spyOn(navigator, 'language', 'get');
+  try {
+    for (const region of ['en-US', 'en-GB', 'zh-Hans-CN', 'de-DE']) {
+      languages.mockReturnValue([region]);
+      language.mockReturnValue(region);
+      for (const lang of ['en', 'zh-Hans']) {
+        await act(async () => { await i18next.changeLanguage(lang); });
+        render(<SessionInfoPanel session={session} usage={{ ...usage, totalCost: 1234.568 }} onClose={close} />);
+        const cost = screen.getByText((text) => text.includes('1234.568') || text.includes('1,234.568'));
+        expect(cost.textContent).toMatch(/^\$/);
+        expect(cost.textContent).not.toContain('US');
+        cleanup();
+      }
+    }
+  } finally {
+    languages.mockRestore();
+    language.mockRestore();
+    await act(async () => { await i18next.changeLanguage('en'); });
+  }
+});
+
 it('shows an effort level it has no copy for as the agent reported it, not as a translation key', () => {
   const unknown: ModelDetail[] = [{ ...details[0], supportedReasoningEfforts: ['minimal' as never, 'low'] }];
   render(<SessionInfoPanel session={session} usage={usage} models={['m1']} modelDetails={unknown} onClose={close} />);
@@ -107,4 +139,70 @@ it('Enter or Escape that confirms an IME candidate in the title neither saves no
   fireEvent.compositionEnd(input);
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(commands.renameSession).toHaveBeenCalledWith(session.id, '新标题');
+});
+
+// K-101: Safari's default Tab order skips buttons, so focus can sit on a
+// control that is not the last one when Tab should wrap. The sheet moves focus
+// itself on every Tab instead of only at the ends.
+it('keeps Tab inside the sheet from any control, as Safari skips buttons (K-101)', () => {
+  open();
+  const model = screen.getByRole('combobox', { name: 'Model' });
+  model.focus();
+  const panel = model.closest('.ksi-panel') as HTMLElement;
+  const notPrevented = fireEvent.keyDown(model, { key: 'Tab' });
+  expect(notPrevented).toBe(false);
+  expect(panel.contains(document.activeElement)).toBe(true);
+  expect(document.activeElement).not.toBe(model);
+  const done = screen.getByRole('button', { name: 'Done' });
+  done.focus();
+  expect(fireEvent.keyDown(done, { key: 'Tab', shiftKey: true })).toBe(false);
+  expect(panel.contains(document.activeElement)).toBe(true);
+  expect(document.activeElement).not.toBe(done);
+});
+
+// K-101 review: the Delete confirmation sits inside the sheet and has its own
+// Tab trap (a window capture listener). The sheet must not undo its move.
+it('cycles Tab between the Delete confirmation buttons only (K-101)', () => {
+  open();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  const alert = screen.getByRole('alertdialog');
+  const cancel = screen.getByRole('button', { name: 'Cancel' });
+  const destructive = alert.querySelector<HTMLButtonElement>('.is-destructive')!;
+  destructive.focus();
+  fireEvent.keyDown(destructive, { key: 'Tab' });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: 'Tab' });
+  expect(document.activeElement).toBe(destructive);
+  fireEvent.keyDown(destructive, { key: 'Tab', shiftKey: true });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+  expect(document.activeElement).toBe(destructive);
+});
+
+// K-208: Rename… opens Session Info with the title already in edit mode.
+it('opens straight into title editing for Rename… (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, title: 'Old title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement;
+  expect(input).toHaveFocus();
+  expect(input.value).toBe('Old title');
+  expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+});
+
+// K-208 review: Rename… then Done without a change must not save the automatic
+// title as a manual one (the Tentacle would stop updating it).
+it('Rename… then Done without a change keeps the automatic title (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, autoTitle: 'Auto title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' });
+  fireEvent.blur(input);
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+  expect(commands.renameSession).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalled();
+});
+
+it('saves a changed title on blur (K-208)', () => {
+  render(<SessionInfoPanel session={{ ...session, autoTitle: 'Auto title' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} startEditingTitle />);
+  const input = screen.getByRole('textbox', { name: 'Session title' });
+  fireEvent.change(input, { target: { value: 'Mine' } });
+  fireEvent.blur(input);
+  expect(commands.renameSession).toHaveBeenCalledWith(session.id, 'Mine');
 });

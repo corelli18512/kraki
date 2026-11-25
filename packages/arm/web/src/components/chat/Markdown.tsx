@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -13,11 +13,41 @@ function textOf(node: ReactNode): string {
   return '';
 }
 
+/** Agent text is not trusted to make this browser fetch anything: a remote
+ *  `![](https://…)` would tell a third party who read the message, and when.
+ *  An image shows as a link the user may open. */
+/** True inside a markdown link: a linked image (a badge) is that link's
+ *  label, not a second link nested in it. */
+const InsideLink = createContext(false);
+
+function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+  const insideLink = useContext(InsideLink);
+  const url = typeof src === 'string' ? src : '';
+  const label = alt || url;
+  if (!insideLink && /^https?:\/\//i.test(url)) {
+    return <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>;
+  }
+  return label ? <span>{label}</span> : null;
+}
+
 /** Markdown elements styled like the native bubbles (see chat.css `.kmd`). */
 const components: Components = {
+  // Each text block takes its direction from its own first strong character,
+  // so Arabic / Hebrew paragraphs read right-to-left (punctuation included)
+  // inside the otherwise left-to-right app.
+  p: ({ node: _node, ...props }) => <p dir="auto" {...props} />,
+  li: ({ node: _node, ...props }) => <li dir="auto" {...props} />,
+  blockquote: ({ node: _node, ...props }) => <blockquote dir="auto" {...props} />,
+  h1: ({ node: _node, ...props }) => <h1 dir="auto" {...props} />,
+  h2: ({ node: _node, ...props }) => <h2 dir="auto" {...props} />,
+  h3: ({ node: _node, ...props }) => <h3 dir="auto" {...props} />,
+  h4: ({ node: _node, ...props }) => <h4 dir="auto" {...props} />,
+  h5: ({ node: _node, ...props }) => <h5 dir="auto" {...props} />,
+  h6: ({ node: _node, ...props }) => <h6 dir="auto" {...props} />,
   a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    <a href={href} target="_blank" rel="noopener noreferrer"><InsideLink.Provider value>{children}</InsideLink.Provider></a>
   ),
+  img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   // ReactMarkdown emits a newline after each hard-break node. Prose preserves
   // that newline in CSS; retaining <br> as well would introduce a blank line.
   br: () => null,
@@ -42,8 +72,8 @@ const components: Components = {
     : null),
 };
 
-/** Inline elements inside table cells (links open outside). */
-const cellComponents = { a: components.a };
+/** Inline elements inside table cells (links open outside; no remote images). */
+const cellComponents = { a: components.a, img: components.img };
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
@@ -103,6 +133,13 @@ export function useThrottledValue<T>(value: T, ms: number): T {
   return shown;
 }
 
+/** A fence still arriving (one or two backticks or tildes alone on the last
+ *  line) is not shown: remend leaves it as text, so "``" flashed in the draft
+ *  until the third backtick opened the block (K-223). */
+export function withoutPartialFence(text: string): string {
+  return text.replace(/(^|\n) {0,3}(`{1,2}|~{1,2})$/, '$1');
+}
+
 /**
  * A streaming draft: `remend` closes unterminated markers so partial text
  * never flashes raw syntax, and the re-parse is throttled so a fast token
@@ -110,7 +147,7 @@ export function useThrottledValue<T>(value: T, ms: number): T {
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }) {
   const shown = useThrottledValue(text, STREAMING_RENDER_MS);
-  const repaired = useMemo(() => remend(shown), [shown]);
+  const repaired = useMemo(() => remend(withoutPartialFence(shown)), [shown]);
   return <Markdown text={repaired} />;
 });
 

@@ -41,14 +41,15 @@ describe('SettingsPanel localization', () => {
     await chinese();
     render(<SettingsPanel open onClose={vi.fn()} />);
     await user.click(screen.getByRole('tab', { name: '关于' }));
-    expect(screen.getByText('后台服务')).toBeInTheDocument();
+    // A browser has no Background Service (Kraki for Windows only) (K-233).
+    expect(screen.queryByText('后台服务')).not.toBeInTheDocument();
     expect(screen.getByText('中继服务器')).toBeInTheDocument();
     expect(screen.getByText('设备 ID')).toBeInTheDocument();
     expect(screen.getByText('Kraki 4.5.6 · 离线')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '复制诊断信息' }));
     expect(write).toHaveBeenCalledTimes(1);
     const text = write.mock.calls[0][0];
-    expect(text).toMatch(/^Background Service: —\nKraki Web: [^\n]+\nMy Mac: Kraki 4\.5\.6 · offline\nRelay: localhost · 1\.2\.3\nDevice ID: self$/);
+    expect(text).toMatch(/^Kraki Web: [^\n]+\nMy Mac: Kraki 4\.5\.6 · offline\nRelay: localhost · 1\.2\.3\nDevice ID: self$/);
     write.mockRestore();
   });
   it('shows a raised error in the language the user switches to', async () => {
@@ -68,7 +69,7 @@ describe('SettingsPanel localization', () => {
     await chinese();
     expect(screen.getByRole('dialog', { name: '设置' })).toHaveAttribute('data-testid', 'settings-window');
     expect(screen.getByRole('radio', { name: '跟随系统' })).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['通用', '账户', '语音输入', '通知', '这台电脑', '设备', '关于']);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['通用', '账户', '语音输入', '通知', '设备', '关于']);
     fireEvent.click(screen.getByRole('tab', { name: '账户' }));
     expect(screen.getByText('通过 GitHub 登录')).toBeInTheDocument();
     expect(screen.getAllByText('octocat')).toHaveLength(2);
