@@ -54,6 +54,7 @@ import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { EdgeAuthCache } from './edge-auth-cache.js';
 import { AccountApi } from './account-api.js';
 import { InflightRequests } from './http-drain.js';
+import { parseTestAccounts, parseTestLoginAppUrl, TestAccountAuthProvider, TEST_ACCOUNT_PROVIDER } from './test-accounts.js';
 
 /** Shutdown waits this long for HTTP requests still being answered. */
 const SHUTDOWN_DRAIN_MS = 2_000;
@@ -113,6 +114,20 @@ if (args.includes('--help') || args.includes('-h')) {
     --public-relay-url <url> Public relay URL for this head (env: PUBLIC_RELAY_URL)
     --region-urls <json>  Region → relay URL map, JSON (env: REGION_URLS, legacy fallback)
                            Example: '{"us":"wss://us.example.com","cn":"wss://cn.example.com"}'
+    DEFAULT_SIGNUP_REGION Region for new accounts from countries outside the built-in
+                           Asia-Pacific / China table (Americas, Europe, Africa,
+                           unknown). Main head only; default: us. Must be an
+                           enabled region, otherwise the usual fallback applies.
+
+  Operator test accounts (main head only, env only; off when unset):
+    TEST_ACCOUNTS          JSON array of {"login":"qa-…","region":"<code>","tokenSha256":"<hex>"}.
+                           Signs in as user test:<login> without GitHub, through
+                           POST /api/test-login {"token":…} (returns a pairing link)
+                           or a CLI set up with --auth apikey --api-key <token>.
+    TEST_LOGIN_APP_URL     Web app of the /api/test-login pairing link
+                           (default: https://app.kraki.chat). https, no query
+                           or fragment; with TEST_ACCOUNTS set, anything else
+                           stops the relay at start.
 
   Voice broker leases:
     VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
@@ -190,6 +205,9 @@ const REGION = flag('region', process.env.REGION || '');
 const PUBLIC_RELAY_URL = flag('public-relay-url', process.env.PUBLIC_RELAY_URL || '');
 const REGION_DISPLAY_NAME = flag('display-name', process.env.REGION_DISPLAY_NAME || '');
 const MAIN_URL = flag('main-url', process.env.MAIN_URL || '');
+const DEFAULT_SIGNUP_REGION = process.env.DEFAULT_SIGNUP_REGION?.trim().toLowerCase() || undefined;
+const TEST_ACCOUNTS_RAW = process.env.TEST_ACCOUNTS ?? '';
+const TEST_LOGIN_APP_URL = process.env.TEST_LOGIN_APP_URL?.trim() || undefined;
 const REGION_URLS_RAW = flag('region-urls', process.env.REGION_URLS || '');
 let REGION_URLS: Record<string, string> = {};
 if (REGION_URLS_RAW) {
@@ -407,6 +425,19 @@ async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
         process.exit(1);
     }
   }
+  let testAccounts;
+  try {
+    testAccounts = parseTestAccounts(TEST_ACCOUNTS_RAW);
+    // The pairing link is only served with test accounts on.
+    if (testAccounts.length > 0) parseTestLoginAppUrl(TEST_LOGIN_APP_URL);
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  if (testAccounts.length > 0) {
+    providers.set(TEST_ACCOUNT_PROVIDER, new ThrottledAuthProvider(new TestAccountAuthProvider(testAccounts)));
+    logger.info('Test accounts enabled', { accounts: testAccounts.map((a) => `${a.login}@${a.region}`).join(', ') });
+  }
   return providers;
 }
 
@@ -502,6 +533,9 @@ if (IS_CONNECTED_MODE) {
   // Connected mode still needs local storage for devices, pending, push tokens
   if (!storage) storage = new Storage(DB_PATH);
 
+  if (TEST_ACCOUNTS_RAW.trim()) logger.warn('TEST_ACCOUNTS is ignored on an edge: set it on the main head');
+  if (DEFAULT_SIGNUP_REGION) logger.warn('DEFAULT_SIGNUP_REGION is ignored on an edge: set it on the main head');
+
   // Known devices sign in against this edge's copy of the account service's
   // last answer (EdgeAuthCache); only active once the account service answers
   // device status polls. KRAKI_EDGE_LOCAL_AUTH=0 keeps every auth remote.
@@ -525,14 +559,15 @@ if (IS_CONNECTED_MODE) {
     pushManager,
     region: REGION || undefined,
     regionUrls: REGION_URLS,
+    defaultSignupRegion: DEFAULT_SIGNUP_REGION,
   });
   authBackend = localBackend;
 
   // Expose account API for public region discovery / login-first flows.
   // If SERVICE_KEY is configured it acts as an admin credential; registered
   // edges can also authenticate with their issued per-region service key.
-  accountApi = new AccountApi({ authBackend: localBackend, serviceKey: SERVICE_KEY || undefined });
-  logger.info('Account API enabled', { adminKeyConfigured: !!SERVICE_KEY });
+  accountApi = new AccountApi({ authBackend: localBackend, serviceKey: SERVICE_KEY || undefined, appUrl: TEST_LOGIN_APP_URL });
+  logger.info('Account API enabled', { adminKeyConfigured: !!SERVICE_KEY, defaultSignupRegion: DEFAULT_SIGNUP_REGION ?? 'us' });
 }
 
 // --- Voice lease issuance (optional) ---
