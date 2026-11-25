@@ -614,22 +614,22 @@ describe('RemoteAuthBackend', () => {
 // ── IP Geo utilities ────────────────────────────────────
 
 describe('IP Geo — regionForCountry', () => {
-  it('should map China to china region', () => {
+  it('should map Greater China to china region', () => {
     expect(regionForCountry('CN')).toBe('china');
     expect(regionForCountry('HK')).toBe('china');
     expect(regionForCountry('MO')).toBe('china');
     expect(regionForCountry('TW')).toBe('china');
   });
 
-  it('should map Asian countries to china region', () => {
-    expect(regionForCountry('JP')).toBe('china');
-    expect(regionForCountry('KR')).toBe('china');
-    expect(regionForCountry('SG')).toBe('china');
-    expect(regionForCountry('IN')).toBe('china');
-    expect(regionForCountry('AU')).toBe('china');
+  it('should map the rest of Asia-Pacific to the Tokyo region (code us)', () => {
+    expect(regionForCountry('JP')).toBe('us');
+    expect(regionForCountry('KR')).toBe('us');
+    expect(regionForCountry('SG')).toBe('us');
+    expect(regionForCountry('IN')).toBe('us');
+    expect(regionForCountry('AU')).toBe('us');
   });
 
-  it('should map non-Asian countries to us region', () => {
+  it('should map other countries to the default signup region (us when not configured)', () => {
     expect(regionForCountry('US')).toBe('us');
     expect(regionForCountry('CA')).toBe('us');
     expect(regionForCountry('GB')).toBe('us');
@@ -639,7 +639,7 @@ describe('IP Geo — regionForCountry', () => {
 
   it('should be case-insensitive', () => {
     expect(regionForCountry('cn')).toBe('china');
-    expect(regionForCountry('Jp')).toBe('china');
+    expect(regionForCountry('Jp')).toBe('us');
     expect(regionForCountry('us')).toBe('us');
   });
 
