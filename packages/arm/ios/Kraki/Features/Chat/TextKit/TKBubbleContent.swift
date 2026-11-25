@@ -53,6 +53,8 @@ final class TKBubbleContent {
     let hueSeed: String
     let body: NSAttributedString?
     let images: [UIImage]
+    /// The original bytes of `images` (Save / Share, GIF animation).
+    let imageFiles: [ChatImageFile]
     /// Lazy image references (tool-produced images via `kraki-show_image`).
     /// Surfaced through the `AttachmentStore` chunk pipeline; rendered as a
     /// SwiftUI grid inside the cell. Mirrors web `content_ref` handling.
@@ -80,7 +82,7 @@ final class TKBubbleContent {
     private var bodyTextHeightCache: [CGFloat: CGFloat] = [:]
 
     init(message: ChatMessage, kind: Kind, hueSeed: String,
-         body: NSAttributedString?, images: [UIImage] = [],
+         body: NSAttributedString?, images: [UIImage] = [], imageFiles: [ChatImageFile] = [],
          imageRefs: [ContentRef] = [], htmlArtifacts: [ContentRef] = [],
          action: ChatMessage? = nil, isLive: Bool = false,
          isFrozen: Bool = false, frozenTimestamp: String? = nil,
@@ -90,6 +92,7 @@ final class TKBubbleContent {
         self.hueSeed = hueSeed
         self.body = body
         self.images = images
+        self.imageFiles = imageFiles
         self.imageRefs = imageRefs
         self.htmlArtifacts = htmlArtifacts
         self.action = action
@@ -474,9 +477,10 @@ final class TKBubbleContent {
             body = rawBody
         }
         let refs = uniqueRefs(message.contentRefAttachments)
+        let inline = ChatInlineImage.decode(message.attachments)
         return TKBubbleContent(
             message: message, kind: kind, hueSeed: sessionId.isEmpty ? agent : sessionId,
-            body: body, images: decodeImages(message.attachments),
+            body: body, images: inline.map(\.image), imageFiles: inline.map(\.file),
             imageRefs: refs.filter { $0.mimeType.hasPrefix("image/") },
             htmlArtifacts: refs.filter { $0.mimeType == "text/html" })
     }
@@ -508,25 +512,6 @@ final class TKBubbleContent {
     private static func uniqueRefs(_ refs: [ContentRef]) -> [ContentRef] {
         var seen = Set<String>()
         return refs.filter { seen.insert($0.id).inserted }
-    }
-
-    private static let imageCache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 200
-        return cache
-    }()
-
-    private static func decodeImages(_ attachments: [ImageAttachment]?) -> [UIImage] {
-        guard let attachments else { return [] }
-        return attachments.compactMap { attachment in
-            guard attachment.type == "image" else { return nil }
-            let key = attachment.data as NSString
-            if let cached = imageCache.object(forKey: key) { return cached }
-            guard let data = Data(base64Encoded: attachment.data),
-                  let image = AttachmentImageCache.decode(data) else { return nil }
-            imageCache.setObject(image, forKey: key)
-            return image
-        }
     }
 }
 

@@ -1,9 +1,12 @@
 import { formatNumber } from '../../i18n/format';
 import { useTranslation } from 'react-i18next';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { downloadImage, imageFileName } from '../../lib/image-download';
 
-export interface ImagePreviewItem { url: string; title: string; blob?: Blob }
+/** `blob`: the original bytes (Download saves them as is); `fileName`: the
+ *  download name, else one from the title and the blob's type. */
+export interface ImagePreviewItem { url: string; title: string; blob?: Blob; fileName?: string }
 export interface ImagePreviewSelection { items: ImagePreviewItem[]; initialIndex: number }
 const ImagePreviewContext = createContext<((selection: ImagePreviewSelection) => void) | undefined>(undefined);
 export const useOpenImagePreview = () => useContext(ImagePreviewContext);
@@ -158,6 +161,8 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
         <span className="kimage-zoom">{formatNumber(zoom, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}×</span>
         <button type="button" title={t('imageViewer.zoomIn')} aria-label={t('imageViewer.zoomIn')} onClick={() => changeZoom(zoom * 1.25)}><ZoomIn /></button>
         <button type="button" title={t('imageViewer.fit')} aria-label={t('imageViewer.fit')} onClick={() => changeZoom(1)}><Minimize2 /></button>
+        {item.blob && <button type="button" title={t('imageViewer.download')} aria-label={t('imageViewer.download')}
+          onClick={() => { if (item.blob) downloadImage(item.blob, item.fileName ?? imageFileName(item.title, item.blob.type)); }}><Download /></button>}
         <button type="button" title={t('imageViewer.close')} aria-label={t('imageViewer.close')} onClick={dismiss}><X /></button>
       </div>
       <div ref={canvas} className="kimage-canvas" onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}

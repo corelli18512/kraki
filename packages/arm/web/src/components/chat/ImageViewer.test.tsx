@@ -20,6 +20,34 @@ describe('ImagePreviewProvider', () => {
   });
 });
 
+describe('ImageViewer — Download', () => {
+  it('saves the original blob of the image shown, under its file name', () => {
+    const gif = new Blob(['GIF89a'], { type: 'image/gif' });
+    const made: Blob[] = [];
+    URL.createObjectURL = vi.fn((blob: Blob) => { made.push(blob); return 'blob:download'; });
+    URL.revokeObjectURL = vi.fn();
+    const names: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { names.push(this.download); });
+    try {
+      render(<ImageViewer selection={{ initialIndex: 0, items: [
+        { url: 'blob:a', title: 'Spinner', blob: gif },
+        { url: 'blob:b', title: 'Chart', blob: new Blob(['png'], { type: 'image/png' }), fileName: 'chart.png' },
+        { url: 'data:image/png;base64,AAAA', title: 'No bytes' },
+      ] }} onClose={() => {}} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Download image' }));
+      expect(made).toEqual([gif]);
+      expect(names).toEqual(['Spinner.gif']);
+      fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Download image' }));
+      expect(names).toEqual(['Spinner.gif', 'chart.png']);
+      fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+      expect(screen.queryByRole('button', { name: 'Download image' })).not.toBeInTheDocument();
+    } finally {
+      click.mockRestore();
+    }
+  });
+});
+
 describe('ImageViewer — pinch zoom on touch (K-110)', () => {
   // jsdom has no PointerEvent.
   class TestPointerEvent extends MouseEvent {

@@ -22,6 +22,9 @@ function fixture({ strict = false, usage = false } = {}) {
   return { ...view, onSend, tile: screen.getByRole('button', { name: 'Open image preview', exact: true }) };
 }
 beforeEach(() => {
+  // The viewer shows the image from its own object URL (jsdom has none).
+  URL.createObjectURL = vi.fn(() => 'blob:viewer');
+  URL.revokeObjectURL = vi.fn();
   useStore.getState().setDraft(sessionId, 'background action canary');
   useUsageShortcut.setState({ enabled: false, shortcut: 'F6', recording: false });
 });

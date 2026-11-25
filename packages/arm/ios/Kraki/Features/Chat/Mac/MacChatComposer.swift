@@ -873,7 +873,7 @@ struct MacChatComposer: View {
     }
 
     private func loadImage(_ url: URL) {
-        guard let image = NSImage(contentsOf: url) else {
+        guard let image = MacComposerImages.image(contentsOf: url) else {
             imageAttachError = String(localized: "That file isn't a supported image format.")
             return
         }
@@ -899,14 +899,11 @@ struct MacChatComposer: View {
         return true
     }
 
+    /// A GIF within the limits keeps its bytes (and its animation).
     private func attachImage(_ image: NSImage) {
-        let maxSize = 3 * 1024 * 1024
-        for quality in [0.8, 0.6] {
-            if let data = MacComposerImages.jpegData(from: image, maxDimension: 1024, quality: quality),
-               data.count <= maxSize {
-                sessionStore.setStagedImage(sessionId, StagedComposerImage(data: data, mimeType: "image/jpeg"))
-                return
-            }
+        if let staged = MacComposerImages.staged(image) {
+            sessionStore.setStagedImage(sessionId, staged)
+            return
         }
         imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
         clearImage()

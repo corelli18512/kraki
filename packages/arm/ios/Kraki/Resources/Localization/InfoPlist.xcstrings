@@ -73,6 +73,23 @@
           }
         }
       }
+    },
+    "NSPhotoLibraryAddUsageDescription" : {
+      "comment" : "Photos add-only permission prompt",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kraki saves chat images to your photo library when you choose Save to Photos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当你选择“保存到照片”时，Kraki 会把聊天中的图片存入你的照片图库。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

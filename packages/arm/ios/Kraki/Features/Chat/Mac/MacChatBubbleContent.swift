@@ -29,6 +29,8 @@ struct MacChatBubbleContent {
     var pendingClientId: String? = nil
     /// Why the computer refused a failed input, in the app's words.
     var pendingRefusedReason: String? = nil
+    /// The original bytes of `inlineImages` (Save Image…, Copy Image, GIF animation).
+    var inlineImageFiles: [ChatImageFile] = []
 
     var bodyTextWidth: CGFloat { bubbleWidth - MacChatBubbleLayout.msgPadH * 2 }
 
@@ -87,7 +89,8 @@ enum MacChatBubbleContentBuilder {
         case .agent, .system:
             body = rawBody
         }
-        let images = decodeImages(message.attachments)
+        let inline = ChatInlineImage.decode(message.attachments)
+        let images = inline.map(\.image)
         let contentRefs = uniqueRefs(message.contentRefAttachments)
         let imageRefs = contentRefs.filter { $0.mimeType.hasPrefix("image/") }
         let htmlArtifacts = contentRefs.filter { $0.mimeType == "text/html" }
@@ -119,6 +122,7 @@ enum MacChatBubbleContentBuilder {
             bubbleWidth: width,
             attachmentWidth: attachmentWidth
         )
+        content.inlineImageFiles = inline.map(\.file)
         if message.type == "pending_input" {
             content.pendingDeliveryState = message.payload["localState"]?.stringValue ?? "sending"
             content.pendingClientId = message.payload["clientId"]?.stringValue
@@ -327,24 +331,6 @@ enum MacChatBubbleContentBuilder {
             }
         }
         return copy
-    }
-
-    private static let imageCache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 200
-        return cache
-    }()
-
-    private static func decodeImages(_ attachments: [ImageAttachment]?) -> [NSImage] {
-        guard let attachments else { return [] }
-        return attachments.compactMap { attachment in
-            guard attachment.type == "image" else { return nil }
-            let key = attachment.data as NSString
-            if let cached = imageCache.object(forKey: key) { return cached }
-            guard let data = Data(base64Encoded: attachment.data), let image = AttachmentImageCache.decode(data) else { return nil }
-            imageCache.setObject(image, forKey: key)
-            return image
-        }
     }
 }
 #endif

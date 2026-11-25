@@ -34,6 +34,8 @@
     "openReport": "打开报告 {{title}}",
     "reportSize": "报告 · {{size}}",
     "numberedImage": "图片 {{number}}",
+    "imageActions": "图片操作",
+    "downloadImage": "下载图片",
     "errors": {
       "metadataUnavailable": "附件元数据不可用",
       "invalidIndex": "无效的附件分块索引",
@@ -176,6 +178,7 @@
     "zoomOut": "缩小",
     "zoomIn": "放大",
     "fit": "适应窗口",
+    "download": "下载图片",
     "close": "关闭图片预览"
   },
   "message": {
