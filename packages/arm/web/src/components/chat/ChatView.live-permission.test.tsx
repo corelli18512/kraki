@@ -25,7 +25,7 @@ vi.mock('../../lib/message-db', () => ({
 vi.mock('./Composer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./Composer')>();
   return {
-    composerIntent: actual.composerIntent,
+    ...actual,
     Composer: ({ intent }: { intent: string }) => <div data-testid="composer-intent">{intent}</div>,
   };
 });
