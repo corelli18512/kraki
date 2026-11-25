@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Download, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { downloadImage, imageFileName } from '../../lib/image-download';
+import { useImageContextMenu } from './ImageContextMenu';
 
-/** `blob`: the original bytes (Download saves them as is); `fileName`: the
- *  download name, else one from the title and the blob's type. */
-export interface ImagePreviewItem { url: string; title: string; blob?: Blob; fileName?: string }
+/** `blob`: the original bytes (Download saves them as is); `display`: the
+ *  bytes to show when they differ (a GIF made to loop, gif-loop.ts);
+ *  `fileName`: the download name, else one from the title and the blob's type. */
+export interface ImagePreviewItem { url: string; title: string; blob?: Blob; display?: Blob; fileName?: string }
 export interface ImagePreviewSelection { items: ImagePreviewItem[]; initialIndex: number }
 const ImagePreviewContext = createContext<((selection: ImagePreviewSelection) => void) | undefined>(undefined);
 export const useOpenImagePreview = () => useContext(ImagePreviewContext);
@@ -16,7 +18,7 @@ export function ImagePreviewProvider({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<ImagePreviewSelection | null>(null);
   const open = useCallback((next: ImagePreviewSelection) => {
     // Own ref-image URLs while open, even if virtualized source tiles unmount.
-    setSelection({ ...next, items: next.items.map((item) => item.blob ? { ...item, url: URL.createObjectURL(item.blob) } : item) });
+    setSelection({ ...next, items: next.items.map((item) => item.blob ? { ...item, url: URL.createObjectURL(item.display ?? item.blob) } : item) });
   }, []);
   useEffect(() => () => {
     selection?.items.forEach((item) => { if (item.blob) URL.revokeObjectURL(item.url); });
@@ -50,6 +52,12 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
     if (touches.current.size < 2) pinch.current = null;
   };
   const item = selection.items[index];
+  // Right-click on the image: Kraki's menu for the original bytes (the
+  // browser's would save the copy shown, e.g. a GIF made to loop).
+  const imageMenu = useImageContextMenu(
+    () => item.blob ? { blob: item.blob, fileName: item.fileName ?? imageFileName(item.title, item.blob.type) } : null,
+    () => dialog.current,
+  );
   const clampZoom = (value: number) => Math.min(8, Math.max(1, value));
   const clampPan = (x: number, y: number, scale = zoom) => {
     const c = canvas.current;
@@ -105,6 +113,8 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
       if (!el) return;
       // Repeats can belong to a key held before the viewer opened.
       if (!event.repeat && event.target instanceof Node && el.contains(event.target)) modalKeys.current.add(event.code || event.key);
+      // The image's menu handles its own keys (Escape closes only the menu).
+      if (event.target instanceof Element && el.contains(event.target) && event.target.closest('[role="menu"]')) return;
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopImmediatePropagation(); dismiss();
         return;
@@ -188,6 +198,7 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
         <img ref={image} src={item.url} alt={item.title} draggable={false}
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? 'grab' : 'default' }}
           onDoubleClick={() => changeZoom(zoom > 1 ? 1 : 2)}
+          onContextMenu={imageMenu.handlers.onContextMenu}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
             drag.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
@@ -198,6 +209,7 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
           }}
           onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} />
       </div>
+      {imageMenu.menu}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { ImagePreviewProvider, ImageViewer, useOpenImagePreview } from './ImageViewer';
 
 function RefPreview() {
@@ -42,6 +42,52 @@ describe('ImageViewer — Download', () => {
       expect(names).toEqual(['Spinner.gif', 'chart.png']);
       fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
       expect(screen.queryByRole('button', { name: 'Download image' })).not.toBeInTheDocument();
+    } finally {
+      click.mockRestore();
+    }
+  });
+});
+
+describe('ImageViewer — right-click', () => {
+  // The viewer shows a GIF without a loop count from a looping copy
+  // (gif-loop.ts); the browser's own image menu would save that copy.
+  it('offers Download Image and Copy Image for the original bytes, inside the viewer', () => {
+    const original = new Blob(['GIF89a original'], { type: 'image/gif' });
+    const looping = new Blob(['GIF89a looping copy'], { type: 'image/gif' });
+    const made: Blob[] = [];
+    URL.createObjectURL = vi.fn((blob: Blob) => { made.push(blob); return `blob:${made.length}`; });
+    URL.revokeObjectURL = vi.fn();
+    const names: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { names.push(this.download); });
+    const onClose = vi.fn();
+    try {
+      render(<ImageViewer selection={{ initialIndex: 0, items: [
+        { url: 'blob:shown', title: 'Spinner', blob: original, display: looping },
+        { url: 'data:image/png;base64,AAAA', title: 'No bytes' },
+      ] }} onClose={onClose} />);
+      const event = createEvent.contextMenu(screen.getByRole('img'), { clientX: 40, clientY: 50 });
+      fireEvent(screen.getByRole('img'), event);
+      expect(event.defaultPrevented).toBe(true);
+      const menu = screen.getByRole('menu');
+      expect(screen.getByRole('dialog')).toContainElement(menu);
+      expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Download Image', 'Copy Image']);
+      expect(screen.getByRole('menuitem', { name: 'Download Image' })).toHaveFocus();
+      // Escape closes the menu, not the viewer.
+      fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Download Image' }), { key: 'Escape' });
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.contextMenu(screen.getByRole('img'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Download Image' }));
+      expect(made).toEqual([original]);
+      expect(names).toEqual(['Spinner.gif']);
+
+      // Without the bytes the browser's menu is left alone.
+      fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+      const plain = createEvent.contextMenu(screen.getByRole('img'));
+      fireEvent(screen.getByRole('img'), plain);
+      expect(plain.defaultPrevented).toBe(false);
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     } finally {
       click.mockRestore();
     }

@@ -291,6 +291,10 @@ final class SessionStore {
     /// survives switching Sessions (the Chat view is rebuilt per Session).
     /// In memory only, unlike the drafts. Set through `setStagedImage`.
     var stagedImages: [String: StagedComposerImage] = [:]
+    /// An image still being prepared for a Session's composer (a photo
+    /// loading, a large GIF being fitted), by attempt. Set through
+    /// `prepareStagedImage`.
+    var preparingImages: [String: UUID] = [:]
     var navigateToSession: String?
     /// Set with `navigateToSession` to the id of a still-pending placeholder
     /// route the target replaces (create/fork/import resolved). The navigation
@@ -988,7 +992,7 @@ final class SessionStore {
         sessionPreviews.removeValue(forKey: id)
         if !keepingComposer {
             drafts.removeValue(forKey: id)
-            stagedImages.removeValue(forKey: id)
+            _ = discardingStagedImages(of: [id])
             draftsOfRemovedSessions.remove(id)
         } else if drafts[id] != nil {
             draftsOfRemovedSessions.insert(id)
@@ -1210,10 +1214,6 @@ final class SessionStore {
         autoReadSuppressedSessions.remove(id)
     }
 
-    func isAutoReadSuppressed(_ id: String) -> Bool {
-        autoReadSuppressedSessions.contains(id)
-    }
-
     // MARK: - Preview / Draft
 
     func setPreview(_ id: String, text: String, type: String = "message", timestamp: String = "") {
@@ -1245,7 +1245,7 @@ final class SessionStore {
         draftsOfRemovedSessions.removeAll()
         pendingAutoArchiveDays.removeAll()
         draftRevisions.removeAll()
-        stagedImages.removeAll()
+        discardAllStagedImages()
         navigateToSession = nil
         navigationReplacesPlaceholder = nil
         navigationPushesOnTop = false
