@@ -20,8 +20,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://kraki.chat/shots/mac-dark-20261016.jpg">
-    <img src="https://kraki.chat/shots/mac-light-20261016.jpg" alt="Kraki for Mac: sessions from several computers and agents in one window" width="860">
+    <source media="(prefers-color-scheme: dark)" srcset="https://kraki.chat/shots/mac-dark-20261126.jpg">
+    <img src="https://kraki.chat/shots/mac-light-20261126.jpg" alt="Kraki for Mac: sessions from several computers and agents in one window" width="860">
   </picture>
 </p>
 
