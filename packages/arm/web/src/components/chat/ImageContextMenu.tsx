@@ -14,9 +14,10 @@ export interface ImageFile { blob: Blob; fileName: string }
  * the original image or copies it (as PNG; a GIF's first frame: image-copy.ts).
  * The Windows app has no browser image menu, and the browser's own one names
  * a downloaded `blob:` image after its random URL. Until the image has
- * loaded, the browser's menu is left alone.
+ * loaded, the browser's menu is left alone. `container`: where the menu is
+ * placed (a modal owns focus and keys within itself); else the page body.
  */
-export function useImageContextMenu(file: () => ImageFile | null): {
+export function useImageContextMenu(file: () => ImageFile | null, container?: () => HTMLElement | null): {
   handlers: { onContextMenu: (event: MouseEvent<HTMLElement>) => void; onKeyDown: (event: KeyboardEvent<HTMLElement>) => void };
   menu: ReactNode;
 } {
@@ -92,7 +93,7 @@ export function useImageContextMenu(file: () => ImageFile | null): {
           }
           close(true);
         }}>{t('attachments.copyImage')}</button>
-      </div>, document.body,
+      </div>, container?.() ?? document.body,
     ),
   };
 }
