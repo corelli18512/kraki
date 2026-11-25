@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { i18next } from '../../i18n';
 import type { ChatMessage } from '../../types/store';
 import { frozenCardOf, openQuestions, presentQuestions, rowKey, seqOf, spineRows } from './spine';
 
@@ -31,6 +32,15 @@ describe('questions on the spine', () => {
     expect(presentQuestions(moved, [], true)[0].question?.state).toBe('unanswered');
   });
 
+  it('a question the agent withdrew closes at once (K-022)', () => {
+    const raw = [m('user_message', 1, { content: 'go' }), ask(2, 'q1')];
+    expect(presentQuestions(raw, [], true, ['q1'])[1].question?.state).toBe('unanswered');
+    expect(openQuestions(raw, [], true, ['q1'])).toEqual([]);
+    expect(rowKey(spineRows(raw, [], true, ['q1'])[1])).toBe('2');
+    // Another question stays open.
+    expect(openQuestions([...raw, ask(3, 'q2')], [], true, ['q1']).map((q) => q.id)).toEqual(['q2']);
+  });
+
   it('an optimistic answer closes the question at once', () => {
     const raw = [ask(1, 'q1')];
     expect(presentQuestions(raw, ['q1'], true)[0].question?.state).toBe('answered');
@@ -44,6 +54,35 @@ describe('questions on the spine', () => {
     expect(answered.text).toBe(open.text);
     expect(open.action).toEqual({ type: 'question', id: 'q1', choices: ['\u5220', '\u7559'] });
     expect(answered.action).toBeUndefined();
+  });
+
+  it('a multi-select question shows the hint in the app language, in every state (triage #14)', async () => {
+    const multi = (choices: string[]) => m('agent_message', 1, {
+      content: '', question: { id: 'q1', text: 'Which databases?', choices, multiSelect: true },
+    });
+    const open = frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'open' } })!;
+    expect(open.text).toBe('**Which databases?**\n\nYou can choose more than one: type them separated by commas.');
+    expect(frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'answered' } })!.text).toBe(open.text);
+    // Nothing to pick from: no hint.
+    expect(frozenCardOf({ message: multi([]), question: { state: 'open' } })!.text).toBe('**Which databases?**');
+    await i18next.changeLanguage('zh-Hans');
+    try {
+      expect(frozenCardOf({ message: multi(['Postgres', 'SQLite']), question: { state: 'open' } })!.text)
+        .toBe('**Which databases?**\n\n\u53EF\u4EE5\u9009\u62E9\u591A\u4E2A\uFF1A\u8F93\u5165\u65F6\u7528\u9017\u53F7\u5206\u9694\u3002');
+    } finally {
+      await i18next.changeLanguage('en');
+    }
+  });
+
+  it('a session whose agent failed right after it was created shows why as a failed turn (triage #8)', () => {
+    const reason = "Couldn't create the session: pi exited";
+    const before = [m('session_created', 1, { agent: 'pi' }), m('error', 2, { message: reason }), m('idle', 3)];
+    // A bare error row is never drawn.
+    expect(spineRows(before, [], true)).toEqual([]);
+    const failed = m('turn_status', 3, { draft: '', action: { type: 'failed', payload: { message: reason } } });
+    const rows = spineRows([before[0], before[1], failed, m('idle', 4, { reason: 'failed' })], [], true);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([3]);
+    expect(frozenCardOf(rows[0])).toEqual({ text: '', action: { type: 'failed', message: reason } });
   });
 
   it('abort while asking draws Stopped inside the question, no separate row', () => {

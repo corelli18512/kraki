@@ -25,6 +25,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private(set) var updateController: MacUpdateController?
     private var updateNotificationObserver: NSObjectProtocol?
     private var updateChannelObserver: NSObjectProtocol?
+    private var secondLaunchObserver: NSObjectProtocol?
 
     override init() {
         updateController = nil
@@ -122,14 +123,20 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Production builds check for updates shortly after launch.
+    private func startUpdateControllerIfAvailable() {
+        guard MacUpdateController.updatesAvailable() else { return }
+        updateController = MacUpdateController.makeIfProduction()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            self?.updateController?.start()
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if NativeTestRuntime.isHeadlessTestHost { return }
-        if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
-            updateController = MacUpdateController.makeIfProduction()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-                self?.updateController?.start()
-            }
-        }
+        // Kraki died while dictating last time: give the sound back.
+        MacOutputVolumeDucker.shared.recoverAbandonedState()
+        startUpdateControllerIfAvailable()
         #if DEBUG
         let environmentAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
         let visibleAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_VISIBLE"] == "1"
@@ -146,6 +153,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // After the policy above: a login launch switches back to menu-bar-only.
         installPresenceObservers()
+        // A second copy launched (MacSingleInstance) asks this one to show itself.
+        if let bundleId = Bundle.main.bundleIdentifier {
+            secondLaunchObserver = DistributedNotificationCenter.default().addObserver(
+                forName: MacSingleInstance.showWindowNotification(bundleId: bundleId), object: nil, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { MacPresenceController.shared.showMainWindow() }
+            }
+        }
 
         // Remove the "File" menu. SwiftUI synthesizes it, but this app has
         // no file concept (New Session lives under Session; Close Window is
@@ -154,6 +169,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // whenever the app reactivates.
         removeUnwantedMenus()
         DispatchQueue.main.async { [weak self] in self?.removeUnwantedMenus() }
+        MacZoomShortcut.install()
 
         installUpdateObservers()
 
@@ -407,7 +423,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // AppState already registered for NSApplication.willTerminate
-        // and flushes its stores. Nothing extra to do here yet.
+        // and flushes its stores. Quitting mid-dictation restores the volume.
+        MacOutputVolumeDucker.shared.restoreSynchronously(reason: "app quitting")
     }
 }
 

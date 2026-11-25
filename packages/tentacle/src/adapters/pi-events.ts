@@ -38,6 +38,10 @@ export function logErrorFields(value: unknown): { errCategory: string; errStatus
   return { errCategory, ...(status && { errStatus: Number(status) }) };
 }
 
+/** Kraki adds no wording of its own: Pi gives no text for a truncated run, so
+ *  the failure carries only the raw stop reason Pi reported. */
+export const LENGTH_STOP_MESSAGE = 'stopReason: length';
+
 /** Choices of a question card shown for another extension's confirm dialog. */
 export const PI_CONFIRM_CHOICES = ['Yes', 'No'] as const;
 
@@ -78,6 +82,13 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         durationMs: s?.compactionStartedAt === undefined ? undefined : Date.now() - s.compactionStartedAt,
       }, 'pi compaction ended');
       if (s) s.compactionStartedAt = undefined;
+      // A failed recovery for a truncated run explains why the turn fails.
+      // Only overflow compaction is Pi's recovery for a truncated run; a failed
+      // threshold compaction is unrelated maintenance.
+      if (s && errorMessage && e.reason === 'overflow' && !s.turn.isSettled && s.lastStopReason === 'length' && s.turn.pendingError) {
+        // Pi's own recovery error, verbatim.
+        s.turn.setError(errorMessage);
+      }
       adapter.setCompacting(sessionId, false, {
         reason: adapter.normalizeCompactionReason(e.reason),
         aborted: e.aborted === true,
@@ -117,9 +128,13 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
     case 'agent_start': {
       const s = adapter.sessions.get(sessionId);
       // A run while held: pi woke the agent with background results; it
-      // continues the same Kraki turn.
+      // continues the same Kraki turn. A run pi starts on its own after the
+      // turn settled (e.g. the hold timed out, then a background run finished)
+      // gets a new Kraki turn; see beginAgentInitiatedTurn for what is not.
       if (s?.awaitingSubagents) adapter.stopAwaitingSubagents(s, 'wake_run');
+      else if (s) adapter.beginAgentInitiatedTurn(sessionId, s);
       if (s) {
+        s.runInFlight = true;
         s.turn.captureTurnId();
         s.promptPreflight = undefined;
         s.pendingMaintenanceIdle = false;
@@ -142,7 +157,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       break;
     }
     case 'message_end': {
-      const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
+      const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string; usage?: { output?: number } } }).message;
       if (m?.role === 'custom') {
         // pi-subagents background run notifications.
         const custom = m as unknown as { customType?: string; content?: unknown };
@@ -167,6 +182,10 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
             // silent reply-less turn.
             s.turn.setError(m.errorMessage?.trim()
               || 'The model request failed without an error message. Try sending again.');
+          } else if (m.stopReason === 'length') {
+            // Output cut off at the token limit (often all thinking, no reply).
+            // Pi may compact and retry; a later successful message_end clears it.
+            s.turn.setError(m.errorMessage?.trim() || LENGTH_STOP_MESSAGE);
           } else {
             s.turn.clearError();
           }
@@ -337,6 +356,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         break;
       }
       s.pendingMaintenanceIdle = false;
+      s.runInFlight = false;
       // A duplicate settled callback must not crystallize the same logical turn
       // twice. The identity is reset only when a new prompt is accepted.
       if (s.turn.isSettled) break;
@@ -347,9 +367,9 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       }
       // Resolve a provisional backend failure only at this authoritative run
       // boundary. Recoverable attempts were suppressed by willRetry above.
-      if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
+      if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted' || s.lastStopReason === 'length') {
         s.turn.discardProse();
-        if (s.lastStopReason !== 'error') s.turn.clearError();
+        if (s.lastStopReason === 'aborted') s.turn.clearError();
         s.turn.finish(); // the held error, if any, then idle
         break;
       }

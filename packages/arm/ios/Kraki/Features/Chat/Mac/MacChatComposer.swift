@@ -63,6 +63,12 @@ enum MacComposerMetrics {
         return true
     }
     static var minimumTextHeight: CGFloat { capsuleHeight - textVerticalPadding * 2 }
+    /// Two-row dictation (Cancel above Edit): the box's top lines up with the
+    /// top of the round control stacked above the send circle, as on iPhone
+    /// (IOSComposerMetrics.recordingMinHeight). Send is centred on the one-line row.
+    static var stackedRecordingHeight: CGFloat {
+        (capsuleHeight - control) / 2 + control + stackGap + control
+    }
     /// Distance from the chat bottom to the bottom of the ↓ jump control.
     static var jumpControlBottom: CGFloat {
         bottomPadding + (capsuleHeight - control) / 2 + control + stackGap
@@ -85,6 +91,10 @@ struct MacChatComposer: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    /// What the draft was started for (see ComposerDraftTarget).
+    @State private var draftTarget: ComposerDraftTarget?
+    @State private var submitNotice: String?
+    @State private var submitNoticeTask: Task<Void, Never>?
     @State private var showVoiceConsent = false
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
@@ -141,6 +151,7 @@ struct MacChatComposer: View {
         guard let data = NSDataAsset(name: "VoiceStartCue")?.data else { return nil }
         let sound = NSSound(data: data)
         sound?.volume = 1.0
+        sound?.delegate = VoiceStartCueObserver.shared
         return sound
     }()
 
@@ -161,6 +172,10 @@ struct MacChatComposer: View {
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+    private var liveTarget: ComposerDraftTarget {
+        ComposerDraftTarget(permissionID: pendingPermission?.id, questionID: pendingQuestion?.id)
+    }
+    private var drafting: Bool { hasText || stagedImage != nil || voiceOwnsComposer }
     /// Kept per Session in the store (like the draft): this view is rebuilt
     /// whenever another Session is shown.
     private var stagedImage: StagedComposerImage? { sessionStore.stagedImages[sessionId] }
@@ -218,6 +233,7 @@ struct MacChatComposer: View {
         // Connection state belongs to the title area, never above the input:
         // reconnecting is silent and messages queue until it is back. Only a
         // computer that really can't receive right now is worth a note here.
+        if let submitNotice { return submitNotice }
         guard appState.hasCompletedInitialConnect, let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
@@ -285,6 +301,10 @@ struct MacChatComposer: View {
             .onChange(of: voiceComposer.dispatchSignal) { _, _ in
                 if voiceComposer.dispatchedSessionID == sessionId { awaitingActive = true }
             }
+            .onChange(of: drafting, initial: true) { _, now in
+                draftTarget = now ? (draftTarget ?? liveTarget) : nil
+            }
+            .onChange(of: sessionId) { _, _ in draftTarget = drafting ? liveTarget : nil }
             .onChange(of: voiceComposer.editorRequest) { _, _ in
                 if voiceComposer.editorSessionID == sessionId { requestComposerFocus() }
             }
@@ -306,9 +326,9 @@ struct MacChatComposer: View {
             }
             .background {
                 MacComposerPasteProbe(
-                    enabled: isFocused && canAttachImage,
+                    enabled: isFocused,
                     onPasteImage: { image in
-                        attachImage(image)
+                        guard offerImage(image) else { return }
                         requestComposerFocus()
                     }
                 )
@@ -348,6 +368,9 @@ struct MacChatComposer: View {
         // immediately; interpolating only the shell leaves text/buttons outside
         // the glass. Commit voice geometry atomically (waveform still animates).
         .animation(voiceOwnsComposer ? nil : .easeOut(duration: 0.18), value: contentHeightKey)
+        // The attach button says "drop one": the whole box takes the drop,
+        // not only the editor (whose own drop handling wins over its area).
+        .onDrop(of: [.fileURL, .image], delegate: MacComposerImageDrop(offer: offerImage))
     }
 
     /// The height the box's content will take for the current text.
@@ -455,7 +478,12 @@ struct MacChatComposer: View {
                 onRequestFocus: requestComposerFocus,
                 onSubmit: handleModeSubmit,
                 onSelection: { selection = $0 },
-                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) }
+                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) },
+                onDropImage: { image in
+                    guard offerImage(image) else { return false }
+                    requestComposerFocus()
+                    return true
+                }
             )
             .padding(.leading, 0)
             .padding(.trailing, MacComposerMetrics.textTrailingInset)
@@ -631,7 +659,11 @@ struct MacChatComposer: View {
             return
         }
         sound.stop()
+        // Other sounds are lowered for the recording only after the cue has
+        // been heard, so the cue itself plays at full volume.
+        MacOutputVolumeDucker.shared.cueStarted()
         let played = sound.play()
+        if !played { MacOutputVolumeDucker.shared.cueFinished() }
         KLog.diag("🎙️ [voice] start cue played=\(played)")
         // A missing/unplayable cue must not become an unrelated warning beep.
     }
@@ -688,13 +720,17 @@ struct MacChatComposer: View {
         .accessibilityValue(previewImage == nil ? String(localized: "No image selected") : String(localized: "Image selected"))
     }
 
-    private var canUseImageSlot: Bool { canAttachImage && !voiceOwnsComposer }
+    private var canUseImageSlot: Bool { attachBlock == nil }
+
+    private var attachBlock: MacControlHelp.AttachBlock? {
+        .of(voice: voiceOwnsComposer, canAttach: canAttachImage,
+            answering: submissionIntent == .answerQuestion, agent: session?.agent)
+    }
 
     /// Per button, not on the slot: an outer `.help` would replace the ×'s own.
     /// Outside `.disabled` so it still shows (and says why) when greyed out.
     private var attachHelp: String {
-        MacControlHelp.attachImage(blocked: .of(voice: voiceOwnsComposer, canAttach: canAttachImage,
-            answering: submissionIntent == .answerQuestion, agent: session?.agent), hasImage: previewImage != nil)
+        MacControlHelp.attachImage(blocked: attachBlock, hasImage: previewImage != nil)
     }
 
     private func requestAbort() {
@@ -723,6 +759,10 @@ struct MacChatComposer: View {
     }
 
     private func handleModeSubmit() {
+        guard confirmDraftTarget() else {
+            if voiceOwnsComposer { voiceComposer.finishToDraft() }
+            return
+        }
         if voiceOwnsComposer {
             // Free-form answers use main's answerTo-aware staged outbox;
             // only permission denial still requires review in the editor.
@@ -833,7 +873,7 @@ struct MacChatComposer: View {
     }
 
     private func loadImage(_ url: URL) {
-        guard let image = NSImage(contentsOf: url) else {
+        guard let image = MacComposerImages.image(contentsOf: url) else {
             imageAttachError = String(localized: "That file isn't a supported image format.")
             return
         }
@@ -847,14 +887,23 @@ struct MacChatComposer: View {
         isFocused = true
     }
 
+    /// A pasted or dropped image: attached, or an alert says why not (while
+    /// the agent was busy a pasted image used to vanish without a word).
+    /// Same rule as the attach button.
+    private func offerImage(_ image: NSImage) -> Bool {
+        if let attachBlock {
+            imageAttachError = MacControlHelp.attachImage(blocked: attachBlock, hasImage: false)
+            return false
+        }
+        attachImage(image)
+        return true
+    }
+
+    /// A GIF within the limits keeps its bytes (and its animation).
     private func attachImage(_ image: NSImage) {
-        let maxSize = 3 * 1024 * 1024
-        for quality in [0.8, 0.6] {
-            if let data = MacComposerImages.jpegData(from: image, maxDimension: 1024, quality: quality),
-               data.count <= maxSize {
-                sessionStore.setStagedImage(sessionId, StagedComposerImage(data: data, mimeType: "image/jpeg"))
-                return
-            }
+        if let staged = MacComposerImages.staged(image) {
+            sessionStore.setStagedImage(sessionId, staged)
+            return
         }
         imageAttachError = String(localized: "That image is too large to send (over 3 MB after compression). Try a smaller picture.")
         clearImage()
@@ -866,67 +915,24 @@ struct MacChatComposer: View {
 
 }
 
-// MARK: - Resting layout
+// MARK: - Draft target (same file: shares the view's private state)
 
-/// The resting Composer: [image] text [clear] [mic] on one row, or — once
-/// the draft wraps — the text across the box with the controls in a row
-/// below (the iOS Composer's shape, and dictation's: text over controls).
-/// Subviews: image, text, clear, mic (always present; hidden ones invisible).
-struct MacComposerRestingLayout: Layout {
-    var stacked: Bool
-    var showsClear: Bool
-    var showsMic: Bool
-    var rowHeight: CGFloat = MacComposerMetrics.capsuleHeight
-    static let stackedLeading: CGFloat = 12
-    /// The text's bottom padding and the row's top inset overlap by this.
-    static let rowOverlap: CGFloat = 6
-
-    /// The editor's width in the one-row arrangement of a layout `width`
-    /// wide: the text column beside the attach slot, clear and mic, less the
-    /// editor's trailing inset (the same widths `frames` places).
-    static func oneRowEditorWidth(width: CGFloat, showsClear: Bool, showsMic: Bool) -> CGFloat {
-        width - MacComposerMetrics.attachSlotWidth
-            - (showsClear ? MacComposerMetrics.clearButtonWidth : 0)
-            - (showsMic ? MacComposerMetrics.micButtonWidth : 0)
-            - MacComposerMetrics.textTrailingInset
-    }
-
-    private func frames(width: CGFloat, _ s: Subviews) -> (frames: [CGRect], height: CGFloat) {
-        let image = s[0].sizeThatFits(.unspecified)
-        let clear = s[2].sizeThatFits(.unspecified)
-        let mic = s[3].sizeThatFits(.unspecified)
-        let clearW = showsClear ? clear.width : 0, micW = showsMic ? mic.width : 0
-        if stacked {
-            let textW = max(1, width - Self.stackedLeading)
-            let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
-            let rowTop = max(0, textH - Self.rowOverlap)
-            return ([CGRect(x: 0, y: rowTop, width: image.width, height: rowHeight),
-                     CGRect(x: Self.stackedLeading, y: 0, width: textW, height: textH),
-                     CGRect(x: width - micW - clear.width, y: rowTop + (rowHeight - clear.height) / 2,
-                            width: clear.width, height: clear.height),
-                     CGRect(x: width - mic.width, y: rowTop + (rowHeight - mic.height) / 2,
-                            width: mic.width, height: mic.height)], rowTop + rowHeight)
+extension MacChatComposer {
+    /// False when the draft was started for another permission / question
+    /// than the one open now: the send is held once, the draft rebinds to the
+    /// open one and the user is told (a second press sends it).
+    private func confirmDraftTarget() -> Bool {
+        guard ComposerDraftTarget.changed(boundTo: draftTarget, live: liveTarget) else { return true }
+        draftTarget = liveTarget
+        submitNoticeTask?.cancel()
+        submitNotice = ComposerDraftTarget.changedNotice
+        NSSound.beep()
+        submitNoticeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            submitNotice = nil
         }
-        let textW = max(1, width - image.width - clearW - micW)
-        let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
-        let height = max(rowHeight, textH)
-        return ([CGRect(x: 0, y: (height - image.height) / 2, width: image.width, height: image.height),
-                 CGRect(x: image.width, y: 0, width: textW, height: height),
-                 CGRect(x: image.width + textW, y: height - clear.height, width: clear.width, height: clear.height),
-                 CGRect(x: width - mic.width, y: height - mic.height, width: mic.width, height: mic.height)], height)
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 600
-        return CGSize(width: width, height: frames(width: width, subviews).height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 4 else { return }
-        for (view, f) in zip(subviews, frames(width: bounds.width, subviews).frames) {
-            view.place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), anchor: .topLeading,
-                       proposal: ProposedViewSize(f.size))
-        }
+        return false
     }
 }
 
@@ -947,4 +953,11 @@ private struct MacPrimaryGlassCircle: View {
     }
 }
 
+/// Tells the volume ducker when the start cue has finished playing.
+final class VoiceStartCueObserver: NSObject, NSSoundDelegate {
+    static let shared = VoiceStartCueObserver()
+    func sound(_ sound: NSSound, didFinishPlaying flag: Bool) {
+        MacOutputVolumeDucker.shared.cueFinished()
+    }
+}
 #endif

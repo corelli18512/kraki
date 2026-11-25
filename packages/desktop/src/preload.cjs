@@ -65,6 +65,15 @@ if (globalThis.location?.origin === APP_ORIGIN) contextBridge.exposeInMainWorld(
     goOffline: () => ipcRenderer.invoke('kraki:settings-go-offline'),
     setAllowRemoteUpdates: (enabled) => ipcRenderer.invoke('kraki:settings-remote-updates', enabled),
   },
+  /** Windows: lower other sounds while the microphone records (voice-volume.cjs). */
+  voiceVolume: process.platform === 'win32' ? {
+    cueStarted: () => ipcRenderer.send('kraki:voice-volume', 'cue-started'),
+    cueFinished: () => ipcRenderer.send('kraki:voice-volume', 'cue-finished'),
+    captureStarted: () => ipcRenderer.send('kraki:voice-volume', 'capture-started'),
+    captureStopped: () => ipcRenderer.send('kraki:voice-volume', 'capture-stopped'),
+    state: () => ipcRenderer.invoke('kraki:voice-volume-state'),
+    setEnabled: (enabled) => ipcRenderer.invoke('kraki:voice-volume-enabled', !!enabled),
+  } : undefined,
   setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),
   localLinkDiscovery: () => ipcRenderer.invoke('kraki:local-link-discovery'),
   diag: { request: (req) => ipcRenderer.invoke('kraki:diag-request', req) },

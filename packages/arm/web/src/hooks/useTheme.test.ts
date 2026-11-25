@@ -13,6 +13,15 @@ describe('useTheme', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
+  it('colors the status bar like the dark page background in index.html (K-233)', () => {
+    const meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+    renderHook(() => useTheme());
+    expect(meta.getAttribute('content')).toBe('#020617');
+    meta.remove();
+  });
+
   it('removes dark class when system prefers light', () => {
     // Override matchMedia to return light preference
     const listeners: Array<(e: { matches: boolean }) => void> = [];

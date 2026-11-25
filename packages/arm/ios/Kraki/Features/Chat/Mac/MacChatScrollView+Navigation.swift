@@ -163,9 +163,30 @@ extension MacChatScrollView {
         return min(maximumY, max(minimumY, desired))
     }
 
+    /// The red dot fades in and out with ↓ instead of popping.
     func syncUnseenDot() {
-        unseenDot.isHidden = unseenReplies == 0
-            || jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != true
+        let show = unseenReplies > 0 && jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true
+        guard show != unseenDotShown else { return }
+        unseenDotShown = show
+        unseenDotGeneration &+= 1
+        let generation = unseenDotGeneration
+        unseenDot.layer?.removeAllAnimations()
+        guard hasPresentedFirstFrame else {
+            unseenDot.alphaValue = show ? 1 : 0
+            unseenDot.isHidden = !show
+            return
+        }
+        if show, unseenDot.isHidden {
+            unseenDot.alphaValue = 0
+            unseenDot.isHidden = false
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
+            unseenDot.animator().alphaValue = show ? 1 : 0
+        } completionHandler: { [weak self] in
+            guard let self, !show, self.unseenDotGeneration == generation else { return }
+            self.unseenDot.isHidden = true
+        }
     }
 
     func noteAppendedReplies(_ count: Int, readerWasAtBottom: Bool) {
@@ -186,6 +207,9 @@ extension MacChatScrollView {
     /// re-evaluated once it settles.
     func updateJumpButtonVisibility(animated: Bool) {
         guard !isDeallocating else { return }
+        #if DEBUG
+        automationLastControlsAnimated = nil
+        #endif
         // A navigation/scroll can settle without another document layout.
         scheduleUnderfilledHistoryCheck()
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
@@ -200,9 +224,16 @@ extension MacChatScrollView {
         let showUp = hasContent
             && !(isAtConversationBottom && chatDocumentView.latestItemIsUser)
             && (previousReplyTarget() != nil || !diagnosticAtOldest)
-        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
-        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
-        placeLatestStart(raised: showTail, animated: animated)
+        // Once the list is on screen every show/hide/raise animates, whichever
+        // path noticed the change (composer growth, loading, arriving content,
+        // a navigation's safety timeout). Only a hidden list snaps.
+        let animate = animated || hasPresentedFirstFrame
+        #if DEBUG
+        automationLastControlsAnimated = animate
+        #endif
+        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animate)
+        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animate)
+        placeLatestStart(raised: showTail, animated: animate)
         syncUnseenDot()
     }
 
@@ -219,14 +250,20 @@ extension MacChatScrollView {
         jumpButtonVisibilityGenerations[key] = generation
         button.layer?.removeAllAnimations()
         material.layer?.removeAllAnimations()
-        if shouldShow {
+        if shouldShow, button.isHidden || material.isHidden {
+            // Start a hidden control from transparent so it fades in.
+            button.alphaValue = 0
+            material.alphaValue = 0
             button.isHidden = false
             material.isHidden = false
         }
-        let changes = {
-            button.alphaValue = shouldShow ? 1 : 0
-            // Glass stays fully opaque-in-alpha; it appears via isHidden.
-            if !Self.isGlass(material) { material.alphaValue = shouldShow ? 1 : 0 }
+        // Through animator(): a plain alphaValue set inside an animation group
+        // does not animate a layer-backed view. The glass fades with its
+        // chevron (Liquid Glass stays translucent while faded through alpha).
+        let changes = { (animate: Bool) in
+            let target: CGFloat = shouldShow ? 1 : 0
+            (animate ? button.animator() : button).alphaValue = target
+            (animate ? material.animator() : material).alphaValue = target
         }
         let completion = { [weak self, weak button, weak material] in
             guard let self, let button, let material,
@@ -240,10 +277,10 @@ extension MacChatScrollView {
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
-                changes()
+                changes(true)
             } completionHandler: { completion() }
         } else {
-            changes()
+            changes(false)
             completion()
         }
     }

@@ -253,7 +253,7 @@ export class PiAdapter extends AgentAdapter {
     // Queued events of a process that has since been replaced (lazy resume
     // while its queue was still draining) must not touch the replacement.
     proc.onEvent = (e) => enqueue(() => (this.sessions.get(sessionId) === sess ? handleEvent(this, sessionId, e) : undefined));
-    proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
+    proc.onExit = (code, signal) => enqueue(() => this.handleProcessExit(sessionId, sess, code, signal));
     proc.start();
     this.sessions.set(sessionId, sess);
     logger.info({
@@ -269,13 +269,14 @@ export class PiAdapter extends AgentAdapter {
     return sess;
   }
 
-  private handleProcessExit(sessionId: string, sess: PiSession, code: number | null = null): void {
+  private handleProcessExit(sessionId: string, sess: PiSession, code: number | null = null, signal: NodeJS.Signals | null = null): void {
     // Process gone (crash/kill) means agent_settled may never arrive.
     // Permissions cannot be reconstructed, but ask_user is durable at
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
-    logger.info({ sessionId, ...sess.turn.event(), code, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
+    sess.runInFlight = false;
+    logger.info({ sessionId, ...sess.turn.event(), code, signal, turnOpen: !sess.turn.isSettled, replaced: this.sessions.get(sessionId) !== sess }, 'pi process exited unexpectedly');
     this.stopAwaitingSubagents(sess, 'process_exit');
     if (this.sessions.get(sessionId) !== sess) {
       // A replacement process already owns the session: this late exit must
@@ -305,8 +306,8 @@ export class PiAdapter extends AgentAdapter {
       // Pi died mid-turn (crash, killed, broken runtime). Without this the
       // turn ends silently and clients show an empty "no reply" turn.
       const reason = sess.proc.crashReason();
-      const exit = code === null ? '' : ` (exit code ${code})`;
-      logger.warn({ sessionId, code, reason }, 'pi exited during a turn');
+      const exit = code !== null ? ` (exit code ${code})` : signal ? ` (killed by ${signal})` : '';
+      logger.warn({ sessionId, code, signal, reason }, 'pi exited during a turn');
       error = `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`;
     }
     sess.turn.clearError();
@@ -498,7 +499,8 @@ export class PiAdapter extends AgentAdapter {
     return !!s && s.turn.isSettled;
   }
 
-  /** A new logical turn (prompt, follow-up, or a steer after the last settled). */
+  /** A new logical turn (prompt, follow-up, a steer after the last settled,
+   *  or a run pi started on its own). */
   private resetTurnTracking(s: PiSession): void {
     this.stopAwaitingSubagents(s, 'new_turn');
     s.turn.beginTurn();
@@ -507,6 +509,50 @@ export class PiAdapter extends AgentAdapter {
     s.lastStopReason = undefined;
     s.pendingMaintenanceIdle = false;
     s.aborting = false;
+    s.stoppedByUser = false;
+  }
+
+  /**
+   * At agent_start (not a held turn's wake run): open a new Kraki turn when
+   * pi started this run on its own. Typical case: a background-subagent hold
+   * ended (no_progress_timeout, or finished_without_wake after the grace) and
+   * a still-running background run later completes and wakes the agent.
+   * Without a turn of its own, its prose, steps and reply carry the settled
+   * turn's id and RelayClient drops them as late.
+   *
+   * Not an agent-initiated run (keeps the existing turn handling):
+   *  - a turn is open: a Kraki prompt, follow_up or steer-as-prompt opened it
+   *    (resetTurnTracking) before submitting, so it is open through the
+   *    prompt's preflight (compaction before agent_start) too; a provider
+   *    retry or overflow-compaction recovery runs inside the same open turn;
+   *  - the previous run has not reached agent_settled (a duplicate
+   *    agent_start; a turn settled early at threshold compaction_start);
+   *  - a steer awaits its ACK (the turn settled meanwhile and pi may run the
+   *    steer itself; sendMessage reopens the turn for it);
+   *  - Stop, from its start: the stopped background runs reporting back must
+   *    not reopen a stopped turn; lifted by the user's next input;
+   *  - the process exited or was replaced (its queued events never reach
+   *    the replacement; see spawn).
+   * RelayClient may still decline (its own turn unsettled, input queued or
+   * in dispatch); the run is then handled as before this hook existed.
+   */
+  beginAgentInitiatedTurn(sessionId: string, s: PiSession): boolean {
+    if (!s.turn.isSettled || s.runInFlight) return false;
+    if ((s.steersInFlight ?? 0) > 0 || s.stoppedByUser) return false;
+    if (s.exitObserved || this.sessions.get(sessionId) !== s) return false;
+    const previousTurnId = s.turn.eventTurnId;
+    const turnId = this.onAgentInitiatedTurn?.(sessionId);
+    if (!turnId) return false;
+    // RelayClient assigned it via setTurnIdentity already; keep it explicit.
+    s.turn.relayTurnId = turnId;
+    this.resetTurnTracking(s);
+    logger.info({
+      sessionId,
+      turnId,
+      previousTurnId,
+      backgroundRuns: this.subagentTrackers.get(sessionId)?.activeAsyncRuns() ?? 0,
+    }, 'pi agent-initiated run opened a new turn');
+    return true;
   }
 
   /** A fresh prompt can produce maintenance events before its provider run.
@@ -713,9 +759,19 @@ export class PiAdapter extends AgentAdapter {
       this.pendingModeSignals.delete(sessionId);
       text = `${modeChangeSignal(pendingMode as SessionMode)}\n\n${text}`;
     }
-    const images = (attachments ?? [])
-      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
-      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+    // Images arrive inline (base64) or, from current apps, as a content_ref
+    // into the AttachmentStore (as the other adapters read them).
+    const images: Array<{ type: 'image'; data: string; mimeType: string }> = [];
+    for (const a of attachments ?? []) {
+      if (a.type === 'image') {
+        images.push({ type: 'image', data: a.data, mimeType: a.mimeType });
+      } else if (a.type === 'content_ref' && this.attachmentStore) {
+        const hit = this.attachmentStore.read(sessionId, a.id);
+        const mimeType = hit?.meta.mimeType ?? a.mimeType;
+        if (hit && /^image\//.test(mimeType)) images.push({ type: 'image', data: hit.bytes.toString('base64'), mimeType });
+        else logger.warn({ sessionId, id: a.id, found: !!hit }, 'pi: attachment not sent (not a stored image)');
+      }
+    }
     const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
 
     if (options?.delivery === 'steer') {
@@ -734,7 +790,12 @@ export class PiAdapter extends AgentAdapter {
       } else {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
-        await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        s.steersInFlight = (s.steersInFlight ?? 0) + 1;
+        try {
+          await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        } finally {
+          s.steersInFlight = (s.steersInFlight ?? 1) - 1;
+        }
         logger.info({ sessionId, turnId: s.turn.relayTurnId }, 'pi steer accepted');
         // The run settled while Pi was accepting the steer: Pi runs the steer
         // as a new run. Reopen the turn so that run's reply and idle are
@@ -868,6 +929,8 @@ export class PiAdapter extends AgentAdapter {
     const tracker = this.subagentTrackers.get(sessionId);
     const backgroundRuns = tracker?.pendingAsyncRunIds() ?? [];
     this.stopAwaitingSubagents(s, 'abort');
+    // Their stop notices may still wake the agent: that run opens no turn.
+    s.stoppedByUser = true;
     // They will not report back into this turn: stop counting them as active,
     // or every later turn would be held for them.
     this.emitSubagentSteps(sessionId, s, tracker?.retirePending() ?? []);
@@ -923,6 +986,8 @@ export class PiAdapter extends AgentAdapter {
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.
       s.turn.settleSilently();
+      // Pi acknowledges abort only once the agent is idle: no run in flight.
+      s.runInFlight = false;
 
       const pendingAcceptance = s.promptAcceptanceAbort;
       if (pendingAcceptance) {
@@ -1198,6 +1263,13 @@ export class PiAdapter extends AgentAdapter {
 
   getSessionUsage(sessionId: string): SessionUsage | null {
     return this.sessions.get(sessionId)?.usage ?? null;
+  }
+
+  /** A respawned pi process starts from zero until its first
+   *  get_session_stats; keep the persisted totals meanwhile. */
+  override setSessionUsage(sessionId: string, usage: SessionUsage): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.usage = { ...usage };
   }
 
   private sweepIdle(): void {

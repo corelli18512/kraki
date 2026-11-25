@@ -6,7 +6,7 @@ const {
   app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, globalShortcut, nativeImage, nativeTheme,
   net, powerMonitor, protocol, screen, shell,
 } = require('electron');
-const { existsSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const os = require('node:os');
@@ -19,6 +19,7 @@ const windowsTitleBar = require('./windows-titlebar.cjs');
 const power = require('./power.cjs');
 const { appOnlyIpc } = require('./ipc-guard.cjs');
 const navigation = require('./navigation.cjs');
+const voiceVolume = require('./voice-volume.cjs');
 const buildInfo = require('./build-info.json');
 
 const SCHEME = 'app';
@@ -176,9 +177,12 @@ function createWindow() {
   win.once('ready-to-show', () => { if (!LAUNCHED_AT_LOGIN) win.show(); });
   win.on('close', (e) => {
     saveBounds();
+    voiceDucker?.restore('window closed');
     // Closing keeps Kraki running in the tray (replies still notify).
     if (!quitting) {
       e.preventDefault();
+      // The installer of a remote update closes the app: let it, staying online.
+      if (installingRemoteUpdate()) { quitting = true; app.quit(); return; }
       if (pref('keepRunningInTray') === false) void quitFromTray();
       else { win.hide(); stillOnlineHintOnce(); }
     }
@@ -201,6 +205,9 @@ function createWindow() {
   };
   wc.on('will-navigate', guard);
   wc.on('will-redirect', guard);
+  // A reloaded or crashed page lost its recording: give the volume back.
+  wc.on('did-navigate', () => voiceDucker?.restore('page loaded'));
+  wc.on('render-process-gone', () => voiceDucker?.restore('page gone'));
   wc.on('context-menu', (_e, p) => {
     const items = [];
     if (p.misspelledWord) {
@@ -294,11 +301,17 @@ async function goOffline() {
   try { await changePresence('stopping', () => builtIn.disable({ keepOwnership: true })); } catch { /* the status shows it */ }
 }
 
-/** Tray › Quit: while this PC is online, quitting takes it offline (asked once). */
+/** An update from another device is replacing Kraki for Windows right now. */
+function installingRemoteUpdate() {
+  return !!builtIn && presence.remoteUpdateInstallerRunning(builtIn.home());
+}
+
+/** Tray › Quit: while this PC is online, quitting takes it offline (asked once).
+ *  Not while a remote update installs: the app comes back online after it. */
 async function quitFromTray() {
   const s = currentState();
   const managed = presence.managesPresence(s);
-  if (managed && presence.canGoOffline(presence.resolveStatus(s))) {
+  if (managed && presence.canGoOffline(presence.resolveStatus(s)) && !installingRemoteUpdate()) {
     if (!pref('quitConfirmSuppressed')) {
       const r = await dialog.showMessageBox(win && win.isVisible() ? win : undefined, {
         type: 'question',
@@ -448,6 +461,51 @@ const safely = (fn) => async (...args) => {
 };
 
 appIpc.handle('kraki:local-link-discovery', () => readLocalLinkDiscovery());
+
+// ── Lower other sounds while recording (Windows; voice-volume.cjs) ──
+// Kraki for Mac's "Lower Other Sounds While Recording", on by default.
+const VOICE_VOLUME_PREF = 'voiceLowerOtherSounds';
+/** @type {import('./voice-volume.cjs').VoiceVolumeDucker | null} */
+let voiceDucker = null;
+function voiceVolumeLog(line) {
+  const file = path.join(app.getPath('userData'), 'voice-volume.log');
+  try { if (statSync(file).size > 256 * 1024) writeFileSync(file, ''); } catch { /* none yet */ }
+  try { appendFileSync(file, `${new Date().toISOString()} ${line}\n`); } catch { /* ignore */ }
+}
+function startVoiceVolume() {
+  if (process.platform !== 'win32') return;
+  let audio = null;
+  // Core Audio through koffi, loaded on first use only.
+  const core = () => (audio ??= require('./windows-audio.cjs').createWindowsAudioBackend());
+  voiceDucker = new voiceVolume.VoiceVolumeDucker({
+    backend: {
+      defaultDevice: () => core().defaultDevice(),
+      supportsWritableVolume: (id) => core().supportsWritableVolume(id),
+      volume: (id) => core().volume(id),
+      setVolume: (id, value) => core().setVolume(id, value),
+      isMuted: (id) => core().isMuted(id),
+    },
+    journal: new voiceVolume.VolumeJournal(path.join(app.getPath('userData'), voiceVolume.VOICE_VOLUME.journalName)),
+    launchWatchdog: (journalFile, state) => voiceVolume.launchWatchdogProcess(journalFile, state, {
+      onError: (error) => voiceVolumeLog(`output volume watchdog failed: ${error.message}`),
+    }),
+    isEnabled: () => pref(VOICE_VOLUME_PREF) !== false,
+    log: voiceVolumeLog,
+  });
+  voiceDucker.recoverAbandonedState();
+  // A headset that was away at launch may be back: retry a pending journal.
+  for (const event of ['resume', 'unlock-screen']) powerMonitor.on(event, () => voiceDucker?.recoverAbandonedState());
+}
+// The main window's recording: start cue and microphone capture.
+appIpc.on('kraki:voice-volume', (event, what) => {
+  if (!voiceDucker || !win || event.sender !== win.webContents) return;
+  if (what === 'cue-started') voiceDucker.cueStarted();
+  else if (what === 'cue-finished') voiceDucker.cueFinished();
+  // Hidden in the tray (closed during the cue): no recording UI, no lowering.
+  else if (what === 'capture-started') { if (win.isVisible()) voiceDucker.scheduleLowering(); }
+  else if (what === 'capture-stopped') voiceDucker.restore('capture stopped');
+});
+appIpc.handle('kraki:voice-volume-state', () => ({ enabled: pref(VOICE_VOLUME_PREF) !== false }));
 // Performance data (Settings › Share Performance Data): fixed collector
 // paths only; main-window callers only.
 const diagHttp = require('./diag-http.cjs');
@@ -537,6 +595,7 @@ appIpc.handle('kraki:settings-login', safely(async (_e, enabled) => {
 appIpc.handle('kraki:settings-go-online', safely(() => changePresence('starting', () => builtIn.enable())));
 appIpc.handle('kraki:settings-go-offline', safely(() => changePresence('stopping', () => builtIn.disable({ keepOwnership: true }))));
 appIpc.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
+appIpc.handle('kraki:voice-volume-enabled', safely((_e, enabled) => { pref(VOICE_VOLUME_PREF, !!enabled); }));
 appIpc.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
 appIpc.handle('kraki:settings-locate-cli', safely(async () => {
   const result = await dialog.showOpenDialog(win, { title: i18n.t('dialog.locateTitle'), properties: ['openFile'], filters: [{ name: i18n.t('dialog.executable'), extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
@@ -577,7 +636,7 @@ appIpc.on('kraki:notify', (_e, n) => {
 app.on('second-instance', showWindow);
 app.on('before-quit', () => { quitting = true; });
 app.on('activate', showWindow);
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { globalShortcut.unregisterAll(); voiceDucker?.restore('app quitting'); });
 
 app.whenReady().then(async () => {
   // Last language the Web client reported; before that, the OS languages.
@@ -599,6 +658,7 @@ app.whenReady().then(async () => {
     const q = builtIn.quickState();
     if (q.owned && q.configured && !q.running) void goOnline();
   }
+  startVoiceVolume();
   serveApp();
   createWindow();
   createTray();

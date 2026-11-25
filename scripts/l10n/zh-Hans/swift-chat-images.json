@@ -1,0 +1,14 @@
+{
+  "translations": {
+    "Save to Photos": "保存到照片",
+    "Saved to Photos": "已保存到照片",
+    "Couldn't Save Image": "无法保存图片",
+    "Allow Kraki to Add Photos": "允许 Kraki 添加照片",
+    "To save images from chats, allow Kraki to add photos in Settings.": "要保存聊天中的图片，请在“设置”中允许 Kraki 添加照片。",
+    "Share…": "分享…",
+    "Play Animation": "播放动画",
+    "Pause Animation": "暂停动画",
+    "Save Image…": "保存图片…",
+    "Copy Image": "复制图片"
+  }
+}

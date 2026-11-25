@@ -90,6 +90,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// the geometry momentarily >24 pt from the bottom, the distance rule
     /// dropped tail-following, and the Chat stopped short of the bottom.
     var sendTailLock = false
+    let keyboardFocusView = MacChatKeyboardFocusView(frame: .zero)
     var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0
@@ -152,6 +153,10 @@ final class MacChatScrollView: MacSmoothScrollView {
     let latestStartButton = NSButton()
     var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
+    #if DEBUG
+    /// Whether the last ↑/↓ visibility evaluation animated (regression tests).
+    var automationLastControlsAnimated: Bool?
+    #endif
     /// ↑ lands a reply start where the first message rests at the top.
     let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
@@ -251,6 +256,8 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     static let unseenDotSize: CGFloat = 11
     let unseenDot = NSView()
+    var unseenDotShown = false
+    var unseenDotGeneration = 0
 
     var onJumpToLatest: (() -> Void)?
     var onRequestLatestTail: (() -> Void)?

@@ -26,7 +26,30 @@ export function browserDeviceName(ua: string): string {
   return os ? `${browser} on ${os}` : `Web ${browser}`;
 }
 
-/** Send the initial auth message. Returns true if a pairing token was consumed. */
+/** Load or create this browser's keys. False when the browser cannot keep
+ *  them (no WebCrypto outside a secure context, IndexedDB blocked): signing
+ *  in without them registers a device that can neither decrypt nor answer the
+ *  next visit's challenge, so the caller must not send auth. */
+export async function ensureDeviceKeys(keyStore: AppKeyStore): Promise<boolean> {
+  if (keyStore.isReady()) return true;
+  try {
+    await keyStore.init();
+    return true;
+  } catch (err) {
+    logger.error('Encryption keys unavailable in this browser:', err);
+    return false;
+  }
+}
+
+/** False when this browser can never keep keys: a plain-http page (no
+ *  WebCrypto), or no IndexedDB. Any other init() failure may be temporary
+ *  (WebKit drops its IndexedDB connection after backgrounding). */
+export function browserCanKeepKeys(): boolean {
+  return window.isSecureContext !== false && !!globalThis.crypto?.subtle && typeof indexedDB !== 'undefined';
+}
+
+/** Send the initial auth message; the keys must be ready (`ensureDeviceKeys`).
+ *  Returns true if a pairing token was consumed. */
 export async function sendAuth(
   send: (msg: Record<string, unknown>) => void,
   keyStore: AppKeyStore,
@@ -41,13 +64,8 @@ export async function sendAuth(
   // Kraki for Mac does with its tentacle's), keeping its device id.
   const desktopToken = desktopCredentials()?.token;
 
-  // Wait for key store if not ready
-  if (!keyStore.isReady()) {
-    try { await keyStore.init(); } catch { /* continue without E2E */ }
-  }
-
-  const publicKey = keyStore.isReady() ? await keyStore.getSigningPublicKey() : undefined;
-  const encryptionKey = keyStore.isReady() ? await keyStore.getPublicKey() : undefined;
+  const publicKey = await keyStore.getSigningPublicKey();
+  const encryptionKey = await keyStore.getPublicKey();
 
   const usedToken = !!pairingToken;
   const device = { name: deviceName, role: 'app', kind: desktopBridge ? 'desktop' : 'web', deviceId: storedDeviceId, publicKey, encryptionKey };
@@ -178,6 +196,8 @@ export function processAuthError(
     setStoredDeviceId: (id: string) => void;
     disconnect: () => void;
     connect: () => void;
+    /** Drop this connection and retry on the reconnect backoff (K-198). */
+    reconnectLater: () => void;
     redirectToRelay: (url: string) => void;
     /** The relay that sent this error. */
     currentRelay: string;
@@ -188,8 +208,9 @@ export function processAuthError(
   // The redirect is saved and then signed into with this device's key, so it
   // is followed only to a trusted relay (same rule as the Tentacle). An
   // untrusted one is handled like any other non-fatal auth error.
-  if (authError.code === 'wrong_region' && authError.redirect
-    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect)) {
+  const refusedRedirect = authError.code === 'wrong_region' && !!authError.redirect
+    && !isAcceptableRegionRedirect(deps.currentRelay, authError.redirect);
+  if (refusedRedirect) {
     logger.warn('Ignoring region redirect to an untrusted relay', authError.redirect);
   } else if (authError.code === 'wrong_region' && authError.redirect) {
     // Save new relay URL so the page reload connects to the correct region
@@ -227,14 +248,16 @@ export function processAuthError(
           ? t('settings:auth.signInAgain')
           : t('settings:auth.scanAgain'),
       );
+      deps.disconnect();
+      deps.connect();
     } else {
-      // Transient: keep the paired identity and just reconnect — the next
-      // challenge attempt succeeds once the backend recovers.
+      // Transient: keep the paired identity and reconnect on the backoff
+      // schedule — the next challenge attempt succeeds once the backend
+      // recovers. Retrying at once hammered the relay many times a second.
       logger.warn('Auth failed for stored device (transient), keeping credentials', { code: authError.code });
-      store.setLastError(t('settings:auth.reconnecting'));
+      store.setLastError(t(refusedRedirect ? 'settings:auth.untrustedRedirect' : 'settings:auth.reconnecting'));
+      deps.reconnectLater();
     }
-    deps.disconnect();
-    deps.connect();
   } else {
     store.setReconnectState(0, null);
     store.setLastError(
@@ -260,6 +283,13 @@ export function channelForAccount(prefs: Record<string, unknown> | undefined): '
 }
 
 const CHANNEL_RELOAD_KEY = 'kraki.channelReload';
+let channelSwitchBlocked = false;
+
+/** The account's channel could not be served here (the cookie does not stick,
+ *  or a reload for it already happened): Settings must not say "Switching…". */
+export function channelSwitchFailed(): boolean {
+  return channelSwitchBlocked;
+}
 
 /**
  * Serve the account's release channel. Called with the full account on
@@ -279,6 +309,7 @@ export function applyAccountChannel(prefs: Record<string, unknown> | undefined):
   setDebugLogging(prefs?.internal === true);
   if (window.krakiDesktop) return;
   const desired = channelForAccount(prefs);
+  channelSwitchBlocked = false;
   if (getCurrentChannel() === desired) {
     try { sessionStorage.removeItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
     return;
@@ -286,12 +317,14 @@ export function applyAccountChannel(prefs: Record<string, unknown> | undefined):
   setChannelCookie(desired);
   if (getCurrentChannel() !== desired) {
     logger.warn('Channel cookie not stored; staying on this build', { channel: desired });
+    channelSwitchBlocked = true;
     return;
   }
   let reloaded: string | null = null;
   try { reloaded = sessionStorage.getItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
   if (reloaded === desired) {
     logger.warn('Already reloaded for this channel; staying on this build', { channel: desired });
+    channelSwitchBlocked = true;
     return;
   }
   try { sessionStorage.setItem(CHANNEL_RELOAD_KEY, desired); } catch { /* storage unavailable */ }

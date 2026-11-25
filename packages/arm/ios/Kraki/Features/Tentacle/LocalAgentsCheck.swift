@@ -28,6 +28,8 @@ final class LocalAgentsCheck {
         var sampleModels: [String] = []
         var hint: String?
         var installURL: URL?
+        /// Set when the installed version is older than Kraki has been tested with.
+        var minVersion: String?
     }
 
     /// The four agents Kraki supports, in display order, before any result.
@@ -73,8 +75,22 @@ final class LocalAgentsCheck {
     /// only ones the main list shows. Not-installed agents live in the
     /// "Supported agents" sheet.
     var installedAgents: [Agent] {
-        displayedAgents.filter { $0.status != .notInstalled && $0.status != .checking }
+        Self.installed(displayedAgents, resultOrder: resultOrder)
     }
+
+    /// Installed agents in the order their results arrived, so a slow agent
+    /// is added below the rows already shown instead of pushing them down.
+    static func installed(_ agents: [Agent], resultOrder: [String]) -> [Agent] {
+        let rank = Dictionary(resultOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return agents
+            .filter { $0.status != .notInstalled && $0.status != .checking }
+            .enumerated()
+            .sorted { (rank[$0.element.id] ?? Int.max, $0.offset) < (rank[$1.element.id] ?? Int.max, $1.offset) }
+            .map(\.element)
+    }
+
+    /// Agent ids in the order their first result arrived.
+    private(set) var resultOrder: [String] = []
 
     /// True once every agent has a result.
     var hasResults: Bool { !displayedAgents.contains { $0.status == .checking } }
@@ -123,7 +139,8 @@ final class LocalAgentsCheck {
             models: json["models"] as? Int ?? 0,
             sampleModels: json["sampleModels"] as? [String] ?? [],
             hint: json["hint"] as? String,
-            installURL: (json["installUrl"] as? String).flatMap(URL.init(string:))
+            installURL: (json["installUrl"] as? String).flatMap(URL.init(string:)),
+            minVersion: json["minVersion"] as? String
         )
         var next = agents
         if let i = next.firstIndex(where: { $0.id == id }) {
@@ -133,6 +150,13 @@ final class LocalAgentsCheck {
             next.append(result)
         }
         return next
+    }
+
+    static func agentId(line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["event"] as? String == "agent" else { return nil }
+        return json["id"] as? String
     }
 
     #if DEBUG
@@ -149,7 +173,12 @@ final class LocalAgentsCheck {
     func run(binaryPath: String) {
         guard !previewOnly else { return }
         cancel()
-        agents = Self.placeholders
+        // Check Again keeps the rows on screen and updates them in place as
+        // results arrive; only the first check starts from placeholders.
+        if !agents.contains(where: { $0.status != .checking }) {
+            agents = Self.placeholders
+            resultOrder = []
+        }
         failure = nil
         isRunning = true
         buffer = Data()
@@ -191,6 +220,7 @@ final class LocalAgentsCheck {
             buffer.removeSubrange(buffer.startIndex...newline)
             if let line = String(data: lineData, encoding: .utf8) {
                 agents = Self.apply(line: line, to: agents)
+                if let id = Self.agentId(line: line), !resultOrder.contains(id) { resultOrder.append(id) }
             }
         }
     }

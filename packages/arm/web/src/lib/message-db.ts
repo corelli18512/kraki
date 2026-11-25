@@ -33,6 +33,7 @@ const TRANSIENT_TYPES = new Set([
   'answer',
   'question_resolved',
   'permission_resolved',
+  'question_withdrawn',
 ]);
 
 /** True for a message that must never be written to / read from IndexedDB. */

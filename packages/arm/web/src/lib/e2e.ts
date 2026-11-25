@@ -82,6 +82,50 @@ function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
   });
 }
 
+/** Store `value` under `key` unless another page (tab) stored one first, in one
+ *  readwrite transaction, and return what is stored. Two tabs creating keys at
+ *  once must end up with ONE key pair: the head keeps the public key the first
+ *  auth sent, so a page that later used the other one could not decrypt. */
+function idbPutIfAbsent<T>(db: IDBDatabase, key: string, value: T): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    let stored = value;
+    const req = store.get(key);
+    req.onsuccess = () => {
+      if (req.result) stored = req.result as T;
+      else store.put(value, key);
+    };
+    tx.oncomplete = () => resolve(stored);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function idbDelete(db: IDBDatabase, keys: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    for (const key of keys) tx.objectStore(STORE_NAME).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/** In flight while sign-out deletes the stored keys: a key store started
+ *  meanwhile must not load the old keys back. */
+let keysClearing: Promise<void> | null = null;
+
+/** Sign-out: delete this browser's key pairs, so nothing addressed to the
+ *  signed-out device (a late push preview) can be decrypted any more, and the
+ *  next sign-in pairs with new keys. Entries are deleted rather than the
+ *  database: an open connection (another tab) would block deleting it. */
+export function clearDeviceKeys(): Promise<void> {
+  keysClearing = (async () => {
+    const db = await openDB();
+    try { await idbDelete(db, [SIGN_KEY_ID, ENCRYPT_KEY_ID, KEY_ID]); } finally { db.close(); }
+  })();
+  return keysClearing;
+}
+
 // ── Base64 helpers (stack-safe for large buffers) ───────
 // String.fromCharCode(...array) blows the call stack for arrays > ~65K bytes.
 // These helpers iterate instead of spreading.
@@ -130,9 +174,32 @@ export class BrowserAppKeyStore implements AppKeyStore {
   private encryptPublicKeyBase64: string | null = null;
   private signPublicKeyBase64: string | null = null;
   private ready = false;
+  private initializing: Promise<void> | null = null;
 
-  async init(): Promise<void> {
+  /** Single-flight: connect() and the first auth both call this while keys are
+   *  still being generated. Two runs generated two key sets; the auth sent one
+   *  public key and IndexedDB kept the other, so inbound messages could not be
+   *  decrypted and the next reload's challenge failed. A failed run can be retried. */
+  init(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    this.initializing ??= this.loadOrCreateKeys().catch((err: unknown) => {
+      this.initializing = null;
+      throw err;
+    });
+    return this.initializing;
+  }
+
+  private async loadOrCreateKeys(): Promise<void> {
+    if (keysClearing) await keysClearing.catch(() => {});
     const db = await openDB();
+    try {
+      await this.loadOrCreateKeysIn(db);
+    } finally {
+      db.close();
+    }
+  }
+
+  private async loadOrCreateKeysIn(db: IDBDatabase): Promise<void> {
 
     // Migrate legacy key: old code stored a single key as 'device-key'
     const legacyKey = await idbGet<CryptoKeyPair>(db, 'device-key');
@@ -146,12 +213,12 @@ export class BrowserAppKeyStore implements AppKeyStore {
       this.signKeyPair = legacyKey;
       await idbPut(db, SIGN_KEY_ID, legacyKey);
     } else {
-      this.signKeyPair = await crypto.subtle.generateKey(
+      const generated = await crypto.subtle.generateKey(
         RSA_SIGN_ALGORITHM,
         false,
         ['sign', 'verify'],
       );
-      await idbPut(db, SIGN_KEY_ID, this.signKeyPair);
+      this.signKeyPair = await idbPutIfAbsent(db, SIGN_KEY_ID, generated);
     }
 
     // Load or generate encryption key pair
@@ -159,14 +226,14 @@ export class BrowserAppKeyStore implements AppKeyStore {
     if (storedEncrypt) {
       this.encryptKeyPair = storedEncrypt;
     } else {
-      this.encryptKeyPair = await crypto.subtle.generateKey(
+      const generated = await crypto.subtle.generateKey(
         RSA_ENCRYPT_ALGORITHM,
         false, // non-extractable private key
         ['encrypt', 'decrypt'],  // public encrypts, private decrypts
       );
       // Note: we need to be able to export the public key but not the private key.
       // Web Crypto allows exporting public keys even when extractable=false.
-      await idbPut(db, ENCRYPT_KEY_ID, this.encryptKeyPair);
+      this.encryptKeyPair = await idbPutIfAbsent(db, ENCRYPT_KEY_ID, generated);
     }
 
     if (!this.encryptKeyPair || !this.signKeyPair) {

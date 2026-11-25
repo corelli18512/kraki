@@ -459,13 +459,17 @@ final class MacCoreTextBodyView: NSView {
     ) {
         guard let selectionRange, selectionRange.length > 0 else { return }
         let isActive = window?.isKeyWindow == true && window?.firstResponder === self
-        let color = isActive
-            ? NSColor.selectedTextBackgroundColor
-            : NSColor.unemphasizedSelectedTextBackgroundColor
-        color.setFill()
         for rect in artifact.selectionRects(for: selectionRange) where rect.intersects(dirtyRect) {
+            Self.selectionColor(for: rect, in: artifact, isActive: isActive).setFill()
             rect.intersection(bounds).fill()
         }
+    }
+
+    /// Text selection on the page, or on the dark code surface.
+    static func selectionColor(for rect: NSRect, in artifact: MacCoreTextLayoutArtifact, isActive: Bool) -> NSColor {
+        let inCode = artifact.blocks.contains { $0.kind == .code && $0.frame.intersects(rect) }
+        if inCode { return isActive ? MacCodePalette.selection : MacCodePalette.unemphasizedSelection }
+        return isActive ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor
     }
 
     private func drawBlockBackgrounds(

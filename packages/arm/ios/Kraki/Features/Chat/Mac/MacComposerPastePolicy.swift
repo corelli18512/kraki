@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Whether ⌘V in the Mac composer attaches an image or pastes into the text.
@@ -28,13 +29,13 @@ enum MacComposerPastePolicy {
     static func image(from pasteboard: NSPasteboard) -> NSImage? {
         guard attachesImage(pasteboard) else { return nil }
         let files = fileURLs(pasteboard)
-        if let image = files.lazy.filter(isImageFile).compactMap({ NSImage(contentsOf: $0) }).first {
+        if let image = files.lazy.filter(isImageFile).compactMap({ MacComposerImages.image(contentsOf: $0) }).first {
             return image
         }
         // Only reached for image files that cannot be read (attachesImage is
         // false for other files, so Finder's icon of a document never comes here).
         guard let type = imageDataType(pasteboard), let data = pasteboard.data(forType: type) else { return nil }
-        return NSImage(data: data)
+        return MacComposerImages.image(data: data)
     }
 
     private static func fileURLs(_ pasteboard: NSPasteboard) -> [URL] {
@@ -64,13 +65,37 @@ enum MacComposerPastePolicy {
         return ["http", "https", "data"].contains(scheme)
     }
 
-    /// PNG first, then TIFF, then any other format NSImage reads.
+    /// GIF first (it keeps its animation), then PNG, then TIFF, then any
+    /// other format NSImage reads.
     private static func imageDataType(_ pasteboard: NSPasteboard) -> NSPasteboard.PasteboardType? {
-        let preferred: [NSPasteboard.PasteboardType] = [NSPasteboard.PasteboardType(UTType.png.identifier), .tiff]
+        let preferred: [NSPasteboard.PasteboardType] = [
+            NSPasteboard.PasteboardType(UTType.gif.identifier), NSPasteboard.PasteboardType(UTType.png.identifier), .tiff,
+        ]
         let others = NSImage.imageTypes
             .map { NSPasteboard.PasteboardType($0) }
             .filter { !preferred.contains($0) }
         return pasteboard.availableType(from: preferred + others)
     }
+}
+
+/// A drop on the composer box outside the editor (attach button, image slot,
+/// padding): the same rule as ⌘V and the editor's own drop, read from the
+/// drag pasteboard. Text and other files are not taken here.
+@MainActor
+struct MacComposerImageDrop: DropDelegate {
+    var pasteboard = NSPasteboard(name: .drag)
+    /// Attaches the image, or explains why not; false refuses the drop.
+    let offer: @MainActor (NSImage) -> Bool
+
+    func accepts() -> Bool { MacComposerPastePolicy.attachesImage(pasteboard) }
+
+    func drop() -> Bool {
+        guard accepts(), let image = MacComposerPastePolicy.image(from: pasteboard) else { return false }
+        return offer(image)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool { accepts() }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: accepts() ? .copy : .forbidden) }
+    func performDrop(info: DropInfo) -> Bool { drop() }
 }
 #endif

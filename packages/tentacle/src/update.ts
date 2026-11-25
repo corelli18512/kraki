@@ -9,8 +9,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createReadStream, createWriteStream, unlinkSync, statSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { basename, join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
@@ -18,7 +18,7 @@ import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { isSea } from 'node:sea';
 import chalk from 'chalk';
-import ora from 'ora';
+import { ora } from './spinner.js';
 import { getConfigDir, getKrakiHome } from './config.js';
 import { probeFda, registerKrakiAppBundle, unregisterAppBundlePath, cleanupStaleBundleEntries } from './checks.js';
 
@@ -47,7 +47,7 @@ export function detectInstallMethod(): InstallMethod {
 
 // ── Latest version fetching ─────────────────────────────
 
-interface GitHubRelease {
+export interface GitHubRelease {
   tag_name: string;
   draft?: boolean;
   prerelease?: boolean;
@@ -109,15 +109,15 @@ function getLocation(location: string | string[] | undefined): string | undefine
   return location;
 }
 
-function createDirectRequest(target: URL, onResponse: (res: IncomingMessage) => void) {
+function createDirectRequest(target: URL, headers: Record<string, string>, timeoutMs: number, onResponse: (res: IncomingMessage) => void) {
   const requestFn = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const req = requestFn(target, {
-    headers: { 'User-Agent': 'kraki-updater' },
+    headers: { 'User-Agent': 'kraki-updater', ...headers },
     method: 'GET',
   }, onResponse);
 
-  req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-    req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  req.setTimeout(timeoutMs, () => {
+    req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
   });
 
   return req;
@@ -126,6 +126,8 @@ function createDirectRequest(target: URL, onResponse: (res: IncomingMessage) => 
 function createProxiedRequest(
   target: URL,
   proxyUrl: URL,
+  headers: Record<string, string>,
+  timeoutMs: number,
   onResponse: (res: IncomingMessage) => void,
   onError: (err: Error) => void,
 ) {
@@ -147,8 +149,8 @@ function createProxiedRequest(
   };
 
   const connectReq = (proxyUrl.protocol === 'https:' ? httpsRequest : httpRequest)(options);
-  connectReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
-    connectReq.destroy(new Error(`Proxy connection timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  connectReq.setTimeout(timeoutMs, () => {
+    connectReq.destroy(new Error(`Proxy connection timed out after ${timeoutMs}ms`));
   });
 
   connectReq.on('connect', (res, socket, head) => {
@@ -164,7 +166,7 @@ function createProxiedRequest(
 
     const tunneledOptions: HttpsRequestOptions & { socket: typeof socket } = {
       agent: false,
-      headers: { 'User-Agent': 'kraki-updater' },
+      headers: { 'User-Agent': 'kraki-updater', ...headers },
       host: target.hostname,
       method: 'GET',
       path: `${target.pathname}${target.search}`,
@@ -174,8 +176,8 @@ function createProxiedRequest(
     };
     const tunneledReq = httpsRequest(tunneledOptions, onResponse);
 
-    tunneledReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
-      tunneledReq.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    tunneledReq.setTimeout(timeoutMs, () => {
+      tunneledReq.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
     });
     tunneledReq.on('error', (err) => {
       socket.destroy();
@@ -187,38 +189,50 @@ function createProxiedRequest(
   return connectReq;
 }
 
+/** A redirect the updater refuses to follow; retrying can't change it. */
+class RedirectPolicyError extends Error {}
+
 /** Follow a redirect, never from https to plain http (update downloads are
  *  installed as executables). */
-function followRedirect(from: URL, location: string, redirects: number): Promise<IncomingMessage> {
+function followRedirect(
+  from: URL, location: string, redirects: number, headers: Record<string, string>, timeoutMs: number,
+): Promise<IncomingMessage> {
   const next = new URL(location, from);
   if (from.protocol === 'https:' && next.protocol !== 'https:') {
-    return Promise.reject(new Error(`Refusing insecure redirect to ${next.origin}`));
+    return Promise.reject(new RedirectPolicyError(`Refusing insecure redirect to ${next.origin}`));
   }
-  return sendRequest(next.toString(), redirects + 1);
+  return sendRequest(next.toString(), redirects + 1, true, headers, timeoutMs);
 }
 
-function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
+/**
+ * `headers` (e.g. `Range`) go to every hop of the redirect chain.
+ * `timeoutMs` is an idle timeout on the connection; it stays armed while the
+ * body is read unless the caller clears it (`res.socket.setTimeout(0)`).
+ */
+function sendRequest(
+  url: string, redirects = 0, follow = true, headers: Record<string, string> = {}, timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     if (redirects > MAX_REDIRECTS) {
-      reject(new Error(`Too many redirects while fetching ${url}`));
+      reject(new RedirectPolicyError(`Too many redirects while fetching ${url}`));
       return;
     }
 
     const target = new URL(url);
     const proxyUrl = getProxyForUrl(url);
-    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, (res) => {
+    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, headers, timeoutMs, (res) => {
       const location = getLocation(res.headers.location);
-      if (isRedirect(res.statusCode) && location) {
+      if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects).then(resolve, reject);
+        followRedirect(target, location, redirects, headers, timeoutMs).then(resolve, reject);
         return;
       }
       resolve(res);
-    }, reject) : createDirectRequest(target, (res) => {
+    }, reject) : createDirectRequest(target, headers, timeoutMs, (res) => {
       const location = getLocation(res.headers.location);
-      if (isRedirect(res.statusCode) && location) {
+      if (follow && isRedirect(res.statusCode) && location) {
         res.resume();
-        followRedirect(target, location, redirects).then(resolve, reject);
+        followRedirect(target, location, redirects, headers, timeoutMs).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -292,6 +306,67 @@ export async function fetchLatestVersion(): Promise<string | null> {
       if (version) return version;
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Kraki for Windows releases ──────────────────────────
+
+export const WINDOWS_APP_DOWNLOAD_URL = 'https://kraki.chat/download/windows';
+
+/** The Kraki for Windows installer of a version (release `win-v<version>`). */
+export function windowsAppInstallerAsset(version: string): string {
+  return `Kraki-Setup-${version}-x64.exe`;
+}
+
+/** The app version of a formal Kraki for Windows release, or null. */
+export function windowsAppReleaseVersion(r: GitHubRelease): string | null {
+  if (r.draft || r.prerelease || typeof r.tag_name !== 'string') return null;
+  const version = r.tag_name.match(/^win-v(\d+\.\d+\.\d+)$/)?.[1];
+  if (!version) return null;
+  return r.assets?.some((a) => a.name === windowsAppInstallerAsset(version)) ? version : null;
+}
+
+/** `…/releases/download/win-v0.1.11/Kraki-Setup-0.1.11-x64.exe` → `0.1.11`. */
+export function windowsAppVersionFromDownloadUrl(url: string | null | undefined): string | null {
+  const m = url?.match(/^https:\/\/github\.com\/corelli18512\/kraki\/releases\/download\/win-v(\d+\.\d+\.\d+)\/Kraki-Setup-(\d+\.\d+\.\d+)-x64\.exe$/);
+  return m && m[1] === m[2] ? m[1] : null;
+}
+
+/** Where a URL redirects to (not followed), or null when it doesn't. */
+export async function fetchRedirectLocation(url: string): Promise<string | null> {
+  const res = await sendRequest(url, 0, false);
+  res.resume();
+  const location = getLocation(res.headers.location);
+  return isRedirect(res.statusCode) && location ? new URL(location, url).toString() : null;
+}
+
+export interface WindowsAppReleaseDeps {
+  fetchReleases: () => Promise<GitHubRelease[]>;
+  fetchRedirectLocation: (url: string) => Promise<string | null>;
+}
+
+/**
+ * Newest formal Kraki for Windows version: the highest `win-v*` release on the
+ * first page of releases (no draft, no pre-release, with its installer). When
+ * GitHub's API refuses (60 unauthenticated requests an hour per IP), the
+ * download link kraki.chat redirects to names it.
+ */
+export async function fetchLatestWindowsAppVersion(deps: WindowsAppReleaseDeps = {
+  fetchReleases: () => fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`),
+  fetchRedirectLocation,
+}): Promise<string | null> {
+  try {
+    let best: string | null = null;
+    for (const r of await deps.fetchReleases()) {
+      const v = windowsAppReleaseVersion(r);
+      if (v && (!best || isNewer(v, best))) best = v;
+    }
+    if (best) return best;
+  } catch { /* fall back to the download link */ }
+  try {
+    return windowsAppVersionFromDownloadUrl(await deps.fetchRedirectLocation(WINDOWS_APP_DOWNLOAD_URL));
   } catch {
     return null;
   }
@@ -396,6 +471,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const latest = await fetchLatestVersion();
   if (!latest) {
     spinner.fail('Could not check for updates');
+    process.exitCode = 1;
     return;
   }
 
@@ -407,6 +483,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const method = detectInstallMethod();
   if (method !== 'npm' && method !== 'sea') {
     spinner.fail('Cannot determine install method. Update manually.');
+    process.exitCode = 1;
     return;
   }
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
@@ -439,14 +516,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   let installStaged: (() => void) | undefined;
   if (method === 'sea') {
     try {
-      installStaged = await prepareBinaryUpdate(latest, (received, total) => {
-        if (total > 0) {
-          const pct = Math.floor((received / total) * 100);
-          spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
-        } else {
-          spinner.text = `Downloading ${formatBytes(received)}…`;
-        }
-      });
+      installStaged = await prepareBinaryUpdate(latest, downloadSpinner(spinner));
     } catch (err) {
       spinner.fail((err as Error).message);
       throw err;
@@ -526,15 +596,78 @@ export async function performUpdate(currentVersion: string): Promise<void> {
 
 // ── npm update ──────────────────────────────────────────
 
-async function updateViaNpm(version: string): Promise<void> {
+/**
+ * The npm prefix that owns a global install of this package:
+ * `<prefix>/lib/node_modules/@kraki/tentacle` (macOS/Linux) or
+ * `<prefix>/node_modules/@kraki/tentacle` (Windows). Null for any other layout.
+ */
+export function npmPrefixForPackageRoot(packageRoot: string): string | null {
+  const scopeDir = dirname(packageRoot);
+  const nodeModules = dirname(scopeDir);
+  if (basename(scopeDir) !== '@kraki' || basename(nodeModules) !== 'node_modules') return null;
+  const parent = dirname(nodeModules);
+  return basename(parent) === 'lib' ? dirname(parent) : parent;
+}
+
+function installedVersion(packageRoot: string): string | null {
+  try {
+    return (JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** npm's error output in one or two lines instead of its whole log (K-274). */
+export function summarizeNpmError(output: string, prefix: string | null): string {
+  if (/\bEACCES\b/.test(output)) {
+    return `npm could not write to ${prefix ?? 'its global folder'} (permission denied). `
+      + `Run \`sudo npm install -g ${NPM_PACKAGE}\`, or let npm install globally without sudo: `
+      + 'https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally';
+  }
+  const lines = output.split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^npm (error|ERR!)/.test(l) && !/A complete log of this run|^npm (error|ERR!)\s*$/.test(l));
+  return lines.slice(0, 2).join(' ') || 'npm install failed';
+}
+
+export interface NpmUpdateDeps {
+  scriptPath: string;
+  exec: (cmd: string) => void;
+}
+
+export async function updateViaNpm(
+  version: string,
+  deps: NpmUpdateDeps = {
+    scriptPath: process.argv[1] ?? '',
+    exec: (cmd) => { execSync(cmd, { stdio: 'pipe', encoding: 'utf8' }); },
+  },
+): Promise<void> {
+  const { scriptPath } = deps;
   // Detect npm vs pnpm
-  const scriptPath = process.argv[1] ?? '';
   const usePnpm = scriptPath.includes('.pnpm') || scriptPath.includes('pnpm');
+  let packageRoot: string | null = null;
+  try { packageRoot = resolve(dirname(realpathSync(scriptPath)), '..'); } catch { /* unknown layout */ }
+  // Update the install that is running: a bare `npm install -g` used npm's
+  // current prefix (another Node version, nvm, a changed npm config) and
+  // reported success while this kraki stayed old (K-274).
+  const prefix = !usePnpm && packageRoot ? npmPrefixForPackageRoot(packageRoot) : null;
   const cmd = usePnpm
     ? `pnpm add -g ${NPM_PACKAGE}@${version}`
-    : `npm install -g ${NPM_PACKAGE}@${version}`;
+    : `npm install -g${prefix ? ` --prefix ${JSON.stringify(prefix)}` : ''} ${NPM_PACKAGE}@${version}`;
 
-  execSync(cmd, { stdio: 'pipe', encoding: 'utf8' });
+  try {
+    deps.exec(cmd);
+  } catch (err) {
+    const e = err as { stderr?: string; stdout?: string; message?: string };
+    throw new Error(summarizeNpmError(`${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`, prefix));
+  }
+
+  // pnpm keeps each version in its own .pnpm/<name>@<version> directory, so
+  // the old package root can stay at the old version after a good update.
+  const now = !usePnpm && packageRoot ? installedVersion(packageRoot) : null;
+  if (!usePnpm && packageRoot && now !== null && now !== version) {
+    throw new Error(`npm installed ${version} somewhere else; this kraki (${packageRoot}) is still ${now}. `
+      + `Update it with the npm that installed it: npm install -g ${NPM_PACKAGE}@${version}`);
+  }
 }
 
 // ── SEA binary update ───────────────────────────────────
@@ -579,14 +712,34 @@ export function getAppBundleAssetName(): string {
   return `kraki-macos-${process.arch}.app.tar.gz`;
 }
 
+/** `kraki update`'s download progress and retries, shown on its spinner. */
+export function downloadSpinner(spinner: { text: string }): DownloadReporter {
+  return {
+    onProgress: (received, total) => {
+      if (total > 0) {
+        const pct = Math.floor((received / total) * 100);
+        spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
+      } else {
+        spinner.text = `Downloading ${formatBytes(received)}…`;
+      }
+    },
+    onRetry: ({ received, total, delayMs }) => {
+      const at = total > 0 ? `${Math.floor((received / total) * 100)}%` : formatBytes(received);
+      spinner.text = `Download interrupted at ${at}; resuming in ${Math.round(delayMs / 1000)}s…`;
+    },
+  };
+}
+
+export interface DownloadReporter {
+  onProgress: (received: number, total: number) => void;
+  onRetry: (retry: DownloadRetry) => void;
+}
+
 /**
  * Download and verify the release for this platform into a private temp
  * directory. Returns the step that installs it (run after the daemon stops).
  */
-async function prepareBinaryUpdate(
-  version: string,
-  onProgress?: (received: number, total: number) => void,
-): Promise<() => void> {
+async function prepareBinaryUpdate(version: string, reporter: DownloadReporter): Promise<() => void> {
   // Try v* tag first, fall back to tentacle-v*
   let release: GitHubRelease;
   try {
@@ -600,7 +753,7 @@ async function prepareBinaryUpdate(
     const appBundleName = getAppBundleAssetName();
     const appAsset = release.assets?.find((a) => a.name === appBundleName);
     if (appAsset) {
-      return prepareAppBundleUpdate(release, appAsset, onProgress);
+      return prepareAppBundleUpdate(release, appAsset, reporter);
     }
     // Fall through to standalone binary update if .app asset not found
   }
@@ -619,7 +772,7 @@ async function prepareBinaryUpdate(
   const workDir = mkdtempSync(join(tmpdir(), 'kraki-update-'));
   const tmpPath = join(workDir, assetName);
   try {
-    await downloadFile(downloadUrl, tmpPath, onProgress);
+    await downloadFile(downloadUrl, tmpPath, reporter.onProgress, { onRetry: reporter.onRetry });
     await verifyReleaseChecksum(release, assetName, tmpPath);
 
     if (process.platform !== 'win32') chmodSync(tmpPath, 0o755);
@@ -650,7 +803,7 @@ async function verifyReleaseChecksum(release: GitHubRelease, assetName: string, 
   if (!checksumAsset) throw new Error(`Release ${release.tag_name} has no SHA256SUMS.txt; refusing to install`);
   const expectedHash = parseChecksum(await fetchText(checksumAsset.browser_download_url), assetName);
   if (!expectedHash) throw new Error(`SHA256SUMS.txt has no entry for ${assetName}; refusing to install`);
-  const actualHash = hashFile(path);
+  const actualHash = await hashFile(path);
   if (actualHash !== expectedHash) {
     throw new Error(`Checksum mismatch for ${assetName}: expected ${expectedHash.slice(0, 12)}…, got ${actualHash.slice(0, 12)}…`);
   }
@@ -661,13 +814,13 @@ async function verifyReleaseChecksum(release: GitHubRelease, assetName: string, 
 async function prepareAppBundleUpdate(
   release: GitHubRelease,
   appAsset: { name: string; browser_download_url: string },
-  onProgress?: (received: number, total: number) => void,
+  reporter: DownloadReporter,
 ): Promise<() => void> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'kraki-app-update-'));
   const tarPath = join(tmpDir, appAsset.name);
   let extractedApp: string;
   try {
-    await downloadFile(appAsset.browser_download_url, tarPath, onProgress);
+    await downloadFile(appAsset.browser_download_url, tarPath, reporter.onProgress, { onRetry: reporter.onRetry });
     await verifyReleaseChecksum(release, appAsset.name, tarPath);
     execSync(`tar -xzf "${tarPath}" -C "${tmpDir}"`, { stdio: 'ignore' });
     extractedApp = join(tmpDir, 'Kraki.app');
@@ -827,9 +980,11 @@ function stripProvenance(filePath: string): void {
   } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
-export function hashFile(path: string): string {
-  const data = readFileSync(path);
-  return createHash('sha256').update(data).digest('hex');
+/** SHA-256 of a file, streamed (a Windows installer is ~150 MB). */
+export async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
 }
 
 export function parseChecksum(checksumData: string, assetName: string): string | null {
@@ -851,40 +1006,201 @@ export function fetchText(url: string): Promise<string> {
   });
 }
 
+export interface DownloadOptions {
+  /** Attempts in a row that add no new bytes before giving up. */
+  maxAttempts?: number;
+  /** Delay before the first retry; doubles per fruitless attempt up to `maxRetryDelayMs`. */
+  retryDelayMs?: number;
+  maxRetryDelayMs?: number;
+  /** No response headers for this long (from connecting on) ends the attempt. */
+  requestTimeoutMs?: number;
+  /** No body bytes for this long ends the attempt; the next one resumes. */
+  stallTimeoutMs?: number;
+  onRetry?: (retry: DownloadRetry) => void;
+}
+
+export interface DownloadRetry {
+  /** The attempt that just failed, counted from 1. */
+  attempt: number;
+  /** Bytes already in the file; the next attempt asks for the rest. */
+  received: number;
+  /** Size of the whole file, 0 while unknown. */
+  total: number;
+  delayMs: number;
+  error: Error;
+}
+
+// 8 fruitless attempts wait 10+20+40+80+160+160+160 s ≈ 10.5 min in total.
+const DOWNLOAD_MAX_ATTEMPTS = 8;
+const DOWNLOAD_RETRY_DELAY_MS = 10_000;
+const DOWNLOAD_MAX_RETRY_DELAY_MS = 160_000;
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000;
+
+/** A download failure that another attempt can't fix (404, disk full). */
+class FatalDownloadError extends Error {}
+
+function fileSize(path: string): number {
+  try { return statSync(path).size; } catch { return 0; }
+}
+
+/** `Content-Range: bytes <start>-<end>/<total>`; a 416 sends `bytes` `*` `/<total>`. */
+function parseContentRange(header: string | undefined): { start: number | null; total: number | null } | null {
+  const m = /^bytes (?:(\d+)-\d+|\*)\/(\d+|\*)$/.exec(header?.trim() ?? '');
+  if (!m) return null;
+  return { start: m[1] === undefined ? null : Number(m[1]), total: m[2] === '*' ? null : Number(m[2]) };
+}
+
+/**
+ * One request for the bytes `dest` doesn't have yet. Resolves when the file
+ * is complete; throws when the attempt ends early (a later one resumes) or
+ * with FatalDownloadError.
+ */
+async function downloadAttempt(
+  url: string,
+  dest: string,
+  file: { total: number },
+  timeouts: { requestMs: number; stallMs: number },
+  onBytes: (received: number) => void,
+): Promise<void> {
+  const offset = fileSize(dest);
+  // Every attempt starts from `url`: a signed CDN URL it redirected to
+  // earlier may have expired.
+  const res = await sendRequest(url, 0, true, offset > 0 ? { Range: `bytes=${offset}-` } : {}, timeouts.requestMs);
+  const status = res.statusCode ?? 0;
+  const range = parseContentRange(res.headers['content-range']);
+
+  if (status === 416 && offset > 0) {
+    res.destroy();
+    const total = range?.total ?? file.total;
+    if (total === offset) { file.total = total; return; }
+    unlinkSync(dest);
+    throw new Error('Range not satisfiable; restarting the download');
+  }
+  if (status !== 200 && status !== 206) {
+    res.destroy();
+    const message = `Download failed: HTTP ${status}`;
+    throw status >= 500 || status === 408 || status === 429 ? new Error(message) : new FatalDownloadError(message);
+  }
+
+  let start = 0;
+  if (status === 206) {
+    // Append only where the file ends, and only to the same file.
+    if (range?.start !== offset || (range.total !== null && file.total > 0 && range.total !== file.total)) {
+      res.destroy();
+      try { unlinkSync(dest); } catch { /* ignore */ }
+      file.total = 0;
+      throw new Error(`Content-Range ${res.headers['content-range'] ?? '(none)'} doesn't continue at byte ${offset}; restarting the download`);
+    }
+    start = offset;
+    if (range.total !== null) file.total = range.total;
+  } else {
+    // 200: the whole file again (the server ignored Range, or none was sent).
+    const contentLength = Number.parseInt(res.headers['content-length'] ?? '', 10);
+    file.total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+  }
+
+  // The request timeout covers connecting and the response headers; from here
+  // the stall timer governs the body.
+  res.socket?.setTimeout(0);
+
+  const out = createWriteStream(dest, { flags: start > 0 ? 'a' : 'w' });
+  const closed = new Promise<void>((resolve) => out.once('close', () => resolve()));
+  // pipeline() passes either side's error to the other: remember which failed first.
+  let failedSide: 'read' | 'write' | null = null;
+  res.on('error', () => { failedSide ??= 'read'; });
+  out.on('error', () => { failedSide ??= 'write'; });
+
+  let stall: NodeJS.Timeout | undefined;
+  const armStall = () => {
+    clearTimeout(stall);
+    stall = setTimeout(() => {
+      res.destroy(new Error(`No data for ${timeouts.stallMs / 1000}s`));
+    }, timeouts.stallMs);
+  };
+  let received = start;
+  res.on('data', (chunk: Buffer) => {
+    received += chunk.length;
+    armStall();
+    onBytes(received);
+  });
+  armStall();
+  try {
+    await pipeline(res, out);
+  } catch (err) {
+    // Writing failed (disk full, no access): another attempt won't help.
+    if (failedSide === 'write') throw new FatalDownloadError((err as Error).message);
+    throw err;
+  } finally {
+    clearTimeout(stall);
+    await closed;
+  }
+
+  const size = fileSize(dest);
+  if (file.total > 0 && size !== file.total) {
+    if (size > file.total) unlinkSync(dest);
+    throw new Error(`Connection closed at ${size} of ${file.total} bytes`);
+  }
+}
+
+/**
+ * Download `url` to `dest`. A dropped, reset or stalled connection doesn't
+ * fail the download: it retries with backoff and resumes with `Range` from
+ * the bytes already written (a server that ignores Range sends it all again).
+ * An attempt ends when the response headers take over 30 s or the body sends
+ * nothing for 60 s. It gives up after `maxAttempts` attempts in a row that add no new bytes, at
+ * once on a 4xx. `onProgress` never goes backwards. Callers verify the
+ * SHA-256 of the result.
+ */
 export async function downloadFile(
   url: string,
   dest: string,
   onProgress?: (received: number, total: number) => void,
+  options: DownloadOptions = {},
 ): Promise<void> {
-  const res = await sendRequest(url);
-  if (res.statusCode !== 200) {
-    throw new Error(`Download failed: HTTP ${res.statusCode}`);
-  }
+  const maxAttempts = options.maxAttempts ?? DOWNLOAD_MAX_ATTEMPTS;
+  const retryDelayMs = options.retryDelayMs ?? DOWNLOAD_RETRY_DELAY_MS;
+  const maxRetryDelayMs = options.maxRetryDelayMs ?? DOWNLOAD_MAX_RETRY_DELAY_MS;
+  const timeouts = {
+    requestMs: options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+    stallMs: options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS,
+  };
+  const file = { total: 0 };
 
-  const contentLength = Number.parseInt(res.headers['content-length'] ?? '', 10);
-  const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
-  let received = 0;
+  let reported = 0;
   let lastTick = 0;
+  const report = (received: number, final = false) => {
+    // A restarted download stays quiet until it passes where it was.
+    if (!onProgress || received < reported) return;
+    // Throttle to ~10 updates/sec so the spinner doesn't churn.
+    const now = Date.now();
+    if (!final && now - lastTick < 100) return;
+    lastTick = now;
+    reported = received;
+    onProgress(received, file.total);
+  };
 
-  if (onProgress) {
-    res.on('data', (chunk: Buffer) => {
-      received += chunk.length;
-      // Throttle to ~10 updates/sec so the spinner doesn't churn.
-      const now = Date.now();
-      if (now - lastTick >= 100) {
-        lastTick = now;
-        onProgress(received, total);
+  // A leftover file isn't ours to resume.
+  try { unlinkSync(dest); } catch { /* ignore */ }
+  let furthest = 0;
+  let fruitless = 0;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await downloadAttempt(url, dest, file, timeouts, (received) => report(received));
+      report(fileSize(dest), true);
+      return;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const received = fileSize(dest);
+      if (received > furthest) { furthest = received; fruitless = 0; }
+      fruitless++;
+      if (error instanceof FatalDownloadError || error instanceof RedirectPolicyError || fruitless >= maxAttempts) {
+        try { unlinkSync(dest); } catch { /* ignore */ }
+        throw error;
       }
-    });
-  }
-
-  const file = createWriteStream(dest);
-  try {
-    await pipeline(res, file);
-    if (onProgress) onProgress(received, total); // final update
-  } catch (err) {
-    try { unlinkSync(dest); } catch { /* ignore */ }
-    throw err;
+      const delayMs = Math.min(retryDelayMs * 2 ** (fruitless - 1), maxRetryDelayMs);
+      options.onRetry?.({ attempt, received, total: file.total, delayMs, error });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 

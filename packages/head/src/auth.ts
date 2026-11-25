@@ -233,7 +233,9 @@ export class OpenAuthProvider implements AuthProvider {
   private sharedKey?: string;
 
   constructor(sharedKey?: string) {
-    this.sharedKey = sharedKey;
+    // Clients trim the key they read from a file; a key set from a file or
+    // heredoc keeps its trailing newline. Whitespace-only is no key.
+    this.sharedKey = sharedKey?.trim() || undefined;
   }
 
   isOwnSecret(token: string): boolean {

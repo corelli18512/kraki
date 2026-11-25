@@ -53,15 +53,21 @@ final class IOSLaunchCoordinator {
 
         if appState.hasStoredCredentials {
             beginPreparingAuthenticatedSurface()
-        } else {
-            await waitForMinimumLaunchVisibility()
-            guard !Task.isCancelled else {
-                hasStarted = false
-                return
-            }
-            phase = .signedOut
-            logDestination("signedOut")
+            return
         }
+        await waitForMinimumLaunchVisibility()
+        guard !Task.isCancelled else {
+            hasStarted = false
+            return
+        }
+        // A pairing link that opened the app cold can sign in during the wait,
+        // and reconcileAuthentication ignores changes while launching (G1).
+        if appState.hasStoredCredentials {
+            beginPreparingAuthenticatedSurface()
+            return
+        }
+        phase = .signedOut
+        logDestination("signedOut")
     }
 
     func authenticatedSurfaceDidPresent() async {

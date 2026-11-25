@@ -334,8 +334,15 @@ export class RemoteAuthBackend implements AuthBackend {
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
-    const result = await this.post<{ ok: boolean }>('/api/devices/remove', { userId, deviceId });
-    return result.ok === true;
+    return (await this.removeDeviceOutcome(userId, deviceId)) === 'removed';
+  }
+
+  /** {@link removeDevice} telling "no such device of this user there" (e.g.
+   *  already removed through another edge) from "could not ask". */
+  async removeDeviceOutcome(userId: string, deviceId: string): Promise<'removed' | 'not_found' | 'unavailable'> {
+    const result = await this.post<{ ok: boolean; code?: string }>('/api/devices/remove', { userId, deviceId });
+    if (result.ok === true) return 'removed';
+    return result.code === 'not_found' ? 'not_found' : 'unavailable';
   }
 
   async renameDevice(userId: string, deviceId: string, displayName: string | null): Promise<boolean> {

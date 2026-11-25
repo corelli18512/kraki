@@ -108,3 +108,13 @@ describe('Bubble — local delivery lifecycle', () => {
     expect(onRetry).toHaveBeenCalledWith('p');
   });
 });
+
+describe('Bubble — K-100: attachments not kept across a reload', () => {
+  it('says so on the restored input', () => {
+    const row: ChatRow = { kind: 'pending', key: 'pending-p', entry: {
+      clientId: 'p', sessionId: 's1', text: 'look at this', timestamp: '', order: 1, state: 'failed', attachmentsDropped: 1,
+    } };
+    render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1' }} />);
+    expect(screen.getByRole('note')).toHaveTextContent('Attachments were too large to keep');
+  });
+});

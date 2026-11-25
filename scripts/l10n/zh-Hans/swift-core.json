@@ -14,7 +14,8 @@
     "Already in your custom words.": "已在你的自定义词汇中。",
     "App": "应用",
     "Authentication failed. Please scan a new pairing QR code.": "认证失败。请扫描新的配对二维码。",
-    "Authentication failed. Scan a pairing QR code to get started.": "认证失败。请扫描配对二维码以开始使用。",
+    "Sign-in failed. Try again, or scan a pairing QR code.": "登录失败。请重试，或扫描配对二维码。",
+    "Sign-in is temporarily unavailable. Try again in a moment.": "登录暂时不可用。请稍后再试。",
     "Authentication service temporarily unavailable. Reconnecting…": "认证服务暂时不可用。正在重新连接…",
     "Authentication temporarily unavailable. Reconnecting…": "认证暂时不可用。正在重新连接…",
     "Authorizing voice input…": "正在授权语音输入…",
@@ -154,7 +155,9 @@
     "_Image unavailable_": "_图片不可用_",
     "e.g. PostgreSQL": "例如 PostgreSQL",
     "e.g. post gress, postgres Q L": "例如 post gress, postgres Q L",
-    "“%@” is already in the list; only the first is used.": "“%@”已在列表中；仅使用第一项。"
+    "“%@” is already in the list; only the first is used.": "“%@”已在列表中；仅使用第一项。",
+    "This server doesn't accept new pairings.": "此服务器不接受新的配对。",
+    "Kraki can't connect to an unencrypted ws:// address with a host name. Use the relay's wss:// address, or its IP address.": "Kraki 无法连接使用主机名的未加密 ws:// 地址。请使用中继服务器的 wss:// 地址或其 IP 地址。"
   },
   "englishPlurals": {
     "Finished with %lld steps and no reply.": {

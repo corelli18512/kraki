@@ -166,20 +166,23 @@ arm PULSE-SEND (seq=1, fp=76b406c4)
 
 ## Deploy Commands
 
-### Edge relay (Tencent Cloud, China)
-
-```bash
-ssh corelli-tecent-cloud-small-0 'cat > /tmp/deploy-edge-relay.sh && chmod +x /tmp/deploy-edge-relay.sh && /tmp/deploy-edge-relay.sh <VERSION>' \
-  < scripts/deploy-edge-relay.sh
-```
+Both relays run Head from a per-release directory chosen by a systemd drop-in
+(see [self-hosting.md](./self-hosting.md#updating-a-running-relay)). Deploy the
+main relay first, then the edge once it is healthy.
 
 ### Main relay (AWS Tokyo, US)
 
 ```bash
-ssh corelli-aws-tokyo-0
-sudo npm install -g @kraki/head@<VERSION> --registry https://registry.npmjs.org
-sudo systemctl restart kraki-relay
+ssh corelli-aws-tokyo-0 'sudo env KRAKI_PUBLIC_URL=https://relay.kraki.chat bash -s <VERSION>' < scripts/deploy-edge-relay.sh
 ```
+
+### Edge relay (Tencent Cloud, China)
+
+```bash
+ssh corelli-tecent-cloud-small-0 'sudo env KRAKI_PUBLIC_URL=https://cn.relay.kraki.chat bash -s <VERSION>' < scripts/deploy-edge-relay.sh
+```
+
+Roll back either one with `... 'sudo bash -s rollback <PREVIOUS VERSION>' < scripts/deploy-edge-relay.sh`.
 
 ### Local tentacle
 

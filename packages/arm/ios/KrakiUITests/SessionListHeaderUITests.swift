@@ -16,6 +16,7 @@ final class SessionListHeaderUITests: XCTestCase {
     }
 
     private func launch(_ appearance: XCUIDevice.Appearance) {
+        XCUIDevice.shared.orientation = .portrait
         XCUIDevice.shared.appearance = appearance
         app = XCUIApplication()
         app.launchEnvironment["KRAKI_IOS_NEW_SESSION_SCENARIO"] = "1"
@@ -42,6 +43,51 @@ final class SessionListHeaderUITests: XCTestCase {
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
         }
+    }
+
+    /// K-340: each computer in the Filter menu shows its session count.
+    func testFilterMenuShowsSessionCounts() {
+        launch(.light)
+        filterButton.tap()
+        let server = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Build Server")).firstMatch
+        XCTAssertTrue(server.waitForExistence(timeout: 3))
+        settle(0.5)
+        shot("09-filter-menu-counts")
+        // The subtitle is not exposed to accessibility as text: a menu row
+        // with one is two lines tall (60 pt), a title-only row 42 pt.
+        for name in ["All Computers", "Build Server", "Scenario Mac"] {
+            let row = app.buttons.matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(row.exists, name)
+            XCTAssertGreaterThan(row.frame.height, 50, "\(name) has no session-count subtitle")
+        }
+    }
+
+    /// K-338: a sideways swipe on an archived row is not a tap: it neither
+    /// opens the Session nor unarchives it. A tap still opens it.
+    func testSwipeOnArchivedRowDoesNotOpenIt() {
+        XCUIDevice.shared.orientation = .portrait
+        app = XCUIApplication()
+        app.launchEnvironment["KRAKI_IOS_NEW_SESSION_SCENARIO"] = "1"
+        app.launchEnvironment["KRAKI_SCENARIO_ARCHIVED"] = "1"
+        app.launch()
+        let header = app.cells["session-list-archived"]
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        header.tap()
+        let row = app.cells.containing(.staticText, identifier: "Archived session 1").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
+        settle()
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)))
+        settle(1.2)
+        shot("10-archived-swipe")
+        XCTAssertFalse(app.buttons["Back"].exists, "the swipe opened the archived Session")
+        XCTAssertTrue(row.exists, "the swipe unarchived the Session")
+        row.swipeRight()
+        settle(1.2)
+        XCTAssertFalse(app.buttons["Back"].exists, "the swipe opened the archived Session")
+
+        row.tap()
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 3), "a tap still opens it")
     }
 
     func testSearchAndComputerFilterLight() { run(.light, "light") }

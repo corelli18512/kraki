@@ -132,8 +132,13 @@ run('Pi 0.87 live RPC compatibility', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('executes actual installed 0.87.x and discovers models/thinking levels', async () => {
-    expect(execFileSync(cli!, ['--version'], { encoding: 'utf8' }).trim()).toMatch(/^0\.87\./);
+  it('executes the actual installed Pi and discovers models/thinking levels', async () => {
+    // Version-neutral: Kraki runs the user's own Pi. Pin a version only when
+    // the caller asks for one (PI_LIVE_EXPECT_VERSION).
+    const version = execFileSync(cli!, ['--version'], { encoding: 'utf8' }).trim();
+    const want = process.env.PI_LIVE_EXPECT_VERSION;
+    if (want) expect(version).toBe(want);
+    else expect(version).toMatch(/^\d+\.\d+\.\d+/);
     expect(await adapter.listModels()).toContain('audit/model-a');
     const detail = (await adapter.listModelDetails()).find(m => m.id === 'audit/model-a');
     expect(detail?.supportedReasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -197,6 +202,17 @@ run('Pi 0.87 live RPC compatibility', () => {
     await wait(() => expect(callbacks.onIdle).toHaveBeenCalledTimes(1));
     expect(existsSync(join(root, 'approval.txt'))).toBe(decision === 'approve');
     expect(toolResult('write').isError).toBe(decision === 'deny');
+  });
+
+  it('K-135: enables the read-only grep/find/ls tools; a safe-mode search runs without a card', async () => {
+    await create(); adapter.setSessionMode(sid, 'safe');
+    writeFileSync(join(root, 'needle.txt'), 'NEEDLE_LINE\n');
+    steps.push({ tool: 'grep', args: { pattern: 'NEEDLE', path: '.' } }, { tool: 'ls', args: { path: '.' } }, { tool: 'find', args: { pattern: '*.txt' } }, { text: 'SEARCH_OK' });
+    await turn();
+    const tools = (requests[0].tools as Array<{ function?: { name?: string }; name?: string }>).map(t => t.function?.name ?? t.name);
+    expect(tools).toEqual(expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'ask_user', 'kraki_get_mode']));
+    expect(callbacks.onPermissionRequest).not.toHaveBeenCalled();
+    expect(callbacks.onToolComplete.mock.calls.map(c => [c[1].toolName, c[1].success])).toEqual([['grep', true], ['ls', true], ['find', true]]);
   });
 
   it('changes permission mode without respawning and exposes kraki_get_mode', async () => {

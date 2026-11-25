@@ -82,7 +82,35 @@ enum PermissionPromptCopy {
         guard message.payload["decision"]?.stringValue == nil else { return base }
         return base.hasSuffix("?") || base.hasSuffix("？") ? base : String(localized: "\(base)?")
     }
-    static let caption = String(localized: "Needs your approval · Safe mode")
+    static let caption = String(localized: "Needs your approval")
+
+    /// The monospaced detail under the title: the command, path or URL, unless
+    /// the title already says it. Adapters describe a request with its target
+    /// ("Run: npm test", "Read: /a/b", "Edit /a/b"), so an exact-match check
+    /// showed the same text twice (K-063).
+    static func argsSummary(_ message: ChatMessage) -> String? {
+        guard let args = message.args else { return nil }
+        let summary: String?
+        switch (message.toolName ?? "").lowercased() {
+        case "shell", "bash":
+            summary = args["command"]?.stringValue
+        case "write_file", "edit_file", "create_file", "read_file", "view":
+            summary = args["path"]?.stringValue
+        case "fetch_url":
+            summary = args["url"]?.stringValue
+        default:
+            // Key order, so the same request always shows the same detail.
+            summary = args.keys.sorted().compactMap { args[$0]?.stringValue }.first { !$0.isEmpty && $0.count < 200 }
+        }
+        guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return nil }
+        // Adapters end the title with the target ("Run: <cmd>", "Edit <path>"),
+        // so only a title that ends with the detail repeats it. A short detail
+        // that merely occurs inside the title ("rm" in "Run: format") must
+        // stay visible on a permission prompt.
+        if let title = message.toolDescription,
+           title == summary || title.hasSuffix(": " + summary) || title.hasSuffix(" " + summary) { return nil }
+        return summary
+    }
 }
 
 /// Resolved state: a small capsule, the same shape as the buttons it replaced.

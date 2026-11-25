@@ -46,6 +46,19 @@ export function formatDateTime(date: Date | string | number, options: Intl.DateT
   return cached(key, () => new Intl.DateTimeFormat(lang, options)).format(new Date(date));
 }
 
+/** The user's own 12/24-hour preference: the browser's locale (en-US "h12",
+ *  en-GB "h23"), independent of the app language. */
+export function userHourCycle(userLocale?: string): Intl.DateTimeFormatOptions['hourCycle'] {
+  return cached(`hc:${userLocale ?? ''}`, () => new Intl.DateTimeFormat(userLocale, { hour: 'numeric' }))
+    .resolvedOptions().hourCycle ?? 'h23';
+}
+
+/** Hours and minutes in the app language with the user's 12/24-hour cycle:
+ *  "11:19 PM" (en-US), "23:19" (en-GB), "下午11:19" / "23:19" (zh). */
+export function formatClockTime(date: Date | string | number, userLocale?: string): string {
+  return formatDateTime(date, { hour: 'numeric', minute: '2-digit', hourCycle: userHourCycle(userLocale) });
+}
+
 export function formatNumber(value: number, options: Intl.NumberFormatOptions = {}): string {
   const lang = currentLanguage();
   const key = `nf:${lang}:${JSON.stringify(options)}`;

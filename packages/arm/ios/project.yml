@@ -160,6 +160,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSCameraUsageDescription: "Kraki uses the camera to scan QR codes for device pairing."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki records your voice while you dictate and sends it to its cloud speech service to turn it into text."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Kraki saves chat images to your photo library when you choose Save to Photos."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         INFOPLIST_KEY_UIBackgroundModes: ["remote-notification"]
         CODE_SIGN_STYLE: Automatic
@@ -258,11 +259,13 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/SubagentStepsTests.swift
+      - path: KrakiTests/LiveTraceTargetTests.swift
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
       - path: KrakiTests/NativeStyleTests.swift
       - path: KrakiTests/ComposerGeometryProbeTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
+      - path: KrakiTests/ComposerVoiceCopyAndLayoutTests.swift
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
@@ -276,6 +279,13 @@ targets:
       - path: KrakiTests/BuildInfoTests.swift
       - path: KrakiTests/LocalizationTests.swift
       - path: KrakiTests/DeviceRenameTests.swift
+      - path: KrakiTests/SessionTitleEditTests.swift
+      - path: KrakiTests/ComputerRefusedInputTests.swift
+      - path: KrakiTests/MessageStoreUnreadEntryWindowTests.swift
+      - path: KrakiTests/ChatGIFFixture.swift
+      - path: KrakiTests/ChatGIFAnimationTests.swift
+      - path: KrakiTests/ChatGIFPlayerTests.swift
+      - path: KrakiTests/ChatImageFileTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -324,16 +334,21 @@ targets:
       - path: Kraki/Shared/KrakiPlatform.swift
       - path: Kraki/Shared/ScaledFont.swift
       - path: Kraki/Shared/AttachmentImageCache.swift
+      # Chat image files (save / share / copy) and animated GIFs.
+      - path: Kraki/Shared/ChatImages
       - path: Kraki/Shared/ThemePlatform.swift
       - path: Kraki/Shared/AppColorScheme.swift
       - path: Kraki/Shared/AgentAvatar.swift
       - path: Kraki/Shared/Helpers.swift
+      - path: Kraki/Shared/UsageNumberFormat.swift
+      - path: Kraki/Shared/AccessibilityAnnouncer.swift
       - path: Kraki/Shared/KrakiLogger.swift
       - path: Kraki/Shared/EventMonitorForwarding.swift
       - path: Kraki/Shared/LucideIcon.swift
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift
       - path: Kraki/Shared/PermissionDiffPreview.swift
+      - path: Kraki/Shared/ToolResultPreview.swift
       - path: Kraki/Shared/DeviceDates.swift
       # Session list UI shared by iOS and Mac (status glyphs, metadata row, update badges).
       - path: Kraki/Shared/SessionUI
@@ -373,6 +388,7 @@ targets:
       - path: Kraki/Features/Chat/ComposerOverlayReporting.swift
       - path: Kraki/Features/Chat/ComposerLatchSettling.swift
       - path: Kraki/Features/Chat/ComposerAnswerImages.swift
+      - path: Kraki/Features/Chat/ComposerDraftTarget.swift
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac

@@ -35,6 +35,7 @@ describe('web transport reconnect logging', () => {
   });
 
   afterEach(() => {
+    localStorage.removeItem('kraki_device');
     globalThis.WebSocket = Original;
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -42,6 +43,7 @@ describe('web transport reconnect logging', () => {
 
   it('logs the close, the backoff of every retry and the recovery with its timings', async () => {
     const transport = new KrakiTransport({ onOpen: async () => {}, onParsedMessage: () => {} }, 'wss://relay.example/ws?token=secret');
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: 'wss://relay.example/ws', deviceId: 'dev-web' }));
     transport.storedDeviceId = 'dev-web';
     info.mockClear(); // loadStoredDevice
     transport.connect();

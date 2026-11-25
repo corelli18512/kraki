@@ -14,13 +14,17 @@ struct PairingView: View {
     @State private var showManualEntry = false
     @State private var manualURL = ""
     @State private var cameraPermission: AVAuthorizationStatus = .notDetermined
+    @State private var cameraUnavailable = false
     @State private var errorMessage: String?
+    @State private var manualEntryError: String?
 
     var body: some View {
         NavigationStack {
             ZStack {
                 // Camera preview
-                if cameraPermission == .authorized {
+                if cameraUnavailable {
+                    cameraUnavailableView
+                } else if cameraPermission == .authorized {
                     CodeScannerView { result in
                         handleScanResult(result)
                     }
@@ -67,6 +71,10 @@ struct PairingView: View {
             }
             .onAppear {
                 checkCameraPermission()
+            }
+            // The toast leaves after 3 s, away from the VoiceOver cursor: say it (K-074).
+            .onChange(of: errorMessage) { _, message in
+                if let message { AccessibilityAnnouncer.announce(message) }
             }
         }
     }
@@ -129,6 +137,26 @@ struct PairingView: View {
         .padding(32)
     }
 
+    /// No camera (or it can't be opened): say so and offer the manual entry,
+    /// instead of a "Failed to read QR code" toast that never clears (K-186).
+    private var cameraUnavailableView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("Camera Unavailable")
+                .font(.headline)
+            Text("This device's camera can't be used to scan. Enter the pairing URL from your terminal instead.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Enter URL manually") { showManualEntry = true }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(32)
+        .accessibilityIdentifier("pairing.cameraUnavailable")
+    }
+
     private var manualEntrySheet: some View {
         NavigationStack {
             Form {
@@ -137,8 +165,16 @@ struct PairingView: View {
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .onChange(of: manualURL) { _, _ in manualEntryError = nil }
                 } footer: {
-                    Text("Paste the pairing URL from your terminal.")
+                    // In the sheet itself: the scanner's toast is drawn behind it (K-186).
+                    if let manualEntryError {
+                        Text(manualEntryError)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("pairing.manualEntryError")
+                    } else {
+                        Text("Paste the pairing URL from your terminal.")
+                    }
                 }
             }
             .navigationTitle("Manual Entry")
@@ -153,7 +189,7 @@ struct PairingView: View {
                             showManualEntry = false
                             completePairing(info)
                         } else {
-                            errorMessage = String(localized: "Invalid pairing URL")
+                            manualEntryError = Self.manualEntryError(for: manualURL)
                         }
                     }
                     .disabled(manualURL.isEmpty)
@@ -177,23 +213,30 @@ struct PairingView: View {
         }
     }
 
+    /// The manual entry's error for `text`, nil when it is a pairing link.
+    static func manualEntryError(for text: String) -> String? {
+        PairingLink(string: text) == nil ? String(localized: "Invalid pairing URL") : nil
+    }
+
     private func handleScanResult(_ result: Result<String, CodeScannerError>) {
         switch result {
         case .success(let code):
             if let info = extractPairingInfo(from: code) {
                 completePairing(info)
             } else {
-                withAnimation {
-                    errorMessage = String(localized: "Not a valid Kraki pairing code")
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    withAnimation { errorMessage = nil }
-                }
+                showTransientError(String(localized: "Not a valid Kraki pairing code"))
             }
-        case .failure:
-            withAnimation {
-                errorMessage = String(localized: "Failed to read QR code")
-            }
+        case .failure(.cameraUnavailable):
+            cameraUnavailable = true
+        case .failure(.scanFailed):
+            showTransientError(String(localized: "Failed to read QR code"))
+        }
+    }
+
+    private func showTransientError(_ message: String) {
+        withAnimation { errorMessage = message }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if errorMessage == message { withAnimation { errorMessage = nil } }
         }
     }
 
@@ -286,7 +329,8 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     private func setupCamera() {
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device) else {
-            onScan?(.failure(.cameraUnavailable))
+            // Not from inside SwiftUI's view update (makeUIViewController).
+            DispatchQueue.main.async { [weak self] in self?.onScan?(.failure(.cameraUnavailable)) }
             return
         }
 

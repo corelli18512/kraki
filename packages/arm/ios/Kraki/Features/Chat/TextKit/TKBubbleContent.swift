@@ -53,6 +53,8 @@ final class TKBubbleContent {
     let hueSeed: String
     let body: NSAttributedString?
     let images: [UIImage]
+    /// The original bytes of `images` (Save / Share, GIF animation).
+    let imageFiles: [ChatImageFile]
     /// Lazy image references (tool-produced images via `kraki-show_image`).
     /// Surfaced through the `AttachmentStore` chunk pipeline; rendered as a
     /// SwiftUI grid inside the cell. Mirrors web `content_ref` handling.
@@ -80,7 +82,7 @@ final class TKBubbleContent {
     private var bodyTextHeightCache: [CGFloat: CGFloat] = [:]
 
     init(message: ChatMessage, kind: Kind, hueSeed: String,
-         body: NSAttributedString?, images: [UIImage] = [],
+         body: NSAttributedString?, images: [UIImage] = [], imageFiles: [ChatImageFile] = [],
          imageRefs: [ContentRef] = [], htmlArtifacts: [ContentRef] = [],
          action: ChatMessage? = nil, isLive: Bool = false,
          isFrozen: Bool = false, frozenTimestamp: String? = nil,
@@ -90,6 +92,7 @@ final class TKBubbleContent {
         self.hueSeed = hueSeed
         self.body = body
         self.images = images
+        self.imageFiles = imageFiles
         self.imageRefs = imageRefs
         self.htmlArtifacts = htmlArtifacts
         self.action = action
@@ -134,7 +137,10 @@ final class TKBubbleContent {
                      steps: Int, isFrozen: Bool = false,
                      frozenTimestamp: String? = nil,
                      attachments: [ContentRef] = []) -> TKBubbleContent {
-        let draft = card.text
+        // The landed reply is trimmed (Tentacle TurnTracker): leading blank
+        // lines would draw the draft taller and jump at handoff (K-047).
+        let trimmed = String(card.text.drop(while: \.isWhitespace))
+        let draft = isFrozen ? trimmed : withoutIncompleteTrailingGrapheme(trimmed)
         var payload: [String: AnyCodable] = [:]
         if !draft.isEmpty { payload["content"] = AnyCodable(draft) }
         if steps > 0 { payload["steps"] = AnyCodable(steps) }
@@ -167,6 +173,27 @@ final class TKBubbleContent {
                                isLive: !isFrozen, isFrozen: isFrozen,
                                frozenTimestamp: frozenTimestamp,
                                liveBody: liveBody)
+    }
+
+    /// A streamed chunk can end inside a grapheme cluster (an emoji ZWJ
+    /// sequence, a flag's regional-indicator pair or tag sequence). Drawn as
+    /// is, the half shows as a wrong glyph (a boxed letter, a family as
+    /// separate people) until the rest arrives; hold that cluster back (K-049).
+    static func withoutIncompleteTrailingGrapheme(_ text: String) -> String {
+        guard let last = text.last else { return text }
+        let scalars = Array(last.unicodeScalars)
+        let joinerPending = scalars.last?.value == 0x200D
+        // A flag is a pair of regional indicators; an odd run is unfinished.
+        let regionalRun = text.unicodeScalars.reversed().prefix { (0x1F1E6...0x1F1FF).contains($0.value) }.count
+        // A tag sequence (subdivision flag) ends with CANCEL TAG.
+        let tagPending = scalars.contains { (0xE0020...0xE007E).contains($0.value) } && scalars.last?.value != 0xE007F
+        guard joinerPending || regionalRun % 2 == 1 || tagPending else { return text }
+        if regionalRun % 2 == 1, !joinerPending, !tagPending {
+            var trimmed = text.unicodeScalars
+            trimmed.removeLast()
+            return String(trimmed)
+        }
+        return String(text.dropLast())
     }
 
     func bubbleWidth(cellWidth: CGFloat) -> CGFloat {
@@ -439,20 +466,21 @@ final class TKBubbleContent {
         switch kind {
         case .user:
             body = rawBody.map { rendered in
-                let solid = TKMarkdown.recolored(rendered, color: .white)
+                let solid = TKMarkdown.underliningLinks(TKMarkdown.recolored(rendered, color: .white))
                 return Self.lighteningUncorrected(solid, message: message) ?? solid
             }
         case .error:
-            body = TKMarkdown.recolored(
+            body = TKMarkdown.underliningLinks(TKMarkdown.recolored(
                 rawBody ?? NSAttributedString(string: message.result ?? String(localized: "Error")),
-                color: .systemRed)
+                color: .systemRed))
         case .system, .agent:
             body = rawBody
         }
         let refs = uniqueRefs(message.contentRefAttachments)
+        let inline = ChatInlineImage.decode(message.attachments)
         return TKBubbleContent(
             message: message, kind: kind, hueSeed: sessionId.isEmpty ? agent : sessionId,
-            body: body, images: decodeImages(message.attachments),
+            body: body, images: inline.map(\.image), imageFiles: inline.map(\.file),
             imageRefs: refs.filter { $0.mimeType.hasPrefix("image/") },
             htmlArtifacts: refs.filter { $0.mimeType == "text/html" })
     }
@@ -484,25 +512,6 @@ final class TKBubbleContent {
     private static func uniqueRefs(_ refs: [ContentRef]) -> [ContentRef] {
         var seen = Set<String>()
         return refs.filter { seen.insert($0.id).inserted }
-    }
-
-    private static let imageCache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 200
-        return cache
-    }()
-
-    private static func decodeImages(_ attachments: [ImageAttachment]?) -> [UIImage] {
-        guard let attachments else { return [] }
-        return attachments.compactMap { attachment in
-            guard attachment.type == "image" else { return nil }
-            let key = attachment.data as NSString
-            if let cached = imageCache.object(forKey: key) { return cached }
-            guard let data = Data(base64Encoded: attachment.data),
-                  let image = AttachmentImageCache.decode(data) else { return nil }
-            imageCache.setObject(image, forKey: key)
-            return image
-        }
     }
 }
 

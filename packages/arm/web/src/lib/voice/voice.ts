@@ -20,7 +20,9 @@ import { TARGET_RATE, loudness, toPcm16 } from './pcm';
 import { applyOps, cleanWord, wordLine } from './words';
 import type { VoiceContext } from './context';
 import { diag } from '../diag';
+import { desktop } from '../desktop';
 import { VoiceTracker } from '../diag/experience';
+import startCueUrl from './voice-start-d1.wav';
 
 class VoiceFailure extends Error {
   constructor(message: string, readonly metricCause: string) { super(message); }
@@ -50,6 +52,8 @@ export type VoiceFinish = 'send' | 'edit';
 export interface StagedVoice {
   update: (text: string, rawText: string) => void;
   complete: (text: string, rawText: string, completed: boolean) => void;
+  /** False once the user resolved the bubble (Send Original, Edit, Delete). */
+  open?: () => boolean;
 }
 export type StageVoice = (rawText: string) => StagedVoice | null;
 
@@ -154,6 +158,22 @@ function getLease(): Promise<VoiceLease> {
 const WORKLET = `class C extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('kraki-capture',C);`;
 interface Capture { stop: () => void }
 
+/** False when this browser certainly has no microphone. When devices can't
+ *  be listed, assume one (getUserMedia still reports it). */
+async function hasMicrophone(): Promise<boolean> {
+  const media = navigator.mediaDevices;
+  if (!media?.getUserMedia) return false;
+  if (!media.enumerateDevices) return true;
+  try {
+    const devices = await media.enumerateDevices();
+    // Some browsers list nothing at all before permission; only a non-empty
+    // list without an audio input proves there is no microphone.
+    return devices.length === 0 || devices.some((device) => device.kind === 'audioinput');
+  } catch {
+    return true;
+  }
+}
+
 async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): Promise<Capture> {
   if (!navigator.mediaDevices?.getUserMedia) throw new VoiceFailure(t('settings:voice.errors.noMicrophone'), 'mic_unavailable');
   let stream: MediaStream;
@@ -163,7 +183,7 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
     const name = (e as DOMException).name;
     const denied = name === 'NotAllowedError' || name === 'SecurityError';
     throw new VoiceFailure(denied
-      ? t('settings:voice.errors.permission')
+      ? t(desktop ? 'settings:voice.errors.permission' : 'settings:voice.errors.permissionBrowser')
       : t('settings:voice.errors.noMicrophone'), denied ? 'permission' : 'mic_unavailable');
   }
   const ctx = new AudioContext();
@@ -174,6 +194,60 @@ async function openMicrophone(onPcm: (pcm: Int16Array, level: number) => void): 
   src.connect(node);
   if (ctx.state === 'suspended') await ctx.resume();
   return { stop: () => { try { node.disconnect(); src.disconnect(); } catch { /* gone */ } stream.getTracks().forEach((t) => t.stop()); void ctx.close(); } };
+}
+
+// ── Start cue and other sounds ───────────────────────────
+/** Kraki for Windows lowers other sounds while the microphone records
+ *  (Settings › Voice Input); absent in browsers and on other systems. */
+const outputVolume = () => (typeof window === 'undefined' ? undefined : window.krakiDesktop?.voiceVolume);
+
+/** The cue lasts 0.2 s; one that never reports its end holds the microphone back at most this long. */
+const START_CUE_MAX_WAIT_MS = 1000;
+
+/**
+ * The Mac/iOS start cue (VoiceStartCue, 0.2 s), played when dictation starts —
+ * inside the click, so autoplay policies allow it. Resolves once it has played
+ * (or could not, or after START_CUE_MAX_WAIT_MS): the microphone opens only
+ * then, so the cue is not recorded. Kraki for Windows hears when the cue
+ * really ends (it bounds a cue that never reports its end itself).
+ */
+function playStartCue(): Promise<void> {
+  const volume = outputVolume();
+  return new Promise((resolve) => {
+    let heard = false;
+    const timer = setTimeout(resolve, START_CUE_MAX_WAIT_MS);
+    const finish = () => {
+      clearTimeout(timer);
+      resolve();
+      if (heard) return;
+      heard = true;
+      volume?.cueFinished();
+    };
+    // Other sounds are lowered only after the cue has been heard.
+    volume?.cueStarted();
+    try {
+      const cue = new Audio(startCueUrl);
+      cue.addEventListener('ended', finish, { once: true });
+      cue.addEventListener('error', finish, { once: true });
+      cue.play().catch(finish);
+    } catch {
+      finish();
+    }
+  });
+}
+
+/** While `capture` records, Kraki for Windows lowers other sounds; stopping it gives them back. */
+function lowerOtherSoundsWhile(capture: Capture): Capture {
+  const volume = outputVolume();
+  if (!volume) return capture;
+  volume.captureStarted();
+  let stopped = false;
+  return {
+    stop: () => {
+      capture.stop();
+      if (!stopped) { stopped = true; volume.captureStopped(); }
+    },
+  };
 }
 
 // ── One recording ────────────────────────────────────────
@@ -195,6 +269,15 @@ interface Recording {
 let rec: Recording | null = null;
 
 function fail(message: string, cause = VoiceTracker.classify(message)) {
+  if (rec?.staged?.open && !rec.staged.open()) {
+    // The user already resolved the staged bubble: the late recognition
+    // failure concerns nothing on screen any more.
+    diag.voices.outcome('cancelled', false);
+    diag.voices.stateChanged('idle');
+    cleanup();
+    useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], error: null, owner: null, startedAt: null });
+    return;
+  }
   diag.voices.cause(cause);
   diag.voices.stateChanged('failed');
   rec?.staged?.complete(rec.rawText, rec.rawText, false);
@@ -225,7 +308,13 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.unavailable') }); return true;
   }
   if (!voiceSettings.consented) { useVoice.setState({ consentPending: true, owner }); return false; }
-  if (rec) cancelDictation();
+  if (rec) {
+    // A dictation still finishing into another composer's draft (its session
+    // was left, K-224) keeps what was heard instead of being dropped.
+    const previous = rec;
+    if (previous.finishMode === 'edit' && !previous.staged && previous.rawText.trim()) previous.onFinal(previous.rawText.trim(), 'edit');
+    cancelDictation();
+  }
   // Web opens a fresh broker socket for every attempt; a cached lease is not a warm connection.
   diag.voices.begin(false, voiceSettings.correction);
   if (!transport?.connected()) {
@@ -234,6 +323,17 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     useVoice.setState({ phase: 'failed', owner, error: t('settings:voice.errors.offline') }); return true;
   }
   useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
+  // Inside the click (autoplay policy), before any await.
+  const cue = playStartCue();
+  // No microphone at all: say so before taking a lease and opening the gateway.
+  if (!(await hasMicrophone())) {
+    if (useVoice.getState().phase !== 'connecting' || useVoice.getState().owner !== owner) return true;
+    diag.voices.stateChanged('requestingPermission');
+    fail(t('settings:voice.errors.noMicrophone'), 'mic_unavailable');
+    useVoice.setState({ owner });
+    return true;
+  }
+  if (rec || useVoice.getState().phase !== 'connecting' || useVoice.getState().owner !== owner) return true;
   const recordingId = uuid();
   let ws: WebSocket;
   try {
@@ -248,7 +348,9 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
   const send = (m: Record<string, unknown>) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
   const flush = () => { if (!r.ready) return; for (const p of r.pending) ws.send(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); r.pending = []; if (r.finishMode && !r.finishSent) sendFinish(); };
   const sendFinish = () => { r.finishSent = true; send({ type: 'finish', recordingId }); };
-  r.timer = setTimeout(() => { if (rec === r && useVoice.getState().phase === 'connecting') fail(t('settings:voice.errors.unreachable'), 'timeout'); }, 12_000);
+  // The microphone opens (and shows Listening…) before the gateway is ready;
+  // a gateway that never gets there must not leave it listening forever.
+  r.timer = setTimeout(() => { if (rec === r && !r.ready) fail(t('settings:voice.errors.unreachable'), 'timeout'); }, 12_000);
 
   ws.onmessage = (ev) => {
     if (rec !== r || typeof ev.data !== 'string') return;
@@ -316,15 +418,20 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     ]);
     if (rec !== r) return true;
     send({ type: 'authorize', uid: transport?.userId() ?? undefined, deviceId: transport?.deviceId() ?? undefined, authorization: l });
+    // The microphone opens once the start cue has played, so it is not recorded.
+    await cue;
+    // Cancelled, or already finished (Send/Edit while connecting): no microphone.
+    if (rec !== r || r.finishMode) return true;
     diag.voices.stateChanged('requestingPermission');
-    r.capture = await openMicrophone((pcm, level) => {
+    const capture = await openMicrophone((pcm, level) => {
       if (rec !== r || r.finishMode) return;
       const lv = useVoice.getState().levels;
       useVoice.setState({ levels: [...lv.slice(-7), level] });
       if (r.ready) ws.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
       else if (r.pending.reduce((n, p) => n + p.byteLength, 0) < 384_000) r.pending.push(pcm);
     }).catch((e: Error) => { throw e instanceof VoiceFailure ? e : new VoiceFailure(e.message, 'audio_session'); });
-    if (rec !== r) { r.capture.stop(); return true; }
+    if (rec !== r || r.finishMode) { capture.stop(); return true; }
+    r.capture = lowerOtherSoundsWhile(capture);
     diag.voices.stateChanged('recording');
     if (useVoice.getState().phase === 'connecting') useVoice.setState({ phase: 'recording' });
   } catch (e) {

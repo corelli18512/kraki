@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
-import { STREAMING_RENDER_MS, StreamingMarkdown, useThrottledValue } from './Markdown';
+import { STREAMING_RENDER_MS, StreamingMarkdown, useThrottledValue, withoutPartialFence } from './Markdown';
 
 /**
  * A streaming draft must keep visibly updating while tokens arrive faster
@@ -54,5 +54,25 @@ describe('StreamingMarkdown', () => {
     rerender({ v: 'b', ms: 30 });
     act(() => { vi.advanceTimersByTime(15); });
     expect(result.current).toBe('b');
+  });
+});
+
+describe('StreamingMarkdown — a fence still arriving (K-223)', () => {
+  it('never shows the first backticks of a fence as text', () => {
+    for (const partial of ['Run this:\n`', 'Run this:\n``', 'Run this:\n~~']) {
+      const { container, unmount } = render(<StreamingMarkdown text={partial} />);
+      expect(container.textContent).toBe('Run this:');
+      unmount();
+    }
+    // Nor the closing one inside the block.
+    const { container } = render(<StreamingMarkdown text={'```sh\npnpm test\n``'} />);
+    expect(container.querySelector('pre')?.textContent?.trim()).toBe('pnpm test');
+  });
+
+  it('keeps inline code and complete fences', () => {
+    expect(withoutPartialFence('use `pnpm`')).toBe('use `pnpm`');
+    expect(withoutPartialFence('a\n```')).toBe('a\n```');
+    expect(withoutPartialFence('``')).toBe('');
+    expect(withoutPartialFence('x ``')).toBe('x ``');
   });
 });

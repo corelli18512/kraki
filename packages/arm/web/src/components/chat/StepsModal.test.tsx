@@ -128,6 +128,56 @@ describe('StepsModal — turn identity', () => {
   });
 });
 
+describe('StepsModal — a turn that starts after an idle without a prompt (agent-initiated)', () => {
+  const at = (type: string, seq: number, payload: Record<string, unknown> = {}) =>
+    ({ ...message, type, seq, payload } as ChatMessage);
+
+  it('a finished W bubble collects only W\'s Steps, not T1\'s', () => {
+    const t1Steps = at('agent_narration', 1.5, { content: 'T1 steps' });
+    const wSteps = at('agent_narration', 3.5, { content: 'W steps' });
+    const messages = [at('user_message', 1), t1Steps, at('agent_message', 2), at('idle', 3), wSteps, at('agent_message', 4), at('idle', 5)];
+    expect(collectTurnSteps(messages, 4)).toEqual([wSteps]);
+    expect(collectTurnSteps(messages, 2)).toEqual([t1Steps]);
+  });
+
+  it('the live Steps of a running W pull the turn after the idle and show only W\'s', async () => {
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    useStore.setState({ messages: new Map([['s', [
+      at('user_message', 1), at('agent_narration', 1.5, { content: 'T1 steps' }), at('agent_message', 2), at('idle', 3),
+    ]]]) });
+    useStore.getState().applyCardMessage('s', 'Lane 26 done', true);
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      expect(request).toHaveBeenLastCalledWith('s', 4);
+      act(() => messageProvider.handleTurnTraceBatch('s', 4, [at('agent_narration', 0, { content: 'W steps' })], false));
+      expect(screen.getByText('W steps')).toBeInTheDocument();
+      expect(screen.queryByText('T1 steps')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      await vi.dynamicImportSettled();
+    }
+  });
+
+  it.each([
+    ['a prompted turn', [1, 2, 3, 4], 4],
+    ['a prompted turn with a steer', [1, 2, 3, 4, 5], 4],
+  ])('%s keeps its prompt as the live target', async (_name, seqs, expected) => {
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    const rows = [at('user_message', 1), at('agent_message', 2), at('idle', 3), at('user_message', 4, { content: 'B' }),
+      at('user_message', 5, { content: 'steer', delivery: 'steer' })].filter(r => seqs.includes(r.seq as number));
+    useStore.setState({ messages: new Map([['s', rows]]) });
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      expect(request).toHaveBeenLastCalledWith('s', expected);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      await vi.dynamicImportSettled();
+    }
+  });
+});
+
 describe('StepsModal — live refresh (log audit: unchanged trace re-pulled every 2.5 s)', () => {
   const prompt = { ...message, type: 'user_message', seq: 1, payload: { content: 'A' } } as ChatMessage;
   const narration = { ...message, type: 'agent_narration', seq: 1.5, payload: { content: 'A steps' } } as ChatMessage;
@@ -267,5 +317,65 @@ describe('StepsModal — modal focus (native sheet)', () => {
     unmount();
     expect(trigger).toHaveFocus();
     trigger.remove();
+  });
+});
+
+describe('StepsModal — a reader scrolled up, and the LIVE badge (K-223)', () => {
+  const prompt = { ...message, type: 'user_message', seq: 1, payload: { content: 'A' } } as ChatMessage;
+  const step = (n: number) => ({ ...message, type: 'agent_narration', seq: 1 + n / 100, payload: { content: `Step ${n}` } }) as ChatMessage;
+  const setState = (state: 'active' | 'idle') => useStore.setState({ sessions: new Map([['s', { id: 's', deviceId: 'd', agent: 'pi', state, messageCount: 0 } as never]]) });
+
+  it('follows new steps only while the reader is at the newest edge', async () => {
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    setState('active');
+    useStore.setState({ messages: new Map([['s', [prompt, step(1)]]]) });
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      const body = document.querySelector<HTMLElement>('.ksheet-body')!;
+      let height = 1000;
+      Object.defineProperties(body, { scrollHeight: { get: () => height }, clientHeight: { value: 300 } });
+      const add = (n: number) => act(() => {
+        height += 100;
+        useStore.setState({ messages: new Map([['s', [...useStore.getState().messages.get('s')!, step(n)]]]) });
+      });
+      add(2);
+      expect(body.scrollTop).toBe(1100);
+      // Scrolled up to read: new steps no longer pull the view down.
+      body.scrollTop = 200;
+      fireEvent.scroll(body);
+      add(3);
+      expect(body.scrollTop).toBe(200);
+      // Back at the newest edge: following again.
+      body.scrollTop = 900;
+      fireEvent.scroll(body);
+      add(4);
+      expect(body.scrollTop).toBe(1300);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      await vi.dynamicImportSettled();
+    }
+  });
+
+  it('shows LIVE only while the opened turn is running', async () => {
+    const request = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    setState('active');
+    useStore.setState({ messages: new Map([['s', [prompt, step(1)]]]) });
+    const view = render(<StepsModal sessionId="s" bubbleSeq={null} onClose={() => {}} />);
+    try {
+      expect(screen.getByText('LIVE')).toBeInTheDocument();
+      act(() => setState('idle'));
+      expect(screen.queryByText('LIVE')).toBeNull();
+      // A later turn running is not the opened one.
+      act(() => {
+        setState('active');
+        useStore.setState({ messages: new Map([['s', [prompt, step(1), { ...prompt, seq: 5, payload: { content: 'B' } } as ChatMessage]]]) });
+      });
+      expect(screen.queryByText('LIVE')).toBeNull();
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      await vi.dynamicImportSettled();
+    }
   });
 });

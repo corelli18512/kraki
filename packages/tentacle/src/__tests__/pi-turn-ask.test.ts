@@ -593,6 +593,33 @@ describe('pi inbound images (sendMessage → RPC prompt.images)', () => {
   });
 });
 
+describe('pi inbound content_ref images (K-291)', () => {
+  it('reads a content_ref image from the attachment store and passes it in the prompt', async () => {
+    const read = vi.fn((_sid: string, id: string) => (id === 'ref-img'
+      ? { bytes: Buffer.from('ABC'), meta: { mimeType: 'image/jpeg' } }
+      : null));
+    const adapter = new PiAdapter({
+      cliPath: '/bin/true',
+      attachmentStore: { read } as unknown as import('../attachment-store.js').AttachmentStore,
+    });
+    const proc: StubProc = { alive: true, send: vi.fn(), sendRaw: vi.fn(), request: vi.fn().mockResolvedValue({}) };
+    (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      proc, cwd: '/tmp', model: 'm', mode: 'auto', usage: {}, lastActivity: Date.now(),
+      pendingPerms: new Map(), pendingQuestions: new Map(),
+      turn: turnFixture(adapter, 's1', { open: false }), lastStopReason: undefined, aborting: false,
+    });
+    await adapter.sendMessage('s1', 'look', [
+      { type: 'content_ref', id: 'ref-img', mimeType: 'image/jpeg', size: 3 },
+      { type: 'content_ref', id: 'missing', mimeType: 'image/png', size: 3 },
+    ]);
+    expect(read).toHaveBeenCalledWith('s1', 'ref-img');
+    expect(proc.request).toHaveBeenCalledWith('prompt', {
+      message: 'look',
+      images: [{ type: 'image', data: Buffer.from('ABC').toString('base64'), mimeType: 'image/jpeg' }],
+    }, { timeoutMs: null });
+  });
+});
+
 describe('pi outbound images (tool result → attachment store)', () => {
   function makeAdapterWithStore() {
     const put = vi.fn((_sid: string, _bytes: Buffer, mimeType: string) => ({

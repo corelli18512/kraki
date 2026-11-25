@@ -47,6 +47,9 @@ const WEB_PORT = Number(process.env.REALSTACK_WEB_PORT ?? 3700);
 const CONTROL_PORT = Number(process.env.REALSTACK_CONTROL_PORT ?? 4710);
 const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
 
+/** A 24×16 GIF with three frames (red, green, blue; 200 ms each, looping). */
+const ANIMATED_GIF_BASE64 = 'R0lGODlhGAAQAIEAAP///+Y8PAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAFAAAACwAAAAAGAAQAAAINQADCBxIsKDBgwgTKlzIsGFBABAjQnQoUKJEigEsRsSocSLFjgA4dhSpkaRFjChTqlzJMkBAACH5BAEUAAIALAAAAAAYABAAgf///zy0WgAAAAAAAAg0AAMIHEiwoMGDCBMqXMiwYUMAECNCdChQokSKASxGxKhxIsWOADh2FKmRpEWMKFOqXOkwIAAh+QQBFAACACwAAAAAGAAQAIH///88buYAAAAAAAAINAADCBxIsKDBgwgTKlzIsKHDgwAiSoz4MMDEiRUvSsyoEQBHjR8vhsT4sKPHiihTqlxZMCAAOw==';
+
 /** Pre-seeded session id, created before the browser connects. */
 const SEED_SESSION_ID = 'realstack-1';
 /** The first tentacle's device id (kept across reconnects and restarts). */
@@ -757,6 +760,19 @@ async function main(): Promise<void> {
           adapter.msg(sid, q.get('reply') ?? 'Here is the generated image.');
           adapter.idle(sid);
           return json(200, { ok: true, id: ref.id, size: png.length, mimeType: ref.mimeType, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / RelayClient.ATTACHMENT_CHUNK_BYTES) });
+        }
+        // ── an animated GIF shown by show_image: the apps keep its bytes as
+        //    they are (it animates, and Download saves the GIF itself). ──
+        case '/gifRef': {
+          const sid = q.get('sid')!;
+          const gif = Buffer.from(ANIMATED_GIF_BASE64, 'base64');
+          const ref = attachmentStore.put(sid, gif, 'image/gif', { name: 'party.gif' });
+          const tcid = `tc-gif-${sid}-${Date.now().toString(36)}`;
+          adapter.toolStart(sid, 'show_image', {}, tcid);
+          adapter.toolComplete(sid, 'show_image', '', tcid, [ref]);
+          adapter.msg(sid, q.get('reply') ?? 'Here is the animation.');
+          adapter.idle(sid);
+          return json(200, { ok: true, id: ref.id, name: ref.name, base64: gif.toString('base64') });
         }
         case '/shutdown': json(200, { ok: true }); cleanup(); process.exit(0); return;
         default: return json(404, { error: 'unknown control endpoint' });

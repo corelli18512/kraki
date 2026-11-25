@@ -1,10 +1,10 @@
 import { Trans, useTranslation } from 'react-i18next';
 import { AccountDeletedNotice } from '../components/layout/DeleteAccount';
 import { KrakiLogo } from '../components/KrakiLogo';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
-import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
+import { startOAuthFlow, loadStoredDevice, canReachGitHub } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 import { ScanQrCode } from 'lucide-react';
 import { QrScanner } from '../components/common/QrScanner';
@@ -12,7 +12,10 @@ import { desktop, desktopCredentials } from '../lib/desktop';
 import { DesktopSetup } from '../components/desktop/DesktopSetup';
 import { StartSessionView } from '../components/sessions/NewSessionComposer';
 import { useNarrow } from '../hooks/useNarrow';
+import { useSessionListLoading } from '../hooks/useSessionListLoading';
 import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
+import { isOfficialRelay } from '../lib/pairing-link';
+import { SettingsAlert } from '../components/layout/SettingsControls';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -35,7 +38,10 @@ export function DashboardPage() {
   const oauthAvailable = supportsOAuthLogin(githubClientId);
   const hasCredentials = !!loadStoredDevice()?.deviceId;
   const [scannerOpen, setScannerOpen] = useState(false);
+  /** A scanned code for a relay that is not Kraki's, waiting for the user. */
+  const [pendingPairing, setPendingPairing] = useState<{ relay: string; token: string; host: string } | null>(null);
   const sessionCount = useStore((s) => s.sessions.size);
+  const sessionListLoading = useSessionListLoading();
   const wide = !useNarrow();
 
   const handleQrScan = useCallback((url: string) => {
@@ -45,19 +51,35 @@ export function DashboardPage() {
       const relay = parsed.searchParams.get('relay');
       const token = parsed.searchParams.get('token');
       if (relay && token) {
-        wsClient.pairWithToken(relay, token);
+        // Same rule as a pairing link opened in the browser (main.tsx): a
+        // crafted code must not sign this browser into a stranger's server.
+        if (isOfficialRelay(relay)) wsClient.pairWithToken(relay, token);
+        else setPendingPairing({ relay, token, host: new URL(relay).host });
       }
     } catch { /* invalid URL — ignored */ }
   }, []);
 
+  const [githubCheck, setGithubCheck] = useState<'idle' | 'checking' | 'unreachable'>('idle');
+  const signInWithGitHub = useCallback(async (id: string) => {
+    setGithubCheck('checking');
+    if (await canReachGitHub()) {
+      setGithubCheck('idle');
+      await startOAuthFlow(id);
+    } else {
+      setGithubCheck('unreachable');
+    }
+  }, []);
+
+  // Only asks GitHub for the newest DMG when the link is used, not on every
+  // load of the sign-in page (K-324).
   const onMac = isMacBrowser();
-  const [macDmgUrl, setMacDmgUrl] = useState(MAC_RELEASES_PAGE);
-  useEffect(() => {
-    if (!onMac) return;
-    let cancelled = false;
-    void resolveMacDmgUrl().then((url) => { if (!cancelled) setMacDmgUrl(url); });
-    return () => { cancelled = true; };
-  }, [onMac]);
+  const downloadMac = useCallback(async (event: React.MouseEvent<HTMLAnchorElement>) => {
+    // Cmd/Ctrl/Shift/middle click keep the browser's own new-tab handling
+    // of the releases-page href.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    window.location.href = await resolveMacDmgUrl();
+  }, []);
 
   // Kraki for Windows: set up the Kraki built into the app (like Kraki for Mac).
   if (desktop?.builtIn && (status === 'awaiting_login' || !desktopCredentials())) {
@@ -87,12 +109,16 @@ export function DashboardPage() {
 
         {clientId && (
           <button
-            onClick={() => { void startOAuthFlow(clientId); }}
+            onClick={() => { void signInWithGitHub(clientId); }}
+            disabled={githubCheck === 'checking'}
             className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f] dark:bg-[#f0f0f0] dark:text-[#24292f] dark:hover:bg-[#d0d0d0] animate-fade-up"
           >
             <GitHubMark className="h-5 w-5" />
             {t('dashboard.signIn')}
           </button>
+        )}
+        {clientId && githubCheck === 'unreachable' && (
+          <p role="alert" className="mt-3 max-w-sm text-xs text-red-500">{t('dashboard.githubUnreachable')}</p>
         )}
 
         {oauthAvailable && (
@@ -126,7 +152,8 @@ export function DashboardPage() {
 
         {onMac && (
           <a
-            href={macDmgUrl}
+            href={MAC_RELEASES_PAGE}
+            onClick={(event) => { void downloadMac(event); }}
             className="mt-6 text-xs text-text-muted underline-offset-2 hover:text-text-primary hover:underline animate-fade-up-d3"
           >
             {t('dashboard.downloadMac')}
@@ -135,6 +162,20 @@ export function DashboardPage() {
 
         {scannerOpen && (
           <QrScanner onScan={handleQrScan} onClose={() => setScannerOpen(false)} />
+        )}
+
+        {pendingPairing && (
+          <SettingsAlert
+            viewport
+            title={t('pairing.confirmTitle')}
+            body={t('pairing.confirmDetail').replace('<b></b>', pendingPairing.host)}
+            confirm={t('pairing.connect')}
+            onCancel={() => setPendingPairing(null)}
+            onConfirm={() => {
+              setPendingPairing(null);
+              wsClient.pairWithToken(pendingPairing.relay, pendingPairing.token);
+            }}
+          />
         )}
       </div>
     );
@@ -154,7 +195,7 @@ export function DashboardPage() {
   if (wide) {
     return (
       <StartSessionView
-        firstTime={sessionCount === 0}
+        firstTime={sessionCount === 0 && !sessionListLoading}
         onConnectPhone={desktop?.builtIn ? () => window.dispatchEvent(new Event('kraki:connect-phone')) : undefined}
       />
     );

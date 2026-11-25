@@ -25,6 +25,17 @@ describe('isKrakiSelfManagementCommand', () => {
     'kill $(cat ~/.kraki/daemon.pid)',
     'kill -9 `cat /Users/me/.kraki/daemon.pid`',
     'launchctl bootout gui/501/chat.kraki.tentacle',
+    // K-294: other common ways of stopping it.
+    'cat ~/.kraki/daemon.pid | xargs kill -9',
+    'pgrep -f kraki | xargs kill',
+    'kill $(pgrep -f kraki)',
+    'kill -9 `pgrep kraki`',
+    "bash -lc 'pkill -f kraki'",
+    'zsh -c "killall kraki"',
+    "bash -lc 'kraki restart'",
+    'npx kraki stop',
+    'npx -y @kraki/tentacle restart',
+    'pnpm dlx @kraki/tentacle@latest update',
   ])('blocks %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(true);
   });
@@ -40,6 +51,13 @@ describe('isKrakiSelfManagementCommand', () => {
     "cat > notes.md <<'EOF'\\nThe guard blocks kraki restart.\\nEOF",
     'kill %1',
     'launchctl list | grep kraki',
+    'pgrep -f kraki',
+    'ps aux | grep kraki | head',
+    'npx kraki status',
+    'echo "kill $(pgrep -f kraki)" >> notes.md',
+    // Bundled -c of a non-shell is a flag, not a script (tentacle-cli #12).
+    'grep -rc "kraki stop" docs/',
+    "grep -ic 'kraki update' CHANGELOG.md",
   ])('allows %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(false);
   });

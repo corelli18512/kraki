@@ -210,12 +210,13 @@ enum SubagentSteps {
 /// A permission step: what was asked and what was decided.
 enum PermissionStep {
     /// The earlier record's request (description, tool) with the later
-    /// record's decision and deny reason.
+    /// record's decision and deny reason, or its cancellation.
     static func merged(_ earlier: ChatMessage, with later: ChatMessage) -> ChatMessage {
         var next = earlier
         for key in ["decision", "reason"] {
             if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
         }
+        if later.cancelled { next.payload["cancelled"] = later.payload["cancelled"] }
         for key in ["description", "toolName"] where next.payload[key]?.stringValue?.isEmpty != false {
             if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
         }
@@ -243,5 +244,16 @@ enum PermissionStep {
 
     static func isDenied(_ message: ChatMessage) -> Bool {
         message.payload["decision"]?.stringValue == "deny"
+    }
+}
+
+/// An error step. Tentacle records its text as `payload.message` (as on the
+/// web); `content`/`result` are kept for older traces (K-053).
+enum ErrorStep {
+    static func text(_ message: ChatMessage) -> String {
+        for text in [message.errorMessage, message.content, message.result] {
+            if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { return text }
+        }
+        return String(localized: "Error")
     }
 }

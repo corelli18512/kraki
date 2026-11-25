@@ -153,6 +153,25 @@ describe('CodexAdapter (fake app-server child process)', () => {
     }]);
   });
 
+  it('K-132: a failed model/list at start is retried and the recovery re-greets the apps', async () => {
+    const saved = CodexAdapter.MODEL_RETRY_FIRST_MS;
+    CodexAdapter.MODEL_RETRY_FIRST_MS = 30;
+    try {
+      h = new Harness(dir, { FAKE_CODEX_MODEL_LIST_FAILURES: '1' });
+      let changed = 0;
+      h.adapter.onCapabilitiesChanged = () => { changed++; };
+      await h.adapter.start();
+      expect(await h.adapter.listModelDetails()).toEqual([]);
+      const end = Date.now() + 3000;
+      while (changed === 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+      expect(changed).toBe(1);
+      expect((await h.adapter.listModels())).toEqual(['gpt-6-astra']);
+      expect(h.sent('model/list')).toHaveLength(2);
+    } finally {
+      CodexAdapter.MODEL_RETRY_FIRST_MS = saved;
+    }
+  });
+
   it('refuses to start when Codex is not logged in', async () => {
     h = new Harness(dir, { FAKE_CODEX_LOGGED_OUT: '1' });
     await expect(h.adapter.start()).rejects.toThrow(/codex login/);
@@ -400,6 +419,44 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await h.idleCount(1);
     expect(h.of('message').map((m) => m.content)).toEqual(['echo: after']);
     expect(h.events.some((e) => e.content === 'ghost')).toBe(false);
+  });
+
+  it('K-131: Stop when the app-server never answers turn/interrupt settles the turn; the next prompt is not queued behind it', async () => {
+    const saved = CodexAdapter.INTERRUPT_TIMEOUT_MS;
+    CodexAdapter.INTERRUPT_TIMEOUT_MS = 200;
+    try {
+      await started({ FAKE_CODEX_IGNORE_INTERRUPT: '1' });
+      const sid = await session();
+      await turn(sid, 'SLOW', 'rt-1');
+      const t0 = Date.now();
+      await h.adapter.abortSession(sid);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      expect(h.adapter.isTurnSettled(sid)).toBe(true);
+      // The next prompt reaches the app-server instead of waiting forever for
+      // a turn/completed that never comes (this fake still holds its turn).
+      await expect(turn(sid, 'after', 'rt-2')).rejects.toThrow(/turn already in progress/);
+      expect(h.sent('turn/start')).toHaveLength(2);
+    } finally {
+      CodexAdapter.INTERRUPT_TIMEOUT_MS = saved;
+    }
+  });
+
+  it('K-130: a turn that fails mid-compaction ends the compaction before its idle', async () => {
+    await started();
+    const sid = await session();
+    await turn(sid, 'MIDCOMPACT', 'rt-1');
+    await h.idleCount(1);
+    expect(h.of('compaction').map((e) => e.phase)).toEqual(['start', 'end']);
+    expect(h.events.findIndex((e) => e.type === 'compaction' && e.phase === 'end'))
+      .toBeLessThan(h.events.findIndex((e) => e.type === 'idle'));
+  });
+
+  it('K-130: an app-server exit mid-compaction ends the compaction', async () => {
+    await started();
+    const sid = await session();
+    await turn(sid, 'MIDCOMPACT DIE', 'rt-1');
+    await h.idleCount(1);
+    expect(h.of('compaction').map((e) => e.phase)).toEqual(['start', 'end']);
   });
 
   it('abort terminates commands the aborted turn left running, but not earlier ones', async () => {

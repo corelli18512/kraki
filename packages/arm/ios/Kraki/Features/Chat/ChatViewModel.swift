@@ -107,13 +107,16 @@ final class ChatViewModel {
     }
 
     /// Identity + delivery state of every optimistic input. Read by the view
-    /// so outbox changes (new send, failed, retried) always re-render.
+    /// so outbox changes (new send, failed, retried) always re-render. A
+    /// withdrawn question closes like an answered one, so it is part of it.
+    /// The refusal reason is too: a Retry that fails locally stays failed
+    /// but drops the computer's reason from the Mac bubble.
     var pendingSignature: String {
         (appState?.commandSender?.pendingInputs(sessionId) ?? [])
             // Text is part of the signature: a correcting voice bubble's
             // content streams in place.
-            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)#\($0.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])" }
-            .joined(separator: ",")
+            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.payload[CommandSender.refusedReasonKey]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)#\($0.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])" }
+            .joined(separator: ",") + withdrawnQuestions.sorted().map { "|w:\($0)" }.joined()
     }
 
     /// Confirmed spine bubbles plus optimistic pending input.
@@ -168,13 +171,14 @@ final class ChatViewModel {
         // open; it becomes known when session_list arrives, often after the
         // window was loaded from the database (a cold open).
         let pending = pendingInputsRaw
-        let answering = Self.answeringIDs(pending)
+        let withdrawn = withdrawnQuestions
+        let answering = Self.answeringIDs(pending) + withdrawn.sorted().map { "withdrawn:\($0)" }
         let atHead = windowAtHead
         if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering, memo.atHead == atHead {
             return Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages)
         }
         let spine = Self.renderable(TurnSpineProjection.project(
-            Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead)
+            Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead, withdrawn: withdrawn)
         ))
         currentSpineMemo = (revision, answering, atHead, spine)
         return Self.place(pendingMessages(landedIn: spine), in: spine)
@@ -193,7 +197,8 @@ final class ChatViewModel {
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
         cachedMessages = Self.renderable(TurnSpineProjection.project(
-            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead,
+                                     withdrawn: withdrawnQuestions)
         ))
         appState?.noteConversationRendered(sessionId, hasContent: !cachedMessages.isEmpty)
         #if KRAKI_DIAG
@@ -249,10 +254,13 @@ final class ChatViewModel {
 
     /// Rows newer than the window already stored on this device (local
     /// pagination). Network catch-up is not this: it lands silently.
+    /// `persistedHead` (observed) can sit past the last stored row in a
+    /// legacy session marked caught up through seqs clients never store;
+    /// those are not rows, so the window at the last stored row is the tail.
     var hasNewerLocalRows: Bool {
         guard let store = appState?.messageStore else { return false }
         let bottom = windowBottomSeq
-        return bottom > 0 && bottom < store.persistedHead(sessionId)
+        return bottom > 0 && bottom < min(store.persistedHead(sessionId), store.dbLastSeq(sessionId))
     }
 
     /// Connected, but this device has not yet stored the session's newest
@@ -292,14 +300,22 @@ final class ChatViewModel {
         return last.type == "idle"
     }
 
-    /// Leading normal prompt for the current logical turn. Steer messages are
-    /// visible user bubbles but remain inside this turn and do not become TRACE
-    /// anchors.
-    var lastUserMessage: ChatMessage? {
-        filteredMessages.last {
-            ($0.type == "user_message" || $0.type == "send_input")
-                && $0.payload["delivery"]?.stringValue != "steer"
+    /// TRACE pull target of the running turn (live Steps): the seq of its
+    /// leading normal prompt (steers stay inside the turn and are no anchor),
+    /// unless an `idle` comes after that prompt. Then the agent started this
+    /// turn itself (no prompt, e.g. Pi woken by a background run after the
+    /// previous turn settled) and the target is the seq after that idle, which
+    /// the tentacle resolves to the running turn. Older tentacles map it to
+    /// the previous prompt's trace.
+    var liveTraceSeq: Int? {
+        for message in filteredMessages.reversed() {
+            if (message.type == "user_message" || message.type == "send_input")
+                && message.payload["delivery"]?.stringValue != "steer" {
+                return message.seq
+            }
+            if message.type == "idle" { return message.seq + 1 }
         }
+        return nil
     }
 
     /// Steps hint for the streaming tail card: the running turn's accumulated
@@ -337,10 +353,11 @@ final class ChatViewModel {
         let raw = filteredMessages
         guard raw.contains(where: { $0.questionSpec != nil }) else { return [] }
         let pending = pendingInputsRaw
+        let withdrawn = withdrawnQuestions
         let key = "\(raw.count)|\(raw.first?.seq ?? 0)|\(raw.last?.seq ?? 0)|\(windowAtHead)|"
-            + Self.answeringIDs(pending).joined(separator: ",")
+            + Self.answeringIDs(pending).joined(separator: ",") + "|" + withdrawn.sorted().joined(separator: ",")
         if let memo = questionsMemo, memo.key == key { return memo.value }
-        let value = Self.presentingQuestions(raw, pending: pending, atHead: windowAtHead).compactMap { message -> PendingQuestion? in
+        let value = Self.presentingQuestions(raw, pending: pending, atHead: windowAtHead, withdrawn: withdrawn).compactMap { message -> PendingQuestion? in
             guard message.questionPresentation?.state == .open, let spec = message.questionSpec else { return nil }
             return PendingQuestion(id: spec.id, sessionId: sessionId, question: spec.text,
                                    choices: spec.choices.isEmpty ? nil : spec.choices, timestamp: Date())
@@ -359,9 +376,10 @@ final class ChatViewModel {
     ///   is drawn inside the question bubble — the question is that turn's
     ///   last output, like the draft of an ordinary aborted turn — and the
     ///   empty status row itself is not rendered (`shouldRender`);
-    /// - nothing yet: open at the conversation head, otherwise undetermined.
+    /// - nothing yet: open at the conversation head, otherwise undetermined;
+    ///   unanswered once the agent withdrew it (`withdrawn`, K-022).
     static func presentingQuestions(_ raw: [ChatMessage], pending: [ChatMessage],
-                                    atHead: Bool) -> [ChatMessage] {
+                                    atHead: Bool, withdrawn: Set<String> = []) -> [ChatMessage] {
         guard raw.contains(where: { $0.questionSpec != nil }) else { return raw }
         var result = raw
         for index in raw.indices {
@@ -377,6 +395,7 @@ final class ChatViewModel {
             if presentation == nil {
                 presentation = answeringIDs(pending).contains(spec.id)
                     ? .init(state: .answered)
+                    : withdrawn.contains(spec.id) ? .init(state: .unanswered)
                     : .init(state: atHead ? .open : .undetermined)
             }
             result[index].questionPresentation = presentation
@@ -392,6 +411,8 @@ final class ChatViewModel {
     }
 
     private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }
+
+    private var withdrawnQuestions: Set<String> { appState?.messageStore.withdrawnQuestions[sessionId] ?? [] }
 
     // MARK: - Session + device
 

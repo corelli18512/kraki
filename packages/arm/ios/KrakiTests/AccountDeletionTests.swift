@@ -39,9 +39,19 @@ final class AccountDeletionTests: XCTestCase {
         XCTAssertEqual(app.accountDeletion, .failed("Could not delete the account. Try again."))
         XCTAssertNil(app.lastError)
 
-        // Not deleting: a server error is the usual banner.
+        // Not deleting: a server error is the usual banner, in the app's
+        // own words, never the relay's raw English (U8).
         app.accountDeletion = .idle
         try route(app, ["type": "server_error", "message": "Other"])
-        XCTAssertEqual(app.lastError, "Other")
+        XCTAssertEqual(app.lastError, String(localized: "The server couldn't complete that. Try again."))
+        try route(app, ["type": "server_error", "message": "Could not remove the device. Try again later."])
+        XCTAssertEqual(app.lastError, String(localized: "Couldn't remove the device. Try again later."))
+    }
+
+    /// U8: a refused live-session subscription is not a signed-in toast.
+    func testSessionSubscriptionErrorIsNotShownAsAToast() {
+        let app = AppState.makeUnitTestHost()
+        app.reportSessionSubscriptionError("Cannot set live session subscription: target is unavailable.")
+        XCTAssertNil(app.lastError)
     }
 }

@@ -557,7 +557,7 @@ final class MacChatBubbleCell: NSView {
         imageHost.rootView = (content.inlineImages.isEmpty && content.imageRefs.isEmpty)
             ? nil
             : MacBubbleImageGrid(
-                inlineImages: content.inlineImages,
+                inlineImages: content.inlineImages, inlineImageFiles: content.inlineImageFiles,
                 refs: content.imageRefs,
                 sessionId: content.sessionId,
                 maxWidth: content.attachmentWidth,
@@ -1082,8 +1082,8 @@ final class MacChatBubbleCell: NSView {
             deliveryStatus.contentTintColor = .systemRed
             deliveryStatus.isEnabled = true
             deliveryStatus.alphaValue = 1
-            deliveryStatus.setAccessibilityLabel(String(localized: "Not delivered. Click to retry or delete"))
-            deliveryStatus.toolTip = String(localized: "Not delivered")
+            deliveryStatus.setAccessibilityLabel(content.failedDeliveryText.label)
+            deliveryStatus.toolTip = content.failedDeliveryText.toolTip
         } else {
             deliveryStatus.image = NSImage(systemSymbolName: "clock",
                                            accessibilityDescription: String(localized: "Sending"))?.withSymbolConfiguration(symbol)

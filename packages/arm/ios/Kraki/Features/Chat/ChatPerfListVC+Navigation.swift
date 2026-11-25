@@ -102,7 +102,9 @@ extension ChatPerfListVC {
             refreshJumpButtonTitle()
         }
         guard !jumpControlsFrozen else { return }
-        let showTail = !isAtConversationBottom
+        // An empty chat has no newer edge to jump to, even when the history
+        // it would load is not reachable yet (computer offline).
+        let showTail = !isAtConversationBottom && !items.isEmpty
         // ↑ stays available at the bottom (resting in ↓'s slot) unless the
         // newest item is the user's own message: there is nothing new to read
         // back to yet, and a right-aligned user bubble sits under the slot.
@@ -273,14 +275,16 @@ extension ChatPerfListVC {
         let target = landingOffset(forRowStart: frame.minY)
         let distance = abs(collectionView.contentOffset.y - target)
         updateJumpButtonVisibility()
-        if distance > collectionView.bounds.height * 2.5 {
+        let glides = !UIAccessibility.isReduceMotionEnabled
+        if glides, distance > collectionView.bounds.height * 2.5 {
             // Long hops: jump most of the way instantly, then glide the last
             // stretch so the motion stays legible without animating across
             // dozens of screens.
             let direction: CGFloat = target < collectionView.contentOffset.y ? 1 : -1
             collectionView.contentOffset.y = target + direction * collectionView.bounds.height * 0.6
         }
-        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: true)
+        // Reduce Motion: land at once.
+        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: glides)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             self?.endBottomGlide()
         }
@@ -338,6 +342,13 @@ extension ChatPerfListVC {
                 iter += 1
             }
             chatPerfLog.log("[reanchor] slide gap=\(gap) iters=\(iter)")
+            // The page cap stopped the slide short of rows this device already
+            // has: reload the tail instead, or the newest turns stay hidden
+            // below a send or ↓ that should have reached them (K-016).
+            if vm.hasNewerLocalRows {
+                vm.jumpToHead()
+                chatPerfLog.log("[reanchor] slide capped → jumpToHead")
+            }
         } else {
             vm.jumpToHead()                              // no window / large gap → instant reload
             chatPerfLog.log("[reanchor] jumpToHead gap=\(gap)")
@@ -361,10 +372,12 @@ extension ChatPerfListVC {
         chatPerfLog.log("[reanchor] win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] n=\(items.count) atNewest=\(atNewest)")
     }
 
-    func jumpToLiveBottom(animated: Bool) {
+    func jumpToLiveBottom(animated requestedAnimation: Bool) {
+        // Reduce Motion: land at once instead of gliding (send, ↓ Bottom).
+        let animated = requestedAnimation && !UIAccessibility.isReduceMotionEnabled
         scrollPolicy.beginTailNavigation(
             offset: collectionView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
+            distanceToBottom: tailFollowDistance()
         )
         widthAnchorGeneration += 1  // a pending re-layout anchor restore must not undo it
         // Suppress edge paging for the duration of the glide: right after the
@@ -425,6 +438,12 @@ extension ChatPerfListVC {
     func endBottomGlide() {
         guard suppressPagingForBottom else { return }
         scrollPolicy.endNavigation()
+        // A tail glide animates to the tail measured when it started. Rows
+        // that warmed meanwhile (a freshly reloaded tail window) move the
+        // tail, so land on where it is now.
+        if followingBottom, !collectionView.isTracking {
+            pinToBottom(reason: "glide-end")
+        }
         chatPerfLog.log("[bottom] glide-end win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] off=\(Int(collectionView.contentOffset.y))")
         settleEdges()
         updateOverlay()

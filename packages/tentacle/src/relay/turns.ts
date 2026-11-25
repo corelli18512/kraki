@@ -17,6 +17,60 @@ export function beginAdapterTurn(client: RelayClient, sessionId: string, turnId?
   return resolvedTurnId;
 }
 
+/**
+ * The agent started a run on its own (AgentAdapter.onAgentInitiatedTurn):
+ * open a new turn for it, like a prompt's but with no user_message. Returns
+ * the new turn id, or undefined when a Kraki turn is still in flight — the
+ * relay's current turn has not settled, or input is queued, dispatching,
+ * resuming or being accepted as a steer. That input owns the agent next.
+ *
+ * The turn behaves like a prompted one from here: `active` (sleep guard,
+ * session list), its steps/narration/reply pass the turn fence, and its
+ * closing idle marks unread, pushes the reply preview and may title the
+ * session. Its trace has its own key (SessionManager.beginAgentTurn), and a
+ * prompt that arrives meanwhile waits for its idle like behind any turn.
+ */
+export function beginAgentInitiatedTurn(client: RelayClient, sessionId: string): string | undefined {
+  const meta = client.sessionManager.getMeta(sessionId);
+  const activeTurnId = client.activeInputTurnIds.get(sessionId);
+  const busy = !meta || meta.state === 'ended'
+    || (activeTurnId !== undefined && client.settledAdapterTurnIds.get(sessionId) !== activeTurnId)
+    || client.inputChains.has(sessionId)
+    || client.inputDispatches.has(sessionId)
+    || client.resumeInFlight.has(sessionId)
+    || client.steerAcceptanceInFlight.has(sessionId);
+  if (busy) {
+    logger.info({ sessionId, activeTurnId, state: meta?.state }, 'Agent-initiated run not given a turn: a Kraki turn is in flight');
+    return undefined;
+  }
+  // Same id scheme as a prompt (reserveInput), so it never repeats an
+  // earlier turn's id, also after a daemon restart.
+  const anchor = Math.max((meta.lastSeq ?? 0) + 1, (client.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
+  client.nextInputTurnAnchors.set(sessionId, anchor);
+  const turnId = `${sessionId}:${anchor}`;
+  // Per-turn outcome state a user_message would reset (see RelayClient.send).
+  client.turnStepCounts.set(sessionId, 0);
+  client.turnHasOutcome.delete(sessionId);
+  client.lastAgentContent.delete(sessionId);
+  client.pendingTerminalErrors.delete(sessionId);
+  client.errorPersistedForTurn.delete(sessionId);
+  // Steps and artifacts from here on belong to this turn, not the last prompt's.
+  const traceStartSeq = client.sessionManager.beginAgentTurn(sessionId);
+  // A prompt arriving while this turn runs queues behind it (send_input
+  // persists and dispatches it at this idle) instead of aborting the run.
+  // Idle, Stop and session end all resolve the waiter (resolveTurnIdle).
+  const settled = waitForTurnIdle(client, sessionId);
+  client.inputChains.set(sessionId, settled);
+  void settled.finally(() => {
+    if (client.inputChains.get(sessionId) === settled) client.inputChains.delete(sessionId);
+  });
+  client.send({ type: 'active', sessionId, payload: {} });
+  client.sessionManager.markActive(sessionId);
+  beginAdapterTurn(client, sessionId, turnId);
+  traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'AGENT-INITIATED-TURN', sessionId, turnId, previousTurnId: activeTurnId, traceStartSeq });
+  return turnId;
+}
+
 /** A terminal adapter event must identify the accepted turn it belongs to.
  *  Legacy adapters/tests may omit the token; those events retain the old
  *  fallback behavior, while tokenized events are strictly fenced. */
@@ -82,13 +136,20 @@ export function reserveInput(
 ): { duplicate: boolean; conflict: boolean; recovery: boolean; effectiveDelivery: 'prompt' | 'steer'; turnId: string; entry?: InputLedgerEntry } {
   const meta = client.sessionManager.getMeta(sessionId);
   const adapterSettled = client.adapter.isTurnSettled?.(sessionId) === true;
+  // A prompt still being handed to the agent owns the next turn. A steer sent
+  // right behind it (the app already shows the session busy) joins that turn
+  // instead of becoming a later prompt that a following steer would overtake.
+  const openingTurnId = client.compactingSessions.has(sessionId)
+    ? undefined
+    : client.openingPromptTurns.get(sessionId);
   const staleSteer = requestedDelivery === 'steer'
+    && !openingTurnId
     && (
       meta?.state === 'idle'
       || meta?.state === 'disconnected'
       || adapterSettled
     );
-  if (requestedDelivery === 'steer' && adapterSettled && meta?.state === 'active') {
+  if (requestedDelivery === 'steer' && !openingTurnId && adapterSettled && meta?.state === 'active') {
     // Reconcile a terminal callback that Relay missed before opening the new
     // prompt. Otherwise the prior normal-input chain remains blocked forever
     // waiting for an idle the adapter has already crossed.
@@ -111,7 +172,7 @@ export function reserveInput(
   // already in flight. Reuse its identity so provider callbacks captured at
   // that run boundary remain admissible; only a stale steer opens a new turn.
   const turnId = effectiveDelivery === 'steer' && !staleSteer
-    ? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
+    ? openingTurnId ?? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
     : `${sessionId}:${turnAnchor}`;
   if (!clientId) {
     claimAnchor();
@@ -245,6 +306,7 @@ export function resolveTurnIdle(client: RelayClient, sessionId: string): void {
   // The underlying task remains observed and is fenced by its turn identity
   // if it ever completes, while a new dispatch may start immediately.
   client.inputDispatches.delete(sessionId);
+  client.openingPromptTurns.delete(sessionId);
   const waiter = client.turnIdleWaiters.get(sessionId);
   if (!waiter) return;
   client.turnIdleWaiters.delete(sessionId);
@@ -340,10 +402,22 @@ export function settleAdapterIdle(client: RelayClient, sessionId: string, event?
 /** A turn that ended on tool calls with no closing prose is relayed as-is:
  *  it has Steps but no reply. Give those Steps a spine anchor (protocol
  *  SystemMessage kind `no_reply`, which clients render as a steps-only
- *  section) — for every agent alike, instead of each adapter improvising. */
+ *  section) — for every agent alike, instead of each adapter improvising.
+ *  A turn whose only words were streamed (no reply event, no step) keeps
+ *  them as its reply. Either way the live draft ends with the turn: a stale
+ *  one would surface in the next turn's Stopped/Turn failed row. */
 export function anchorStepsOnlyTurn(client: RelayClient, sessionId: string): void {
-  if (client.turnHasOutcome.has(sessionId)) return;
-  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) return;
+  const draft = client.card.state(sessionId).draft;
+  if (client.turnHasOutcome.has(sessionId)) {
+    if (draft) client.card.onBubble(sessionId);
+    return;
+  }
+  if ((client.turnStepCounts.get(sessionId) ?? 0) === 0) {
+    if (!draft.trim()) return;
+    client.card.onBubble(sessionId);
+    client.send({ type: 'agent_message', sessionId, payload: { content: draft } });
+    return;
+  }
   client.card.onBubble(sessionId);
   client.send({ type: 'system_message', sessionId, payload: { kind: 'no_reply' } });
 }

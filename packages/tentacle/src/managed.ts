@@ -55,6 +55,12 @@ export interface ManagedByMarker {
   updatedAt: string;
 }
 
+/** Windows paths compare without case, either slash. */
+export function sameWindowsPath(a: string, b: string): boolean {
+  const norm = (p: string) => p.replace(/\//g, '\\').toLowerCase();
+  return norm(a) === norm(b);
+}
+
 export function getManagedByPath(): string {
   return join(getKrakiHome(), 'managed-by.json');
 }

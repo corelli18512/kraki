@@ -21,7 +21,7 @@ export interface BuiltInState {
 
 export type AgentCheckEvent =
   | { event: 'checking'; id: string; name: string }
-  | { event: 'agent'; id: string; name: string; status: 'ready' | 'needs_login' | 'not_installed' | 'error'; version?: string; models: number; sampleModels: string[]; hint?: string; installUrl: string }
+  | { event: 'agent'; id: string; name: string; status: 'ready' | 'needs_login' | 'not_installed' | 'error'; version?: string; models: number; sampleModels: string[]; hint?: string; installUrl: string; minVersion?: string }
   | { event: 'done'; ready: string[] };
 
 export type SetupEvent =
@@ -101,6 +101,18 @@ export interface DesktopBuildInfo {
   runAttempt?: string;
 }
 
+/** Kraki for Windows: "Lower Other Sounds While Recording" (Kraki for Mac's
+ *  MacOutputVolumeDucker). The shell lowers this PC's output volume while the
+ *  microphone records, after the start cue, and restores it when capture stops. */
+export interface DesktopVoiceVolumeBridge {
+  cueStarted: () => void;
+  cueFinished: () => void;
+  captureStarted: () => void;
+  captureStopped: () => void;
+  state: () => Promise<{ enabled: boolean }>;
+  setEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+}
+
 export interface KrakiDesktopBridge {
   buildInfo?: DesktopBuildInfo;
   settings?: DesktopSettingsBridge;
@@ -132,6 +144,8 @@ export interface KrakiDesktopBridge {
   diag?: { request: (req: import('./diag/client').DiagHttpRequest) => Promise<{ status: number; body: string }> };
   /** System sleep/wake (Electron powerMonitor). Absent in older shells. */
   onPower?: (handler: (event: 'suspend' | 'resume') => void) => () => void;
+  /** Windows only; absent in browsers, on Linux and in older shells. */
+  voiceVolume?: DesktopVoiceVolumeBridge;
 }
 
 declare global {

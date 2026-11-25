@@ -657,6 +657,14 @@ describe('daemon TCC identity proof', () => {
     expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
+  it('K-257: a Kraki for Mac daemon is healthy without a chat.kraki.cli identity (TCC follows the app bundle)', () => {
+    mockExecFileSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
+    const result = getDaemonTccIdentity(123, null, true);
+
+    expect(result).toMatchObject({ healthy: true, managedBy: 'kraki-mac', daemonPid: 123 });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
   it('does not trust an identity proof for a different PID', () => {
     mockExecFileSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
     const result = getDaemonTccIdentity(123, { pid: 999, bundleId: 'chat.kraki.cli' });

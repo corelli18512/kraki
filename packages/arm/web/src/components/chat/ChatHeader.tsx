@@ -46,15 +46,19 @@ export function ChatHeader({
     if (!menu) return;
     const close = (e: MouseEvent) => { if (!containsModeTarget(e.target as Node)) setMenu(false); };
     if (hasWindowsTitleBar) popupRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    // Capture phase + preventDefault: the open menu owns this Escape, so the
+    // report panel (and other window Escape handlers) must not close too.
+    // An Escape that cancels an IME candidate in the composer is not ours.
     const esc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
         setMenu(false);
         if (hasWindowsTitleBar) triggerRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', close);
-    window.addEventListener('keydown', esc);
-    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
+    window.addEventListener('keydown', esc, true);
+    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc, true); };
   }, [menu]);
 
   useLayoutEffect(() => {

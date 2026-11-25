@@ -199,6 +199,15 @@ final class DeviceStore {
         return pendingGreetingIds.contains(deviceId) ? .connecting : .noAgents
     }
 
+    /// Online and greeted, with or without a coding agent: the device list and
+    /// page show it as Online. A computer without an agent never sends models,
+    /// so waiting for them showed "Connecting…" forever.
+    func isOnlineAndGreeted(_ deviceId: String) -> Bool {
+        guard devices[deviceId]?.online == true else { return false }
+        let availability = agentAvailability(for: deviceId)
+        return availability == .ready || availability == .noAgents
+    }
+
     func agent(_ agentId: AgentId, on deviceId: String) -> AgentCapabilities? {
         agents(for: deviceId).first { $0.id == agentId }
     }
@@ -460,18 +469,22 @@ final class DeviceStore {
             if let latest = info.latest, !KrakiVersion.isNewer(latest, than: version) { info.latest = nil }
             deviceUpdates[id] = info
         }
-        // Kraki for Mac reports its app version; `deviceVersions` is the CLI's.
-        if deviceUpdates[id]?.installedVia != "mac-app",
+        // Kraki for Mac and Windows report their app version; `deviceVersions` is the CLI's.
+        if !["mac-app", "windows-app"].contains(deviceUpdates[id]?.installedVia),
            deviceVersions[id].map({ KrakiVersion.isNewer(version, than: $0) }) ?? true {
             deviceVersions[id] = version
         }
         scheduleSave()
     }
 
-    /// The version a user recognises: Kraki for Mac's own version for its
-    /// built-in tentacle, the tentacle version otherwise.
+    /// The version a user recognises: Kraki for Mac's or Kraki for Windows'
+    /// own version for its built-in tentacle, the tentacle version otherwise.
     func displayVersion(for id: String) -> String? {
         if let u = deviceUpdates[id], u.installedVia == "mac-app" { return "Kraki for Mac \(u.current)" }
+        if let u = deviceUpdates[id], u.installedVia == "windows-app",
+           !AvailableUpdate.reportedTentacleVersion(u, tentacleVersion: deviceVersions[id]) {
+            return "\(String(localized: "Kraki for Windows")) \(u.current)"
+        }
         return deviceVersions[id].map { "Kraki \($0)" }
     }
 
@@ -486,7 +499,8 @@ final class DeviceStore {
     func availableUpdate(for id: String) -> AvailableUpdate? {
         if let info = deviceUpdates[id] {
             guard let latest = info.latest, KrakiVersion.isNewer(latest, than: info.current) else { return nil }
-            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true)
+            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true,
+                                   reportsTentacleVersion: AvailableUpdate.reportedTentacleVersion(info, tentacleVersion: deviceVersions[id]))
         }
         guard devices[id]?.role == .tentacle,
               let version = deviceVersions[id], let newest = knownLatestTentacle,
@@ -574,17 +588,19 @@ final class DeviceStore {
             finishUsageRefresh(id, requestId: requestId, error: payload.refreshError)
         }
         // A transport/disabled error carries a cache, not a new successful reading.
-        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accounts) }
+        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accountsOnLocalClock()) }
     }
 
     /// Online tentacles whose greeting says they predate account usage, so the app
-    /// can name them instead of silently showing nothing for them.
+    /// can name them instead of silently showing nothing for them. One that has
+    /// it turned off says `account_usage_off`: updating would not help (K-084).
     func devicesNeedingUsageUpdate() -> [DeviceSummary] {
         devices.values
             .filter { $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id) }
             .filter { device in
                 guard let features = deviceFeatures[device.id] else { return false }
-                return !features.contains("account_usage") && deviceUsage[device.id] == nil
+                return !features.contains("account_usage") && !features.contains("account_usage_off")
+                    && deviceUsage[device.id] == nil
             }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

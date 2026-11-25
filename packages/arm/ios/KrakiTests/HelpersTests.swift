@@ -20,6 +20,39 @@ final class HelpersTests: XCTestCase {
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "", new: "pasted line\n"))
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "a ", new: "a two\nlines\n"))
         XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "ab", new: "a\nb"))
+        // K-153: a hardware Shift/Option/Control-Return types a newline.
+        XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "hello", new: "hello\n", literalNewline: true))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey(.shift))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey([.option]))
+        XCTAssertTrue(MessageInputView.isLiteralNewlineKey([.control, .shift]))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineKey([]))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineKey(.command), "Command-Return sends")
+        // The flag outlives the key event's run-loop turn, but not by long.
+        let now = Date()
+        XCTAssertTrue(MessageInputView.isLiteralNewlineFresh(now.addingTimeInterval(-0.1), now: now))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineFresh(now.addingTimeInterval(-1), now: now))
+        XCTAssertFalse(MessageInputView.isLiteralNewlineFresh(nil, now: now))
+    }
+
+    /// A Return that sent nothing gives back the draft before it; quick
+    /// repeated Returns give back the draft before the first one.
+    func testUnsentReturnRestoresTheDraftBeforeTheFirstPendingReturn() {
+        let unsent = MessageInputView.UnsentReturnNewline()
+        unsent.returnTyped(old: "  ", typed: "  \n")
+        XCTAssertEqual(unsent.draft, "  \n")
+        unsent.returnTyped(old: "  \n", typed: "  \n\n")
+        XCTAssertNil(unsent.takeBase(showing: "  \n"), "the first removal gave way to the second Return")
+        XCTAssertEqual(unsent.takeBase(showing: "  \n\n"), "  ")
+        XCTAssertNil(unsent.takeBase(showing: "  \n\n"), "removed once")
+        // A Return on text that was changed some other way starts afresh.
+        unsent.returnTyped(old: "", typed: "\n")
+        unsent.returnTyped(old: "dictated", typed: "dictated\n")
+        XCTAssertEqual(unsent.takeBase(showing: "dictated\n"), "dictated")
+        // Typing or a send in between: nothing to remove.
+        unsent.returnTyped(old: "", typed: "\n")
+        unsent.clear()
+        XCTAssertNil(unsent.draft)
+        XCTAssertNil(unsent.takeBase(showing: "\n"))
     }
 
     func testAccountUsagePercentIsClampedAtDecode() throws {
@@ -61,23 +94,59 @@ final class HelpersTests: XCTestCase {
 
     // MARK: - formatCost
 
+    /// Fixed region: the formatters follow the host region (K-146).
+    private let enUS = Locale(identifier: "en_US")
+
     func testFormatCostSmall() {
-        XCTAssertEqual(formatCost(0.001), "$0.0010")
+        XCTAssertEqual(formatCost(0.001, locale: enUS), "$0.0010")
     }
 
     func testFormatCostMedium() {
-        XCTAssertEqual(formatCost(0.042), "$0.042")
+        XCTAssertEqual(formatCost(0.042, locale: enUS), "$0.042")
     }
 
     func testFormatCostLarge() {
-        XCTAssertEqual(formatCost(1.5), "$1.500")
+        XCTAssertEqual(formatCost(1.5, locale: enUS), "$1.500")
+    }
+
+    /// K-146: cost used POSIX `String(format:)` ("$1234.568" in every
+    /// region). The precision stays; grouping and separators follow the region.
+    func testFormatCostFollowsRegion() {
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_US")), "$1,234.568")
+        let german = formatCost(1234.568, locale: Locale(identifier: "de_DE"))
+        XCTAssertTrue(german.hasPrefix("1.234,568"), german)
+        XCTAssertTrue(german.hasSuffix("$"), german)
+        XCTAssertEqual(formatCost(0.001, locale: Locale(identifier: "de_DE")).filter { $0.isNumber || $0 == "," }, "0,0010")
+    }
+
+    /// K-305 owner choice: the symbol is the plain "$" in every region, not
+    /// "US$" (en_GB, zh_Hans) or "USD"; grouping, separators and the symbol's
+    /// side still follow the region.
+    func testFormatCostUsesPlainDollarSignInEveryRegion() {
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_US")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "en_GB")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "zh_Hans_CN")), "$1,234.568")
+        XCTAssertEqual(formatCost(1234.568, locale: Locale(identifier: "de_DE")), "1.234,568\u{00A0}$")
+        for id in ["en_US", "en_GB", "zh_Hans_CN", "de_DE", "fr_FR", "en_AU", "en_CA"] {
+            for cost in [0.001, 0.042, 1234.568] {
+                let text = formatCost(cost, locale: Locale(identifier: id))
+                XCTAssertFalse(text.contains("US"), "\(id): \(text)")
+                XCTAssertTrue(text.contains("$"), "\(id): \(text)")
+            }
+        }
+    }
+
+    /// K-146: the seconds value used the POSIX decimal point in every region.
+    func testFormatDurationFollowsRegion() {
+        XCTAssertEqual(formatDuration(4_600, locale: Locale(identifier: "en_US")), "4.6s")
+        XCTAssertEqual(formatDuration(4_600, locale: Locale(identifier: "de_DE")), "4,6s")
     }
 
     // MARK: - formatDuration
 
     func testFormatDurationSeconds() {
-        XCTAssertEqual(formatDuration(500), "0.5s")
-        XCTAssertEqual(formatDuration(2300), "2.3s")
+        XCTAssertEqual(formatDuration(500, locale: enUS), "0.5s")
+        XCTAssertEqual(formatDuration(2300, locale: enUS), "2.3s")
     }
 
     func testFormatDurationMinutes() {

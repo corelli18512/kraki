@@ -253,3 +253,53 @@ describe('setTurnSteps', () => {
     expect(toolCount).toBe(2);
   });
 });
+
+// An agent-initiated turn W (Pi woken by a background run after T1 settled)
+// has no user_message: it starts after T1's idle.
+describe('setTurnSteps — a turn that starts after an idle without a prompt', () => {
+  const tools = () => useStore.getState().messages.get('s1')!
+    .filter(x => x.type === 'tool_start' || x.type === 'tool_complete')
+    .map(x => [x.payload.toolCallId, (x as { seq: number }).seq]);
+
+  it('pulling W\'s Steps keeps T1\'s loaded Steps and places W\'s after T1\'s idle', () => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1, { content: 'T1' }));
+    store.appendMessage('s1', m('agent_message', 2, { content: 'T1 done' }));
+    store.appendMessage('s1', m('idle', 3));
+    store.appendMessage('s1', m('agent_message', 4, { content: 'W done' }));
+    store.appendMessage('s1', m('idle', 5));
+    store.setTurnSteps('s1', 2, [traceEntry('tool_start', 't1')]);
+    store.setTurnSteps('s1', 4, [traceEntry('tool_start', 'w')]);
+    const list = tools();
+    expect(list.map(([id]) => id)).toEqual(['t1', 'w']);
+    expect(list[0][1]).toBeGreaterThan(1); expect(list[0][1]).toBeLessThan(2);
+    expect(list[1][1]).toBeGreaterThan(3); expect(list[1][1]).toBeLessThan(4);
+    // Re-pulling T1 leaves W's Steps alone too.
+    store.setTurnSteps('s1', 2, [traceEntry('tool_complete', 't1')]);
+    expect(tools().map(([id]) => id)).toEqual(['t1', 'w']);
+  });
+
+  it('a terminal status in W does not reject T1\'s Steps', () => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1));
+    store.appendMessage('s1', m('agent_message', 2, { content: 'T1 done' }));
+    store.appendMessage('s1', m('idle', 3));
+    store.appendMessage('s1', m('turn_status', 4, { draft: 'W', action: { type: 'user_abort', payload: { abortedAt: '' } }, finishedAt: '' }));
+    store.appendMessage('s1', m('idle', 5));
+    store.setTurnSteps('s1', 2, [traceEntry('tool_start', 't1')]);
+    expect(tools().map(([id]) => id)).toEqual(['t1']);
+  });
+
+  it('a live pull keyed after the idle (no W row yet) lands after the idle, T1 untouched', () => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1));
+    store.appendMessage('s1', m('agent_message', 2));
+    store.appendMessage('s1', m('idle', 3));
+    store.setTurnSteps('s1', 2, [traceEntry('tool_start', 't1')]);
+    store.setTurnSteps('s1', 4, [traceEntry('tool_start', 'w')]);
+    store.setTurnSteps('s1', 4, [traceEntry('tool_start', 'w'), traceEntry('tool_complete', 'w')]);
+    const list = tools();
+    expect(list.map(([id]) => id)).toEqual(['t1', 'w', 'w']);
+    expect(list[1][1]).toBeGreaterThan(3); expect(list[2][1]).toBeLessThan(4);
+  });
+});

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
 import type { WebSessionSummary } from '../../types/store';
@@ -15,6 +15,7 @@ import { SessionCardMetadata } from './SessionCardMetadata';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { SwipeableCard } from './SwipeableCard';
 import { SettingsAlert } from '../layout/SettingsControls';
+import { focusFirstMenuItem, isContextMenuKey, onMenuKeyDown } from '../../lib/menu-keyboard';
 
 function StatusGlyph({ status, draft, delivery }: { status: SessionCardStatus; draft: boolean; delivery?: SessionDeliveryStatus }) {
   if (delivery) return <svg viewBox="0 0 16 16" className={`ksr-glyph ksr-delivery is-${delivery}`} fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" role="img" aria-label={DELIVERY_LABEL[delivery]}>
@@ -58,8 +59,11 @@ export const SessionRow = memo(function SessionRow({
   const draft = useStore((s) => s.drafts.get(session.id));
   const unread = useStore((s) => !selected && (s.unreadCount.get(session.id) ?? 0) > 0);
   const compacting = useStore((s) => s.runtimeStatuses.get(session.id)?.status === 'compacting');
+  const turnClosing = useStore((s) => s.closingTurns.has(session.id));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const entries = useOutbox((s) => s.entries);
   const connected = useStore((s) => s.status === 'connected');
@@ -67,7 +71,7 @@ export const SessionRow = memo(function SessionRow({
   const draftText = collapseWhitespace(draft);
   const hasDraft = !pending && !!draftText;
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
-  const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
+  const status = pending ? 'delivery' : resolveCardStatus(turnClosing ? 'active' : session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
   // The live device name first: it follows renames.
   const machine = device?.name || session.deviceName;
@@ -76,30 +80,54 @@ export const SessionRow = memo(function SessionRow({
   const togglePin = () => wsClient.pinSession(session.id, !pinned);
   const toggleRead = () => (unread ? wsClient.markRead(session.id) : wsClient.markUnread(session.id));
 
+  const openMenuAt = useCallback((x: number, y: number) => {
+    setMenu({ x: Math.max(0, Math.min(x, window.innerWidth - 118)), y: Math.max(0, Math.min(y, window.innerHeight - 166)) });
+  }, []);
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     if (narrow || archived) return;
     e.preventDefault();
-    setMenu({ x: Math.max(0, Math.min(e.clientX, window.innerWidth - 118)), y: Math.max(0, Math.min(e.clientY, window.innerHeight - 166)) });
-  }, [narrow, archived]);
+    openMenuAt(e.clientX, e.clientY);
+  }, [narrow, archived, openMenuAt]);
+  // The Menu key / Shift+F10 open the same menu under the row.
+  const onRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (narrow || archived || !isContextMenuKey(e)) return;
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    openMenuAt(rect.left + 16, rect.bottom);
+  }, [narrow, archived, openMenuAt]);
 
   useEffect(() => {
     if (!menu) return;
+    focusFirstMenuItem(menuRef.current);
     const close = () => setMenu(null);
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
-    window.addEventListener('click', close);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { close(); rowRef.current?.focus(); } };
+    // Listen from the next task: the tap that opened the menu (Swipe › More)
+    // is still bubbling to window when this effect runs and would close it.
+    const listen = setTimeout(() => window.addEventListener('click', close));
     window.addEventListener('keydown', onKey);
     return () => {
+      clearTimeout(listen);
       window.removeEventListener('click', close);
       window.removeEventListener('keydown', onKey);
     };
   }, [menu]);
 
+  // One spoken name with separators (the visible parts would run together).
+  const accessibleName = [
+    title, pinned && t('row.pinned'), unread && t('row.unread'),
+    pending ? DELIVERY_LABEL[pending.status] : STATUS_LABEL[status],
+    machine, previewText, time,
+  ].filter(Boolean).join(', ');
   const row = (
     <button
+      ref={rowRef}
       type="button"
       className={`ksr ${narrow ? 'is-narrow' : 'is-wide'} ${selected ? 'is-selected' : ''}`}
       onClick={() => { archived?.onOpen(); navigate(`/session/${session.id}`); }}
       onContextMenu={onContextMenu}
+      onKeyDown={onRowKeyDown}
+      aria-label={accessibleName}
+      aria-keyshortcuts={narrow || archived ? undefined : 'Shift+F10'}
       aria-current={selected ? 'page' : undefined}
     >
       <span className="ksr-avatar">
@@ -107,11 +135,11 @@ export const SessionRow = memo(function SessionRow({
       </span>
       <span className="ksr-body">
         <span className="ksr-line1">
-          <span className="ksr-title">{title}</span>
+          <span className="ksr-title" dir="auto">{title}</span>
           {narrow && device && !device.online && <span className="ksr-offline">{t('row.offline')}</span>}
           {pinned && <Pin className="ksr-pin" aria-label={t('row.pinned')} />}
           <span className="ksr-spacer" />
-          {unread && <span className="ksr-unread" aria-label={t('row.unread')} />}
+          {unread && <span className="ksr-unread" role="img" aria-label={t('row.unread')} />}
           {time && <span className="ksr-time">{time}</span>}
         </span>
         {narrow ? <span className="ksr-line2">
@@ -127,7 +155,7 @@ export const SessionRow = memo(function SessionRow({
         <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
           <span className="ksr-status-slot" data-status={pending?.status ?? status}><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText
-            ? <span className="ksr-preview">{previewText}</span>
+            ? <span className="ksr-preview" dir="auto">{previewText}</span>
             : <span className="ksr-preview is-empty">{t('row.created')}</span>}
         </span>
       </span>
@@ -153,7 +181,7 @@ export const SessionRow = memo(function SessionRow({
       ) : row}
 
       {menu && (
-        <div className="ksr-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+        <div ref={menuRef} className="ksr-menu" style={{ left: menu.x, top: menu.y }} role="menu" onKeyDown={onMenuKeyDown}>
           <button type="button" role="menuitem" onClick={() => { togglePin(); setMenu(null); }}>
             {pinned ? <PinOff /> : <Pin />} {pinned ? t('row.unpin') : t('row.pin')}
           </button>
@@ -161,7 +189,7 @@ export const SessionRow = memo(function SessionRow({
             {unread ? <BellOff /> : <BellRing />} {unread ? t('row.markRead') : t('row.markUnread')}
           </button>
           {/* Mac: Rename lives in Session Info, opened over the selected chat. */}
-          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`, { replace: selected }); setMenu(null); }}><Pencil /> {t('row.rename')}</button>
+          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=rename`, { replace: selected }); setMenu(null); }}><Pencil /> {t('row.rename')}</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
             <GitFork /> {t('row.fork')}
           </button>
