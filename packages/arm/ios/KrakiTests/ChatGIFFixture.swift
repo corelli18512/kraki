@@ -13,6 +13,9 @@ import XCTest
 /// tests (iOS and Mac).
 enum ChatGIFFixture {
     /// One solid colour a frame (red, green, blue, … by index).
+    /// `loopCount` is ImageIO's: how many times it plays (0: forever).
+    /// ImageIO stores n − 1 in the file's loop block, and writes no loop
+    /// block for 1 (or nil), which Kraki plays forever.
     static func gif(
         frames: Int,
         width: Int = 40,

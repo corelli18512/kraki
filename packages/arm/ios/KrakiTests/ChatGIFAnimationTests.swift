@@ -48,6 +48,80 @@ final class ChatGIFAnimationTests: XCTestCase {
         XCTAssertNil(animation.timeUntilNextFrame(at: 5))
     }
 
+    /// A GIF's loop block says how often it plays: 0 forever, n plays n
+    /// more times after the first pass (n + 1 passes, like browsers). A GIF
+    /// without one loops forever. Read from the GIF's own bytes, whatever
+    /// ImageIO reports.
+    func testLoopBlockSetsThePlayCountAndAGIFWithoutOneLoopsForever() throws {
+        let forever = try ChatGIFFixture.gif(frames: 3, loopCount: 0)
+        let playsThreeTimes = try ChatGIFFixture.gif(frames: 3, loopCount: 3)
+        XCTAssertEqual(Self.loopBlockCount(forever), 0)
+        XCTAssertEqual(Self.loopBlockCount(playsThreeTimes), 2, "ImageIO stores the extra passes")
+        XCTAssertEqual(ChatGIFAnimation.playCount(forever), 0)
+        XCTAssertEqual(ChatGIFAnimation.playCount(playsThreeTimes), 3)
+        XCTAssertEqual(try XCTUnwrap(ChatGIFAnimation.decode(playsThreeTimes)).loopCount, 3)
+
+        // No loop block at all: loops forever (browsers would play it once).
+        let noLoopBlock = Self.withoutLoopBlock(forever)
+        XCTAssertNil(Self.loopBlockCount(noLoopBlock))
+        let animation = try XCTUnwrap(ChatGIFAnimation.decode(noLoopBlock))
+        XCTAssertEqual(animation.loopCount, 0)
+        XCTAssertFalse(animation.hasFinished(at: 3600))
+        XCTAssertNotNil(animation.timeUntilNextFrame(at: 3600))
+        XCTAssertEqual(ChatGIFAnimation.playCount(try ChatGIFFixture.gif(frames: 3, loopCount: nil)), 0)
+        XCTAssertEqual(ChatGIFAnimation.playCount(try ChatGIFFixture.gif(frames: 3, loopCount: 1)), 0, "ImageIO writes no block for one pass")
+    }
+
+    func testLoopBlocksThatImageIOMisreads() throws {
+        let noLoopBlock = Self.withoutLoopBlock(try ChatGIFFixture.gif(frames: 3, loopCount: 0))
+        let start = Self.blocksStart(noLoopBlock)
+        func inserting(_ block: [UInt8], at index: Int) -> Data {
+            var data = noLoopBlock
+            data.insert(contentsOf: block, at: data.startIndex + index)
+            return data
+        }
+        // NETSCAPE2.0's buffering sub-block (id 2) is no loop count (ImageIO
+        // reports 4097 passes for this one).
+        let buffering = inserting(Self.applicationBlock("NETSCAPE2.0", [0x05, 0x02, 0x00, 0x10, 0x00, 0x00]), at: start)
+        XCTAssertEqual(ChatGIFAnimation.playCount(buffering), 0)
+        // ANIMEXTS1.0 is NETSCAPE2.0's twin (ImageIO ignores it).
+        let animexts = inserting(Self.applicationBlock("ANIMEXTS1.0", [0x03, 0x01, 0x01, 0x00]), at: start)
+        XCTAssertEqual(ChatGIFAnimation.playCount(animexts), 2)
+        // A loop block after the first frame still counts.
+        let firstFrameEnd = try XCTUnwrap(noLoopBlock.range(of: Data([0x21, 0xF9]), in: (noLoopBlock.startIndex + start + 8)..<noLoopBlock.endIndex))
+        let late = inserting(Self.applicationBlock("NETSCAPE2.0", [0x03, 0x01, 0x04, 0x00]), at: firstFrameEnd.lowerBound - noLoopBlock.startIndex)
+        XCTAssertEqual(ChatGIFAnimation.playCount(late), 5)
+        XCTAssertEqual(try XCTUnwrap(ChatGIFAnimation.decode(late)).frames.count, 3)
+        // Cut off mid-frame: no loop block found, loops forever.
+        XCTAssertEqual(ChatGIFAnimation.playCount(noLoopBlock.prefix(noLoopBlock.count - 20)), 0)
+        XCTAssertEqual(ChatGIFAnimation.playCount(Data("GIF89a".utf8)), 0)
+        XCTAssertEqual(ChatGIFAnimation.playCount(try ChatGIFFixture.png()), 0)
+    }
+
+    /// `21 FF 0B <identifier> <sub-blocks> 00`
+    private static func applicationBlock(_ identifier: String, _ subBlocks: [UInt8]) -> [UInt8] {
+        [0x21, 0xFF, 0x0B] + Array(identifier.utf8) + subBlocks + [0x00]
+    }
+
+    private static func blocksStart(_ gif: Data) -> Int {
+        let packed = gif[gif.startIndex + 10]
+        return 13 + (packed & 0x80 != 0 ? 3 << (Int(packed & 0x07) + 1) : 0)
+    }
+
+    /// The NETSCAPE2.0 loop count stored in the file, nil without one.
+    private static func loopBlockCount(_ gif: Data) -> Int? {
+        guard let range = gif.range(of: Data("NETSCAPE2.0".utf8)) else { return nil }
+        let bytes = [UInt8](gif[range.upperBound..<(range.upperBound + 4)])
+        return Int(bytes[2]) | Int(bytes[3]) << 8
+    }
+
+    private static func withoutLoopBlock(_ gif: Data) -> Data {
+        guard let range = gif.range(of: Data("NETSCAPE2.0".utf8)) else { return gif }
+        var data = gif
+        data.removeSubrange((range.lowerBound - 3)..<(range.upperBound + 5))
+        return data
+    }
+
     func testTinyOrMissingDelaysPlayAt100msLikeBrowsers() {
         XCTAssertEqual(ChatGIFAnimation.frameDelay(nil), 0.1)
         XCTAssertEqual(ChatGIFAnimation.frameDelay([kCGImagePropertyGIFDelayTime: 0.0]), 0.1)

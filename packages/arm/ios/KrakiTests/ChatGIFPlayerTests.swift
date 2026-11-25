@@ -50,7 +50,7 @@ final class ChatGIFPlayerTests: XCTestCase {
     }
 
     func testFiniteLoopStopsOnTheLastFrameAndReplays() async throws {
-        let animation = try animation(frames: 3, delay: 0.03, loopCount: 1)
+        let animation = try animation(frames: 3, delay: 0.03, loopCount: 2)
         var last: CGImage?
         let player = ChatGIFPlayer { last = $0 }
         player.setVisible(true)
