@@ -90,6 +90,52 @@ final class MacComposerDropTests: XCTestCase {
         XCTAssertEqual(animation.frames[0].width, 1024)
     }
 
+    /// PR #669 review P1: while a GIF over the limits is being fitted, the
+    /// image staged before is gone at once (the GIF replaces it) and Send
+    /// waits: it used to send the old image, or the text alone, and drop
+    /// the GIF without a word.
+    func testSendWaitsForADroppedGIFBeingFittedInsteadOfSendingTheImageItReplaces() throws {
+        let (app, editor) = try composer(busy: false)
+        var sent: [[String: Any]] = []
+        let fixture = app.testOutboundMessageHandler
+        app.testOutboundMessageHandler = { message, target, scoped in
+            if message["type"] as? String == "send_input", let payload = message["payload"] as? [String: Any] {
+                sent.append(payload)
+            }
+            return fixture?(message, target, scoped) ?? true
+        }
+        let png = drag([try pngFile()])
+        XCTAssertTrue(editor.performDragOperation(png))
+        editor.concludeDragOperation(png)
+        let imageA = try XCTUnwrap(app.sessionStore.stagedImages["voice-a"], "image A is staged")
+        app.sessionStore.setDraft("voice-a", "look")
+        drain(100)
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("drop-\(UUID().uuidString).gif")
+        try ChatGIFFixture.gif(frames: 3, width: 1600, height: 100).write(to: url)
+        files.append(url)
+        let gif = drag([url])
+        // The fit finishes on the main thread, so it is still running until
+        // the run loop is drained.
+        XCTAssertTrue(editor.performDragOperation(gif))
+        editor.concludeDragOperation(gif)
+        XCTAssertNil(app.sessionStore.stagedImages["voice-a"], "the GIF replaces image A at once")
+        editor.onSubmit?()
+        XCTAssertTrue(sent.isEmpty, "Send waits for the GIF: neither image A nor the text alone goes")
+
+        for _ in 0..<50 where app.sessionStore.stagedImages["voice-a"] == nil { drain(100) }
+        let staged = try XCTUnwrap(app.sessionStore.stagedImages["voice-a"], "the fitted GIF is staged")
+        XCTAssertNotEqual(staged, imageA)
+        XCTAssertEqual(staged.mimeType, "image/gif")
+        XCTAssertEqual(app.sessionStore.drafts["voice-a"], "look", "the text is still there")
+        editor.onSubmit?()
+        drain(100)
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?["text"] as? String, "look")
+        let attachments = try XCTUnwrap(sent.first?["attachments"] as? [[String: Any]])
+        XCTAssertEqual(attachments.map { $0["mimeType"] as? String }, ["image/gif"], "the GIF goes with the text")
+    }
+
     func testImageDroppedWhileTheAgentIsBusyIsRefusedWithoutText() throws {
         let (app, editor) = try composer(busy: true)
         let drag = drag([try pngFile()])

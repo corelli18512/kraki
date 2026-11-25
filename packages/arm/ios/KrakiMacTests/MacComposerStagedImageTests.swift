@@ -79,9 +79,11 @@ final class MacComposerStagedImageTests: XCTestCase {
         XCTAssertTrue(sender.pendingInputs(sessionId).isEmpty, "the image moved from the bubble into the composer")
     }
 
-    private func clickClear() throws {
-        let marker = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).first { $0.identifier?.rawValue == "chat-clear" },
-                                   "missing clear control geometry")
+    private func clickClear() throws { try click("chat-clear") }
+
+    private func click(_ identifier: String) throws {
+        let marker = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).first { $0.identifier?.rawValue == identifier },
+                                   "missing \(identifier) control geometry")
         let frame = marker.convert(marker.bounds, to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = try XCTUnwrap(NSEvent.mouseEvent(
@@ -145,6 +147,35 @@ final class MacComposerStagedImageTests: XCTestCase {
         XCTAssertEqual(sent.last?.attachments, 0, "Clear removed the staged image for good")
     }
 
+    /// PR #669 review P1: an image being prepared (a large GIF being fitted)
+    /// shows loading in the image slot with the ×, which cancels it; Send
+    /// waits for it meanwhile.
+    func testImageBeingPreparedShowsLoadingAndItsRemoveButtonCancelsIt() throws {
+        show(sessionA)
+        try stageImage(in: sessionA)
+        app.sessionStore.setDraft(sessionA, "Text only")
+        let (hold, release) = AsyncStream<Void>.makeStream()
+        var stagedLate = false
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in hold {} }) { _ in stagedLate = true }
+        drain(300)
+        XCTAssertNil(app.sessionStore.stagedImages[sessionA], "the image being prepared replaces the staged one")
+        XCTAssertTrue(views(try XCTUnwrap(window.contentView)).contains { $0 is NSProgressIndicator },
+                      "the image slot shows the image loading")
+        try editor().onSubmit?()
+        drain(100)
+        XCTAssertTrue(sent.isEmpty, "Send waits for the image")
+
+        try click("chat-remove-image")
+        XCTAssertFalse(app.sessionStore.isPreparingImage(sessionA), "× cancels it")
+        release.finish()
+        drain(300)
+        XCTAssertFalse(stagedLate, "a cancelled image is not staged when it is ready")
+        XCTAssertNil(app.sessionStore.stagedImages[sessionA])
+        try editor().onSubmit?()
+        drain(300)
+        XCTAssertEqual(sent.map(\.attachments), [0], "after × the text goes alone")
+    }
+
     /// An image-only draft (no text) is still sendable after the switch.
     func testImageOnlyDraftSurvivesSessionSwitch() throws {
         show(sessionA)
@@ -196,6 +227,41 @@ final class SessionStoreStagedImageTests: XCTestCase {
         XCTAssertNil(store.drafts["a"])
         XCTAssertNil(store.stagedImages["a"], "removed with its draft")
         XCTAssertEqual(store.stagedImages["b"], image, "a Session still listed keeps its image")
+    }
+
+    /// An image being prepared replaces the staged one at once and is
+    /// staged when ready, unless a newer choice came first.
+    func testImageBeingPreparedReplacesTheStagedOneAndTheLatestChoiceWins() async throws {
+        let store = SessionStore(persistenceEnabled: false)
+        let imageA = StagedComposerImage(data: Data([1]), mimeType: "image/png")
+        let imageB = StagedComposerImage(data: Data([2]), mimeType: "image/gif")
+        store.setStagedImage("a", imageA)
+        store.prepareStagedImage("a", { imageB }) { store.setStagedImage("a", $0) }
+        XCTAssertNil(store.stagedImages["a"], "image A goes at once")
+        XCTAssertTrue(store.isPreparingImage("a"))
+        try await waitBriefly { store.stagedImages["a"] != nil }
+        XCTAssertEqual(store.stagedImages["a"], imageB)
+        XCTAssertFalse(store.isPreparingImage("a"))
+
+        // A newer choice (another image, or × with nil) drops the one still
+        // being prepared.
+        let (hold, release) = AsyncStream<Void>.makeStream()
+        var stagedLate = false
+        store.prepareStagedImage("a", { for await _ in hold {} }) { _ in stagedLate = true }
+        store.setStagedImage("a", imageA)
+        XCTAssertFalse(store.isPreparingImage("a"))
+        release.finish()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(stagedLate)
+        XCTAssertEqual(store.stagedImages["a"], imageA)
+
+        // It goes with its Session.
+        store.prepareStagedImage("a", { }) { _ in }
+        store.removeSession("a")
+        XCTAssertFalse(store.isPreparingImage("a"))
+        store.prepareStagedImage("b", { }) { _ in }
+        store.reset()
+        XCTAssertFalse(store.isPreparingImage("b"))
     }
 
     func testEachStagedImageHasItsOwnIdentity() {
