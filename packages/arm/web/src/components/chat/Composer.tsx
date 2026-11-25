@@ -94,6 +94,22 @@ function readDataUrl(file: Blob): Promise<string> {
   });
 }
 
+/** Whether the file's bytes are a GIF ("GIF87a"/"GIF89a"), whatever its
+ *  name and type say: a PNG named .gif must not go out as image/gif (an
+ *  agent's model rejects an image that is not the type it is told), and a
+ *  GIF named .png keeps its animation. */
+function isGifFile(file: Blob): Promise<boolean> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const head = new Uint8Array(reader.result as ArrayBuffer);
+      resolve(String.fromCharCode(...head) === 'GIF87a' || String.fromCharCode(...head) === 'GIF89a');
+    };
+    reader.onerror = () => resolve(false);
+    reader.readAsArrayBuffer(file.slice(0, 6));
+  });
+}
+
 /** The image to stage, or why it cannot be: `unreadable` when this browser
  *  cannot decode it (corrupt, or HEIC outside Safari), `tooLarge` when even
  *  the compressed copy exceeds the limit (K-200). */
@@ -106,7 +122,7 @@ async function compressImage(file: File): Promise<StagedImage | 'unreadable' | '
   let { width, height } = img;
   if (!width || !height) return 'unreadable';
   // A canvas keeps only the first frame: a GIF within the limits goes as is.
-  if (file.type === 'image/gif' && file.size <= MAX_IMAGE_SIZE && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+  if (file.size <= MAX_IMAGE_SIZE && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION && await isGifFile(file)) {
     const dataUrl = await readDataUrl(file).catch(() => null);
     if (!dataUrl) return 'unreadable';
     const data = dataUrl.split(',')[1];

@@ -309,6 +309,33 @@ describe('Composer — image errors and formats (K-200)', () => {
     expect(onSend).toHaveBeenCalledWith('[image]', [{ type: 'image', mimeType: 'image/gif', data: btoa('GIF89a') }], 'prompt');
   });
 
+  it('a GIF is known by its bytes, not its name or type', async () => {
+    const onSend = vi.fn();
+    // A GIF named .png still goes as an animated GIF.
+    let stub = stubImagePipeline(true);
+    try {
+      const view = render(<Composer {...imgProps} onSend={onSend} />);
+      await pick(new File(['GIF87a!!'], 'party.png', { type: 'image/png' }));
+      expect(stub.toDataURL).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      view.unmount();
+    } finally { stub.restore(); }
+    expect(onSend).toHaveBeenLastCalledWith('[image]', [{ type: 'image', mimeType: 'image/gif', data: btoa('GIF87a!!') }], 'prompt');
+    // A PNG or WebP named .gif is re-encoded (as PNG), never sent as image/gif.
+    for (const bytes of ['\x89PNG\r\n\x1a\n', 'RIFF\x00\x00\x00\x00WEBPVP8 ']) {
+      stub = stubImagePipeline(true);
+      stub.toDataURL.mockReturnValue('data:image/png;base64,AAAA');
+      try {
+        const view = render(<Composer {...imgProps} onSend={onSend} />);
+        await pick(new File([bytes], 'not-really.gif', { type: 'image/gif' }));
+        expect(stub.toDataURL).toHaveBeenCalledWith('image/png', 0.8);
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+        view.unmount();
+      } finally { stub.restore(); }
+      expect(onSend).toHaveBeenLastCalledWith('[image]', [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }], 'prompt');
+    }
+  });
+
   it('a GIF larger than the size cap is resized like any other image', async () => {
     const stub = stubImagePipeline(true, 2048);
     try {
