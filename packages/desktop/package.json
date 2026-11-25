@@ -15,7 +15,7 @@
     "test": "node --test test/*.test.cjs"
   },
   "devDependencies": {
-    "electron": "^38.1.2",
+    "electron": "^42.11.16",
     "electron-builder": "^26.0.12"
   },
   "build": {
