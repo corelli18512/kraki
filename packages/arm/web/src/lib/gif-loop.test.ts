@@ -56,6 +56,9 @@ describe('loopingGifBytes', () => {
     'pillow-loop-3.gif',
     'animexts-loop-1.gif',
     'loop-block-after-first-frame.gif',
+    // NETSCAPE2.0 with its buffering sub-block (id 2) before the loop
+    // sub-block (id 1): Chromium walks the sub-blocks and honours the count.
+    'netscape-buffering-then-loop-3.gif',
   ])('keeps %s, which sets its own loop count, as it is', (name) => {
     const original = gif(name);
     expect(gifLoopInfo(original)?.hasLoopCount).toBe(true);
@@ -77,7 +80,7 @@ describe('loopingGifBytes', () => {
     expect(readdirSync(FIXTURES).filter((name) => name.endsWith('.gif')).sort()).toEqual([
       'animexts-loop-1.gif', 'ffmpeg-loop-forever.gif', 'ffmpeg-no-loop.gif', 'gif87a-no-loop.gif',
       'local-tables-interlaced-no-loop.gif', 'loop-block-after-first-frame.gif', 'netscape-buffering-only.gif',
-      'pillow-loop-3.gif', 'pillow-loop-forever.gif', 'pillow-no-loop.gif', 'single-frame.gif', 'truncated-no-loop.gif',
+      'netscape-buffering-then-loop-3.gif', 'pillow-loop-3.gif', 'pillow-loop-forever.gif', 'pillow-no-loop.gif', 'single-frame.gif', 'truncated-no-loop.gif',
     ]);
   });
 });

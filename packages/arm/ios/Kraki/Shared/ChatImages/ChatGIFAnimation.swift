@@ -97,7 +97,8 @@ final class ChatGIFAnimation: @unchecked Sendable {
     }
 
     /// The count in the GIF's loop block (sub-block 1 of NETSCAPE2.0 or
-    /// ANIMEXTS1.0), nil when it has none. Walks the GIF's blocks, never its
+    /// ANIMEXTS1.0, wherever it is among the block's sub-blocks), nil when
+    /// it has none. Walks the GIF's blocks, never its
     /// compressed pixels; a damaged GIF is read up to where it breaks.
     static func loopBlockCount(_ data: Data) -> Int? {
         data.withUnsafeBytes { raw -> Int? in
@@ -114,11 +115,18 @@ final class ChatGIFAnimation: @unchecked Sendable {
             while index < bytes.count {
                 switch bytes[index] {
                 case 0x21: // extension
-                    if index + 16 <= bytes.count, bytes[index + 1] == 0xFF, bytes[index + 2] == 0x0B,
+                    if index + 14 <= bytes.count, bytes[index + 1] == 0xFF, bytes[index + 2] == 0x0B,
                        let identifier = String(bytes: bytes[(index + 3)..<(index + 14)], encoding: .ascii),
-                       identifier == "NETSCAPE2.0" || identifier == "ANIMEXTS1.0",
-                       bytes[index + 14] >= 3, bytes[index + 15] == 0x01, index + 18 <= bytes.count {
-                        return Int(bytes[index + 16]) | Int(bytes[index + 17]) << 8
+                       identifier == "NETSCAPE2.0" || identifier == "ANIMEXTS1.0" {
+                        // Its sub-blocks: id 1 (03 01 <count u16>) is the loop
+                        // count; id 2 (buffering) may come first.
+                        var sub = index + 14
+                        while sub + 3 < bytes.count, bytes[sub] != 0 {
+                            if bytes[sub] >= 3, bytes[sub + 1] == 0x01 {
+                                return Int(bytes[sub + 2]) | Int(bytes[sub + 3]) << 8
+                            }
+                            sub += Int(bytes[sub]) + 1
+                        }
                     }
                     index = skipSubBlocks(index + 2)
                 case 0x2C: // image: descriptor, local colour table, LZW code size, pixels

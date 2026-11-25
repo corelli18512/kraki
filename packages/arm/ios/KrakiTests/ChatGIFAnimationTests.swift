@@ -84,6 +84,12 @@ final class ChatGIFAnimationTests: XCTestCase {
         // reports 4097 passes for this one).
         let buffering = inserting(Self.applicationBlock("NETSCAPE2.0", [0x05, 0x02, 0x00, 0x10, 0x00, 0x00]), at: start)
         XCTAssertEqual(ChatGIFAnimation.playCount(buffering), 0)
+        // The buffering sub-block may come before the loop sub-block (id 1):
+        // the count is still read (Chromium honours it too).
+        let bufferingThenLoop = inserting(Self.applicationBlock("NETSCAPE2.0", [0x05, 0x02, 0x00, 0x10, 0x00, 0x00,
+                                                                               0x03, 0x01, 0x03, 0x00]), at: start)
+        XCTAssertEqual(ChatGIFAnimation.loopBlockCount(bufferingThenLoop), 3)
+        XCTAssertEqual(ChatGIFAnimation.playCount(bufferingThenLoop), 4)
         // ANIMEXTS1.0 is NETSCAPE2.0's twin (ImageIO ignores it).
         let animexts = inserting(Self.applicationBlock("ANIMEXTS1.0", [0x03, 0x01, 0x01, 0x00]), at: start)
         XCTAssertEqual(ChatGIFAnimation.playCount(animexts), 2)

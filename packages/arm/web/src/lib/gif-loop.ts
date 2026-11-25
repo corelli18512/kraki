@@ -47,11 +47,16 @@ function skipSubBlocks(bytes: Uint8Array, at: number): number {
 }
 
 function isLoopExtension(bytes: Uint8Array, at: number): boolean {
-  // 21 FF 0B <11-byte identifier> 03 01 <count u16> — sub-block id 1 is the
-  // loop count (id 2 of NETSCAPE2.0 is a buffering hint, not a loop count).
-  if (bytes[at + 2] !== 0x0b || at + 16 > bytes.length) return false;
+  // 21 FF 0B <11-byte identifier>, then data sub-blocks: the one with id 1
+  // (03 01 <count u16>) is the loop count. Id 2 of NETSCAPE2.0 is a
+  // buffering hint, not a loop count, and may come first.
+  if (bytes[at + 2] !== 0x0b || at + 14 > bytes.length) return false;
   const identifier = String.fromCharCode(...bytes.subarray(at + 3, at + 14));
-  return LOOP_IDENTIFIERS.includes(identifier) && bytes[at + 14] >= 3 && bytes[at + 15] === 0x01;
+  if (!LOOP_IDENTIFIERS.includes(identifier)) return false;
+  for (let i = at + 14; i + 1 < bytes.length && bytes[i] !== 0; i += bytes[i] + 1) {
+    if (bytes[i] >= 3 && bytes[i + 1] === 0x01) return true;
+  }
+  return false;
 }
 
 /** Walks the GIF's blocks (never its compressed pixels): a truncated or
