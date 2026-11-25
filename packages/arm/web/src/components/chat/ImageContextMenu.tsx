@@ -2,15 +2,19 @@ import { useTranslation } from 'react-i18next';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { downloadImage } from '../../lib/image-download';
+import { copyImage } from '../../lib/image-copy';
+import { useStore } from '../../hooks/useStore';
+import { onMenuKeyDown } from '../../lib/menu-keyboard';
 
 /** The original bytes of a chat image and the name to save them under. */
 export interface ImageFile { blob: Blob; fileName: string }
 
 /**
  * Right-click (or the keyboard's menu key) on a chat image: a menu that saves
- * the original image. The Windows app has no browser image menu, and the
- * browser's own one names a downloaded `blob:` image after its random URL.
- * Until the image has loaded, the browser's menu is left alone.
+ * the original image or copies it (as PNG; a GIF's first frame: image-copy.ts).
+ * The Windows app has no browser image menu, and the browser's own one names
+ * a downloaded `blob:` image after its random URL. Until the image has
+ * loaded, the browser's menu is left alone.
  */
 export function useImageContextMenu(file: () => ImageFile | null): {
   handlers: { onContextMenu: (event: MouseEvent<HTMLElement>) => void; onKeyDown: (event: KeyboardEvent<HTMLElement>) => void };
@@ -74,12 +78,20 @@ export function useImageContextMenu(file: () => ImageFile | null): {
         onContextMenu={(event) => event.preventDefault()}
         onKeyDown={(event) => {
           if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(true); }
+          onMenuKeyDown(event);
         }}>
         <button type="button" role="menuitem" onClick={() => {
           const current = file();
           if (current) downloadImage(current.blob, current.fileName);
           close(true);
         }}>{t('attachments.downloadImage')}</button>
+        <button type="button" role="menuitem" onClick={() => {
+          const current = file();
+          if (current) {
+            void copyImage(current.blob).catch(() => useStore.getState().setLastError(t('attachments.copyImageFailed')));
+          }
+          close(true);
+        }}>{t('attachments.copyImage')}</button>
       </div>, document.body,
     ),
   };

@@ -36,6 +36,8 @@
     "numberedImage": "图片 {{number}}",
     "imageActions": "图片操作",
     "downloadImage": "下载图片",
+    "copyImage": "复制图片",
+    "copyImageFailed": "无法复制图片。",
     "errors": {
       "metadataUnavailable": "附件元数据不可用",
       "invalidIndex": "无效的附件分块索引",
