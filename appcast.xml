@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.93</title>
+            <pubDate>Thu, 26 Nov 2026 08:16:42 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.93</sparkle:fullReleaseNotesLink>
+            <sparkle:version>95</sparkle:version>
+            <sparkle:shortVersionString>0.2.93</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.93
+
+- **Save and copy chat images**: right-click an image in a chat or in the image viewer and choose **Save Image…** or **Copy Image**. Both are also in the viewer's toolbar. You get the original file under the image's name, so a GIF stays an animated GIF.
+- **Animated GIFs play** in chats and in the viewer, and the viewer has Play/Pause. A GIF without a loop count loops forever. With Reduce Motion on, a GIF shows its first frame until you play it.
+- **Sending GIFs**: a GIF you drop, paste or attach is sent as a GIF instead of being turned into a still picture. A GIF that is too large is made smaller and stays animated. While it is being prepared, the image slot shows that it is loading and Send waits; × cancels it.
+- Devices show a PC running Kraki for Windows by the app's name and version. Once it runs Kraki for Windows 0.1.12 or later, you can update it from this Mac.
+- Built-in Kraki 0.39.1: every change in [Kraki CLI 0.39.1](https://github.com/corelli18512/kraki/releases/tag/v0.39.1).
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.93/Kraki.app.zip" length="94733403" type="application/octet-stream" sparkle:edSignature="/8R7Pm3WPx20Hp01o2kEvMos9+QVjv5ZpY9nymI9O5OM4RfqXshRaztTCiEq+DTKizsVY+DTooLPNOxLKeo9Dw=="/>
+        </item>
+        <item>
             <title>0.2.92</title>
             <pubDate>Sun, 22 Nov 2026 16:43:36 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -50,24 +68,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.91/Kraki.app.zip" length="93980577" type="application/octet-stream" sparkle:edSignature="fIop9sxqw9uaYWARizlKucHTHJeO1TSZsKR+1bJCPCbacM2UdMHJX7y8ESXTE6gCyUhVKS7YLzZZ05V1u+U6Ag=="/>
         </item>
-        <item>
-            <title>0.2.90</title>
-            <pubDate>Sat, 17 Oct 2026 09:10:05 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.90</sparkle:fullReleaseNotesLink>
-            <sparkle:version>92</sparkle:version>
-            <sparkle:shortVersionString>0.2.90</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.90
-
-- Opening a Session with a red dot lands on the start of the latest reply again, when the reply is longer than a screen.
-- Your GitHub avatar loads from GitHub's image server directly, so it also shows on networks where github.com is unreachable.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.90/Kraki.app.zip" length="93941228" type="application/octet-stream" sparkle:edSignature="XJ9queVIp/x1VdvXcNtZRSjFW7ivgq3wo9twXjS/t7ZhkDUQrkVZOaWAk6J25dyBGV9+fal4xe3jLIHlFc8cBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: WGJNcCXccFrApPV6HLG6+/T1nAJPmcsG71r2n3Qn2MpX6FvzUXljaNefFH1vUOKR2o280vac1izkgtf0PwZoDQ==
-length: 7082
+edSignature: e/g1V6GML/M990DCqSo7zRv165TU8WGR4pSst/rQngAYz4M8D9dJOAI+jTfGhHKomUUCnE4JhOHUUW6K97SYCQ==
+length: 7840
 -->
