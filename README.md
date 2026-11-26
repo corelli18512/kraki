@@ -20,8 +20,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://kraki.chat/shots/mac-dark-20261016.jpg">
-    <img src="https://kraki.chat/shots/mac-light-20261016.jpg" alt="Kraki for Mac: sessions from several computers and agents in one window" width="860">
+    <source media="(prefers-color-scheme: dark)" srcset="https://kraki.chat/shots/mac-dark-20261126.jpg">
+    <img src="https://kraki.chat/shots/mac-light-20261126.jpg" alt="Kraki for Mac: sessions from several computers and agents in one window" width="860">
   </picture>
 </p>
 
@@ -44,7 +44,7 @@ and keep your agents moving.
 | | |
 | --- | --- |
 | **Mac** | [Download Kraki for Mac](https://kraki.chat/download/mac) — macOS 15+, Apple silicon and Intel. Finds your agents and signs you in; no Terminal needed. |
-| **iPhone** | Native app, in beta on TestFlight. |
+| **iPhone** | [Download on the App Store](https://apps.apple.com/app/kraki/id6799694476) — iOS 18 or later. |
 | **Windows** (preview) | [Download Kraki for Windows](https://kraki.chat/download/windows) — Windows 10/11 x64. The installer isn't signed yet: choose *More info → Run anyway*. |
 | **Any phone or browser** | [app.kraki.chat](https://app.kraki.chat) — add it to your home screen for notifications. |
 | **Linux / command line** | See below. |

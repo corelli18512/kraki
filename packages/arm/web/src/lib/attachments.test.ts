@@ -3,6 +3,8 @@
  */
 
 import { Blob as NodeBlob } from 'node:buffer';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import 'fake-indexeddb/auto';
 import type { ContentRef } from '@kraki/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -230,6 +232,48 @@ describe('attachment state machine', () => {
 
     expect(await hydrateFromIDB(validRef)).toBe(true);
     expect(getState(validRef.id)?.kind).toBe('ready');
+  });
+
+  it('shows a GIF without a loop count from a looping copy and keeps its original bytes, live and from the cache', async () => {
+    const original = new Uint8Array(readFileSync(join(__dirname, '__fixtures__', 'gifs', 'ffmpeg-no-loop.gif')));
+    const ref = await makeRef(original, { mimeType: 'image/gif' });
+    // jsdom Blobs (no arrayBuffer) and the cache's Node Blobs (FileReader refuses them).
+    const bytesOf = (blob: Blob) => typeof blob.arrayBuffer === 'function' ? blob.arrayBuffer().then((buffer) => new Uint8Array(buffer)) : new Promise<Uint8Array>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(blob);
+    });
+    const expectShown = async () => {
+      const state = getState(ref.id);
+      if (state?.kind !== 'ready') throw new Error(`not ready: ${state?.kind}`);
+      expect([...await bytesOf(state.blob)]).toEqual([...original]);
+      const shown = await bytesOf(state.display!);
+      expect(state.display!.type).toBe('image/gif');
+      expect(shown.length).toBe(original.length + 19);
+      expect(String.fromCharCode(...shown)).toContain('NETSCAPE2.0');
+    };
+    markAwaitingPush(ref, (requested) => pulls.push(requested));
+    await ingestChunk(ref.id, 0, 1, ref.mimeType, toBase64(original));
+    await expectShown();
+
+    __resetForTests();
+    await putStoredAttachment(ref, original);
+    expect(await hydrateFromIDB(ref)).toBe(true);
+    await expectShown();
+
+    // Anything else is shown from its own bytes.
+    const looping = new Uint8Array(readFileSync(join(__dirname, '__fixtures__', 'gifs', 'ffmpeg-loop-forever.gif')));
+    const loopingRef = await makeRef(looping, { mimeType: 'image/gif' });
+    markAwaitingPush(loopingRef, (requested) => pulls.push(requested));
+    await ingestChunk(loopingRef.id, 0, 1, loopingRef.mimeType, toBase64(looping));
+    const loopingState = getState(loopingRef.id);
+    expect(loopingState?.kind === 'ready' && loopingState.display).toBeUndefined();
+    const png = await makeRef();
+    markAwaitingPush(png, (requested) => pulls.push(requested));
+    await ingestChunk(png.id, 0, 1, png.mimeType, toBase64(PNG_BYTES));
+    const pngState = getState(png.id);
+    expect(pngState?.kind === 'ready' && pngState.display).toBeUndefined();
   });
 
   it('deletes a corrupt IDB record and reports a cache miss so the caller re-pulls', async () => {

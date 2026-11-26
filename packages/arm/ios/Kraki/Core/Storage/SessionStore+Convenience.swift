@@ -1,8 +1,8 @@
 import Foundation
 
 // Moved out of SessionStore.swift (file and type length): seq-derived unread,
-// the legacy test surface, aliases the router calls and the optimistic
-// placeholder bookkeeping.
+// auto-read suppression, the legacy test surface, aliases the router calls
+// and the optimistic placeholder bookkeeping.
 extension SessionStore {
     // MARK: - Computed unread (seq-derived)
 
@@ -16,6 +16,10 @@ extension SessionStore {
     /// Convenience boolean for badge-style consumers (red dot).
     func isUnread(_ id: String) -> Bool {
         unreadCount(id) > 0
+    }
+
+    func isAutoReadSuppressed(_ id: String) -> Bool {
+        autoReadSuppressedSessions.contains(id)
     }
 
     // MARK: - Test-Compat Shims

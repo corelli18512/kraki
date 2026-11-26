@@ -16,6 +16,9 @@ export interface AuthUser {
   login: string;
   provider: string;
   email?: string;
+  /** Region the account gets on its first sign-in, instead of one chosen by
+   *  IP or the relay (operator test accounts). */
+  region?: string;
 }
 
 export interface AuthSuccess {
