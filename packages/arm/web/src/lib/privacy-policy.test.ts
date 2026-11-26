@@ -26,4 +26,6 @@ it('names the speech provider per region in both languages', () => {
   expect(policy).toContain('中国大陆区域使用豆包／火山引擎');
   expect(policy).toContain('日本和美国区域使用 AssemblyAI（在美国处理音频）');
   expect(policy.match(/assemblyai\.com\/legal\/privacy-policy/g)).toHaveLength(2);
+  // Regions are independent: overseas audio never falls back to a China provider.
+  expect(policy).not.toMatch(/fall back to Doubao|改用豆包/);
 });

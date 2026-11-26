@@ -78,10 +78,10 @@ KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS=2000
 VOICE_API_KEY=<optional legacy server-only migration key>
 ```
 
-Speech recognition (`ASR_PROVIDERS`, ordered failover; default `doubao`):
+Speech recognition (`ASR_PROVIDER`, one per region; default `doubao`):
 
 ```text
-ASR_PROVIDERS=assemblyai,doubao        # Tokyo / US West; China: doubao
+ASR_PROVIDER=assemblyai                # Tokyo / US West; China: doubao
 ASSEMBLYAI_API_KEY=<server-only key>
 ASSEMBLYAI_ENDPOINT=wss://streaming.us.assemblyai.com/v3/ws   # default: US data zone
 ASSEMBLYAI_MODEL=assemblyai-stt-3-7-realtime-agent             # default
@@ -91,11 +91,12 @@ DOUBAO_ENDPOINT / DOUBAO_ACCESS_KEY / DOUBAO_RESOURCE_ID / DOUBAO_APP_KEY
 DOUBAO_HOTWORD_TOKENS=100                                      # 0 disables hot words
 ```
 
-Each recording opens on the first provider that accepts it, so an AssemblyAI
-refusal (rate limit, balance, outage) falls back to Doubao for that recording.
-Custom Words (`context.vocabulary`, the spelling before `=`) are sent to the
-speech provider as recognition hints (Doubao hot words, AssemblyAI key terms)
-as well as to the corrector. Requires `@coinfra/voice` 0.4.0 or later.
+Regions are independent implementations: there is no cross-provider failover.
+If the region's provider refuses a recording (balance, rate limit, outage), that
+recording fails with `asr_open_failed`. Custom Words (`context.vocabulary`, the
+spelling before `=`) are sent to the speech provider as recognition hints
+(Doubao hot words, AssemblyAI key terms) as well as to the corrector. Requires
+`@coinfra/voice` 0.4.0 or later.
 
 `VOICE_API_KEY` enables the legacy static-key path for non-Kraki clients. It
 bypasses lease verification, Head settlement and the daily quota, so it is off
