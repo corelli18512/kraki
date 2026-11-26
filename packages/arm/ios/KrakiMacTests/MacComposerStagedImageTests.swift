@@ -176,6 +176,22 @@ final class MacComposerStagedImageTests: XCTestCase {
         XCTAssertEqual(sent.map(\.attachments), [0], "after × the text goes alone")
     }
 
+    /// PR #669 review P2: the agent turning busy while an image is being
+    /// prepared locks attaching, but the × still cancels the image (Send
+    /// waits for it, so a locked × left only Clear, which drops the text).
+    func testRemoveCancelsAnImageBeingPreparedWhileTheAgentIsBusy() throws {
+        show(sessionA)
+        app.sessionStore.setDraft(sessionA, "Keep me")
+        let (hold, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in hold {} }) { _ in }
+        app.sessionStore.sessions[sessionA]?.state = .active
+        drain(300)
+        try click("chat-remove-image")
+        XCTAssertFalse(app.sessionStore.isPreparingImage(sessionA), "× cancels it while the agent is busy")
+        XCTAssertEqual(app.sessionStore.drafts[sessionA], "Keep me", "the text stays")
+    }
+
     /// An image-only draft (no text) is still sendable after the switch.
     func testImageOnlyDraftSurvivesSessionSwitch() throws {
         show(sessionA)

@@ -730,8 +730,10 @@ struct MessageInputView: View {
             }
         }
         .padding(.leading, 4)
-        .disabled(!canAttachImage)
-        .opacity(canAttachImage ? 1 : 0.4)
+        // Picking an image is locked while the agent is busy; the × of an
+        // image still loading stays usable to cancel it.
+        .disabled(!canAttachImage && !preparingImage)
+        .opacity(canAttachImage || preparingImage ? 1 : 0.4)
     }
 
     /// × on the thumbnail: removes the image, or cancels one still loading.
