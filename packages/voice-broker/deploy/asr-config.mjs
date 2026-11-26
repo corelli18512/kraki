@@ -1,18 +1,19 @@
 /**
  * Speech-provider selection for the production adapter. Dependency-free so it
  * can be tested without the deployed @coinfra/voice bundle.
+ *
+ * One provider per region, no cross-provider failover: a region's voice
+ * gateway is simply that region's implementation.
  */
 
 export const ASR_PROVIDER_NAMES = ['doubao', 'assemblyai'];
 
-/** `ASR_PROVIDERS`: ordered failover list, e.g. `assemblyai,doubao`. Default `doubao`. */
-export function asrProviderOrder(raw) {
-  const names = (raw?.trim() || 'doubao')
-    .split(',')
-    .map((name) => name.trim().toLowerCase())
-    .filter(Boolean);
-  const unknown = names.filter((name) => !ASR_PROVIDER_NAMES.includes(name));
-  if (unknown.length) throw new Error(`ASR_PROVIDERS: unknown provider ${unknown.join(', ')}`);
-  if (new Set(names).size !== names.length) throw new Error('ASR_PROVIDERS: duplicate provider');
-  return names;
+/** `ASR_PROVIDER`: `doubao` (default) or `assemblyai`. */
+export function asrProvider(env) {
+  if (env.ASR_PROVIDERS !== undefined) {
+    throw new Error('ASR_PROVIDERS (failover list) was removed: set ASR_PROVIDER to one provider');
+  }
+  const name = (env.ASR_PROVIDER?.trim() || 'doubao').toLowerCase();
+  if (!ASR_PROVIDER_NAMES.includes(name)) throw new Error(`ASR_PROVIDER: unknown provider ${name}`);
+  return name;
 }

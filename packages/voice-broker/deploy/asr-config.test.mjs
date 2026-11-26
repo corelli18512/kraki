@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { asrProviderOrder } from './asr-config.mjs';
+import { asrProvider } from './asr-config.mjs';
 
-test('ASR_PROVIDERS defaults to doubao and keeps the configured order', () => {
-  assert.deepEqual(asrProviderOrder(undefined), ['doubao']);
-  assert.deepEqual(asrProviderOrder('  '), ['doubao']);
-  assert.deepEqual(asrProviderOrder('AssemblyAI, doubao'), ['assemblyai', 'doubao']);
+test('ASR_PROVIDER selects exactly one provider, default doubao', () => {
+  assert.equal(asrProvider({}), 'doubao');
+  assert.equal(asrProvider({ ASR_PROVIDER: ' AssemblyAI ' }), 'assemblyai');
 });
 
-test('ASR_PROVIDERS rejects unknown or duplicate providers', () => {
-  assert.throws(() => asrProviderOrder('deepgram'), /unknown provider deepgram/);
-  assert.throws(() => asrProviderOrder('doubao,doubao'), /duplicate/);
+test('unknown providers, lists and the removed failover variable are rejected', () => {
+  assert.throws(() => asrProvider({ ASR_PROVIDER: 'deepgram' }), /unknown provider deepgram/);
+  assert.throws(() => asrProvider({ ASR_PROVIDER: 'assemblyai,doubao' }), /unknown provider/);
+  assert.throws(() => asrProvider({ ASR_PROVIDERS: 'assemblyai,doubao' }), /was removed/);
 });

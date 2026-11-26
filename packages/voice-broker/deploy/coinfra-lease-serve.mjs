@@ -13,11 +13,10 @@ import {
   createKrakiSettlementClient,
   createLegacyApiKeyAuthorizer,
 } from './kraki-lease-authorizer.mjs';
-import { asrProviderOrder } from './asr-config.mjs';
+import { asrProvider } from './asr-config.mjs';
 import {
   createAssemblyAiAsrProvider,
   createDoubaoAsrProvider,
-  createFallbackAsrProvider,
   createLogger,
   createOpenAiCorrector,
   levelFromEnv,
@@ -74,11 +73,8 @@ async function main() {
   const settlementUrl = required('KRAKI_VOICE_SETTLEMENT_URL');
   const settlementKey = required('KRAKI_VOICE_SETTLEMENT_KEY');
   const correctionEnabled = process.env.CORRECTION_ENABLED !== '0';
-  const providerNames = asrProviderOrder(process.env.ASR_PROVIDERS);
-  const asr = createFallbackAsrProvider(
-    providerNames.map((name) => ({ name, provider: createAsrProvider(name) })),
-    { logger: log.child('asr') },
-  );
+  const providerName = asrProvider(process.env);
+  const asr = createAsrProvider(providerName);
   const corrector = correctionEnabled
     ? createOpenAiCorrector({
         baseUrl: process.env.CORRECTOR_BASE_URL?.trim() || 'https://api.deepseek.com/v1',
@@ -118,7 +114,7 @@ async function main() {
     onUsage: settlement.onUsage,
   });
   log.info('Kraki lease gateway ready', {
-    asr: providerNames.join('>'),
+    asr: providerName,
     url: gateway.url,
     correction: correctionEnabled,
     authorization: process.env.VOICE_API_KEY?.trim() ? 'warm-kraki-lease+legacy-api-key' : 'warm-kraki-lease',
