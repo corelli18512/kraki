@@ -5,16 +5,19 @@ Public policy: https://app.kraki.chat/privacy/ (source:
 production gateway behavior. This is an engineering description, not a legal
 opinion or a claim that provider categories alone satisfy every jurisdiction.
 
-## Verified data flow (2026-10-15)
+## Verified data flow (2026-11-26)
 
-The hosted gateway currently uses Doubao / Volcengine (ByteDance) ASR and DeepSeek
-correction. Confirm deployment configuration before changing provider claims.
+Speech provider by region (`ASR_PROVIDERS`): mainland China uses Doubao /
+Volcengine (ByteDance); Tokyo and US West use AssemblyAI (US data zone,
+`streaming.us.assemblyai.com`) and fall back to Doubao for a recording that
+AssemblyAI refuses. Correction is DeepSeek in every region. Confirm deployment
+configuration before changing provider claims.
 
 | Recipient | Data |
 |---|---|
 | Kraki relay/account service | Account/device identity, signed voice leases, daily audio seconds; no voice recordings in the usage DB |
 | Kraki voice gateway | Audio, transcript, authorization/account/device and recording identifiers; locale, Custom Words, and enabled conversation context |
-| Speech provider | Audio, audio/model configuration and supplied recognition-user identifier |
+| Speech provider | Audio, audio/model configuration, supplied recognition-user identifier, and Custom Words as recognition hints (Doubao hot words / AssemblyAI key terms; spellings only) |
 | Correction model, when enabled | Transcript, Custom Words, locale; enabled session title, agent/model/mode and extracted terms |
 
 Current gateway removes `product`, `sessionId` and `inputMethod` from the correction
@@ -37,6 +40,8 @@ archive; audio/text is processed in memory. It logs operational categories,
 timings and usage. Final text can become part of local conversation history.
 Third-party retention/training terms have not been independently established:
 **do not promise zero retention or no training on a provider's behalf**.
+AssemblyAI's model-improvement opt-out and data TTL are only available on its paid
+plan; on the free plan Customer Data may be used for model improvement.
 
 ## Controls and disclosure
 
