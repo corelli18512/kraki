@@ -1069,6 +1069,8 @@ struct MessageInputView: View {
         let session = sessionId
         sessionStore.prepareStagedImage(session, {
             let data = try? await item.loadTransferable(type: Data.self)
+            // Cancelled (× or a newer pick): the outcome is dropped anyway.
+            guard !Task.isCancelled else { return .unreadable }
             return PhotoAttachmentLoad.attachment(from: data)
         }) { outcome in
             stagePhoto(outcome, in: session)

@@ -62,6 +62,24 @@ final class ComposerGIFFitTests: XCTestCase {
         XCTAssertGreaterThan(size.width, 380)
     }
 
+    /// PR #669 review P2: × or a newer image cancels the fit
+    /// (`SessionStore.prepareStagedImage`); it used to run on, redrawing
+    /// every frame up to four times, for a result then dropped.
+    func testACancelledFitStopsWithoutRedrawingTheGIF() async throws {
+        let gif = try ChatGIFFixture.gif(frames: 3, width: 2000, height: 100)
+        let limits = ComposerGIFFit.Limits(maxBytes: 3 * 1024 * 1024, maxDimension: 1568)
+        let fit = { (cancelled: Bool) async -> Data? in
+            await Task.detached { () -> Data? in
+                if cancelled { withUnsafeCurrentTask { $0?.cancel() } }
+                return ComposerGIFFit.fitted(gif, limits: limits)
+            }.value
+        }
+        let fitted = await fit(false)
+        XCTAssertNotNil(fitted, "the same GIF fits when not cancelled")
+        let cancelledFit = await fit(true)
+        XCTAssertNil(cancelledFit, "a cancelled fit stops instead of redrawing the GIF")
+    }
+
     func testWhatCannotBeFittedIsLeftToTheStillImagePath() throws {
         let limits = ComposerGIFFit.Limits(maxBytes: 3 * 1024 * 1024, maxDimension: 1024)
         XCTAssertNil(ComposerGIFFit.fitted(try ChatGIFFixture.gif(frames: 1, width: 2000, height: 100), limits: limits), "one frame: a still image anyway")
