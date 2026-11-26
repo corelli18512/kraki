@@ -292,9 +292,8 @@ final class SessionStore {
     /// In memory only, unlike the drafts. Set through `setStagedImage`.
     var stagedImages: [String: StagedComposerImage] = [:]
     /// An image still being prepared for a Session's composer (a photo
-    /// loading, a large GIF being fitted), by attempt. Set through
-    /// `prepareStagedImage`.
-    var preparingImages: [String: UUID] = [:]
+    /// loading, a large GIF being fitted). Set through `prepareStagedImage`.
+    var preparingImages: [String: PreparingComposerImage] = [:]
     var navigateToSession: String?
     /// Set with `navigateToSession` to the id of a still-pending placeholder
     /// route the target replaces (create/fork/import resolved). The navigation

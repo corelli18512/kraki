@@ -32,8 +32,9 @@ enum ComposerGIFFit {
         var attempts = 4
     }
 
-    /// The GIF redrawn to fit `limits`, or nil (not an animated GIF, or it
-    /// cannot be fitted within the limits).
+    /// The GIF redrawn to fit `limits`, or nil (not an animated GIF, it
+    /// cannot be fitted within the limits, or the task running it was
+    /// cancelled: it stops between sizes and frames).
     static func fitted(_ data: Data, limits: Limits) -> Data? {
         guard ChatGIFAnimation.isGIF(data),
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
@@ -44,7 +45,8 @@ enum ComposerGIFFit {
               var side = startingSide(source: size, frameCount: count, limits: limits)
         else { return nil }
         for _ in 0..<limits.attempts {
-            guard let encoded = encode(source, frameCount: count, longestSide: side, loopBlockCount: ChatGIFAnimation.loopBlockCount(data)) else { return nil }
+            guard !Task.isCancelled,
+                  let encoded = encode(source, frameCount: count, longestSide: side, loopBlockCount: ChatGIFAnimation.loopBlockCount(data)) else { return nil }
             if encoded.count <= limits.maxBytes { return encoded }
             // File size follows the pixel count: shrink both sides by the
             // square root of the overshoot, with a margin.
@@ -83,7 +85,8 @@ enum ComposerGIFFit {
             kCGImageSourceThumbnailMaxPixelSize: longestSide,
         ]
         for index in 0..<frameCount {
-            guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { return nil }
+            guard !Task.isCancelled,
+                  let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { return nil }
             let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
             let delay = storedDelay(properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any])
             CGImageDestinationAddImage(destination, frame, [

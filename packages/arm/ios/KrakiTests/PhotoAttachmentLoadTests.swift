@@ -43,4 +43,26 @@ final class PhotoAttachmentLoadTests: XCTestCase {
         XCTAssertEqual(mimeType, "image/jpeg")
         XCTAssertNotEqual(data, gif)
     }
+
+    /// A cancelled load (×, a newer pick, send) skips the still-image fallback
+    /// instead of decoding and JPEG-encoding a photo nobody will use.
+    func testACancelledLoadSkipsTheStillImageFallback() async throws {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 1500), format: format)
+            .pngData { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 3000, height: 1500))
+            }
+        let load = { (cancelled: Bool) async -> PhotoAttachmentLoad.Outcome in
+            await Task.detached { () -> PhotoAttachmentLoad.Outcome in
+                if cancelled { withUnsafeCurrentTask { $0?.cancel() } }
+                return PhotoAttachmentLoad.attachment(from: png)
+            }.value
+        }
+        guard case .image(_, let mimeType) = await load(false) else { return XCTFail("not attached when not cancelled") }
+        XCTAssertEqual(mimeType, "image/jpeg")
+        let cancelledOutcome = await load(true)
+        XCTAssertEqual(cancelledOutcome, .unreadable, "a cancelled load stops before the JPEG fallback")
+    }
 }

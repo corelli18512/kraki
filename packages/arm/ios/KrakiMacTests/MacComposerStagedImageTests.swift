@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import os
 @testable import Kraki_Dev
 
 /// Mac input audit finding 7: an image staged in a Session's composer must
@@ -176,6 +177,22 @@ final class MacComposerStagedImageTests: XCTestCase {
         XCTAssertEqual(sent.map(\.attachments), [0], "after × the text goes alone")
     }
 
+    /// PR #669 review P2: the agent turning busy while an image is being
+    /// prepared locks attaching, but the × still cancels the image (Send
+    /// waits for it, so a locked × left only Clear, which drops the text).
+    func testRemoveCancelsAnImageBeingPreparedWhileTheAgentIsBusy() throws {
+        show(sessionA)
+        app.sessionStore.setDraft(sessionA, "Keep me")
+        let (hold, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in hold {} }) { _ in }
+        app.sessionStore.sessions[sessionA]?.state = .active
+        drain(300)
+        try click("chat-remove-image")
+        XCTAssertFalse(app.sessionStore.isPreparingImage(sessionA), "× cancels it while the agent is busy")
+        XCTAssertEqual(app.sessionStore.drafts[sessionA], "Keep me", "the text stays")
+    }
+
     /// An image-only draft (no text) is still sendable after the switch.
     func testImageOnlyDraftSurvivesSessionSwitch() throws {
         show(sessionA)
@@ -262,6 +279,46 @@ final class SessionStoreStagedImageTests: XCTestCase {
         store.prepareStagedImage("b", { }) { _ in }
         store.reset()
         XCTAssertFalse(store.isPreparingImage("b"))
+    }
+
+    /// PR #669 review P2: dropping an image still being prepared (a newer
+    /// image, × or a send, the Session going, `reset`) also stops the work
+    /// preparing it; it used to run on (a GIF fit redraws every frame up to
+    /// four times) for a result then dropped.
+    func testDroppingAnImageBeingPreparedCancelsItsWork() async throws {
+        let store = SessionStore(persistenceEnabled: false)
+        let cancelled = OSAllocatedUnfairLock(initialState: Set<String>())
+        var stagedLate: [String] = []
+        func prepare(_ id: String, _ name: String) {
+            store.prepareStagedImage(id, {
+                // Bounded: without cancellation it gives up after ~2 s.
+                for _ in 0..<200 where !Task.isCancelled { try? await Task.sleep(for: .milliseconds(10)) }
+                if Task.isCancelled { cancelled.withLock { _ = $0.insert(name) } }
+            }) { _ in stagedLate.append(name) }
+        }
+        func waitCancelled(_ names: Set<String>) async throws {
+            try await waitBriefly { cancelled.withLock { $0 } == names }
+            XCTAssertEqual(cancelled.withLock { $0 }, names)
+        }
+
+        prepare("a", "replaced by a newer image")
+        prepare("a", "removed by ×")
+        try await waitCancelled(["replaced by a newer image"])
+        store.setStagedImage("a", nil)
+        try await waitCancelled(["replaced by a newer image", "removed by ×"])
+
+        prepare("b", "its Session removed")
+        store.removeSession("b")
+        prepare("c", "reset")
+        store.reset()
+        try await waitCancelled(["replaced by a newer image", "removed by ×", "its Session removed", "reset"])
+        XCTAssertEqual(stagedLate, [], "nothing cancelled is staged")
+
+        // The latest choice still wins, and goes in once prepared.
+        let image = StagedComposerImage(data: Data([1]), mimeType: "image/gif")
+        store.prepareStagedImage("a", { image }) { store.setStagedImage("a", $0) }
+        try await waitBriefly { store.stagedImages["a"] != nil }
+        XCTAssertEqual(store.stagedImages["a"], image)
     }
 
     func testEachStagedImageHasItsOwnIdentity() {
