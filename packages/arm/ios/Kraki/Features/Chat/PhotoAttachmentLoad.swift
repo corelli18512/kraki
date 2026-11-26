@@ -26,6 +26,9 @@ enum PhotoAttachmentLoad {
         if let gif = gifWithinLimits(data) ?? ComposerGIFFit.fitted(data, limits: gifFit) {
             return .image(gif, mimeType: "image/gif")
         }
+        // Dropped while loading or fitting (×, a newer pick, send): skip the
+        // still-image fallback; the caller discards this result anyway.
+        if Task.isCancelled { return .unreadable }
         guard let uiImage = UIImage(data: data) else { return .unsupported }
 
         var targetImage = uiImage
