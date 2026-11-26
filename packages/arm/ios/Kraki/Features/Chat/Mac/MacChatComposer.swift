@@ -701,7 +701,9 @@ struct MacChatComposer: View {
                     }
                     .buttonStyle(.plain)
                     .offset(x: -1, y: 4)
-                    .disabled(!canUseImageSlot)
+                    // Cancelling an image still being prepared stays possible
+                    // while attaching is locked (the agent busy meanwhile).
+                    .disabled(!canUseImageSlot && !preparingImage)
                     .labelAndHelp(MacControlHelp.removeImage)
                     #if DEBUG
                     .background { MacComposerControlGeometryProbe(identifier: "chat-remove-image") }
@@ -719,7 +721,7 @@ struct MacChatComposer: View {
             }
         }
         .padding(.leading, MacComposerMetrics.attachSlotLeading)
-        .opacity(canUseImageSlot ? 1 : 0.4)
+        .opacity(canUseImageSlot || preparingImage ? 1 : 0.4)
         .background {
             #if DEBUG
             MacComposerControlGeometryProbe(identifier: "chat-attach-image")

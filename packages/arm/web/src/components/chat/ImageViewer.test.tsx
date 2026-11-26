@@ -94,6 +94,28 @@ describe('ImageViewer — right-click', () => {
   });
 });
 
+describe('ImageViewer — focus after the right-click menu', () => {
+  // PR #669 review P2: the image takes no focus, so closing the menu left
+  // focus on the page body and the viewer swallowed the next key to take it back.
+  it('returns focus to the viewer, so the next arrow key still navigates', () => {
+    URL.createObjectURL = vi.fn(() => 'blob:made');
+    URL.revokeObjectURL = vi.fn();
+    const onClose = vi.fn();
+    render(<ImageViewer selection={{ initialIndex: 0, items: [
+      { url: 'blob:first', title: 'First', blob: new Blob(['GIF89a'], { type: 'image/gif' }) },
+      { url: 'blob:second', title: 'Second', blob: new Blob(['png'], { type: 'image/png' }) },
+    ] }} onClose={onClose} />);
+    fireEvent.contextMenu(screen.getByRole('img'), { clientX: 40, clientY: 50 });
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Download Image' }), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveFocus();
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'ArrowRight' });
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:second');
+  });
+});
+
 describe('ImageViewer — pinch zoom on touch (K-110)', () => {
   // jsdom has no PointerEvent.
   class TestPointerEvent extends MouseEvent {

@@ -8,13 +8,20 @@ struct StagedComposerImage: Equatable {
     let mimeType: String
 }
 
+/// An image being prepared for a Session's composer (`prepareStagedImage`).
+struct PreparingComposerImage {
+    let attempt = UUID()
+    /// Stops the work preparing it (a photo loading, a GIF being fitted).
+    let cancel: () -> Void
+}
+
 extension SessionStore {
     /// Stages (or, with nil, removes) the image in a Session's composer.
-    /// Either way an image still being prepared for it is dropped: the
-    /// latest choice wins. Cleared with the Session (`removeSession`, a
-    /// session list without it, `reset`).
+    /// Either way an image still being prepared for it is dropped and its
+    /// work stopped: the latest choice wins. Cleared with the Session
+    /// (`removeSession`, a session list without it, `reset`).
     func setStagedImage(_ id: String, _ image: StagedComposerImage?) {
-        if preparingImages[id] != nil { preparingImages.removeValue(forKey: id) }
+        cancelPreparingImage(id)
         if stagedImages[id] != image { stagedImages[id] = image }
     }
 
@@ -27,19 +34,22 @@ extension SessionStore {
     /// hands the result to `stage` on the main thread. The image staged
     /// before goes at once (this one replaces it, so it cannot be sent by
     /// mistake meanwhile). A newer image, × or a send since then drops the
-    /// result (`setStagedImage`).
+    /// result and cancels `prepare` (`setStagedImage`), which stops early
+    /// where it checks for cancellation (`ComposerGIFFit`).
     @MainActor
     func prepareStagedImage<Prepared: Sendable>(
         _ id: String,
         _ prepare: @escaping @Sendable () async -> Prepared,
         stage: @escaping @MainActor (Prepared) -> Void
     ) {
-        let attempt = UUID()
+        cancelPreparingImage(id)
         if stagedImages[id] != nil { stagedImages.removeValue(forKey: id) }
-        preparingImages[id] = attempt
+        let work = Task.detached(priority: .userInitiated, operation: prepare)
+        let preparing = PreparingComposerImage(cancel: work.cancel)
+        preparingImages[id] = preparing
         Task { @MainActor in
-            let prepared = await Task.detached(priority: .userInitiated, operation: prepare).value
-            guard preparingImages[id] == attempt else { return }
+            let prepared = await work.value
+            guard preparingImages[id]?.attempt == preparing.attempt else { return }
             preparingImages.removeValue(forKey: id)
             stage(prepared)
         }
@@ -48,6 +58,7 @@ extension SessionStore {
     /// `reset`: no Session keeps a staged image or one being prepared.
     func discardAllStagedImages() {
         stagedImages.removeAll()
+        preparingImages.values.forEach { $0.cancel() }
         preparingImages.removeAll()
     }
 
@@ -57,8 +68,14 @@ extension SessionStore {
     func discardingStagedImages(of removedIDs: Set<String>) -> Set<String> {
         for id in removedIDs {
             if stagedImages[id] != nil { stagedImages.removeValue(forKey: id) }
-            if preparingImages[id] != nil { preparingImages.removeValue(forKey: id) }
+            cancelPreparingImage(id)
         }
         return removedIDs
+    }
+
+    private func cancelPreparingImage(_ id: String) {
+        guard let preparing = preparingImages[id] else { return }
+        preparing.cancel()
+        preparingImages.removeValue(forKey: id)
     }
 }

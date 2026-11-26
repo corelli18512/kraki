@@ -225,6 +225,24 @@ import Darwin
         XCTAssertNil(app.sessionStore.stagedImages[sessionA])
     }
 
+    /// PR #669 review P2: the agent turning busy while a photo loads locks
+    /// picking, but the × still cancels the photo loading (Send waits for
+    /// it, so a locked × left only Clear, which drops the text).
+    func testRemoveCancelsAPhotoStillLoadingWhileTheAgentIsBusy() throws {
+        let app = makeApp()
+        try show(sessionA)
+        let (held, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
+        app.sessionStore.prepareStagedImage(sessionA, { for await _ in held {} }) { _ in }
+        app.sessionStore.sessions[sessionA]?.state = .active
+        XCTAssertTrue(drain(until: { !self.accessible("Loading image").isEmpty }), "the image slot shows the photo loading")
+        try activate("Remove image")
+        XCTAssertFalse(app.sessionStore.isPreparingImage(sessionA), "× cancels the photo loading while the agent is busy")
+        XCTAssertTrue(drain(until: {
+            self.accessible("Attach image").first?.accessibilityTraits.contains(.notEnabled) == true
+        }), "picking a new image stays locked while the agent is busy")
+    }
+
     func testSendWaitsForAPhotoStillLoading() throws {
         let app = makeApp()
         _ = try stage(sessionA)
