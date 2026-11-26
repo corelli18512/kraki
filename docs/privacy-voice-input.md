@@ -8,8 +8,9 @@ opinion or a claim that provider categories alone satisfy every jurisdiction.
 ## Verified data flow (2026-11-26)
 
 Speech provider by region (`ASR_PROVIDER`, one per region, no cross-provider
-failover): mainland China uses Doubao / Volcengine (ByteDance); Tokyo and US
-West use AssemblyAI (US data zone, `streaming.us.assemblyai.com`). Correction is DeepSeek in every region. Confirm deployment
+failover): mainland China uses Doubao / Volcengine (ByteDance); the international
+region (US West, also serving Japan/Asia-Pacific since Tokyo was retired
+2026-11-26) uses AssemblyAI (US data zone, `streaming.us.assemblyai.com`). Correction is DeepSeek in every region. Confirm deployment
 configuration before changing provider claims.
 
 | Recipient | Data |
