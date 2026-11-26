@@ -35,7 +35,12 @@ export function useImageContextMenu(file: () => ImageFile | null, container?: ()
 
   function close(restoreFocus = false) {
     setAt(null);
-    if (restoreFocus) opener.current?.focus({ preventScroll: true });
+    if (!restoreFocus) return;
+    opener.current?.focus({ preventScroll: true });
+    // An opener that takes no focus (the viewer's image): focus goes to the
+    // container, else it fell to the page body and the viewer swallowed the
+    // next key to take it back.
+    if (document.activeElement !== opener.current) container?.()?.focus({ preventScroll: true });
   }
 
   useLayoutEffect(() => {
