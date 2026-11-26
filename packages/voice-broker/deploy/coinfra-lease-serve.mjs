@@ -13,8 +13,11 @@ import {
   createKrakiSettlementClient,
   createLegacyApiKeyAuthorizer,
 } from './kraki-lease-authorizer.mjs';
+import { asrProviderOrder } from './asr-config.mjs';
 import {
+  createAssemblyAiAsrProvider,
   createDoubaoAsrProvider,
+  createFallbackAsrProvider,
   createLogger,
   createOpenAiCorrector,
   levelFromEnv,
@@ -38,18 +41,44 @@ function envInt(name, fallback) {
   return value;
 }
 
-async function main() {
-  const publicKey = readFileSync(required('KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH'), 'utf8');
-  const settlementUrl = required('KRAKI_VOICE_SETTLEMENT_URL');
-  const settlementKey = required('KRAKI_VOICE_SETTLEMENT_KEY');
-  const correctionEnabled = process.env.CORRECTION_ENABLED !== '0';
-  const asr = createDoubaoAsrProvider({
+function createAsrProvider(name) {
+  if (name === 'assemblyai') {
+    const languageCodes = process.env.ASSEMBLYAI_LANGUAGE_CODES?.trim();
+    const mode = process.env.ASSEMBLYAI_MODE?.trim() ?? 'manual';
+    return createAssemblyAiAsrProvider({
+      apiKey: required('ASSEMBLYAI_API_KEY'),
+      // US data zone by default: audio and transcripts are processed in the US.
+      endpoint: process.env.ASSEMBLYAI_ENDPOINT?.trim() || 'wss://streaming.us.assemblyai.com/v3/ws',
+      // Agent model + manual turns: push-to-talk ends the only turn; first
+      // partial ~0.5 s (the notetaker model waits ~1.3 s).
+      speechModel: process.env.ASSEMBLYAI_MODEL?.trim() || 'assemblyai-stt-3-7-realtime-agent',
+      ...(mode ? { extraParams: { mode } } : {}),
+      // Unset = native multilingual (English first-class, Mandarin usable).
+      ...(languageCodes ? { languageCodes: languageCodes.split(',').map((code) => code.trim()) } : {}),
+      logger: log.child('assemblyai'),
+    });
+  }
+  return createDoubaoAsrProvider({
     endpoint: required('DOUBAO_ENDPOINT'),
     accessKey: required('DOUBAO_ACCESS_KEY'),
     resourceId: process.env.DOUBAO_RESOURCE_ID?.trim() || 'volc.seedasr.sauc.duration',
     model: 'seedasr',
     appKey: process.env.DOUBAO_APP_KEY?.trim() || undefined,
+    // Custom Words as recognition hot words (bidirectional API: ~100 tokens).
+    hotwordTokenBudget: envInt('DOUBAO_HOTWORD_TOKENS', 100),
   });
+}
+
+async function main() {
+  const publicKey = readFileSync(required('KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH'), 'utf8');
+  const settlementUrl = required('KRAKI_VOICE_SETTLEMENT_URL');
+  const settlementKey = required('KRAKI_VOICE_SETTLEMENT_KEY');
+  const correctionEnabled = process.env.CORRECTION_ENABLED !== '0';
+  const providerNames = asrProviderOrder(process.env.ASR_PROVIDERS);
+  const asr = createFallbackAsrProvider(
+    providerNames.map((name) => ({ name, provider: createAsrProvider(name) })),
+    { logger: log.child('asr') },
+  );
   const corrector = correctionEnabled
     ? createOpenAiCorrector({
         baseUrl: process.env.CORRECTOR_BASE_URL?.trim() || 'https://api.deepseek.com/v1',
@@ -89,6 +118,7 @@ async function main() {
     onUsage: settlement.onUsage,
   });
   log.info('Kraki lease gateway ready', {
+    asr: providerNames.join('>'),
     url: gateway.url,
     correction: correctionEnabled,
     authorization: process.env.VOICE_API_KEY?.trim() ? 'warm-kraki-lease+legacy-api-key' : 'warm-kraki-lease',

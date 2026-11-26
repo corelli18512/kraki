@@ -78,6 +78,25 @@ KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS=2000
 VOICE_API_KEY=<optional legacy server-only migration key>
 ```
 
+Speech recognition (`ASR_PROVIDERS`, ordered failover; default `doubao`):
+
+```text
+ASR_PROVIDERS=assemblyai,doubao        # Tokyo / US West; China: doubao
+ASSEMBLYAI_API_KEY=<server-only key>
+ASSEMBLYAI_ENDPOINT=wss://streaming.us.assemblyai.com/v3/ws   # default: US data zone
+ASSEMBLYAI_MODEL=assemblyai-stt-3-7-realtime-agent             # default
+ASSEMBLYAI_MODE=manual                                         # default; push-to-talk ends the turn
+ASSEMBLYAI_LANGUAGE_CODES=                                     # unset = multilingual
+DOUBAO_ENDPOINT / DOUBAO_ACCESS_KEY / DOUBAO_RESOURCE_ID / DOUBAO_APP_KEY
+DOUBAO_HOTWORD_TOKENS=100                                      # 0 disables hot words
+```
+
+Each recording opens on the first provider that accepts it, so an AssemblyAI
+refusal (rate limit, balance, outage) falls back to Doubao for that recording.
+Custom Words (`context.vocabulary`, the spelling before `=`) are sent to the
+speech provider as recognition hints (Doubao hot words, AssemblyAI key terms)
+as well as to the corrector. Requires `@coinfra/voice` 0.4.0 or later.
+
 `VOICE_API_KEY` enables the legacy static-key path for non-Kraki clients. It
 bypasses lease verification, Head settlement and the daily quota, so it is off
 when unset and every use is logged ("legacy VOICE_API_KEY authorization
@@ -85,9 +104,9 @@ used"). Unset it once those logs stop.
 
 The gateway itself (`./coinfra/index.mjs`: `startGateway`, the Doubao ASR
 provider and the OpenAI-compatible corrector) is **not in this repository**.
-It is the built `@coinfra/voice` distribution (0.3.0 or later) from the
+It is the built `@coinfra/voice` distribution (0.4.0 or later) from the
 coinfra repository, copied next to this file at deploy time. Audio goes to
-Doubao (Volcengine); with correction on, the transcript and the client's
+the configured speech provider (Doubao / Volcengine, or AssemblyAI); with correction on, the transcript and the client's
 context go to the OpenAI-compatible corrector configured by `CORRECTOR_*`
 (DeepSeek by default).
 

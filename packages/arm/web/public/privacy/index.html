@@ -30,7 +30,7 @@
 <header>
   <nav aria-label="Page navigation"><a href="https://kraki.chat/">Kraki</a><a href="#en">English</a><a href="#zh" lang="zh-CN">中文</a><a href="https://kraki.chat/terms/">Terms</a></nav>
   <h1>Privacy Policy</h1>
-  <p class="muted">Updated October 15, 2026 · Kraki apps and hosted services</p>
+  <p class="muted">Updated November 26, 2026 · Kraki apps and hosted services</p>
 </header>
 <main>
 <section id="en" lang="en" aria-label="English privacy policy">
@@ -51,12 +51,12 @@
   <p>The coding agent and model provider you configure may receive prompts, code, files, tool results or screenshots according to the actions and permissions you authorize. Their processing is governed by their own terms and settings, not by the relay's encryption. Opening external links or loading external resources may also disclose request information to the relevant website.</p>
 
   <h2>4. Cloud voice input</h2>
-  <p><strong>Dictation is not end-to-end encrypted.</strong> When you record, audio is sent over an encrypted network connection through Kraki's voice gateway to a cloud speech-recognition provider. The service processes account/device authorization, recording/session identifiers and language or audio configuration. The speech provider can receive the user identifier supplied for the recognition session.</p>
-  <p>The hosted speech provider currently uses Doubao / Volcengine speech services (ByteDance). If <strong>Correct Transcripts</strong> is on, the transcript is sent to an AI correction service, currently DeepSeek, to correct recognition mistakes. Both correction and <strong>Use Conversation Context</strong> are on by default in supported clients.</p>
+  <p><strong>Dictation is not end-to-end encrypted.</strong> When you record, audio is sent over an encrypted network connection through Kraki's voice gateway to a cloud speech-recognition provider. The service processes account/device authorization, recording/session identifiers and language or audio configuration. The speech provider can receive the user identifier supplied for the recognition session and your Custom Words, which are sent as recognition hints so names and technical terms are spelled correctly.</p>
+  <p>The speech provider depends on the voice region your app connects to: the mainland China region uses Doubao / Volcengine speech services (ByteDance); the Japan and US regions use AssemblyAI, which processes audio in the United States, and fall back to Doubao / Volcengine for a recording if AssemblyAI is unavailable. If <strong>Correct Transcripts</strong> is on, the transcript is sent to an AI correction service, currently DeepSeek, to correct recognition mistakes. Both correction and <strong>Use Conversation Context</strong> are on by default in supported clients.</p>
   <p>The voice gateway can receive your locale and Custom Words. With conversation context enabled, it can also receive session metadata (including a session identifier, title, agent, model and mode) and a limited set of terms extracted on your device from recent messages; a new-session request may include the selected computer's name among these terms. The correction prompt can include the transcript, Custom Words, locale, title, agent/model and these terms. The current gateway removes its product, session-identifier and input-method fields from the correction-model prompt.</p>
   <p>Clients extract terms rather than upload whole conversation messages for correction. They filter recognizable secret-like strings from extracted context, but this is a heuristic, not a guarantee that all sensitive information is removed. Your dictated text and your own Custom Words are not a secret-redaction service.</p>
   <p>Turning off correction stops AI transcript correction, not speech recognition. Context can still be sent to the voice gateway unless you also turn off <strong>Use Conversation Context</strong>. With conversation context off, locale and Custom Words can still accompany dictation. You can manage these options in <strong>Settings → Voice Input</strong>, remove Custom Words, deny microphone access or not use dictation. The app shows a cloud-voice notice before the first recording.</p>
-  <p>The current Kraki voice gateway processes audio and transcripts in memory rather than intentionally keeping a recording/transcript archive. Final text can become part of your locally stored conversation. The relay stores voice authorization and daily seconds used to enforce limits, not recordings. Third-party providers have their own processing, retention and privacy terms; we do not promise zero retention or particular training restrictions on their behalf. Provider information: <a href="https://www.volcengine.com/">Volcengine</a>, <a href="https://www.deepseek.com/">DeepSeek</a>.</p>
+  <p>The current Kraki voice gateway processes audio and transcripts in memory rather than intentionally keeping a recording/transcript archive. Final text can become part of your locally stored conversation. The relay stores voice authorization and daily seconds used to enforce limits, not recordings. Third-party providers have their own processing, retention and privacy terms; we do not promise zero retention or particular training restrictions on their behalf. Provider information: <a href="https://www.volcengine.com/">Volcengine</a>, <a href="https://www.assemblyai.com/legal/privacy-policy">AssemblyAI</a>, <a href="https://www.deepseek.com/">DeepSeek</a>.</p>
 
   <h2>5. Optional performance diagnostics</h2>
   <p>Supported iOS, Mac and Windows releases send allowlisted performance metadata to Kraki's own diagnostic collector. <strong>Share Performance Data</strong> is on by default. After sign-in, a one-time notice explains it and offers <strong>OK</strong> and <strong>Don't Share</strong>. This notice is not a promise that no upload can occur before you respond.</p>
@@ -90,7 +90,7 @@
 
 <section id="zh" lang="zh-CN" aria-label="中文隐私政策">
   <h1>隐私政策</h1>
-  <p class="muted">更新于 2026 年 10 月 15 日 · Kraki 应用及托管服务</p>
+  <p class="muted">更新于 2026 年 11 月 26 日 · Kraki 应用及托管服务</p>
   <div class="summary"><strong>简要说明：</strong>设备之间的对话使用端到端加密。账号资料、云端语音输入、可选性能诊断和基本账号活跃统计是不同的数据类别，并非全部端到端加密。我们不将这些数据用于广告或跨 App 跟踪。</div>
 
   <h2>1. 适用范围与联系方式</h2>
@@ -108,12 +108,12 @@
   <p>你配置的编程 agent 和模型服务商可能根据你授权的操作与权限接收提示词、代码、文件、工具结果或截图，其处理受自身条款和设置约束，不能由 relay 的加密来限制。打开外部链接或加载外部资源时，相应网站也可能收到请求信息。</p>
 
   <h2>4. 云端语音输入</h2>
-  <p><strong>语音输入不是端到端加密的。</strong>录音时，音频通过加密网络连接经 Kraki 语音网关发送给云端语音识别服务商。服务还处理账号／设备授权、录音／会话标识及语言或音频参数。语音识别服务商可以收到识别请求所带的用户标识。</p>
-  <p>托管服务目前使用豆包／火山引擎（字节跳动）的语音识别。开启 <strong>Correct Transcripts（校正转写）</strong>时，转写文本会发送给 AI 校正服务，目前为 DeepSeek，以纠正识别错误。支持这些选项的客户端中，校正和 <strong>Use Conversation Context（使用会话上下文）</strong>默认开启。</p>
+  <p><strong>语音输入不是端到端加密的。</strong>录音时，音频通过加密网络连接经 Kraki 语音网关发送给云端语音识别服务商。服务还处理账号／设备授权、录音／会话标识及语言或音频参数。语音识别服务商可以收到识别请求所带的用户标识，以及作为识别提示发送的自定义词汇（用于让人名和技术术语写对）。</p>
+  <p>语音识别服务商取决于 App 连接的语音区域：中国大陆区域使用豆包／火山引擎（字节跳动）的语音识别；日本和美国区域使用 AssemblyAI（在美国处理音频），AssemblyAI 不可用时该次录音改用豆包／火山引擎。开启 <strong>Correct Transcripts（校正转写）</strong>时，转写文本会发送给 AI 校正服务，目前为 DeepSeek，以纠正识别错误。支持这些选项的客户端中，校正和 <strong>Use Conversation Context（使用会话上下文）</strong>默认开启。</p>
   <p>语音网关可以收到语言地区和自定义词汇。开启会话上下文时，还可收到会话元数据（包括会话标识、标题、agent、模型和模式）及设备从最近消息中提取的有限术语；新建会话时，术语中可能包含所选电脑的名称。AI 校正提示词可以包含转写文本、自定义词汇、语言地区、标题、agent／模型和术语。当前网关会从模型提示词中移除产品标记、会话标识和输入方式字段。</p>
   <p>客户端为校正提取术语，而不是上传完整会话消息，并过滤提取上下文中可识别的、类似秘密凭证的字符串。但这属于启发式过滤，不能保证移除所有敏感信息。口述文字和你自行填写的词汇表也不会经过一个保证有效的秘密信息脱敏服务。</p>
   <p>关闭校正只会停止 AI 文本校正，不会停止语音识别；除非同时关闭“使用会话上下文”，上下文仍可能发送至语音网关。关闭会话上下文后，语言地区和自定义词汇仍可能随语音请求发送。你可以在<strong>设置 → Voice Input（语音输入）</strong>中管理选项、删除自定义词汇、拒绝麦克风权限，或不使用语音输入。App 会在首次录音前说明云端处理。</p>
-  <p>当前 Kraki 语音网关在内存中处理录音和转写，并不主动建立录音／转写档案。最终文字可能成为设备上保存的对话。relay 保存语音授权和每日使用秒数以执行额度限制，不保存录音。第三方服务商有各自的处理、保留和隐私条款；我们不代其承诺零保留或特定模型训练限制。服务商信息：<a href="https://www.volcengine.com/">火山引擎</a>、<a href="https://www.deepseek.com/">DeepSeek</a>。</p>
+  <p>当前 Kraki 语音网关在内存中处理录音和转写，并不主动建立录音／转写档案。最终文字可能成为设备上保存的对话。relay 保存语音授权和每日使用秒数以执行额度限制，不保存录音。第三方服务商有各自的处理、保留和隐私条款；我们不代其承诺零保留或特定模型训练限制。服务商信息：<a href="https://www.volcengine.com/">火山引擎</a>、<a href="https://www.assemblyai.com/legal/privacy-policy">AssemblyAI</a>、<a href="https://www.deepseek.com/">DeepSeek</a>。</p>
 
   <h2>5. 可选性能诊断</h2>
   <p>支持此功能的 iOS、Mac 和 Windows 正式版向 Kraki 自己的诊断服务发送白名单内的性能元数据。<strong>Share Performance Data（共享性能数据）</strong>默认开启。登录后的一次性提示会说明用途并提供 <strong>OK</strong> 和 <strong>Don't Share</strong>；这不代表回答提示之前绝不会上传。</p>
