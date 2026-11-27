@@ -254,8 +254,9 @@ extension AppState {
     /// relay would skip APNs for ~30s while it waits for a pong from
     /// the dead socket.
     ///
-    /// GRDB DatabasePool checkpoints WAL on its own — no explicit
-    /// flush needed for messages. We still flush the SessionStore /
+    /// Messages need no explicit flush: every write is committed to the WAL,
+    /// and `MessageDatabase.scheduleCheckpoint` copies it into the database
+    /// file in the background. We still flush the SessionStore /
     /// DeviceStore JSON snapshots so debounced writes don't get lost.
     func handleInactive() {
         #if KRAKI_DIAG

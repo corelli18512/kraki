@@ -11,7 +11,8 @@
 /// it only for off-main DB reads and leaves all window mutation to the store.
 ///
 /// WAL mode is enabled so reads never block writes; writes are
-/// serialised by GRDB's `DatabasePool`.
+/// serialised by GRDB's `DatabasePool`. WAL checkpoints run on GRDB's writer
+/// queue, never inside a caller's write (see `scheduleCheckpoint`).
 
 import Foundation
 import GRDB
@@ -97,6 +98,17 @@ final class MessageDatabase {
     /// Bumped by every write: a read that raced a write must not fill the memo.
     private var writeGeneration = 0
 
+    /// SQLite's automatic checkpoint runs inside whichever commit pushes the
+    /// WAL past 1000 pages: that caller copies the pages into the database file
+    /// and waits for two fsyncs. Writes come from the main thread (a live
+    /// message), so the wait was a main-thread stall: production
+    /// `provider.ingest_messages` outliers of 28-364 ms used 1-3 ms of CPU.
+    /// Writes therefore leave the WAL alone and a passive checkpoint runs on
+    /// GRDB's writer queue this long after the first write of a burst.
+    private let checkpointDelay: TimeInterval?
+    private let checkpointLock = NSLock()
+    private var checkpointScheduled = false
+
     // MARK: - Init
 
     /// Opens (or creates) the database at the standard application
@@ -106,6 +118,8 @@ final class MessageDatabase {
     convenience init() throws {
         try self.init(databaseURL: Self.databaseURL())
     }
+
+    static let defaultCheckpointDelay: TimeInterval = 2
 
     /// Open the standard database, never failing the launch. The database is a
     /// cache that Tentacle replay rebuilds:
@@ -151,7 +165,7 @@ final class MessageDatabase {
     /// Opens an explicitly located database. Used by the macOS Debug scroll
     /// harness to exercise the full production store/provider/list stack in an
     /// isolated temporary directory without touching production history.
-    init(databaseURL url: URL) throws {
+    init(databaseURL url: URL, checkpointDelay: TimeInterval = MessageDatabase.defaultCheckpointDelay) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -168,11 +182,14 @@ final class MessageDatabase {
             // window could lose the last transaction. Acceptable for
             // a chat cache backed by server replay.
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
+            // No checkpoint inside a commit; `scheduleCheckpoint` runs them.
+            try db.execute(sql: "PRAGMA wal_autocheckpoint = 0")
             // foreign_keys would matter once we add session metadata
             // joins; on by default to catch logic bugs early.
             try db.execute(sql: "PRAGMA foreign_keys = ON")
         }
         self.dbPool = try DatabasePool(path: url.path, configuration: config)
+        self.checkpointDelay = checkpointDelay
 
         var migrator = DatabaseMigrator()
         Self.registerMigrations(&migrator)
@@ -186,6 +203,7 @@ final class MessageDatabase {
         config.prepareDatabase { db in try db.execute(sql: "PRAGMA foreign_keys = ON") }
         // swiftlint:disable:next force_try
         self.dbPool = try! DatabaseQueue(configuration: config)
+        self.checkpointDelay = nil
         var migrator = DatabaseMigrator()
         Self.registerMigrations(&migrator)
         // swiftlint:disable:next force_try
@@ -292,6 +310,30 @@ final class MessageDatabase {
         // Known head: advance it. Unknown: leave it to the next read.
         if let known = lastSeqMemo[sessionId], inserted > known { lastSeqMemo[sessionId] = inserted }
         lastSeqLock.unlock()
+        scheduleCheckpoint()
+    }
+
+    /// One passive checkpoint per burst of writes, on GRDB's writer queue. A
+    /// write that arrives while it runs waits for it, but it only copies the
+    /// pages written since the last one. Passive: never waits for readers.
+    /// Submitted at user-initiated QoS: a main-thread write queued behind it
+    /// must not wait on disk work issued at a throttled (utility) priority.
+    private func scheduleCheckpoint() {
+        guard let checkpointDelay else { return }
+        checkpointLock.lock()
+        let alreadyScheduled = checkpointScheduled
+        checkpointScheduled = true
+        checkpointLock.unlock()
+        guard !alreadyScheduled else { return }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + checkpointDelay) { [weak self] in
+            guard let self else { return }
+            self.checkpointLock.lock()
+            self.checkpointScheduled = false
+            self.checkpointLock.unlock()
+            self.dbPool.asyncWriteWithoutTransaction { db in
+                _ = try? db.checkpoint(.passive)
+            }
+        }
     }
 
     /// Delete every message for a session. Called on session
@@ -305,6 +347,7 @@ final class MessageDatabase {
             )
         }
         forgetLastSeq(sessionId)
+        scheduleCheckpoint()
     }
 
     private func forgetLastSeq(_ sessionId: String?) {
@@ -327,6 +370,7 @@ final class MessageDatabase {
             )
         }
         forgetLastSeq(sessionId)
+        scheduleCheckpoint()
     }
 
     /// Wipe everything. Logout / factory reset only.
@@ -335,6 +379,7 @@ final class MessageDatabase {
             try db.execute(sql: "DELETE FROM messages")
         }
         forgetLastSeq(nil)
+        scheduleCheckpoint()
     }
 
     // MARK: - Read
