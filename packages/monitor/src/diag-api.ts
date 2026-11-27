@@ -131,7 +131,9 @@ const EVENT_KEYS = ['t', 'm', 'seq', 'ev', 'sid', 'd'];
  */
 const diagPlatform = (v: unknown): v is string => typeof v === 'string' && ['ios', 'mac', 'windows', 'test'].includes(v);
 const diagVersion = (v: unknown): v is string => typeof v === 'string' && /^[\d.]{1,32}$/.test(v);
-const diagBuild = (v: unknown): v is string => typeof v === 'string' && /^\d{1,16}$/.test(v);
+/** CFBundleVersion / installer build: `93`, a Dogfood Mac `93.57` (scripts/release/dogfood-feed.mjs),
+ *  a Windows run number. Digits only, at most one dot. */
+const diagBuild = (v: unknown): v is string => typeof v === 'string' && /^\d{1,16}(?:\.\d{1,16})?$/.test(v);
 
 export function sanitizeDiagBatch(value: unknown, batchId: string, problems?: string[]): { batch: Record<string, unknown>; stripped: number; invalid: number } | null {
   const problem = (name: string) => { if (problems && problems.length < 16 && !problems.includes(name)) problems.push(name); };
