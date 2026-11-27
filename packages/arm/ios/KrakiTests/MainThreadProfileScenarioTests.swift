@@ -71,7 +71,7 @@ final class MainThreadProfileScenarioTests: XCTestCase {
             guard !s.isEmpty else { return "\(name): n=0" }
             func q(_ p: Double) -> Double { s[min(s.count - 1, Int(Double(s.count) * p))] }
             return String(format: "%@: n=%d p50=%.0f p90=%.0f max=%.0f ms, >=50ms: %d, >=100ms: %d", name, s.count,
-                          q(0.5), q(0.9), s.last!, s.filter { $0 >= 50 }.count, s.filter { $0 >= 100 }.count)
+                          q(0.5), q(0.9), s[s.count - 1], s.filter { $0 >= 50 }.count, s.filter { $0 >= 100 }.count)
         }
     }
     private let intervals = MainIntervals()
