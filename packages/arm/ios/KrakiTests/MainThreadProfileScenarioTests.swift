@@ -34,6 +34,53 @@ final class MainThreadProfileScenarioTests: XCTestCase {
 
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
 
+    /// Main run-loop wake-to-sleep intervals, measured like production's
+    /// `ui.busy` (DiagRunLoop), so a phase reports the numbers diagnostics
+    /// report. `begin()` also counts work the test body itself triggers
+    /// before the next drain (e.g. a navigation push).
+    final class MainIntervals {
+        private var observer: CFRunLoopObserver?
+        private var started: TimeInterval?
+        private var startedCPU: UInt64 = 0
+        /// `ms` wall clock, `cpuMs` main-thread CPU (less sensitive to host load).
+        private(set) var intervals: [(end: TimeInterval, ms: Double, cpuMs: Double)] = []
+        private static var cpuNow: UInt64 { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
+        func start() {
+            let activities: CFRunLoopActivity = [.afterWaiting, .beforeWaiting, .exit]
+            observer = CFRunLoopObserverCreateWithHandler(nil, activities.rawValue, true, 0) { [weak self] _, activity in
+                guard let self else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                if activity == .afterWaiting {
+                    if self.started == nil { self.started = now; self.startedCPU = Self.cpuNow }
+                } else if let start = self.started {
+                    self.started = nil
+                    self.intervals.append((now, (now - start) * 1000, Double(Self.cpuNow &- self.startedCPU) / 1e6))
+                }
+            }
+            if let observer { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        }
+        func begin() { started = ProcessInfo.processInfo.systemUptime; startedCPU = Self.cpuNow }
+        func stop() { if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }; observer = nil }
+        func longest(since: TimeInterval) -> Double { intervals.filter { $0.end >= since }.map(\.ms).max() ?? 0 }
+        /// Main-thread CPU of the longest interval since `since`.
+        func longestCPU(since: TimeInterval) -> Double {
+            intervals.filter { $0.end >= since }.max { $0.ms < $1.ms }?.cpuMs ?? 0
+        }
+        static func summary(_ name: String, _ values: [Double]) -> String {
+            let s = values.sorted()
+            guard !s.isEmpty else { return "\(name): n=0" }
+            func q(_ p: Double) -> Double { s[min(s.count - 1, Int(Double(s.count) * p))] }
+            return String(format: "%@: n=%d p50=%.0f p90=%.0f max=%.0f ms, >=50ms: %d, >=100ms: %d", name, s.count,
+                          q(0.5), q(0.9), s.last!, s.filter { $0 >= 50 }.count, s.filter { $0 >= 100 }.count)
+        }
+    }
+    private let intervals = MainIntervals()
+    private func report(_ phase: String, _ lines: [String]) {
+        let text = lines.joined(separator: "\n")
+        NSLog("[main-intervals] %@\n%@", phase, text)
+        try? text.write(toFile: "/tmp/kraki-profile-\(phase)-intervals.txt", atomically: true, encoding: .utf8)
+    }
+
     private static let para = "这是一段比较典型的回答内容，包含 **加粗**、`inline code` 和一个[链接](https://example.com)。\n\n"
     private static let code = "```swift\nfunc load() async throws {\n    let (data, _) = try await session.data(for: req)\n    try decode(data)\n}\n```\n\n"
 
@@ -91,7 +138,10 @@ final class MainThreadProfileScenarioTests: XCTestCase {
         // root view, so nothing would be laid out or drawn on screen.
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        // Full screen, as on a phone: a narrower window resizes every freshly
+        // loaded chat list from screen width (and logs a FlowLayout warning
+        // per row), work a real full-screen open never does.
+        window.frame = scene.screen.bounds
         window.rootViewController = UIHostingController(rootView: Harness(nav: nav, app: app))
         window.makeKeyAndVisible()
         drain(1_500)
@@ -103,9 +153,11 @@ final class MainThreadProfileScenarioTests: XCTestCase {
         while !FileManager.default.fileExists(atPath: go.path), Date() < deadline { drain(100) }
         try? FileManager.default.removeItem(at: go)
         try? FileManager.default.removeItem(at: ready)
+        intervals.start()
     }
 
     override func tearDown() {
+        intervals.stop()
         window?.isHidden = true; window = nil; app = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         super.tearDown()
@@ -116,14 +168,56 @@ final class MainThreadProfileScenarioTests: XCTestCase {
 
     /// Open and close conversations, one per second.
     func testPhaseOpenSessions() throws {
-        for n in 0..<24 { open(n * 3 % 56); drain(900); back(); drain(500) }
+        var opens: [Double] = [], openCPU: [Double] = [], backs: [Double] = []
+        for n in 0..<24 {
+            let opened = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); open(n * 3 % 56); drain(900)
+            opens.append(intervals.longest(since: opened))
+            openCPU.append(intervals.longestCPU(since: opened))
+            let closed = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); back(); drain(500)
+            backs.append(intervals.longest(since: closed))
+        }
+        report("OpenSessions", [MainIntervals.summary("open (longest interval per open)", opens),
+                                MainIntervals.summary("open, main-thread CPU of that interval", openCPU),
+                                MainIntervals.summary("back (longest interval per back)", backs),
+                                MainIntervals.summary("all intervals >= 16 ms", intervals.intervals.map(\.ms).filter { $0 >= 16 })])
+    }
+
+    /// Open and close the long (400-message, tables + code) conversation.
+    func testPhaseOpenLongSession() throws {
+        var opens: [Double] = [], openCPU: [Double] = [], backs: [Double] = []
+        for _ in 0..<12 {
+            let opened = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); open(55); drain(1_200)
+            opens.append(intervals.longest(since: opened))
+            openCPU.append(intervals.longestCPU(since: opened))
+            let closed = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); back(); drain(600)
+            backs.append(intervals.longest(since: closed))
+        }
+        report("OpenLongSession", [MainIntervals.summary("open (longest interval per open)", opens),
+                                   MainIntervals.summary("open, main-thread CPU of that interval", openCPU),
+                                   MainIntervals.summary("back (longest interval per back)", backs),
+                                   MainIntervals.summary("all intervals >= 16 ms", intervals.intervals.map(\.ms).filter { $0 >= 16 })])
     }
 
     /// Reconnect-style session_list while the list is visible, then while a chat is open.
     func testPhaseSessionList() throws {
-        for _ in 0..<15 { try applySessionList(); drain(400) }
+        var onList: [Double] = [], inChat: [Double] = []
+        for _ in 0..<15 {
+            let at = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); try applySessionList(); drain(400)
+            onList.append(intervals.longest(since: at))
+        }
         open(5); drain(1_000)
-        for _ in 0..<15 { try applySessionList(); drain(400) }
+        for _ in 0..<15 {
+            let at = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); try applySessionList(); drain(400)
+            inChat.append(intervals.longest(since: at))
+        }
+        report("SessionList", [MainIntervals.summary("session_list, list visible (longest per list)", onList),
+                               MainIntervals.summary("session_list, chat open (longest per list)", inChat)])
     }
 
     /// Stream an answer into the open conversation (~30 deltas/s).
@@ -140,6 +234,7 @@ final class MainThreadProfileScenarioTests: XCTestCase {
         app.messageStore.beginCardTurn("s7") // a turn is running (as after the user's message)
         var text = ""
         let source = (String(repeating: Self.para, count: 6) + Self.code) as NSString
+        let streamStart = ProcessInfo.processInfo.systemUptime
         for k in 0..<400 {
             let chunk = source.substring(with: NSRange(location: (k * 7) % (source.length - 8), length: 7))
             text += chunk
@@ -149,6 +244,8 @@ final class MainThreadProfileScenarioTests: XCTestCase {
             app.messageRouter?.handleDataMessage(data)
             drain(33)
         }
+        report("Streaming", [MainIntervals.summary("streaming intervals >= 8 ms",
+                                                   intervals.intervals.filter { $0.end >= streamStart }.map(\.ms).filter { $0 >= 8 })])
         let shown = app.messageStore.cards["s7"]?.text.count ?? 0
         try? "streamed=\(text.count) card=\(shown)".write(toFile: "/tmp/kraki-profile-streaming.txt", atomically: true, encoding: .utf8)
         XCTAssertGreaterThan(shown, text.count / 2, "deltas must reach the live card")
@@ -164,6 +261,11 @@ final class MainThreadProfileScenarioTests: XCTestCase {
     func testPhaseScroll() throws {
         open(55); drain(1_500)
         let list = try XCTUnwrap(collectionView(in: window))
+        let scrollStart = ProcessInfo.processInfo.systemUptime
+        defer {
+            report("Scroll", [MainIntervals.summary("scroll intervals >= 16 ms",
+                                                    intervals.intervals.filter { $0.end >= scrollStart }.map(\.ms).filter { $0 >= 16 })])
+        }
         for direction in [-1.0, 1.0] {
             for _ in 0..<300 {   // ~5 s per direction at 60 Hz, 40 pt/frame
                 var offset = list.contentOffset
