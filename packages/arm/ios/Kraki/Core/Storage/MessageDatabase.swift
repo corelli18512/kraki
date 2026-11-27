@@ -315,7 +315,9 @@ final class MessageDatabase {
 
     /// One passive checkpoint per burst of writes, on GRDB's writer queue. A
     /// write that arrives while it runs waits for it, but it only copies the
-    /// few pages written since the last one. Passive: never waits for readers.
+    /// pages written since the last one. Passive: never waits for readers.
+    /// Submitted at user-initiated QoS: a main-thread write queued behind it
+    /// must not wait on disk work issued at a throttled (utility) priority.
     private func scheduleCheckpoint() {
         guard let checkpointDelay else { return }
         checkpointLock.lock()
@@ -323,7 +325,7 @@ final class MessageDatabase {
         checkpointScheduled = true
         checkpointLock.unlock()
         guard !alreadyScheduled else { return }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + checkpointDelay) { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + checkpointDelay) { [weak self] in
             guard let self else { return }
             self.checkpointLock.lock()
             self.checkpointScheduled = false

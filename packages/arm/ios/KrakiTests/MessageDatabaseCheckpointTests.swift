@@ -58,13 +58,16 @@ final class MessageDatabaseCheckpointTests: XCTestCase {
         XCTAssertEqual(db.recentMessages("s", limit: 1_000).count, 400)
     }
 
-    func testUncheckpointedWritesSurviveReopening() throws {
-        do {
-            let db = try MessageDatabase(databaseURL: databaseURL, checkpointDelay: 3_600)
-            try writeOneByOne(db, count: 50)
-        }
-        let reopened = try MessageDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(reopened.recentMessages("s", limit: 1_000).count, 50)
-        XCTAssertEqual(reopened.lastSeq("s"), 50)
+    /// Rows that so far exist only in the WAL are read by a new connection:
+    /// the first one stays open, so closing it cannot checkpoint them first.
+    func testWALOnlyWritesAreReadByAnotherConnection() throws {
+        let db = try MessageDatabase(databaseURL: databaseURL, checkpointDelay: 3_600)
+        let before = fileSize(databaseURL)
+        try writeOneByOne(db, count: 50)
+        XCTAssertEqual(fileSize(databaseURL), before, "nothing checkpointed yet")
+        let other = try MessageDatabase(databaseURL: databaseURL, checkpointDelay: 3_600)
+        XCTAssertEqual(other.recentMessages("s", limit: 1_000).count, 50)
+        XCTAssertEqual(other.lastSeq("s"), 50)
+        withExtendedLifetime(db) {}
     }
 }
