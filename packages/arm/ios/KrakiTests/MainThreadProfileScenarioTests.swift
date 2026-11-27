@@ -288,6 +288,50 @@ final class MainThreadProfileScenarioTests: XCTestCase {
         XCTAssertGreaterThan(shown, text.count / 2, "deltas must reach the live card")
     }
 
+    /// A whole turn in the open conversation, as the Tentacle sends it: the
+    /// user's message lands, the agent works (tool actions, draft deltas),
+    /// the answer lands and the session goes idle. Reports the longest
+    /// main-thread interval after each step.
+    func testPhaseReplyLifecycle() throws {
+        open(7); drain(1_000)
+        app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+            "type": "session_subscription_set", "deviceId": Self.device,
+            "payload": ["accepted": true, "sessionId": "s7"]]))
+        drain(300)
+        XCTAssertTrue(try XCTUnwrap(app.sessionSubscriptionController).acceptsLive("s7"))
+        var steps: [String: [Double]] = [:]
+        func send(_ type: String, seq: Int? = nil, _ payload: [String: Any], step: String, wait: Int) throws {
+            var envelope: [String: Any] = ["type": type, "sessionId": "s7", "deviceId": Self.device, "payload": payload,
+                                           "timestamp": ISO8601.withFractional.string(from: Date())]
+            if let seq { envelope["seq"] = seq }
+            let at = ProcessInfo.processInfo.systemUptime
+            intervals.begin()
+            app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: envelope))
+            drain(wait)
+            steps[step, default: []].append(intervals.longest(since: at))
+        }
+        let answer = String(repeating: Self.para, count: 4) + Self.code
+        var seq = 40
+        for turn in 0..<8 {
+            seq += 1
+            try send("user_message", seq: seq, ["content": "帮我再看一下这个问题 \(turn)"], step: "1 user message lands", wait: 400)
+            try send("active", ["state": "active"], step: "2 active", wait: 200)
+            for tool in 0..<3 {
+                try send("card_action", ["action": ["type": "tool_start", "payload": [
+                    "toolName": "bash", "toolCallId": "t\(turn)-\(tool)", "headline": "Run the tests \(tool)"]]],
+                    step: "3 card action", wait: 250)
+            }
+            for k in 0..<12 {
+                try send("agent_message_delta", ["content": String(answer.prefix(20 * (k + 1))), "reset": true],
+                         step: "4 draft delta", wait: 33)
+            }
+            seq += 1
+            try send("agent_message", seq: seq, ["content": answer + "\(turn)"], step: "5 answer lands", wait: 500)
+            try send("idle", ["state": "idle"], step: "6 idle", wait: 400)
+        }
+        report("ReplyLifecycle", steps.keys.sorted().map { MainIntervals.summary($0, steps[$0] ?? []) })
+    }
+
     private func collectionView(in view: UIView) -> UICollectionView? {
         if let c = view as? UICollectionView, c.collectionViewLayout is ChatFlowLayout { return c }
         for sub in view.subviews { if let c = collectionView(in: sub) { return c } }
