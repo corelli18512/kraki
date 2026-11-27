@@ -199,7 +199,7 @@ describe('off-band diagnostics', () => {
       const batch = { ...f.batch, platform: 'mac', version: '0.2.94', build };
       expect(sanitizeDiagBatch(batch, f.id)?.batch.build).toBe(build);
     }
-    // Windows builds are long run numbers.
+    // Windows sends its GitHub run ID (about 11 digits).
     expect(sanitizeDiagBatch({ ...f.batch, platform: 'windows', build: '42438530084' }, f.id)).not.toBeNull();
     // Still never free text, a version string, or more than one dot.
     for (const build of ['95.', '.49', '95.49.1', '0.2.94-dev.3', '95 49', 'tok_abc', '']) {
