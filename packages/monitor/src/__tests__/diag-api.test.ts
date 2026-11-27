@@ -192,6 +192,21 @@ describe('off-band diagnostics', () => {
     const bad = sanitizeDiagBatch({ ...batch, events: [{ ...event, d: { ...event.d, cpuMs: 'slow' } }] }, batchId);
     expect(bad?.batch.events[0].d).not.toHaveProperty('cpuMs');
   });
+  it('stores batches from Dogfood Mac builds, whose CFBundleVersion is N.M (93.57)', async () => {
+    const f = await fixture();
+    // Every Dogfood Mac batch was rejected as batch.build from 2026-11-04 (95.49, 1375+1063+113 log lines).
+    for (const build of ['95.49', '93.57', '93']) {
+      const batch = { ...f.batch, platform: 'mac', version: '0.2.94', build };
+      expect(sanitizeDiagBatch(batch, f.id)?.batch.build).toBe(build);
+    }
+    // Windows sends its GitHub run ID (about 11 digits).
+    expect(sanitizeDiagBatch({ ...f.batch, platform: 'windows', build: '42438530084' }, f.id)).not.toBeNull();
+    // Still never free text, a version string, or more than one dot.
+    for (const build of ['95.', '.49', '95.49.1', '0.2.94-dev.3', '95 49', 'tok_abc', '']) {
+      expect(sanitizeDiagBatch({ ...f.batch, build }, f.id)).toBeNull();
+    }
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, platform: 'mac', build: '95.49' })))).status).toBe(204);
+  });
   it('stores ui.busy tagged phase=inactive (Mac hangs while not frontmost)', async () => {
     const f = await fixture();
     const busy = { ev: 'ui.busy', seq: 1, t: 1, m: 1, d: { durationMs: 1840.5, phase: 'inactive' } };
