@@ -220,6 +220,43 @@ final class MainThreadProfileScenarioTests: XCTestCase {
                                MainIntervals.summary("session_list, chat open (longest per list)", inChat)])
     }
 
+    /// A new message in another session while the list is visible: only that
+    /// session's digest changes and it moves to the top (as in reality; the
+    /// session_list phase rewrites every row's timestamp).
+    func testPhaseSessionReorder() throws {
+        var lastSeqs = (0..<56).map { $0 == 55 ? 400 : 40 }
+        var minutes = Array(repeating: 0, count: 56)
+        func push(_ round: Int) throws {
+            let sessions: [[String: Any]] = (0..<56).map { i in
+                var d = digest(i, lastSeq: lastSeqs[i], bump: 0)
+                let ts = String(format: "2026-10-%02dT%02d:%02d:00.000Z", 1 + i % 7, i % 24, 0)
+                let bumped = minutes[i] > 0 ? String(format: "2026-10-09T%02d:%02d:00.000Z", minutes[i] / 60, minutes[i] % 60) : ts
+                d["lastActivityAt"] = bumped
+                d["preview"] = ["text": "最后一条消息的预览 \(minutes[i]) " + String(repeating: "文字", count: 20),
+                                "type": "agent_message", "timestamp": bumped]
+                return d
+            }
+            app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
+                "type": "session_list", "deviceId": Self.device, "seq": 1,
+                "timestamp": ISO8601.withFractional.string(from: Date()),
+                "payload": ["sessions": sessions, "archivedCount": 0, "autoArchiveDays": 14]]))
+        }
+        var reorders: [Double] = [], reorderCPU: [Double] = []
+        for round in 1...30 {
+            // Alternate a row near the bottom of the first screen and one in the middle.
+            let order = (0..<56).sorted { (minutes[$0], $0) > (minutes[$1], $1) }
+            let pick = order[round.isMultiple(of: 2) ? 7 : 4]
+            lastSeqs[pick] += 2
+            minutes[pick] = 60 + round
+            let at = ProcessInfo.processInfo.systemUptime
+            intervals.begin(); try push(round); drain(400)
+            reorders.append(intervals.longest(since: at))
+            reorderCPU.append(intervals.longestCPU(since: at))
+        }
+        report("SessionReorder", [MainIntervals.summary("one session moves to the top (longest per update)", reorders),
+                                  MainIntervals.summary("main-thread CPU of that interval", reorderCPU)])
+    }
+
     /// Stream an answer into the open conversation (~30 deltas/s).
     func testPhaseStreaming() throws {
         open(7); drain(1_000)
