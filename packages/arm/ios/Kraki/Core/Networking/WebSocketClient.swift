@@ -769,13 +769,13 @@ extension WebSocketClient {
         guard let sentAt = authFrameSentAt, let probeTask = task else { return }
         if Date().timeIntervalSince(sentAt) >= Self.authReplyLiveLinkCap {
             authReplyCapReached = true
-            replaceForMissingAuthReply("No auth reply within \(Int(Self.authReplyLiveLinkCap))s on a live link")
+            replaceForMissingAuthReply("⚠️ no auth reply within \(Int(Self.authReplyLiveLinkCap))s on a live link")
             return
         }
         let epoch = generation, wait = authReplyWait
         let noPong = DispatchWorkItem { [weak self] in
             guard let self, self.isCurrentAuthReplyWait(epoch: epoch, wait: wait) else { return }
-            self.replaceForMissingAuthReply("No auth reply and no pong within \(Int(Self.authReplyProbeTimeout))s")
+            self.replaceForMissingAuthReply("⚠️ no auth reply and no pong within \(Int(Self.authReplyProbeTimeout))s")
         }
         authReplyDeadline = noPong
         probeTask.sendPing { [weak self] error in
@@ -783,7 +783,7 @@ extension WebSocketClient {
                 guard let self, self.isCurrentAuthReplyWait(epoch: epoch, wait: wait) else { return }
                 noPong.cancel()
                 if let error {
-                    self.replaceForMissingAuthReply("Auth link ping failed: \(error)")
+                    self.replaceForMissingAuthReply("⚠️ auth link ping failed: \(error)")
                     return
                 }
                 let remaining = Self.authReplyLiveLinkCap - Date().timeIntervalSince(sentAt)
@@ -796,7 +796,7 @@ extension WebSocketClient {
 
     private func replaceForMissingAuthReply(_ why: String) {
         consecutiveAuthReplyTimeouts += 1
-        KLog.d("⚠️ \(why) — replacing socket")
+        KLog.d("\(why) — replacing socket")
         recover(reason: "auth_reply_timeout")
     }
 

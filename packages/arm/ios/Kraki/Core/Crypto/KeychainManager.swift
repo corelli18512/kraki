@@ -699,7 +699,7 @@ extension KeychainManager {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: identityService,
             kSecAttrAccount as String: account,
-            kSecAttrLabel as String: "Kraki Mac identity",
+            kSecAttrLabel as String: "Kraki",   // account says which key pair
             kSecValueData as String: der,
         ]
         let status = withoutKeychainUI { SecItemAdd(item as CFDictionary, nil) }

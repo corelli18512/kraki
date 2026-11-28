@@ -971,7 +971,7 @@ extension AuthManager {
               pendingRegionDeviceId == nil, storedDeviceId != nil,
               let registered = registeredCLISignIn else { return false }
         guard cliSignInDate == registered else {
-            KLog.diag("Auth: the local Kraki's sign-in changed since this device registered — using its token")
+            KLog.diag("Auth: local kraki sign-in changed since this device registered — using its token")
             return false
         }
         guard keychain.useStoredIdentityIfPresent() else { return false }
