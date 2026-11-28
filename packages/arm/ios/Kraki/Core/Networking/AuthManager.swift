@@ -123,19 +123,22 @@ final class AuthManager {
     #endif
 
     #if os(macOS)
-    /// This process signs in with the stored device (`challenge`, Keychain
-    /// keys) although the CLI token is loaded; the token is the fallback.
-    /// Like iOS: an edge Head verifies a known device itself instead of
-    /// asking the account service on another continent (token sign-in with
-    /// new keys always did, 0.6–10 s per Mac launch).
+    /// This process signs in with the stored device (`challenge`, the stored
+    /// identity's keys) although the CLI token is loaded; the token is the
+    /// fallback. Like iOS: an edge Head verifies a known device itself
+    /// instead of asking the account service on another continent, which a
+    /// token sign-in with new keys always did (edge log: p50 6.8 s, max
+    /// 10 s; cross-border requests 0.6–10 s).
     private(set) var signsInWithStoredDevice = false
     /// The stored device's challenge failed in this process; it stays on the
     /// token until the next launch.
     private var storedDeviceSignInAbandoned = false
     /// The last `auth` sent was the stored device's challenge.
     private var sentStoredDeviceChallenge = false
+    /// `method` of the last `auth` sent.
+    private var sentAuthMethod: String?
     #if DEBUG
-    private var isolatedCredentialSignInAt: Date?
+    private var isolatedRegisteredCLISignIn: Date?
     /// Tests: signing the challenge fails as with a denied Keychain item.
     var debugChallengeSigningError: Error?
     #endif
@@ -147,6 +150,9 @@ final class AuthManager {
     /// process-local, is never logged/persisted by Kraki, and is cleared on
     /// explicit logout through `clearStoredCredentials()`.
     var cliGitHubToken: String?
+    /// `cliSignInDate()` when `cliGitHubToken` was loaded: which local Kraki
+    /// sign-in that token belongs to.
+    var cliTokenSignInDate: Date?
     #endif
 
     #if os(iOS)
@@ -278,8 +284,14 @@ final class AuthManager {
         #if os(macOS)
         // Never a challenge with process-local keys: the relay knows the
         // stored ones, so it would only fail.
-        if signsInWithStoredDevice, keychain.usingEphemeralKeys {
+        if signsInWithStoredDevice, !keychain.usingStoredIdentity {
             abandonStoredDeviceSignIn(keychainUsable: false)
+        }
+        // The stored device's last challenge got no answer on a live link
+        // through the whole wait: the token's turn.
+        if signsInWithStoredDevice, sentStoredDeviceChallenge, appState?.wsClient?.authReplyCapReached == true {
+            KLog.diag("Auth: the stored device's challenge got no answer — signing in with the CLI token")
+            abandonStoredDeviceSignIn(keychainUsable: true)
         }
         sentStoredDeviceChallenge = signsInWithStoredDevice && activeDeviceId != nil && pairingToken == nil
         if let token = cliGitHubToken, !sentStoredDeviceChallenge {
@@ -435,12 +447,7 @@ final class AuthManager {
         #if os(macOS)
         // Signed in again (only an explicit sign-in gets here after Sign Out).
         appState.signedOutByUser = false
-        if !usesEphemeralOpenAuth, !sentStoredDeviceChallenge {
-            // Registered with a credential: with the stored keys the next
-            // launch can sign in with a challenge; process-local keys die
-            // with this process, so the next launch uses the token again.
-            credentialSignInAt = keychain.usingEphemeralKeys ? nil : Date()
-        }
+        if !usesEphemeralOpenAuth { recordRegisteredCLISignIn() }
         #endif
 
         // Mark transport as authenticated
@@ -634,9 +641,10 @@ final class AuthManager {
         appState?.isRegionRedirectInFlight = false
         #if os(macOS)
         cliGitHubToken = nil
+        cliTokenSignInDate = nil
         signsInWithStoredDevice = false
         sentStoredDeviceChallenge = false
-        credentialSignInAt = nil
+        registeredCLISignIn = nil
         #endif
         #if DEBUG
         if debugIsolatedIdentity { appState?.hasStoredCredentials = false; return }
@@ -877,6 +885,9 @@ final class AuthManager {
     }
 
     private func sendRaw(_ dict: [String: Any]) {
+        #if os(macOS)
+        if dict["type"] as? String == "auth" { sentAuthMethod = (dict["auth"] as? [String: Any])?["method"] as? String }
+        #endif
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let string = String(data: data, encoding: .utf8) else { return }
         appState?.wsClient?.sendRaw(string)
@@ -894,56 +905,76 @@ extension AuthManager {
         keychain.activateEphemeralKeys()
     }
 
-    /// Before a token sign-in: register the stored Keychain keys when they
-    /// work without any Keychain UI (the next launch can then sign in with a
-    /// challenge the edge Head verifies itself), else process-local keys.
+    /// Before a token sign-in: register the stored identity (created when
+    /// missing) when it works without any Keychain UI, so the next launch can
+    /// sign in with a challenge the edge Head verifies itself; else
+    /// process-local keys.
     func prepareKeysForTokenSignIn() {
-        let stored = keychain.useStoredKeysIfUsable()
+        let stored = keychain.useStoredIdentityForTokenSignIn()
         KLog.diag("Auth: token sign-in registers \(stored ? "stored" : "process-local") keys")
     }
 
-    /// When this device last completed a sign-in that registered its stored
-    /// keys with a credential (CLI token, pairing, OAuth). A challenge does
-    /// not count: it proves the device, not which login it belongs to.
-    private static let credentialSignInAtKey = "kraki.deviceCredentialSignInAt"
+    /// The local Kraki sign-in (`cliSignInDate()`, the token file's
+    /// modification time) whose token last registered this device's stored
+    /// identity. A launch signs in with the stored device only while the
+    /// local Kraki is still on that sign-in: `kraki connect` with another
+    /// account changes the file, and the next launch uses its token.
+    private static let registeredCLISignInKey = "kraki.deviceRegisteredCLISignIn"
     #if DEBUG
-    func debugSetCredentialSignInAt(_ date: Date?) { credentialSignInAt = date }
+    func debugSetRegisteredCLISignIn(_ date: Date?) { registeredCLISignIn = date }
     #endif
-    private(set) var credentialSignInAt: Date? {
+    private(set) var registeredCLISignIn: Date? {
         get {
             #if DEBUG
-            if debugIsolatedIdentity { return isolatedCredentialSignInAt }
+            if debugIsolatedIdentity { return isolatedRegisteredCLISignIn }
             #endif
-            let seconds = Self.sharedDefaults.double(forKey: Self.credentialSignInAtKey)
-            return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+            return Self.sharedDefaults.object(forKey: Self.registeredCLISignInKey) as? Date
         }
         set {
             #if DEBUG
-            if debugIsolatedIdentity { isolatedCredentialSignInAt = newValue; return }
+            if debugIsolatedIdentity { isolatedRegisteredCLISignIn = newValue; return }
             #endif
             if let newValue {
-                Self.sharedDefaults.set(newValue.timeIntervalSince1970, forKey: Self.credentialSignInAtKey)
+                Self.sharedDefaults.set(newValue, forKey: Self.registeredCLISignInKey)
             } else {
-                Self.sharedDefaults.removeObject(forKey: Self.credentialSignInAtKey)
+                Self.sharedDefaults.removeObject(forKey: Self.registeredCLISignInKey)
             }
         }
     }
 
+    /// On `auth_ok`. A CLI token sign-in that registered the stored identity
+    /// records its local Kraki sign-in, but only while the token file is
+    /// still the one that token was loaded from (a reconnect with the cached
+    /// token after `kraki connect` with another account must not). A
+    /// challenge proves the device, not which login it belongs to: no change.
+    /// Pairing / OAuth: the next launch uses the token, as before.
+    private func recordRegisteredCLISignIn() {
+        switch sentAuthMethod {
+        case "challenge":
+            return
+        case "github_token":
+            let loadedFrom = cliTokenSignInDate
+            let current = loadedFrom != nil && Self.cliSignInDate() == loadedFrom
+            registeredCLISignIn = current && keychain.usingStoredIdentity ? loadedFrom : nil
+        default:
+            registeredCLISignIn = nil
+        }
+    }
+
     /// Choose the stored-device challenge for this launch when: a device is
-    /// stored, its Keychain keys work without UI, it last signed in with a
-    /// credential that registered those keys, and the local Kraki has not
-    /// saved a newer GitHub sign-in since (`kraki connect` with another
-    /// account must not stay on the old one). Otherwise the token signs in.
-    func beginStoredDeviceSignIn(cliSignInDate: () -> Date?) -> Bool {
+    /// stored, the local Kraki is still on the sign-in whose token registered
+    /// this device's stored identity, and that identity reads without
+    /// Keychain UI. Otherwise the token signs in.
+    func beginStoredDeviceSignIn(cliSignInDate: Date?) -> Bool {
         if signsInWithStoredDevice { return true }
         guard !usesEphemeralOpenAuth, !storedDeviceSignInAbandoned,
               pendingRegionDeviceId == nil, storedDeviceId != nil,
-              let registeredAt = credentialSignInAt,
-              keychain.storedKeysUsableWithoutPrompt() else { return false }
-        if let cliSignIn = cliSignInDate(), cliSignIn > registeredAt {
-            KLog.diag("Auth: the local Kraki signed in again since this device did — using its token")
+              let registered = registeredCLISignIn else { return false }
+        guard cliSignInDate == registered else {
+            KLog.diag("Auth: the local Kraki's sign-in changed since this device registered — using its token")
             return false
         }
+        guard keychain.useStoredIdentityIfPresent() else { return false }
         signsInWithStoredDevice = true
         return true
     }

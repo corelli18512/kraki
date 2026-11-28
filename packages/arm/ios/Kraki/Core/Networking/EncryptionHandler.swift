@@ -71,9 +71,10 @@ final class EncryptionHandler {
     private var keyAvailabilityConfirmed = false
     private var cachedEncryptionKeyPair: (privateKey: SecKey, publicKey: SecKey)?
     #if os(macOS)
-    /// `KeychainManager.keyPairGeneration` of the cached pair: a switch to
-    /// process-local keys after it was cached must not leave decryption on
-    /// the stored key while auth registered the new one.
+    /// `KeychainManager.keyPairGeneration` of the cached pair: a switch of
+    /// this process's keys (stored identity, process-local) after it was
+    /// cached must not leave decryption on the old key while auth registered
+    /// the new one.
     private var cachedKeyPairGeneration = 0
     #endif
 

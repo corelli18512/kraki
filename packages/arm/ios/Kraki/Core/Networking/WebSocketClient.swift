@@ -159,8 +159,10 @@ final class WebSocketClient: NSObject {
     /// (bumped whenever a wait starts or ends, so late pongs are ignored).
     private var authFrameSentAt: Date?
     private var authReplyWait = 0
-    /// Last pong on this socket (auth probe or liveness ping).
-    private var lastPongAt: Date?
+    /// The last wait ended at `authReplyLiveLinkCap`: the link answered pings
+    /// but the Head never answered the frame. Cleared by the next frame and
+    /// by a sign-in.
+    private(set) var authReplyCapReached = false
 
     // MARK: Outbound retry queue
     //
@@ -382,6 +384,7 @@ final class WebSocketClient: NSObject {
 
     private func armAuthReplyDeadline() {
         endAuthReplyWait()
+        authReplyCapReached = false
         authFrameSentAt = Date()
         scheduleAuthReplyCheck(after: currentAuthReplyTimeout)
     }
@@ -416,6 +419,7 @@ final class WebSocketClient: NSObject {
             phaseDeadline?.cancel(); phaseDeadline = nil
             endAuthReplyWait()
             consecutiveAuthReplyTimeouts = 0
+            authReplyCapReached = false
             flushOutboundQueue()
             scheduleStableConnectionReset()
         }
@@ -613,7 +617,6 @@ final class WebSocketClient: NSObject {
                     self.recover(reason: "ping_failed")
                 } else {
                     self.lastLivenessAt = Date()
-                    self.lastPongAt = self.lastLivenessAt
                 }
             }
         }
@@ -726,7 +729,6 @@ final class WebSocketClient: NSObject {
         lastWriteCompletedAt = nil
         phaseDeadline?.cancel(); phaseDeadline = nil
         endAuthReplyWait()
-        lastPongAt = nil
         resumeProbeDeadline?.cancel(); resumeProbeDeadline = nil
         isAuthenticated = false
         stopPing()
@@ -766,6 +768,7 @@ extension WebSocketClient {
     private func checkLateAuthReply() {
         guard let sentAt = authFrameSentAt, let probeTask = task else { return }
         if Date().timeIntervalSince(sentAt) >= Self.authReplyLiveLinkCap {
+            authReplyCapReached = true
             replaceForMissingAuthReply("No auth reply within \(Int(Self.authReplyLiveLinkCap))s on a live link")
             return
         }
@@ -783,7 +786,6 @@ extension WebSocketClient {
                     self.replaceForMissingAuthReply("Auth link ping failed: \(error)")
                     return
                 }
-                self.lastPongAt = Date()
                 let remaining = Self.authReplyLiveLinkCap - Date().timeIntervalSince(sentAt)
                 KLog.d("⏳ Auth reply late but the link answers — waiting (\(Int(remaining))s left)")
                 self.scheduleAuthReplyCheck(after: max(0, min(Self.authReplyRecheckInterval, remaining)))
@@ -798,14 +800,13 @@ extension WebSocketClient {
         recover(reason: "auth_reply_timeout")
     }
 
-    /// A retryable sign-in frame awaits its reply, still within the cap, on
-    /// a link that answered a ping recently: the Head is working on it.
-    var isWaitingForAuthReplyOnLiveLink: Bool {
+    /// A retryable sign-in frame awaits its reply, sent less than the cap
+    /// ago. Its link has not failed a ping: a failed or unanswered probe
+    /// replaces the socket at once, which ends the wait.
+    var isAwaitingAuthReplyWithinCap: Bool {
         guard state == .connected, !isAuthenticated, authReplyDeadline != nil,
-              let sentAt = authFrameSentAt, let pong = lastPongAt else { return false }
-        let now = Date()
-        return now.timeIntervalSince(sentAt) < Self.authReplyLiveLinkCap
-            && now.timeIntervalSince(pong) < Self.authReplyProbeTimeout + Self.authReplyRecheckInterval
+              let sentAt = authFrameSentAt else { return false }
+        return Date().timeIntervalSince(sentAt) < Self.authReplyLiveLinkCap
     }
 }
 

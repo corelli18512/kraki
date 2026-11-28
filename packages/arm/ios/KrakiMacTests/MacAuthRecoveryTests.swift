@@ -9,9 +9,11 @@ import XCTest
 @MainActor
 private final class FakeRelay {
     /// `.fatal`: device_not_found. `.hang`: the link stalls (no reply, no
-    /// pong). `.verify`: a real challenge, verified against the key the device
-    /// last registered (`registeredKeys`), `invalid_signature` otherwise.
-    enum ChallengeMode { case fatal, hang, verify }
+    /// pong). `.silent`: no reply, but the link keeps answering pings (a Head
+    /// that never answers). `.verify`: a real challenge, verified against the
+    /// key the device last registered (`registeredKeys`), `invalid_signature`
+    /// otherwise.
+    enum ChallengeMode { case fatal, hang, silent, verify }
 
     private let listener: NWListener
     private var connections: [NWConnection] = []
@@ -23,6 +25,8 @@ private final class FakeRelay {
     var stalledTokenAuths = 0
     /// Token auths are answered this late (the link keeps answering pings).
     var tokenReplyDelay: TimeInterval = 0
+    /// `.verify` challenges are sent this late (the link keeps answering pings).
+    var challengeReplyDelay: TimeInterval = 0
     /// Signing key (SPKI) each device last registered with a token sign-in.
     var registeredKeys: [String: String] = [:]
     private(set) var methods: [String] = []
@@ -137,6 +141,8 @@ private final class FakeRelay {
             send(["type": "auth_error", "code": "device_not_found", "message": "Unknown device"], on: connection)
         case .hang:
             stalled.append(ObjectIdentifier(connection))
+        case .silent:
+            break
         case .verify:
             let deviceId = (message["auth"] as? [String: Any])?["deviceId"] as? String ?? ""
             guard registeredKeys[deviceId] != nil else {
@@ -145,7 +151,9 @@ private final class FakeRelay {
             }
             let nonce = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
             nonces[ObjectIdentifier(connection)] = (deviceId, nonce)
-            send(["type": "auth_challenge", "nonce": nonce], on: connection)
+            DispatchQueue.main.asyncAfter(deadline: .now() + challengeReplyDelay) { [weak self] in
+                self?.send(["type": "auth_challenge", "nonce": nonce], on: connection)
+            }
         }
     }
 
@@ -182,7 +190,8 @@ final class MacAuthRecoveryTests: XCTestCase {
         app = nil
         relay?.stop()
         relay = nil
-        KeychainManager.debugStoredKeysUnusable = false
+        KeychainManager.debugIdentityItemsUnreadable = false
+        KeychainManager.debugIdentityItemWriteFails = false
         KeychainManager.debugResetProcessKeys()
         if let keys = DevSecretFileStore.testDirectory {
             try? FileManager.default.removeItem(at: keys)
@@ -378,9 +387,12 @@ final class MacAuthRecoveryTests: XCTestCase {
 
     // MARK: Stored-device sign-in (the Mac signs in like the iPhone)
 
-    /// This process's stored keys, in a test directory (Debug keeps them in
-    /// files, DevSecretFileStore). `create`: they exist already (a returning
-    /// Mac). Returns the signing key's SPKI, or nil when not created.
+    /// The local Kraki's sign-in (`cliSignInDate()`, the token file's time).
+    private let cliSignIn = Date(timeIntervalSince1970: 1_795_000_000)
+
+    /// This process's stored identity, in a test directory (Debug keeps the
+    /// items in files, DevSecretFileStore). `create`: it exists already (a
+    /// returning Mac). Returns the signing key's SPKI, or nil when not created.
     @discardableResult
     private func useTestStoredKeys(create: Bool = true) throws -> String? {
         DevSecretFileStore.testDirectory = FileManager.default.temporaryDirectory
@@ -388,55 +400,63 @@ final class MacAuthRecoveryTests: XCTestCase {
         KeychainManager.debugResetProcessKeys()
         guard create else { return nil }
         let spki = try storedSigningKey()
-        KeychainManager.debugResetProcessKeys()   // the launch proves them itself
+        KeychainManager.debugResetProcessKeys()   // the launch reads them itself
         return spki
     }
 
     private func storedSigningKey() throws -> String {
-        XCTAssertTrue(KeychainManager().useStoredKeysIfUsable())
+        XCTAssertTrue(KeychainManager().useStoredIdentityForTokenSignIn())
         return try CryptoManager().exportPublicKeySPKI(KeychainManager().getOrCreateSigningKey().publicKey)
     }
 
-    /// A returning Mac: device `dev_mac` registered its stored keys with a
-    /// token sign-in at `registeredAt`; the local Kraki signed in at `cliSignIn`.
-    private func makeReturningMac(registeredAt: Date? = Date().addingTimeInterval(-60),
-                                  cliSignIn: Date = Date().addingTimeInterval(-3600)) throws -> AppState {
+    private func identityItem(_ key: String) -> Data? {
+        let tag = key == "signing" ? "chat.kraki.mac.dev.signing-key" : "chat.kraki.mac.dev.encryption-key"
+        return DevSecretFileStore.read(KeychainManager.identityFileName(tag))
+    }
+
+    /// A returning Mac: device `dev_mac`, whose stored identity was registered
+    /// by the token of the local Kraki's sign-in `registered`; the local
+    /// Kraki is now on `cliSignIn` (default: the same sign-in).
+    private func makeReturningMac(registered: Date?? = .none, cliSignIn: Date? = nil) throws -> AppState {
+        let current = cliSignIn ?? self.cliSignIn
         AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
-        AuthManager.debugCLISignInDate = { cliSignIn }
+        AuthManager.debugCLISignInDate = { current }
         let app = try makeGraph()
         app.authManager?.debugSetStoredDeviceId("dev_mac")
-        app.authManager?.debugSetCredentialSignInAt(registeredAt)
+        app.authManager?.debugSetRegisteredCLISignIn(registered ?? current)
         app.authWatchdogInterval = 60
         return app
     }
 
-    /// (a) A returning Mac whose Keychain keys work without UI signs in with
-    /// its challenge, which an edge Head verifies itself, instead of a token
-    /// sign-in with new process-local keys that only the account service on
-    /// the US main Head could answer (6.8 s p50 from Beijing, 19 s on 11-27).
+    /// (a) A returning Mac whose stored identity reads without Keychain UI
+    /// signs in with its challenge, which an edge Head verifies itself,
+    /// instead of a token sign-in with new process-local keys that only the
+    /// account service on the US main Head could answer (edge log p50 6.8 s
+    /// from Beijing; 19 s to a fresh session list on 11-27).
     func testReturningMacSignsInWithItsStoredDeviceNotTheToken() async throws {
         let storedKey = try useTestStoredKeys()
         relay.challengeMode = .verify
         relay.registeredKeys["dev_mac"] = storedKey
         app = try makeReturningMac()
-        let registeredAt = app.authManager?.credentialSignInAt
         let signedIn = await app.attemptCLILogin()
         XCTAssertTrue(signedIn)
         try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
         XCTAssertEqual(relay.methods, ["challenge"])
         XCTAssertEqual(relay.verifiedChallenges, 1)
         XCTAssertEqual(relay.sentKeys, [storedKey])
-        XCTAssertFalse(KeychainManager().usingEphemeralKeys, "no process-local keys")
+        XCTAssertTrue(KeychainManager().usingStoredIdentity, "no process-local keys")
         XCTAssertEqual(app.deviceId, "dev_mac")
         XCTAssertEqual(app.authManager?.cliGitHubToken, "tok-ok", "the token stays loaded for recovery")
-        XCTAssertEqual(app.authManager?.credentialSignInAt, registeredAt, "a challenge does not move the account-switch mark")
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, cliSignIn, "a challenge does not move the mark")
     }
 
-    /// (b) Keys that would need Keychain UI or were denied: the token signs in
-    /// with process-local keys as before, and the next launch uses it again.
-    func testUnusableKeychainKeysSignInWithTheTokenAndProcessLocalKeys() async throws {
+    /// (b) Identity items that would need Keychain UI or were denied: the
+    /// token signs in with process-local keys as before, the items are left
+    /// exactly as they were, and the next launch uses the token again.
+    func testUnreadableIdentitySignsInWithTheTokenAndProcessLocalKeys() async throws {
         let storedKey = try useTestStoredKeys()
-        KeychainManager.debugStoredKeysUnusable = true
+        let items = (identityItem("signing"), identityItem("encryption"))
+        KeychainManager.debugIdentityItemsUnreadable = true
         relay.challengeMode = .verify
         relay.registeredKeys["dev_mac"] = storedKey
         app = try makeReturningMac()
@@ -446,7 +466,59 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(relay.methods, ["github_token"])
         XCTAssertTrue(KeychainManager().usingEphemeralKeys)
         XCTAssertNotEqual(relay.sentKeys.first ?? nil, storedKey)
-        XCTAssertNil(app.authManager?.credentialSignInAt, "process-local keys die with the process")
+        XCTAssertNil(app.authManager?.registeredCLISignIn, "process-local keys die with the process")
+        XCTAssertEqual(identityItem("signing"), items.0, "never overwritten")
+        XCTAssertEqual(identityItem("encryption"), items.1, "never overwritten")
+    }
+
+    /// The identity cannot be stored: this process signs in with the token
+    /// and process-local keys (today's behaviour), the next launch too.
+    func testIdentityThatCannotBeStoredSignsInWithProcessLocalKeys() async throws {
+        try useTestStoredKeys(create: false)
+        KeychainManager.debugIdentityItemWriteFails = true
+        relay.challengeMode = .verify
+        app = try makeReturningMac(registered: .some(nil))
+        let signedIn = await app.attemptCLILogin()
+        XCTAssertTrue(signedIn)
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["github_token"])
+        XCTAssertTrue(KeychainManager().usingEphemeralKeys)
+        XCTAssertNil(app.authManager?.registeredCLISignIn)
+        XCTAssertNil(identityItem("signing"))
+        XCTAssertNil(identityItem("encryption"))
+    }
+
+    /// The stored identity is key bytes (DER) in one item per pair, imported
+    /// into memory: no SecKey item is created or used for it, a relaunch
+    /// reads the same keys, and deleting the keys removes the items.
+    func testStoredIdentityIsKeyBytesImportedIntoMemory() throws {
+        try useTestStoredKeys(create: false)
+        let keychain = KeychainManager()
+        XCTAssertFalse(keychain.useStoredIdentityIfPresent(), "nothing stored yet, nothing created")
+        XCTAssertNil(identityItem("signing"))
+        XCTAssertTrue(keychain.useStoredIdentityForTokenSignIn())
+        let signing = try keychain.getOrCreateSigningKey()
+        let encryption = try keychain.getOrCreateEncryptionKey()
+        let crypto = CryptoManager()
+        XCTAssertEqual(identityItem("signing"), SecKeyCopyExternalRepresentation(signing.privateKey, nil) as Data?)
+        XCTAssertEqual(identityItem("encryption"), SecKeyCopyExternalRepresentation(encryption.privateKey, nil) as Data?)
+        XCTAssertNil(DevSecretFileStore.read("chat.kraki.mac.dev.signing-key"), "no SecKey item (legacy store)")
+        XCTAssertNil(DevSecretFileStore.read("chat.kraki.mac.dev.encryption-key"), "no SecKey item (legacy store)")
+
+        KeychainManager.debugResetProcessKeys()   // relaunch
+        XCTAssertTrue(KeychainManager().useStoredIdentityIfPresent())
+        XCTAssertTrue(KeychainManager().usingStoredIdentity)
+        let reloaded = try KeychainManager().getOrCreateEncryptionKey()
+        XCTAssertEqual(try crypto.exportPublicKeySPKI(reloaded.publicKey), try crypto.exportPublicKeySPKI(encryption.publicKey))
+        XCTAssertEqual(try crypto.exportPublicKeySPKI(KeychainManager().getOrCreateSigningKey().publicKey),
+                       try crypto.exportPublicKeySPKI(signing.publicKey))
+        let blob = try crypto.encryptToBlob("hi", recipients: [.init(deviceId: "d", publicKey: encryption.publicKey)])
+        XCTAssertEqual(try crypto.decryptFromBlob(blob, deviceId: "d", privateKey: reloaded.privateKey), "hi")
+
+        try KeychainManager().deleteAllKeys()   // Sign Out / Delete Account
+        XCTAssertNil(identityItem("signing"))
+        XCTAssertNil(identityItem("encryption"))
+        XCTAssertFalse(KeychainManager().usingStoredIdentity)
     }
 
     /// Stored device refused by the relay: the CLI token signs in by itself,
@@ -467,8 +539,8 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(app.deviceId, "dev_mac", "the device was not reset", line: line)
         XCTAssertEqual(app.sessionStore.drafts["s1"], "half a thought", "local data kept", line: line)
         XCTAssertEqual(relay.sentKeys.last ?? nil, storedKey, "the token registers the stored keys again", line: line)
-        XCTAssertFalse(KeychainManager().usingEphemeralKeys, line: line)
-        XCTAssertNotNil(app.authManager?.credentialSignInAt, line: line)
+        XCTAssertTrue(KeychainManager().usingStoredIdentity, line: line)
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, cliSignIn, line: line)
     }
 
     /// (c) Another key is registered for the device (e.g. last launch's
@@ -488,8 +560,8 @@ final class MacAuthRecoveryTests: XCTestCase {
         try await assertQuietFallbackToTheToken(storedKey: storedKey)
     }
 
-    /// (c) The challenge cannot be signed (Keychain denied after launch):
-    /// the token signs in with process-local keys, no error shown.
+    /// (c) The challenge cannot be signed: the token signs in with
+    /// process-local keys, no error shown.
     func testUnsignableChallengeFallsBackToTheTokenWithProcessLocalKeys() async throws {
         let storedKey = try useTestStoredKeys()
         relay.challengeMode = .verify
@@ -508,27 +580,44 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(app.deviceId, "dev_mac")
         XCTAssertTrue(KeychainManager().usingEphemeralKeys, "auth and decryption both on process-local keys")
         XCTAssertNotEqual(relay.sentKeys.last ?? nil, storedKey)
-        XCTAssertNil(app.authManager?.credentialSignInAt)
+        XCTAssertNil(app.authManager?.registeredCLISignIn)
     }
 
-    /// (d) First launch with this version (nothing recorded, no stored keys
-    /// yet): the token signs in registering newly stored keys, so the second
-    /// launch signs in with the challenge.
+    /// (c) The Head never answers the challenge although the link answers
+    /// pings: at the socket's cap the token signs in instead (previously the
+    /// watchdog dropped the stored device on any tick).
+    func testChallengeUnansweredOnALiveLinkFallsBackToTheTokenAtTheCap() async throws {
+        let storedKey = try useTestStoredKeys()
+        relay.challengeMode = .silent
+        relay.registeredKeys["dev_mac"] = storedKey
+        app = try makeReturningMac()
+        let started = Date()
+        _ = await app.attemptCLILogin()
+        try await waitUntil(WebSocketClient.authReplyLiveLinkCap + 10, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["challenge", "github_token"])
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), WebSocketClient.authReplyLiveLinkCap - 0.5)
+        XCTAssertEqual(relay.sentKeys.last ?? nil, storedKey, "still the stored identity")
+        XCTAssertFalse(app.authManager?.signsInWithStoredDevice ?? true)
+    }
+
+    /// (d) First launch with this version (nothing recorded, no stored
+    /// identity yet): the token signs in registering a newly stored identity,
+    /// so the second launch signs in with the challenge.
     func testTokenSignInRegistersStoredKeysSoTheNextLaunchUsesTheChallenge() async throws {
         try useTestStoredKeys(create: false)
         relay.challengeMode = .verify
-        app = try makeReturningMac(registeredAt: nil)
+        app = try makeReturningMac(registered: .some(nil))
         let signedIn = await app.attemptCLILogin()
         XCTAssertTrue(signedIn)
         try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
         XCTAssertEqual(relay.methods, ["github_token"])
-        XCTAssertFalse(KeychainManager().usingEphemeralKeys)
+        XCTAssertTrue(KeychainManager().usingStoredIdentity)
         XCTAssertEqual(relay.sentKeys, [try storedSigningKey()])
-        let registeredAt = try XCTUnwrap(app.authManager?.credentialSignInAt)
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, cliSignIn)
 
         app.disconnect()
         KeychainManager.debugResetProcessKeys()   // next launch
-        app = try makeReturningMac(registeredAt: registeredAt)
+        app = try makeReturningMac(registered: app.authManager?.registeredCLISignIn)
         let again = await app.attemptCLILogin()
         XCTAssertTrue(again)
         try await waitUntil(10, "signed in again") { app.connectionStatus == .connected }
@@ -536,20 +625,49 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(relay.verifiedChallenges, 1)
     }
 
-    /// (e) The local Kraki saved a GitHub sign-in after this device last
+    /// (e) The local Kraki saved another GitHub sign-in since this device
     /// registered (`kraki connect`, maybe another account): the token signs in.
     func testNewerLocalKrakiSignInUsesTheToken() async throws {
         let storedKey = try useTestStoredKeys()
         relay.challengeMode = .verify
         relay.registeredKeys["dev_mac"] = storedKey
-        let registeredAt = Date().addingTimeInterval(-3600)
-        app = try makeReturningMac(registeredAt: registeredAt, cliSignIn: Date().addingTimeInterval(-60))
+        let switched = cliSignIn.addingTimeInterval(3600)
+        app = try makeReturningMac(registered: cliSignIn, cliSignIn: switched)
         let signedIn = await app.attemptCLILogin()
         XCTAssertTrue(signedIn)
         try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
         XCTAssertEqual(relay.methods, ["github_token"])
         XCTAssertEqual(relay.sentKeys, [storedKey], "still the stored keys")
-        XCTAssertGreaterThan(app.authManager?.credentialSignInAt ?? .distantPast, registeredAt)
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, switched)
+    }
+
+    /// (e) Review P1-1: signed in, then `kraki connect` with another account
+    /// saves a new token while the app runs. A reconnect still uses the old
+    /// cached token; it must not record the new sign-in, or every later
+    /// launch would sign in to the old account with the challenge.
+    func testReconnectWithTheOldCachedTokenAfterAnAccountSwitchKeepsTheNextLaunchOnTheToken() async throws {
+        try useTestStoredKeys(create: false)
+        relay.challengeMode = .verify
+        app = try makeReturningMac(registered: .some(nil))
+        _ = await app.attemptCLILogin()
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, cliSignIn)
+
+        let switched = cliSignIn.addingTimeInterval(3600)
+        AuthManager.debugCLISignInDate = { switched }   // `kraki connect` as account B
+        app.reconnectForNewCredentials(reason: "test")
+        try await waitUntil(10, "signed in again") {
+            relay.methods.count == 2 && app.connectionStatus == .connected
+        }
+
+        app.disconnect()
+        KeychainManager.debugResetProcessKeys()   // next launch
+        app = try makeReturningMac(registered: app.authManager?.registeredCLISignIn, cliSignIn: switched)
+        _ = await app.attemptCLILogin()
+        try await waitUntil(10, "signed in after relaunch") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["github_token", "github_token", "github_token"],
+                       "the next launch after the account switch must use the (new) token")
+        XCTAssertEqual(app.authManager?.registeredCLISignIn, switched)
     }
 
     /// (f) Sign Out after a stored-device sign-in stays signed out.
@@ -572,8 +690,30 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(app.connectionStatus, .awaitingLogin)
         XCTAssertEqual(relay.methods, ["challenge"], "nothing signed in behind the person's back")
         XCTAssertFalse(app.hasStoredCredentials)
-        XCTAssertNil(app.authManager?.credentialSignInAt)
+        XCTAssertNil(app.authManager?.registeredCLISignIn)
         XCTAssertFalse(app.authManager?.signsInWithStoredDevice ?? true)
+    }
+
+    /// Review P2: after an outage longer than the watchdog's threshold
+    /// (`notConnectedSince` already old), a tick landing while the stored
+    /// device's challenge is in flight, before any probe pong, gave up on
+    /// the stored device for the process and replaced the socket. It now
+    /// waits for the reply.
+    func testWatchdogTickDuringAnInFlightChallengeKeepsTheStoredDevice() async throws {
+        let storedKey = try useTestStoredKeys()
+        relay.challengeMode = .verify
+        relay.challengeReplyDelay = 2.5
+        relay.registeredKeys["dev_mac"] = storedKey
+        app = try makeReturningMac()
+        app.authWatchdogInterval = 0.2
+        app.authStuckThreshold = 1
+        app.notConnectedSince = Date().addingTimeInterval(-30)
+        _ = await app.attemptCLILogin()
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["challenge"])
+        XCTAssertEqual(relay.verifiedChallenges, 1)
+        XCTAssertNil(app.lastAuthRecoveryAt, "no stuck_unauthenticated recovery")
+        XCTAssertTrue(app.authManager?.signsInWithStoredDevice ?? false, "the stored device is kept")
     }
 
     // MARK: Slow Head on a live link
