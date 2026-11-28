@@ -15,5 +15,8 @@
     "rename": "重命名",
     "continue": "继续",
     "back": "返回"
+  },
+  "presence": {
+    "unknown": "状态未知"
   }
 }

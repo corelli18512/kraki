@@ -138,6 +138,39 @@ describe('SessionRow keyboard and screen reader (K-212)', () => {
   });
 });
 
+describe('SessionRow narrow presence dot', () => {
+  const narrowRow = () => render(<MemoryRouter><SessionRow session={session} selected={false} pinned={false} narrow /></MemoryRouter>);
+  it('shows unknown presence before this page load\'s auth_ok as a hollow ring, not offline', () => {
+    // A reload: the persisted device list says offline, but nothing is live yet.
+    useStore.setState({ devices: new Map([['d', { id: 'd', role: 'tentacle', name: 'Local Mac', online: false }]]) });
+    const { container } = narrowRow();
+    const dot = container.querySelector('.ksr-devdot');
+    expect(dot).toHaveClass('is-unknown');
+    expect(dot).toHaveAccessibleName('Status unknown');
+    expect(screen.queryByText('offline')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Offline')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sidebar test/ }).getAttribute('aria-label')).toContain('Status unknown');
+  });
+  it('shows the live presence once the relay\'s device list arrived: green online, gray offline with the tag', () => {
+    useStore.getState().setDevices([{ id: 'd', role: 'tentacle', name: 'Local Mac', online: false }]);
+    const { container, unmount } = narrowRow();
+    expect(container.querySelector('.ksr-devdot')).not.toHaveClass('is-unknown');
+    expect(container.querySelector('.ksr-devdot')).not.toHaveClass('is-online');
+    expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.getByLabelText('Offline')).toBeInTheDocument();
+    unmount();
+    useStore.getState().setDevices([{ id: 'd', role: 'tentacle', name: 'Local Mac', online: true }]);
+    const online = narrowRow();
+    expect(online.container.querySelector('.ksr-devdot')).toHaveClass('is-online');
+    expect(screen.queryByText('offline')).not.toBeInTheDocument();
+  });
+  it('says status unknown in Chinese', async () => {
+    await act(async () => { await i18next.changeLanguage('zh-Hans'); });
+    const { container } = narrowRow();
+    expect(container.querySelector('.ksr-devdot')).toHaveAccessibleName('状态未知');
+  });
+});
+
 describe('SessionRow narrow swipe tray', () => {
   function Harness() {
     const [openId, setOpenId] = useState<string | null>('s');

@@ -15,5 +15,8 @@
     "rename": "Rename",
     "continue": "Continue",
     "back": "Back"
+  },
+  "presence": {
+    "unknown": "Status unknown"
   }
 }

@@ -61,12 +61,9 @@ private struct SessionCardBody: View, Equatable {
     @ScaledMetric(relativeTo: .footnote) private var lineRowHeight: CGFloat = 18
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private var deviceStatusColor: Color {
-        guard projection.deviceOnline == true else { return .gray }
-        if isAwaitingGreeting {
-            return Color(hex: 0xFBBF24)
-        }
-        return Color(hex: 0x34D399)
+    /// Unknown before this launch's first sign-in (hollow ring), not offline.
+    private var devicePresence: DevicePresence {
+        .resolve(online: projection.deviceOnline, awaitingGreeting: isAwaitingGreeting)
     }
 
     /// Same name as the chat header, Mac and web ("New Session" when untitled).
@@ -149,7 +146,7 @@ private struct SessionCardBody: View, Equatable {
         SessionCardMetadataRow(machineName: projection.machineName, model: projection.model,
                                effort: projection.effortLabel, sessionId: session.id,
                                font: .caption, deviceColor: .secondary, modelColor: Color(.tertiaryLabel),
-                               statusColor: deviceStatusColor)
+                               presence: devicePresence)
     }
 
     private var previewRow: some View {

@@ -169,6 +169,45 @@ struct CompactingStatusGlyph: View {
     var body: some View { SessionPreviewStatusGlyph(kind: .compacting) }
 }
 
+/// What a computer's presence dot shows (iOS session cards, Devices list).
+enum DevicePresence: Equatable {
+    /// No sign-in has completed in this launch: the cached device list carries
+    /// no live presence. A hollow ring, never the solid gray of offline.
+    case unknown
+    case online
+    /// Online, its greeting (agents and models) not received yet.
+    case awaitingGreeting
+    case offline
+
+    /// `online` is nil while presence is not known (`SessionCardProjection.deviceOnline`).
+    static func resolve(online: Bool?, awaitingGreeting: Bool) -> Self {
+        switch online {
+        case nil: return .unknown
+        case false?: return .offline
+        case true?: return awaitingGreeting ? .awaitingGreeting : .online
+        }
+    }
+}
+
+/// A computer's presence dot: solid in `color`, or (nil color) the hollow
+/// ring of unknown presence, read as "Status unknown".
+struct DevicePresenceDot: View {
+    let color: Color?
+    var size: CGFloat = 6
+
+    var body: some View {
+        if let color {
+            Circle().fill(color).frame(width: size, height: size)
+        } else {
+            Circle()
+                .strokeBorder(Color.secondary, lineWidth: max(1, size / 6))
+                .frame(width: size, height: size)
+                .accessibilityElement()
+                .accessibilityLabel(Text("Status unknown"))
+        }
+    }
+}
+
 #if os(iOS)
 /// iOS counterpart of the native macOS status slot. The slot remains fixed so
 /// changes between active work, a speaker glyph, and an empty preview do not

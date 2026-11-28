@@ -60,6 +60,15 @@ final class ReconnectingIndicatorTests: XCTestCase {
         let unknown = SessionCardProjection.make(session: session, device: device, preview: nil, draft: nil,
                                                  presenceKnown: false)
         XCTAssertNotEqual(unknown.status, .offline)
+        // The card's dot: a hollow ring (unknown), not the solid gray of offline.
+        XCTAssertEqual(DevicePresence.resolve(online: unknown.deviceOnline, awaitingGreeting: false), .unknown)
+        XCTAssertNil(SessionCardMetadataRow.dotColor(.unknown), "nil color draws the hollow ring")
+        let known = SessionCardProjection.make(session: session, device: device, preview: nil, draft: nil,
+                                               presenceKnown: true)
+        XCTAssertEqual(DevicePresence.resolve(online: known.deviceOnline, awaitingGreeting: false), .offline)
+        XCTAssertNotNil(SessionCardMetadataRow.dotColor(.offline))
+        XCTAssertEqual(DevicePresence.resolve(online: true, awaitingGreeting: false), .online)
+        XCTAssertEqual(DevicePresence.resolve(online: true, awaitingGreeting: true), .awaitingGreeting)
         let store = SessionStore(persistenceEnabled: false)
         XCTAssertNotEqual(
             SessionTableController.fingerprint(for: session, store: store, device: device, isAwaitingGreeting: false,

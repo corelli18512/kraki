@@ -76,6 +76,7 @@
     "online": "online",
     "connecting": "connecting…",
     "offline": "offline",
+    "unknown": "status unknown",
     "thisDevice": "This device",
     "removeAction": "Remove…",
     "identityError": "Couldn’t identify this PC. Device removal is unavailable.",

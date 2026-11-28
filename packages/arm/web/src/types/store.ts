@@ -76,6 +76,10 @@ export interface AppState {
   // Data
   sessions: Map<string, WebSessionSummary>;
   devices: Map<string, DeviceSummary>;
+  /** The relay's device list arrived in this page load (auth_ok): until then
+   *  `devices` is the persisted copy and its `online` flags are stale, so a
+   *  computer's presence is unknown (hollow ring), not offline. Not persisted. */
+  presenceKnown: boolean;
   messages: Map<string, ChatMessage[]>;
   cards: Map<string, SessionCard>;
   /** Subscription cards stay hidden until local history reaches this spine seq. */

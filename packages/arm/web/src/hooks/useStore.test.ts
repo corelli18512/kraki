@@ -166,6 +166,18 @@ describe('useStore', () => {
       expect(devices.get('dev-1')).toEqual(mockDevice);
     });
 
+    it('presence is known only once the relay\'s device list arrived in this page load', () => {
+      // The persisted list (a reload) carries stale online flags.
+      useStore.setState({ devices: new Map([[mockDevice.id, mockDevice]]) });
+      expect(useStore.getState().presenceKnown).toBe(false);
+      useStore.getState().setDevices([mockDevice]);
+      expect(useStore.getState().presenceKnown).toBe(true);
+      const persisted = JSON.parse(localStorage.getItem('kraki-store')!);
+      expect(persisted.state).not.toHaveProperty('presenceKnown');
+      useStore.getState().reset();
+      expect(useStore.getState().presenceKnown).toBe(false);
+    });
+
     it('upsertDevice adds a new device', () => {
       useStore.getState().upsertDevice(mockDevice);
       expect(useStore.getState().devices.size).toBe(1);

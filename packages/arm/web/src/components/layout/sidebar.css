@@ -188,6 +188,8 @@
 .ksr.is-narrow .ksr-line2 { font-size: 12px; line-height: 16px; }
 .ksr-devdot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--s-text-3); }
 .ksr-devdot.is-online { background: #10b981; }
+/* Presence not known yet (before this page load's auth_ok): a hollow ring, not the offline gray. */
+.ksr-devdot.is-unknown { box-sizing: border-box; border: 1px solid var(--s-text-3); background: transparent; }
 .ksr-machine, .ksr-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ksr-model { color: var(--s-text-3); }
 .ksr-sep { width: 1px; height: 9px; flex-shrink: 0; background: var(--s-border); }

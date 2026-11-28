@@ -165,12 +165,16 @@ function DeviceButton({
   isSelf: boolean;
   onClick: () => void;
 }) {
-  const { t } = useTranslation('devices');
-  const dotClass = device.online && hasGreeting
-    ? 'bg-emerald-400'
-    : device.online
-      ? 'animate-pulse bg-amber-400'
-      : 'bg-slate-400';
+  const { t } = useTranslation(['devices', 'common']);
+  // Before this page load's auth_ok the persisted presence is stale: unknown.
+  const presenceKnown = useStore((s) => s.presenceKnown);
+  const dotClass = !presenceKnown
+    ? 'k-presence-unknown'
+    : device.online && hasGreeting
+      ? 'bg-emerald-400'
+      : device.online
+        ? 'animate-pulse bg-amber-400'
+        : 'bg-slate-400';
 
   return (
     <button
@@ -181,7 +185,7 @@ function DeviceButton({
           : 'border-border-primary bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
       }`}
     >
-      <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+      <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} {...(presenceKnown ? {} : { role: 'img', 'aria-label': t('common:presence.unknown') })} />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{device.name}</span>
       {hasUpdate && (
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-kraki-500" title={t('grid.updateHint')} aria-label={t('grid.update')} />

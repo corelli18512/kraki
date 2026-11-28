@@ -12306,6 +12306,16 @@
           }
         }
       }
+    },
+    "Status unknown" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状态未知"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
