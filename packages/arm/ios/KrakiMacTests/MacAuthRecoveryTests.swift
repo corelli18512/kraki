@@ -671,6 +671,26 @@ final class MacAuthRecoveryTests: XCTestCase {
     }
 
     /// (f) Sign Out after a stored-device sign-in stays signed out.
+    /// Review 2, note 1: `kraki connect` saves another account's sign-in
+    /// between loading the (old) token and reading the sign-in date. The old
+    /// token must not be tied to the new sign-in, or later launches would keep
+    /// the old account's challenge; the next launch uses the token instead.
+    func testAccountSwitchWhileTheTokenLoadsIsNotTiedToTheNewSignIn() async throws {
+        try useTestStoredKeys(create: false)
+        relay.challengeMode = .verify
+        app = try makeReturningMac(registered: .some(nil))
+        let switched = cliSignIn.addingTimeInterval(3600)
+        AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in
+            AuthManager.debugCLISignInDate = { switched }   // written right after the old token was read
+            return (url, "tok-ok")
+        }
+        let signedIn = await app.attemptCLILogin()
+        XCTAssertTrue(signedIn)
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["github_token"])
+        XCTAssertNil(app.authManager?.registeredCLISignIn, "the old token is not tied to the new sign-in")
+    }
+
     func testSignOutAfterStoredDeviceSignInStaysSignedOut() async throws {
         let storedKey = try useTestStoredKeys()
         relay.challengeMode = .verify

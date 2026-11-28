@@ -65,6 +65,7 @@ extension AppState {
         }
         cliLoginInFlight = true
         defer { cliLoginInFlight = false }
+        let signInBeforeLoad = AuthManager.cliSignInDate()
         guard let creds = await AuthManager.loadCLICredentials(ghDeadline: ghDeadline) else {
             // The quick launch probe can time out on a cold `gh` (first run
             // after an OS update). Keep looking in the background with a
@@ -76,7 +77,7 @@ extension AppState {
             }
             return false
         }
-        adoptCLICredentials(creds)
+        adoptCLICredentials(creds, signInBeforeLoad: signInBeforeLoad)
         return true
     }
 
@@ -86,12 +87,17 @@ extension AppState {
     /// for recovery (`AuthManager.beginStoredDeviceSignIn`); otherwise the
     /// token signs in, registering the stored identity when usable, else
     /// process-local keys (a denied Keychain item can never strand the Mac).
-    func adoptCLICredentials(_ creds: (relay: String, token: String)) {
+    /// `signInBeforeLoad`: `AuthManager.cliSignInDate()` read before the token
+    /// was loaded. If `kraki connect` saved another sign-in meanwhile, the
+    /// loaded token may be the old one: it is then tied to no sign-in, so the
+    /// next launch uses the (new) token instead of this device's challenge.
+    func adoptCLICredentials(_ creds: (relay: String, token: String), signInBeforeLoad: Date?) {
         if creds.relay != relayURL { relayURL = creds.relay }
         // Sign Out resets AppState's relay but not the socket's, so compare
         // with the socket: only a real change schedules a new connection.
         let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
-        let cliSignIn = AuthManager.cliSignInDate()
+        let current = AuthManager.cliSignInDate()
+        let cliSignIn = current == signInBeforeLoad ? current : nil
         let storedDevice = authManager?.beginStoredDeviceSignIn(cliSignInDate: cliSignIn) ?? false
         if !storedDevice { authManager?.prepareKeysForTokenSignIn() }
         if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
@@ -114,11 +120,12 @@ extension AppState {
         guard !staysSignedOut, connectionStatus != .connected else { return false }
         KLog.diag("Auth: stored device sign-in failed (\(reason)) — signing in with the CLI login")
         if authManager?.cliGitHubToken == nil {
+            let signInBeforeLoad = AuthManager.cliSignInDate()
             guard let creds = await AuthManager.loadCLICredentials(ghDeadline: AuthManager.recoveryGhDeadline) else {
                 return false
             }
             guard connectionStatus != .connected else { return true }
-            adoptCLICredentials(creds)
+            adoptCLICredentials(creds, signInBeforeLoad: signInBeforeLoad)
             return true
         }
         // Same keys as the challenge unless signing failed: the token
@@ -148,10 +155,11 @@ extension AppState {
         cliRecoveryInFlight = true
         defer { cliRecoveryInFlight = false }
         KLog.diag("Auth: recovering sign-in (\(reason))")
+        let signInBeforeLoad = AuthManager.cliSignInDate()
         if authManager?.cliGitHubToken == nil,
            let creds = await AuthManager.loadCLICredentials(ghDeadline: AuthManager.recoveryGhDeadline) {
             guard connectionStatus != .connected else { return }
-            adoptCLICredentials(creds)
+            adoptCLICredentials(creds, signInBeforeLoad: signInBeforeLoad)
             return
         }
         guard connectionStatus != .connected else { return }
