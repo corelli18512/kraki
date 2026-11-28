@@ -531,17 +531,34 @@ final class AppState {
     }
     #endif
 
+    /// What the app says while it waits for the relay (header, chat title,
+    /// Mac notice, VoiceOver). Someone signed in before (a stored identity;
+    /// on the Mac also its CLI sign-in) is only connecting, also on a cold
+    /// start: "Signing in…" would read as if they had been signed out. Only
+    /// a first sign-in says "Signing in…".
+    var connectingStatusText: String {
+        hasSignedInBefore ? String(localized: "Connecting…") : String(localized: "Signing in…")
+    }
+
+    private var hasSignedInBefore: Bool {
+        #if os(macOS)
+        hasCompletedInitialConnect || isSigningInWithCredentials
+        #else
+        hasCompletedInitialConnect || hasStoredCredentials
+        #endif
+    }
+
     /// User-facing connection notice for the Mac window (nil when online).
     var connectionNotice: String? {
         guard showsReconnecting, connectionStatus != .connected else { return nil }
-        return hasCompletedInitialConnect ? String(localized: "Connecting…") : String(localized: "Signing in…")
+        return connectingStatusText
     }
 
     /// Title-area status for an open conversation (nil = show its title).
     /// Reconnecting and catching up are silent elsewhere; this is the only
     /// place they surface, and only after they have lasted a moment.
     func conversationTitleStatus(syncing: Bool) -> String? {
-        if showsReconnecting { return hasCompletedInitialConnect ? String(localized: "Connecting…") : String(localized: "Signing in…") }
+        if showsReconnecting { return connectingStatusText }
         if syncing { return String(localized: "Syncing…") }
         return nil
     }
@@ -892,8 +909,7 @@ extension AppState {
                 self.stability.reconnectingShown(true)
                 // The header changes silently otherwise (VoiceOver users
                 // would not learn the app is offline).
-                self.announceForAccessibility(self.hasCompletedInitialConnect
-                    ? String(localized: "Connecting…") : String(localized: "Signing in…"))
+                self.announceForAccessibility(self.connectingStatusText)
             }
         }
         reconnectingIndicatorWork = work

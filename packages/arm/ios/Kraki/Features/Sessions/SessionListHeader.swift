@@ -65,10 +65,10 @@ struct SessionListHeader: View {
 
     private var wordmark: some View {
         // While the relay link has been down for a moment the product name
-        // reads "Connecting…" ("Signing in…" before the first sign-in of this
-        // launch, as in the chat title); it returns to the name once connected.
+        // reads "Connecting…" (as the chat title; `connectingStatusText`); it
+        // returns to the name once connected.
         let reconnecting = appState.showsReconnecting
-        let status = appState.hasCompletedInitialConnect ? String(localized: "Connecting…") : String(localized: "Signing in…")
+        let status = appState.connectingStatusText
         return Text(reconnecting ? status : "KRAKI")
             .font(.system(size: reconnecting ? 17 : Self.wordmarkSize,
                           weight: reconnecting ? .semibold : .heavy,

@@ -182,7 +182,7 @@ struct IOSComposerOfflineNotice: View {
 
     /// Before the first sign-in the cached devices carry no live presence (all
     /// restored offline): the computer is not known to be offline, the relay
-    /// may be what is unreachable, and the title says "Signing in…" — so
+    /// may be what is unreachable, and the title says "Connecting…" — so
     /// nothing is blamed (`presenceKnown`).
     static func text(deviceOnline: Bool?, deviceName: String?, presenceKnown: Bool) -> String? {
         guard presenceKnown, deviceOnline != true else { return nil }
