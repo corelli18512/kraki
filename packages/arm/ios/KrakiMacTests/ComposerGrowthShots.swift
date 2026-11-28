@@ -113,19 +113,23 @@ final class ComposerGrowthShots: XCTestCase {
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
         drain(500)
         let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
-        var heights: [CGFloat] = []
+        var heights: [CGFloat] = [], glasses: [CGFloat] = []
         for text in ["Short speech", "First line\nSecond line", String(repeating: "这是持续增长的语音输入，", count: 40)] {
             app.iosVoiceComposer.receive(text, id: id)
             drain(500)
             let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
             let scroll = try XCTUnwrap(transcript.enclosingScrollView)
             heights.append(scroll.frame.height)
+            glasses.append(try glassHeight())
             XCTAssertEqual(scroll.contentView.bounds.maxY, transcript.frame.height, accuracy: 1)
             try assertVoiceFitsGlass()
         }
         XCTAssertEqual(heights[0], 20, accuracy: 0.5)
-        XCTAssertGreaterThan(heights[1], heights[0] + 20, "two lines must grow the production overlay: \(heights)")
+        XCTAssertEqual(heights[1], 20 + MacComposerVoiceTranscriptView.lineHeight, accuracy: 0.5, "two lines: \(heights)")
         XCTAssertEqual(heights[2], 56, accuracy: 1)
+        XCTAssertEqual(glasses[0], MacComposerMetrics.capsuleHeight, accuracy: 0.5)
+        XCTAssertEqual(glasses[1], MacComposerMetrics.stackedRecordingHeight, accuracy: 0.5,
+                       "two lines grow the production overlay to the control column: \(glasses)")
         for width in [1000.0, 820, 640, 420] {
             window.setContentSize(NSSize(width: width, height: 700))
             app.iosVoiceComposer.receive("Short", id: id)
@@ -176,7 +180,9 @@ final class ComposerGrowthShots: XCTestCase {
                 XCTAssertGreaterThan(scroll.contentView.bounds.width, narrow + 30)
                 XCTAssertLessThan(transcript.contentHeight, MacComposerVoiceTranscriptView.lineHeight * 1.5,
                                   "must exercise two narrow lines reflowing into one wide line")
-                XCTAssertGreaterThan(scroll.contentView.bounds.height, 40)
+                // The actions keep the tall (stacked) shell; the one line sits at its top
+                // (assertVoiceFitsGlass), not centred in it.
+                XCTAssertEqual(try glassHeight(), MacComposerMetrics.stackedRecordingHeight, accuracy: 0.5)
                 try shot("voice-reflow-\(Int(width))-\(appearance.rawValue)")
                 XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5,
                                "expanded single-line speech belongs at the top, not in the middle")
@@ -215,11 +221,25 @@ final class ComposerGrowthShots: XCTestCase {
         let transcript = try XCTUnwrap(all.compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
         let scroll = try XCTUnwrap(transcript.enclosingScrollView)
         let viewport = scroll.convert(scroll.bounds, to: nil)
-        for content in [viewport, try frame("voice-cancel"), try frame("voice-to-text")] {
+        let cancel = try frame("voice-cancel"), edit = try frame("voice-to-text")
+        for content in [viewport, cancel, edit] {
             XCTAssertGreaterThanOrEqual(content.minY, glass.minY - 0.5, "content \(content) below glass \(glass)", file: file, line: line)
             XCTAssertLessThanOrEqual(content.maxY, glass.maxY + 0.5, "content \(content) above glass \(glass)", file: file, line: line)
         }
-        XCTAssertEqual(glass.height, viewport.height + 16, accuracy: 0.5, file: file, line: line)
+        // The glass is the text plus padding; two-row dictation (Cancel above
+        // Edit) is at least as tall as the control column, the spare height
+        // below the text, which stays at the top (#650).
+        let stacked = abs(cancel.midY - edit.midY) > 1
+        let padding = MacComposerMetrics.textVerticalPadding
+        let expected = stacked ? max(viewport.height + padding * 2, MacComposerMetrics.stackedRecordingHeight)
+                               : viewport.height + padding * 2
+        XCTAssertEqual(glass.height, expected, accuracy: 0.5, "stacked=\(stacked)", file: file, line: line)
+        XCTAssertEqual(glass.maxY - viewport.maxY, padding, accuracy: 0.5, "text at the top of the glass", file: file, line: line)
+    }
+
+    private func glassHeight() throws -> CGFloat {
+        let v = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).first { $0.identifier?.rawValue == "chat-input-box" })
+        return v.frame.height
     }
 
     func testVoiceStates() throws {
@@ -236,7 +256,8 @@ final class ComposerGrowthShots: XCTestCase {
                 if name == "2-lines", let t = views(window.contentView!).compactMap({ $0 as? MacComposerVoiceTranscriptView }).first {
                     XCTAssertEqual(t.textDrawingRect.minY, t.bounds.minY, accuracy: 0.5, "two lines start at the top, not centered")
                     let viewport = try XCTUnwrap(t.enclosingScrollView)
-                    XCTAssertGreaterThan(viewport.frame.height, t.contentHeight + 4, "the stacked actions make the box taller than two lines")
+                    XCTAssertGreaterThan(try glassHeight(), t.contentHeight + MacComposerMetrics.textVerticalPadding * 2 + 4,
+                                         "the stacked actions make the box taller than two lines")
                     // Two lines sit at the top of the taller viewport.
                     XCTAssertEqual(t.convert(t.bounds, to: viewport).minY, viewport.contentView.convert(viewport.contentView.bounds, to: viewport).minY, accuracy: 0.5)
                     XCTAssertEqual(viewport.contentView.bounds.minY, 0, accuracy: 0.5)
@@ -267,16 +288,17 @@ final class ComposerGrowthShots: XCTestCase {
         drain(500)
         let host = try XCTUnwrap(window.contentView)
         func boxHeight() -> CGFloat {
-            views(host).compactMap { $0 as? MacComposerVoiceTranscriptView }.first?.enclosingScrollView?.frame.height ?? -1
+            views(host).first { $0.identifier?.rawValue == "chat-input-box" }?.frame.height ?? -1
         }
         var hs: [String] = []
         app.voiceInputController.debugApplyPartial(Self.voiceTexts[1].1)
         for i in 0..<20 { drain(16); hs.append(String(format: "%.1f", boxHeight())); if i == 3 || i == 8 { try shot("voice-growth-\(i)") } }
         try hs.joined(separator: " ").write(to: dir.appendingPathComponent("voice-growth.txt"), atomically: true, encoding: .utf8)
         let values = hs.compactMap(Double.init)
-        XCTAssertTrue(values.allSatisfy { abs($0 - 20) < 1 || abs($0 - 54) < 1 },
+        let oneRow = MacComposerMetrics.capsuleHeight, twoRows = MacComposerMetrics.stackedRecordingHeight
+        XCTAssertTrue(values.allSatisfy { abs($0 - oneRow) < 1 || abs($0 - twoRows) < 1 },
                       "voice geometry switches atomically, never an interpolated shell around a final Layout: \(hs)")
-        XCTAssertEqual(values.last ?? 0, 54, accuracy: 1)
+        XCTAssertEqual(values.last ?? 0, twoRows, accuracy: 1)
         try assertVoiceFitsGlass()
         try fadeLog.write(to: dir.appendingPathComponent("fade-voice.txt"), atomically: true, encoding: .utf8)
         for s in ["light", "dark"] {
