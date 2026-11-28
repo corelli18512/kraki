@@ -134,8 +134,7 @@ import UIKit
             // The real box. Two-row dictation is as tall as the control column
             // with its text at the top, so the text viewport plus padding is
             // not the box there (#650).
-            let box = try XCTUnwrap(all(host).first { $0.identifier?.rawValue == "chat-input-box" })
-            let capsule = normalized(box.convert(box.bounds, to: host))
+            let box = try XCTUnwrap(all(host).first { $0.identifier?.rawValue == "chat-input-box" }), capsule = normalized(box.convert(box.bounds, to: host))
             let row: [String: Any] = ["phase": label, "windowHeight": host.bounds.height,
                 "viewportHeight": scroll.contentView.bounds.height, "scrollY": scroll.contentView.bounds.minY,
                 "documentHeight": scroll.chatDocumentView.frame.height,
@@ -300,7 +299,7 @@ import UIKit
         #if os(macOS)
         for row in rows {
             // The box stays on the bottom padding in every phase; it grows upwards.
-            XCTAssertEqual(try XCTUnwrap(row["capsuleBottom"] as? CGFloat), 568, accuracy: 0.5, "\(row["phase"]!)")
+            XCTAssertEqual(try XCTUnwrap(row["capsuleBottom"] as? CGFloat), 568, accuracy: 0.5, row["phase"] as? String ?? "?")
             XCTAssertEqual(try XCTUnwrap(row["tailHeight"] as? CGFloat), try XCTUnwrap(baseline["documentHeight"] as? CGFloat), accuracy: 0.5)
         }
         // Covered bubbles stay reachable: the raised Composer extends the
