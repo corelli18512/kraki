@@ -19,6 +19,9 @@ enum SessionCardStatus: Equatable {
     case approval
     case error
     case offline
+    /// The computer is offline but is this Mac's own, and its service is
+    /// going online (Kraki for Mac was just opened): not offline yet.
+    case starting
     case agentMessage
     case humanMessage
     case delivery(SessionDeliveryStatus)
@@ -28,9 +31,10 @@ enum SessionCardStatus: Equatable {
         sessionState: SessionState,
         previewType: String?,
         deviceOnline: Bool?,
-        hasDraft: Bool = false
+        hasDraft: Bool = false,
+        deviceStarting: Bool = false
     ) -> Self {
-        if deviceOnline == false { return .offline }
+        if deviceOnline == false { return deviceStarting ? .starting : .offline }
         switch previewType {
         case "question": return .waiting
         case "permission": return .approval
@@ -58,6 +62,7 @@ enum SessionCardStatus: Equatable {
         case .approval: return String(localized: "Waiting for approval")
         case .error: return String(localized: "Failed")
         case .offline: return String(localized: "Offline")
+        case .starting: return String(localized: "Starting")
         case .agentMessage: return String(localized: "Last message from agent")
         case .humanMessage: return String(localized: "Last message from you")
         case .delivery(let delivery): return delivery.accessibilityLabel
@@ -121,6 +126,7 @@ struct SessionCardProjection: Equatable {
         pendingInputs: [ChatMessage] = [],
         isDeliveryOnline: Bool = true,
         presenceKnown: Bool = true,
+        deviceStarting: Bool = false,
         modelName: String? = nil
     ) -> Self {
         // Before the first sign-in the cached device list has no live
@@ -154,7 +160,8 @@ struct SessionCardProjection: Equatable {
                 sessionState: isCompacting ? .compacting : session.state,
                 previewType: preview?.type,
                 deviceOnline: deviceOnline,
-                hasDraft: hasDraft
+                hasDraft: hasDraft,
+                deviceStarting: deviceStarting
             ),
             isUnread: session.readSeq < session.lastSeq,
             isPinned: session.pinned,
@@ -167,6 +174,18 @@ struct SessionCardProjection: Equatable {
 /// Shared native B3 geometry and compositor-driven animation on both clients.
 struct CompactingStatusGlyph: View {
     var body: some View { SessionPreviewStatusGlyph(kind: .compacting) }
+}
+
+/// `.starting` in the status slot: a small dotted ring (coming online, not
+/// offline). Drawn in the caller's muted color.
+struct StartingStatusGlyph: View {
+    let color: Color
+
+    var body: some View {
+        Circle()
+            .strokeBorder(color, style: StrokeStyle(lineWidth: 1.2, dash: [1.6, 1.6]))
+            .frame(width: 10, height: 10)
+    }
 }
 
 /// What a computer's presence dot shows (iOS session cards, Devices list).
@@ -236,6 +255,8 @@ struct SessionCardStatusGlyph: View {
                 Image(systemName: "wifi.slash")
                     .scaledFont(11, weight: .semibold)
                     .foregroundStyle(.tertiary)
+            case .starting:
+                StartingStatusGlyph(color: Color(.tertiaryLabel))
             case .agentMessage:
                 LucideIcon(.botMessageSquare, size: SessionStatusGlyphMetrics.agentSize, strokeWidth: 1.9, color: .krakiPrimary)
             case .humanMessage:

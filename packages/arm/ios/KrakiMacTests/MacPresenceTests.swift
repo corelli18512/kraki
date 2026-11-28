@@ -94,6 +94,64 @@ final class MacPresenceTests: XCTestCase {
         XCTAssertEqual(status(.running(pid: 7), mode: .external, role: .remoteOnly), .online)
     }
 
+    // MARK: This Mac's own sessions while it comes online
+
+    /// Relaunching Kraki brings this Mac back online (quitting took it
+    /// offline): until it is, its sessions read "starting", like the menu
+    /// bar's "This Mac is going online…", not offline.
+    func testThisMacIsComingOnlineWhileCheckingStartingOrNotYetOnTheRelay() {
+        XCTAssertTrue(TentacleCLIManager.isComingOnline(.checking, relayState: nil))
+        XCTAssertTrue(TentacleCLIManager.isComingOnline(.goingOnline, relayState: nil))
+        XCTAssertTrue(TentacleCLIManager.isComingOnline(.online, relayState: "connecting"),
+                      "running, not on the relay yet")
+        XCTAssertFalse(TentacleCLIManager.isComingOnline(.online, relayState: "connected"))
+        XCTAssertFalse(TentacleCLIManager.isComingOnline(.online, relayState: nil), "older daemons report nothing")
+        for settled: MacOnlineStatus in [.offline, .reconnecting, .goingOffline, .needsLoginItems,
+                                         .problem("boom"), .controlsOthersOnly] {
+            XCTAssertFalse(TentacleCLIManager.isComingOnline(settled, relayState: "connecting"), "\(settled)")
+        }
+    }
+
+    func testStartingComputerIsThisMacsOwnFromItsFilesBeforeTheFirstPoll() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-starting-\(UUID())")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home); DeviceTrustTesting.localKrakiHome = nil }
+        try "dev_this_mac\n".write(to: home.appendingPathComponent("device-id"), atomically: true, encoding: .utf8)
+        DeviceTrustTesting.localKrakiHome = home
+        let cli = TentacleCLIManager()
+        XCTAssertEqual(cli.onlineStatus, .checking)
+        XCTAssertEqual(cli.startingComputerId, "dev_this_mac")
+    }
+
+    func testThisMacsOfflineSessionsReadStartingAndOthersStayOffline() {
+        let session = SessionInfo(id: "s1", deviceId: "mac", deviceName: "Macbook", agent: "pi", model: "m",
+                                  title: "Release train", state: .idle, mode: .auto, lastSeq: 1, readSeq: 1,
+                                  messageCount: 1, createdAt: Date(), pinned: false)
+        func device(online: Bool) -> DeviceSummary {
+            DeviceSummary(id: "mac", name: "Macbook", role: .tentacle, kind: .desktop, publicKey: nil,
+                          encryptionKey: nil, online: online, lastSeen: nil, createdAt: nil)
+        }
+        let starting = SessionCardProjection.make(session: session, device: device(online: false), preview: nil,
+                                                  draft: nil, deviceStarting: true)
+        XCTAssertEqual(starting.status, .starting)
+        XCTAssertEqual(starting.statusAccessibilityLabel, "Starting")
+        XCTAssertEqual(SessionCardProjection.make(session: session, device: device(online: false), preview: nil,
+                                                  draft: nil).status, .offline, "other computers: offline as before")
+        XCTAssertEqual(SessionCardProjection.make(session: session, device: device(online: true), preview: nil,
+                                                  draft: nil, deviceStarting: true).status, .idle, "online: normal")
+        XCTAssertEqual(SessionCardStatus.resolve(sessionState: .idle, previewType: nil, deviceOnline: false,
+                                                 deviceStarting: true), .starting)
+
+        // The composer does not call it offline meanwhile either.
+        XCTAssertNil(MacComposerOfflineHint.text(deviceOnline: false, deviceName: "Macbook", presenceKnown: true,
+                                                 deviceStarting: true))
+        XCTAssertEqual(MacComposerOfflineHint.text(deviceOnline: false, deviceName: "Macbook", presenceKnown: true,
+                                                   deviceStarting: false),
+                       "Macbook is offline — message will deliver when it reconnects.")
+        XCTAssertNil(MacComposerOfflineHint.text(deviceOnline: false, deviceName: "Macbook", presenceKnown: false,
+                                                 deviceStarting: false))
+    }
+
     func testOnlyBrokenStatesNeedFixing() {
         XCTAssertTrue(MacOnlineStatus.needsLoginItems.needsFixing)
         XCTAssertTrue(MacOnlineStatus.problem("x").needsFixing)

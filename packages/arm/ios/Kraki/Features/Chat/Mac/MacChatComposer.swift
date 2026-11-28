@@ -88,6 +88,7 @@ struct MacChatComposer: View {
     var hasLiveCard = false
 
     @Environment(AppState.self) private var appState
+    @Environment(\.startingComputerId) private var startingComputerId
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
@@ -236,15 +237,11 @@ struct MacChatComposer: View {
         // reconnecting is silent and messages queue until it is back. Only a
         // computer that really can't receive right now is worth a note here.
         if let submitNotice { return submitNotice }
-        guard appState.hasCompletedInitialConnect, let deviceId = session?.deviceId else { return nil }
+        guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
-        if device?.online != true {
-            if let name = device?.name ?? session?.deviceName {
-                return String(localized: "\(name) is offline — message will deliver when it reconnects.")
-            }
-            return String(localized: "Device is offline — message will deliver when it reconnects.")
-        }
-        return nil
+        return MacComposerOfflineHint.text(deviceOnline: device?.online, deviceName: device?.name ?? session?.deviceName,
+                                           presenceKnown: appState.hasCompletedInitialConnect,
+                                           deviceStarting: deviceId == startingComputerId)
     }
 
     var body: some View {

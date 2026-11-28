@@ -167,6 +167,20 @@ extension View {
             .help(text)
     }
 }
+/// The note over the composer when its computer can't receive right now.
+enum MacComposerOfflineHint {
+    /// Only a computer known to be offline gets one: not before presence is
+    /// known (first sign-in of this launch), and not this Mac's own computer
+    /// while it is coming online ("starting" in the sidebar).
+    static func text(deviceOnline: Bool?, deviceName: String?, presenceKnown: Bool, deviceStarting: Bool) -> String? {
+        guard presenceKnown, !deviceStarting, deviceOnline != true else { return nil }
+        if let deviceName {
+            return String(localized: "\(deviceName) is offline — message will deliver when it reconnects.")
+        }
+        return String(localized: "Device is offline — message will deliver when it reconnects.")
+    }
+}
+
 extension NSView {
     /// VoiceOver label and tooltip in one call; the tooltip defaults to the label.
     func setAccessibilityLabel(_ label: String, toolTip: String?) {
