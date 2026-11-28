@@ -235,6 +235,12 @@ final class ComposerGrowthShots: XCTestCase {
                                : viewport.height + padding * 2
         XCTAssertEqual(glass.height, expected, accuracy: 0.5, "stacked=\(stacked)", file: file, line: line)
         XCTAssertEqual(glass.maxY - viewport.maxY, padding, accuracy: 0.5, "text at the top of the glass", file: file, line: line)
+        // The text viewport itself is always whole lines: 1, 2 or the 3-line cap.
+        let lineHeights = (0..<Int(MacComposerMetrics.maxVisibleTextLines)).map {
+            MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * CGFloat($0)
+        }
+        XCTAssertTrue(lineHeights.contains { abs($0 - viewport.height) < 0.5 },
+                      "text viewport \(viewport.height) is one of \(lineHeights)", file: file, line: line)
     }
 
     private func glassHeight() throws -> CGFloat {
@@ -258,7 +264,8 @@ final class ComposerGrowthShots: XCTestCase {
                     let viewport = try XCTUnwrap(t.enclosingScrollView)
                     XCTAssertGreaterThan(try glassHeight(), t.contentHeight + MacComposerMetrics.textVerticalPadding * 2 + 4,
                                          "the stacked actions make the box taller than two lines")
-                    // Two lines sit at the top of the taller viewport.
+                    XCTAssertEqual(try glassHeight(), MacComposerMetrics.stackedRecordingHeight, accuracy: 0.5)
+                    // Two lines sit at the top of their viewport, which sits at the top of the box.
                     XCTAssertEqual(t.convert(t.bounds, to: viewport).minY, viewport.contentView.convert(viewport.contentView.bounds, to: viewport).minY, accuracy: 0.5)
                     XCTAssertEqual(viewport.contentView.bounds.minY, 0, accuracy: 0.5)
                 }

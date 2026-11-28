@@ -8,11 +8,12 @@ import XCTest
 @MainActor
 final class MacSessionSidebarRevealTests: XCTestCase {
     override func setUpWithError() throws {
+        // Saved before the skip: tearDown runs after a skipped setUp too.
+        savedRevealAnimation = SessionsSidebarView.revealAnimation
         try requireForegroundUITests()
         try super.setUpWithError()
         // These tests check where the list ends up, not the animation; SwiftUI
         // animations do not advance while the screen is locked or asleep.
-        savedRevealAnimation = SessionsSidebarView.revealAnimation
         SessionsSidebarView.revealAnimation = nil
     }
 
@@ -78,7 +79,7 @@ final class MacSessionSidebarRevealTests: XCTestCase {
     func testNewSessionBelowManyPinnedIsRevealedWithMinimalScroll() throws {
         let (app, sv) = try makeSidebar(pinned: 25)
         let visible = sv.contentView.bounds.height
-        let rowHeight = sv.documentView!.frame.height / 30
+        let rowHeight = try XCTUnwrap(sv.documentView).frame.height / 30
         XCTAssertLessThan(visible, rowHeight * 25, "fixture: pinned rows overflow the sidebar")
         XCTAssertEqual(sv.contentView.bounds.minY, 0, accuracy: 1)
         createNewSession(app)
@@ -87,6 +88,9 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         XCTAssertGreaterThan(offset, 0, "the new row is brought into view")
         XCTAssertLessThan(offset, rowTop - rowHeight, "not aligned to the top: pinned rows above stay in view")
         XCTAssertGreaterThanOrEqual(offset + visible, rowTop + rowHeight - 4, "the new row is fully visible")
+        // Minimal: the row's bottom lands at the viewport's bottom, no further
+        // (a centred or top-aligned reveal scrolls past it).
+        XCTAssertEqual(offset + visible, rowTop + rowHeight, accuracy: 4, "minimal scroll: the row ends at the bottom edge")
     }
 
     /// Deterministic form of the intermittent sidebar clipping: SwiftUI laid
