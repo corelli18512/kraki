@@ -81,7 +81,10 @@ enum DevSecretFileStore {
         ProcessInfo.processInfo.environment["KRAKI_DEV_USE_KEYCHAIN"] != "1"
     }
 
-    static let directory: URL = {
+    /// Tests: keep the secret files in this directory instead.
+    static var testDirectory: URL?
+
+    private static let defaultDirectory: URL = {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
@@ -89,6 +92,8 @@ enum DevSecretFileStore {
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "chat.kraki.mac.dev", isDirectory: true)
             .appendingPathComponent("DevSecrets", isDirectory: true)
     }()
+
+    static var directory: URL { testDirectory ?? defaultDirectory }
 
     private static func url(_ name: String) -> URL {
         directory.appendingPathComponent(name)
@@ -155,11 +160,40 @@ public final class KeychainManager {
     /// does not strand the app offline. Authentication refreshes the relay's
     /// public keys through the existing CLI token flow; these keys are never
     /// written to disk.
+    ///
+    /// The choice is process-wide: the auth path and the decryptor each own a
+    /// KeychainManager and must never end up with one stored and one
+    /// process-local key (nothing would decrypt).
     private static let ephemeralLock = NSLock()
     private static var preferEphemeralKeys = false
     private static var ephemeralSigningPair: (privateKey: SecKey, publicKey: SecKey)?
     private static var ephemeralEncryptionPair: (privateKey: SecKey, publicKey: SecKey)?
-    private(set) var usingEphemeralKeys = false
+    /// Bumped whenever the process switches key pairs; a cached pair
+    /// (EncryptionHandler) compares it before reuse.
+    private static var pairGeneration = 0
+    /// Both stored pairs, proven in this process to sign and decrypt with
+    /// Keychain UI disallowed (see `verifiedStoredPairs`).
+    private static let storedLock = NSLock()
+    private static var verifiedStored: (signing: (privateKey: SecKey, publicKey: SecKey),
+                                        encryption: (privateKey: SecKey, publicKey: SecKey))?
+    #if DEBUG
+    /// Tests: stored keys behave as denied by the Keychain (no prompt, no use).
+    static var debugStoredKeysUnusable = false
+    #endif
+
+    /// This process signs and decrypts with process-local keys.
+    var usingEphemeralKeys: Bool { Self.isUsingEphemeralKeys }
+
+    private static var isUsingEphemeralKeys: Bool {
+        ephemeralLock.lock(); defer { ephemeralLock.unlock() }
+        return preferEphemeralKeys
+    }
+
+    /// Changes whenever the pair `getOrCreate…Key()` hands out changes.
+    static var keyPairGeneration: Int {
+        ephemeralLock.lock(); defer { ephemeralLock.unlock() }
+        return pairGeneration
+    }
     #endif
 
     /// Optional app group for shared keychain access (app ↔ notification extension).
@@ -177,73 +211,66 @@ public final class KeychainManager {
     /// fresh public keys as part of the token-auth registration.
     public func activateEphemeralKeys() {
         Self.ephemeralLock.lock()
+        if !Self.preferEphemeralKeys { Self.pairGeneration += 1 }
         Self.preferEphemeralKeys = true
         Self.ephemeralLock.unlock()
-        usingEphemeralKeys = true
+    }
+
+    /// Whether the stored (Keychain) keys exist and work without any Keychain
+    /// UI: a stored-device challenge can be signed with them. Never prompts,
+    /// never creates keys.
+    public func storedKeysUsableWithoutPrompt() -> Bool {
+        !Self.isUsingEphemeralKeys && verifiedStoredPairs(createIfMissing: false) != nil
+    }
+
+    /// Before a token sign-in: register the stored keys (created when
+    /// missing) if they work without Keychain UI, so the next launch can sign
+    /// in with a challenge; otherwise use process-local keys. Returns whether
+    /// the stored keys are used.
+    @discardableResult
+    public func useStoredKeysIfUsable() -> Bool {
+        if !Self.isUsingEphemeralKeys, verifiedStoredPairs(createIfMissing: true) != nil { return true }
+        activateEphemeralKeys()
+        return false
     }
     #endif
 
     /// Load or generate the signing key pair (for challenge-response auth).
     public func getOrCreateSigningKey() throws -> (privateKey: SecKey, publicKey: SecKey) {
         #if os(macOS)
-        if Self.preferEphemeralKeys {
-            usingEphemeralKeys = true
-            return try ephemeralKeyPair(tag: Self.signingKeyTag)
+        return try processKeyPair(signing: true)
+        #else
+        if let existing = try loadKeyPair(tag: Self.signingKeyTag) {
+            return existing
         }
+        return try generateAndStoreKeyPair(tag: Self.signingKeyTag)
         #endif
-        do {
-            if let existing = try loadKeyPair(tag: Self.signingKeyTag) {
-                return existing
-            }
-            return try generateAndStoreKeyPair(tag: Self.signingKeyTag)
-        } catch {
-            #if os(macOS)
-            // Process-wide, not just this instance: the auth path and the
-            // decryptor each own a KeychainManager, and must not end up with
-            // one ephemeral and one stored key (nothing would decrypt).
-            activateEphemeralKeys()
-            return try ephemeralKeyPair(tag: Self.signingKeyTag)
-            #else
-            throw error
-            #endif
-        }
     }
 
     /// Load or generate the encryption key pair (for E2E message decryption).
     public func getOrCreateEncryptionKey() throws -> (privateKey: SecKey, publicKey: SecKey) {
         #if os(macOS)
-        if Self.preferEphemeralKeys {
-            usingEphemeralKeys = true
-            return try ephemeralKeyPair(tag: Self.encryptionKeyTag)
+        return try processKeyPair(signing: false)
+        #else
+        if let existing = try loadKeyPair(tag: Self.encryptionKeyTag) {
+            return existing
         }
+        return try generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
         #endif
-        do {
-            if let existing = try loadKeyPair(tag: Self.encryptionKeyTag) {
-                return existing
-            }
-            return try generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
-        } catch {
-            #if os(macOS)
-            // Process-wide, not just this instance: the auth path and the
-            // decryptor each own a KeychainManager, and must not end up with
-            // one ephemeral and one stored key (nothing would decrypt).
-            activateEphemeralKeys()
-            return try ephemeralKeyPair(tag: Self.encryptionKeyTag)
-            #else
-            throw error
-            #endif
-        }
     }
 
     /// Check if both key pairs exist without generating them.
     public func hasKeys() -> Bool {
         #if os(macOS)
-        if Self.ephemeralSigningPair != nil && Self.ephemeralEncryptionPair != nil {
-            return true
+        if Self.isUsingEphemeralKeys {
+            Self.ephemeralLock.lock(); defer { Self.ephemeralLock.unlock() }
+            return Self.ephemeralSigningPair != nil && Self.ephemeralEncryptionPair != nil
         }
-        #endif
+        return verifiedStoredPairs(createIfMissing: false) != nil
+        #else
         return (try? loadKeyPair(tag: Self.signingKeyTag)) != nil &&
                (try? loadKeyPair(tag: Self.encryptionKeyTag)) != nil
+        #endif
     }
 
     /// Delete all stored keys (for account reset or testing).
@@ -254,7 +281,11 @@ public final class KeychainManager {
             Self.preferEphemeralKeys = false
             Self.ephemeralSigningPair = nil
             Self.ephemeralEncryptionPair = nil
+            Self.pairGeneration += 1
             Self.ephemeralLock.unlock()
+            Self.storedLock.lock()
+            Self.verifiedStored = nil
+            Self.storedLock.unlock()
         }
         #endif
         try deleteKeyPair(tag: Self.signingKeyTag)
@@ -299,6 +330,98 @@ public final class KeychainManager {
     }
 
     #if os(macOS)
+    /// The stored pair when both stored keys work without Keychain UI
+    /// (created when missing), otherwise this process's in-memory pair.
+    private func processKeyPair(signing: Bool) throws -> (privateKey: SecKey, publicKey: SecKey) {
+        if !Self.isUsingEphemeralKeys, let stored = verifiedStoredPairs(createIfMissing: true) {
+            return signing ? stored.signing : stored.encryption
+        }
+        activateEphemeralKeys()
+        return try ephemeralKeyPair(tag: signing ? Self.signingKeyTag : Self.encryptionKeyTag)
+    }
+
+    /// Both stored pairs, loaded (and with `createIfMissing`, created) and
+    /// proven to sign and decrypt while Keychain UI is disallowed, or nil when
+    /// either is missing, denied, or would need a prompt. A launch must never
+    /// wait on a Keychain dialog: after a signing change macOS can deny an old
+    /// item's ACL or ask for the login password (b446f716). Getting a key
+    /// reference does not check the ACL; using the private key does, so the
+    /// proof is a real signature and decryption. Success is cached.
+    private func verifiedStoredPairs(createIfMissing: Bool) -> (signing: (privateKey: SecKey, publicKey: SecKey),
+                                                                encryption: (privateKey: SecKey, publicKey: SecKey))? {
+        Self.storedLock.lock(); defer { Self.storedLock.unlock() }
+        if let cached = Self.verifiedStored { return cached }
+        #if DEBUG
+        if Self.debugStoredKeysUnusable { return nil }
+        #endif
+        let verified = Self.withoutKeychainUI { () -> (signing: (privateKey: SecKey, publicKey: SecKey),
+                                                       encryption: (privateKey: SecKey, publicKey: SecKey))? in
+            do {
+                let existingSigning = try loadKeyPair(tag: Self.signingKeyTag)
+                let existingEncryption = try loadKeyPair(tag: Self.encryptionKeyTag)
+                guard createIfMissing || (existingSigning != nil && existingEncryption != nil) else { return nil }
+                let signing = try existingSigning ?? generateAndStoreKeyPair(tag: Self.signingKeyTag)
+                let encryption = try existingEncryption ?? generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
+                guard Self.canSign(with: signing), Self.canDecrypt(with: encryption) else {
+                    KLog.diag("Keychain: stored keys need Keychain UI or were denied — not used")
+                    return nil
+                }
+                return (signing, encryption)
+            } catch {
+                KLog.diag("Keychain: stored keys unavailable without UI (\(error))")
+                return nil
+            }
+        }
+        Self.verifiedStored = verified
+        return verified
+    }
+
+    /// Runs `body` with Keychain UI disallowed for this process. On macOS
+    /// `kSecUseAuthenticationUI` only covers the Data Protection keychain;
+    /// these keys live in the legacy login keychain, whose ACL prompts only
+    /// this switch suppresses (an operation that would prompt fails with
+    /// errSecInteractionNotAllowed instead). Callers hold `storedLock`, so
+    /// the save/restore never interleaves.
+    private static func withoutKeychainUI<T>(_ body: () -> T) -> T {
+        #if DEBUG
+        if DevSecretFileStore.isEnabled { return body() }
+        #endif
+        var allowed: DarwinBoolean = true
+        SecKeychainGetUserInteractionAllowed(&allowed)
+        SecKeychainSetUserInteractionAllowed(false)
+        defer { SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
+        return body()
+    }
+
+    private static let keyCheckMessage = Data("kraki-key-check".utf8) as CFData
+
+    private static func canSign(with pair: (privateKey: SecKey, publicKey: SecKey)) -> Bool {
+        SecKeyCreateSignature(pair.privateKey, .rsaSignatureMessagePKCS1v15SHA256, keyCheckMessage, nil) != nil
+    }
+
+    private static func canDecrypt(with pair: (privateKey: SecKey, publicKey: SecKey)) -> Bool {
+        guard let sealed = SecKeyCreateEncryptedData(pair.publicKey, .rsaEncryptionOAEPSHA256, keyCheckMessage, nil),
+              let opened = SecKeyCreateDecryptedData(pair.privateKey, .rsaEncryptionOAEPSHA256, sealed, nil) else {
+            return false
+        }
+        return (opened as Data) == (keyCheckMessage as Data)
+    }
+
+    #if DEBUG
+    /// Tests: forget this process's key choice (stored keys stay on disk).
+    static func debugResetProcessKeys() {
+        ephemeralLock.lock()
+        preferEphemeralKeys = false
+        ephemeralSigningPair = nil
+        ephemeralEncryptionPair = nil
+        pairGeneration += 1
+        ephemeralLock.unlock()
+        storedLock.lock()
+        verifiedStored = nil
+        storedLock.unlock()
+    }
+    #endif
+
     private func ephemeralKeyPair(tag: String) throws -> (privateKey: SecKey, publicKey: SecKey) {
         Self.ephemeralLock.lock()
         defer { Self.ephemeralLock.unlock() }

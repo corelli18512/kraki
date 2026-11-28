@@ -123,12 +123,22 @@ final class AuthManager {
     #endif
 
     #if os(macOS)
-    /// Use process-local RSA keys for token authentication when the old
-    /// Keychain ACL is unavailable. The token authenticates the user; the
-    /// fresh public keys let the relay continue delivering encrypted data.
-    func useEphemeralKeysForCurrentProcess() {
-        keychain.activateEphemeralKeys()
-    }
+    /// This process signs in with the stored device (`challenge`, Keychain
+    /// keys) although the CLI token is loaded; the token is the fallback.
+    /// Like iOS: an edge Head verifies a known device itself instead of
+    /// asking the account service on another continent (token sign-in with
+    /// new keys always did, 0.6–10 s per Mac launch).
+    private(set) var signsInWithStoredDevice = false
+    /// The stored device's challenge failed in this process; it stays on the
+    /// token until the next launch.
+    private var storedDeviceSignInAbandoned = false
+    /// The last `auth` sent was the stored device's challenge.
+    private var sentStoredDeviceChallenge = false
+    #if DEBUG
+    private var isolatedCredentialSignInAt: Date?
+    /// Tests: signing the challenge fails as with a denied Keychain item.
+    var debugChallengeSigningError: Error?
+    #endif
 
     /// Reuse the locally installed CLI credential for every authentication
     /// attempt in this process. A WebSocket can drop after the auth frame but
@@ -137,83 +147,6 @@ final class AuthManager {
     /// process-local, is never logged/persisted by Kraki, and is cleared on
     /// explicit logout through `clearStoredCredentials()`.
     var cliGitHubToken: String?
-
-    /// Reuse the locally-installed `kraki` CLI's login so the Mac app can
-    /// sign in without a separate pairing/OAuth dance. Returns the relay
-    /// URL + GitHub token when the CLI is installed and logged in.
-    /// Mirrors the kraki daemon: only Kraki's own saved token at
-    /// ~/.kraki/github-token (the GitHub CLI token is never used).
-    /// `ghDeadline` is kept for call-site compatibility and is unused.
-    /// When the local Kraki last saved a GitHub sign-in (`kraki connect`,
-    /// setup), or nil. A sign-in after Sign Out ends the Sign Out.
-    static func cliSignInDate() -> Date? {
-        #if DEBUG
-        if let override = debugCLISignInDate { return override() }
-        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
-            ?? (NSHomeDirectory() + "/.kraki")
-        #else
-        let krakiHome = NSHomeDirectory() + "/.kraki"
-        #endif
-        let attributes = try? FileManager.default.attributesOfItem(atPath: krakiHome + "/github-token")
-        return attributes?[.modificationDate] as? Date
-    }
-    #if DEBUG
-    static var debugCLISignInDate: (() -> Date?)?
-    #endif
-
-    static func loadCLICredentials(ghDeadline: TimeInterval = launchGhDeadline) async -> (relay: String, token: String)? {
-        #if DEBUG
-        if let loader = debugCLICredentialLoader { return await loader(ghDeadline) }
-        #endif
-        #if DEBUG
-        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
-            ?? (NSHomeDirectory() + "/.kraki")
-        #else
-        let krakiHome = NSHomeDirectory() + "/.kraki"
-        #endif
-        guard let configData = try? Data(contentsOf: URL(fileURLWithPath: krakiHome + "/config.json")),
-              let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
-              let relay = config["relay"] as? String,
-              relay.hasPrefix("ws") else {
-            KLog.diag("Mac CLI login unavailable: ~/.kraki/config.json has no relay")
-            return nil
-        }
-
-        // Kraki's own saved token (~/.kraki/github-token, scope read:user).
-        // Never the GitHub CLI's `gh auth token`: its scopes (repo, workflow,
-        // …) are far wider than Kraki needs and it would be sent to the relay.
-        if let raw = try? String(contentsOfFile: krakiHome + "/github-token", encoding: .utf8) {
-            let saved = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !saved.isEmpty {
-                KLog.diag("Mac CLI login resolved a saved device-flow token")
-                return (relay, saved)
-            }
-        }
-        KLog.diag("Mac CLI login unavailable: no GitHub credential was found")
-        return nil
-    }
-
-    /// Resolve `gh` without assuming a GUI process inherited the user's shell
-    /// PATH. Sparkle and LaunchServices relaunch apps with a minimal system
-    /// environment, while MacPorts and Homebrew install `gh` outside it.
-    static let launchGhDeadline: TimeInterval = 0.5
-    static let recoveryGhDeadline: TimeInterval = 8
-
-    #if DEBUG
-    /// Test seam replacing CLI discovery (argument: the gh deadline used).
-    static var debugCLICredentialLoader: ((TimeInterval) async -> (relay: String, token: String)?)?
-    #endif
-
-
-    /// Synchronous process polling intentionally runs only inside the detached
-    /// CLI worker above. Keeping it out of the async closure avoids blocking an
-    /// executor thread with an async-unavailable `Thread.sleep` call.
-    private static func waitForProcessExit(_ process: Process, until deadline: Date) -> Bool {
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        return !process.isRunning
-    }
     #endif
 
     #if os(iOS)
@@ -343,7 +276,13 @@ final class AuthManager {
         }
 
         #if os(macOS)
-        if let token = cliGitHubToken {
+        // Never a challenge with process-local keys: the relay knows the
+        // stored ones, so it would only fail.
+        if signsInWithStoredDevice, keychain.usingEphemeralKeys {
+            abandonStoredDeviceSignIn(keychainUsable: false)
+        }
+        sentStoredDeviceChallenge = signsInWithStoredDevice && activeDeviceId != nil && pairingToken == nil
+        if let token = cliGitHubToken, !sentStoredDeviceChallenge {
             KLog.d("🔑 Auth method: github_token (local kraki CLI)")
             sendRaw([
                 "type": "auth",
@@ -394,6 +333,9 @@ final class AuthManager {
 
     func handleAuthChallenge(nonce: String) {
         do {
+            #if os(macOS) && DEBUG
+            if let error = debugChallengeSigningError { throw error }
+            #endif
             let signingKey = try keychain.getOrCreateSigningKey()
             let signature = try crypto.signChallenge(nonce, privateKey: signingKey.privateKey)
 
@@ -406,6 +348,15 @@ final class AuthManager {
         } catch {
             KLog.d("⚠️ Challenge signing failed: \(error)")
             #if os(macOS)
+            if sentStoredDeviceChallenge {
+                // The loaded CLI token signs in instead, quietly, with
+                // process-local keys.
+                Task { @MainActor [weak self] in
+                    guard let appState = self?.appState else { return }
+                    _ = await appState.fallBackFromStoredDevice(reason: "challenge_signing_failed", keychainUsable: false)
+                }
+                return
+            }
             // A denied Keychain ACL must be recoverable. Re-authenticate with
             // the existing CLI token and process-local keys instead of leaving
             // the socket authenticated-but-stuck on the login screen.
@@ -484,6 +435,12 @@ final class AuthManager {
         #if os(macOS)
         // Signed in again (only an explicit sign-in gets here after Sign Out).
         appState.signedOutByUser = false
+        if !usesEphemeralOpenAuth, !sentStoredDeviceChallenge {
+            // Registered with a credential: with the stored keys the next
+            // launch can sign in with a challenge; process-local keys die
+            // with this process, so the next launch uses the token again.
+            credentialSignInAt = keychain.usingEphemeralKeys ? nil : Date()
+        }
         #endif
 
         // Mark transport as authenticated
@@ -588,8 +545,8 @@ final class AuthManager {
         }
 
         #if os(macOS)
-        let recoverableCLIOutage = cliGitHubToken != nil
-            && (code == "service_unavailable" || code == "auth_unavailable")
+        if fallsBackFromStoredDeviceChallenge(code: code) { return }
+        let recoverableCLIOutage = cliGitHubToken != nil && (code == "service_unavailable" || code == "auth_unavailable")
         #else
         let recoverableCLIOutage = false
         #endif
@@ -677,6 +634,9 @@ final class AuthManager {
         appState?.isRegionRedirectInFlight = false
         #if os(macOS)
         cliGitHubToken = nil
+        signsInWithStoredDevice = false
+        sentStoredDeviceChallenge = false
+        credentialSignInAt = nil
         #endif
         #if DEBUG
         if debugIsolatedIdentity { appState?.hasStoredCredentials = false; return }
@@ -704,6 +664,9 @@ final class AuthManager {
         pairingToken = nil
         appState?.isAwaitingAuthInfo = false
         appState?.connectionStatus = .authenticating
+        #if os(macOS)
+        sentStoredDeviceChallenge = false
+        #endif
 
         // Mint / load our key pair NOW so the relay can register the
         // device with our public keys on first auth. Without this the
@@ -919,6 +882,172 @@ final class AuthManager {
         appState?.wsClient?.sendRaw(string)
     }
 }
+
+// MARK: - Mac: the local Kraki's login and the stored-device sign-in
+
+#if os(macOS)
+extension AuthManager {
+    /// Use process-local RSA keys for token authentication when the old
+    /// Keychain ACL is unavailable. The token authenticates the user; the
+    /// fresh public keys let the relay continue delivering encrypted data.
+    func useEphemeralKeysForCurrentProcess() {
+        keychain.activateEphemeralKeys()
+    }
+
+    /// Before a token sign-in: register the stored Keychain keys when they
+    /// work without any Keychain UI (the next launch can then sign in with a
+    /// challenge the edge Head verifies itself), else process-local keys.
+    func prepareKeysForTokenSignIn() {
+        let stored = keychain.useStoredKeysIfUsable()
+        KLog.diag("Auth: token sign-in registers \(stored ? "stored" : "process-local") keys")
+    }
+
+    /// When this device last completed a sign-in that registered its stored
+    /// keys with a credential (CLI token, pairing, OAuth). A challenge does
+    /// not count: it proves the device, not which login it belongs to.
+    private static let credentialSignInAtKey = "kraki.deviceCredentialSignInAt"
+    #if DEBUG
+    func debugSetCredentialSignInAt(_ date: Date?) { credentialSignInAt = date }
+    #endif
+    private(set) var credentialSignInAt: Date? {
+        get {
+            #if DEBUG
+            if debugIsolatedIdentity { return isolatedCredentialSignInAt }
+            #endif
+            let seconds = Self.sharedDefaults.double(forKey: Self.credentialSignInAtKey)
+            return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+        }
+        set {
+            #if DEBUG
+            if debugIsolatedIdentity { isolatedCredentialSignInAt = newValue; return }
+            #endif
+            if let newValue {
+                Self.sharedDefaults.set(newValue.timeIntervalSince1970, forKey: Self.credentialSignInAtKey)
+            } else {
+                Self.sharedDefaults.removeObject(forKey: Self.credentialSignInAtKey)
+            }
+        }
+    }
+
+    /// Choose the stored-device challenge for this launch when: a device is
+    /// stored, its Keychain keys work without UI, it last signed in with a
+    /// credential that registered those keys, and the local Kraki has not
+    /// saved a newer GitHub sign-in since (`kraki connect` with another
+    /// account must not stay on the old one). Otherwise the token signs in.
+    func beginStoredDeviceSignIn(cliSignInDate: () -> Date?) -> Bool {
+        if signsInWithStoredDevice { return true }
+        guard !usesEphemeralOpenAuth, !storedDeviceSignInAbandoned,
+              pendingRegionDeviceId == nil, storedDeviceId != nil,
+              let registeredAt = credentialSignInAt,
+              keychain.storedKeysUsableWithoutPrompt() else { return false }
+        if let cliSignIn = cliSignInDate(), cliSignIn > registeredAt {
+            KLog.diag("Auth: the local Kraki signed in again since this device did — using its token")
+            return false
+        }
+        signsInWithStoredDevice = true
+        return true
+    }
+
+    /// Any answer to the stored device's challenge other than a transient
+    /// outage (unknown device, key mismatch, rejected) is the token's turn:
+    /// same device id, local data kept, no error shown.
+    func fallsBackFromStoredDeviceChallenge(code: String?) -> Bool {
+        guard sentStoredDeviceChallenge, !usesEphemeralOpenAuth,
+              code != "service_unavailable", code != "auth_unavailable" else { return false }
+        KLog.diag("Auth: stored device challenge refused (code=\(code ?? "nil")) — signing in with the CLI token")
+        Task { @MainActor [weak appState] in
+            _ = await appState?.fallBackFromStoredDevice(reason: "challenge_\(code ?? "error")", keychainUsable: true)
+        }
+        return true
+    }
+
+    /// The stored device's challenge failed or stalled: sign in with the
+    /// token for the rest of this process. `keychainUsable` false (signing
+    /// failed) also moves this process to process-local keys.
+    func abandonStoredDeviceSignIn(keychainUsable: Bool) {
+        storedDeviceSignInAbandoned = true
+        signsInWithStoredDevice = false
+        if !keychainUsable { keychain.activateEphemeralKeys() }
+    }
+
+    /// Reuse the locally-installed `kraki` CLI's login so the Mac app can
+    /// sign in without a separate pairing/OAuth dance. Returns the relay
+    /// URL + GitHub token when the CLI is installed and logged in.
+    /// Mirrors the kraki daemon: only Kraki's own saved token at
+    /// ~/.kraki/github-token (the GitHub CLI token is never used).
+    /// `ghDeadline` is kept for call-site compatibility and is unused.
+    /// When the local Kraki last saved a GitHub sign-in (`kraki connect`,
+    /// setup), or nil. A sign-in after Sign Out ends the Sign Out.
+    static func cliSignInDate() -> Date? {
+        #if DEBUG
+        if let override = debugCLISignInDate { return override() }
+        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
+            ?? (NSHomeDirectory() + "/.kraki")
+        #else
+        let krakiHome = NSHomeDirectory() + "/.kraki"
+        #endif
+        let attributes = try? FileManager.default.attributesOfItem(atPath: krakiHome + "/github-token")
+        return attributes?[.modificationDate] as? Date
+    }
+    #if DEBUG
+    static var debugCLISignInDate: (() -> Date?)?
+    #endif
+
+    static func loadCLICredentials(ghDeadline: TimeInterval = launchGhDeadline) async -> (relay: String, token: String)? {
+        #if DEBUG
+        if let loader = debugCLICredentialLoader { return await loader(ghDeadline) }
+        #endif
+        #if DEBUG
+        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
+            ?? (NSHomeDirectory() + "/.kraki")
+        #else
+        let krakiHome = NSHomeDirectory() + "/.kraki"
+        #endif
+        guard let configData = try? Data(contentsOf: URL(fileURLWithPath: krakiHome + "/config.json")),
+              let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+              let relay = config["relay"] as? String,
+              relay.hasPrefix("ws") else {
+            KLog.diag("Mac CLI login unavailable: ~/.kraki/config.json has no relay")
+            return nil
+        }
+
+        // Kraki's own saved token (~/.kraki/github-token, scope read:user).
+        // Never the GitHub CLI's `gh auth token`: its scopes (repo, workflow,
+        // …) are far wider than Kraki needs and it would be sent to the relay.
+        if let raw = try? String(contentsOfFile: krakiHome + "/github-token", encoding: .utf8) {
+            let saved = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !saved.isEmpty {
+                KLog.diag("Mac CLI login resolved a saved device-flow token")
+                return (relay, saved)
+            }
+        }
+        KLog.diag("Mac CLI login unavailable: no GitHub credential was found")
+        return nil
+    }
+
+    /// Resolve `gh` without assuming a GUI process inherited the user's shell
+    /// PATH. Sparkle and LaunchServices relaunch apps with a minimal system
+    /// environment, while MacPorts and Homebrew install `gh` outside it.
+    static let launchGhDeadline: TimeInterval = 0.5
+    static let recoveryGhDeadline: TimeInterval = 8
+
+    #if DEBUG
+    /// Test seam replacing CLI discovery (argument: the gh deadline used).
+    static var debugCLICredentialLoader: ((TimeInterval) async -> (relay: String, token: String)?)?
+    #endif
+
+
+    /// Synchronous process polling intentionally runs only inside the detached
+    /// CLI worker above. Keeping it out of the async closure avoids blocking an
+    /// executor thread with an async-unavailable `Thread.sleep` call.
+    private static func waitForProcessExit(_ process: Process, until deadline: Date) -> Bool {
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return !process.isRunning
+    }
+}
+#endif
 
 extension AuthManager {
     /// Every Head issues `randomBytes(32).toString('hex')` as its challenge

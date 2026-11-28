@@ -80,24 +80,50 @@ extension AppState {
         return true
     }
 
-    /// Use a CLI credential now: token auth with process-local keys, on a
-    /// fresh socket unless the current one is already signed in.
+    /// Use a CLI credential now, on a fresh socket unless the current one is
+    /// already signed in. A returning device whose Keychain keys work without
+    /// UI signs in with its challenge and keeps the token for recovery
+    /// (`AuthManager.beginStoredDeviceSignIn`); otherwise the token signs in,
+    /// registering the stored keys when usable, else process-local keys (a
+    /// denied Keychain item can never strand the Mac).
     func adoptCLICredentials(_ creds: (relay: String, token: String)) {
-        // Token auth is independent of the old device's Keychain ACL. Use
-        // process-local keys so a denied Keychain prompt cannot strand the
-        // Mac before the relay refreshes this device's public keys.
-        authManager?.useEphemeralKeysForCurrentProcess()
         if creds.relay != relayURL { relayURL = creds.relay }
         // Sign Out resets AppState's relay but not the socket's, so compare
         // with the socket: only a real change schedules a new connection.
         let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
+        let storedDevice = authManager?.beginStoredDeviceSignIn(cliSignInDate: AuthManager.cliSignInDate) ?? false
+        if !storedDevice { authManager?.prepareKeysForTokenSignIn() }
         if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
         authManager?.cliGitHubToken = creds.token
-        KLog.diag("Auth: using local CLI login")
+        KLog.diag(storedDevice ? "Auth: signing in with the stored device (CLI login kept for recovery)" : "Auth: using local CLI login")
         // setRelayURL schedules the replacement connection itself. Calling
         // connect again here would briefly create two authenticated sockets.
         guard !socketRelayChanged, connectionStatus != .connected else { return }
-        reconnectForNewCredentials(reason: "cli_token")
+        reconnectForNewCredentials(reason: storedDevice ? "stored_device" : "cli_token")
+    }
+
+    /// The stored device's challenge was refused or could not be signed:
+    /// sign in with the CLI token as `recoverCLIAuthentication` does, keeping
+    /// the device id and this Mac's data, without showing an error. Returns
+    /// false when there is no CLI login to fall back to.
+    @discardableResult
+    func fallBackFromStoredDevice(reason: String, keychainUsable: Bool) async -> Bool {
+        authManager?.abandonStoredDeviceSignIn(keychainUsable: keychainUsable)
+        guard !staysSignedOut, connectionStatus != .connected else { return false }
+        KLog.diag("Auth: stored device sign-in failed (\(reason)) — signing in with the CLI login")
+        if authManager?.cliGitHubToken == nil {
+            guard let creds = await AuthManager.loadCLICredentials(ghDeadline: AuthManager.recoveryGhDeadline) else {
+                return false
+            }
+            guard connectionStatus != .connected else { return true }
+            adoptCLICredentials(creds)
+            return true
+        }
+        // Same keys as the challenge unless signing failed: the token
+        // sign-in registers them, so the next launch's challenge works.
+        if keychainUsable { authManager?.prepareKeysForTokenSignIn() }
+        reconnectForNewCredentials(reason: reason)
+        return true
     }
 
     /// `connect()` is ensure-connected: it does nothing while a socket is
@@ -160,6 +186,8 @@ extension AppState {
         guard Date().timeIntervalSince(reference) >= backoff else { return }
         authRecoveryAttempts += 1
         lastAuthRecoveryAt = Date()
+        // A stalled stored-device sign-in falls back to the token.
+        if transportOpen { authManager?.abandonStoredDeviceSignIn(keychainUsable: true) }
         await recoverCLIAuthentication(reason: transportOpen ? "stuck_unauthenticated" : "no_cli_token")
     }
     #endif
