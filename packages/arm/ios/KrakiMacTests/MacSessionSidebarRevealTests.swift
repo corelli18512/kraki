@@ -10,12 +10,18 @@ final class MacSessionSidebarRevealTests: XCTestCase {
     override func setUpWithError() throws {
         try requireForegroundUITests()
         try super.setUpWithError()
+        // These tests check where the list ends up, not the animation; SwiftUI
+        // animations do not advance while the screen is locked or asleep.
+        savedRevealAnimation = SessionsSidebarView.revealAnimation
+        SessionsSidebarView.revealAnimation = nil
     }
 
     private var windows: [NSWindow] = []
+    private var savedRevealAnimation: Animation?
     override func tearDown() {
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()
+        SessionsSidebarView.revealAnimation = savedRevealAnimation
         super.tearDown()
     }
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
@@ -46,8 +52,12 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         var selected: String?
         let binding = Binding(get: { selected }, set: { selected = $0 })
         let host = NSHostingView(rootView: SessionsSidebarView(selectedSessionId: binding).environment(app))
+        // Borderless: the Debug test host's launch step
+        // (MacAppDelegate.inflateAndCenterMainWindowOnce) resizes every titled
+        // window under 800 x 500 about 1.2 s after launch, which grew this
+        // 320 x 520 fixture to 1165 x 901 mid-test.
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 320, height: 520),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+                              styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
