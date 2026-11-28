@@ -132,18 +132,37 @@ final class WebSocketClient: NSObject {
         min(Self.connectTimeout * pow(2, Double(consecutiveConnectTimeouts)), Self.connectMaxTimeout)
     }
     static let authenticationTimeout: TimeInterval = 90
-    /// A sent challenge/token auth frame must get an answer within this long
-    /// (doubling per consecutive miss, up to `authReplyMaxTimeout`) or the
-    /// socket is replaced. An open socket that never answers (half-open
+    /// A sent challenge/token auth frame that has no answer after this long
+    /// (doubling per consecutive miss, up to `authReplyMaxTimeout`) gets its
+    /// link proven with a ping. An open socket that never answers (half-open
     /// link, auth_ok stuck behind TCP retransmission) otherwise waited for
     /// the 22 s liveness ping: diag 10-19 27.9 s, 10-18 15.9 s; a fresh
-    /// socket authenticated in under a second both times. The doubling keeps
-    /// a slow-but-working backend (each retry re-asks it) from looping.
+    /// socket authenticated in under a second both times. So no pong within
+    /// `authReplyProbeTimeout` replaces the socket at once.
     /// Single-use credentials (OAuth code, pairing token) are never retried.
     static let authReplyTimeout: TimeInterval = 5
     static let authReplyMaxTimeout: TimeInterval = 20
+    static let authReplyProbeTimeout: TimeInterval = 3
+    /// A pong means the Head got the frame and is still working on it
+    /// (11-27: account requests across the border took 6.8–9.4 s, and each
+    /// 5 s replacement threw away one the edge was still processing). The
+    /// Head answers within its account-service timeout (RemoteAuthBackend,
+    /// 15 s per request, then `service_unavailable`), so a live link waits up
+    /// to 25 s after the frame: 15 s plus 10 s for the reply's way back on a
+    /// slow link. Re-proven every `authReplyRecheckInterval`; still nothing
+    /// at the cap replaces the socket as before.
+    static let authReplyLiveLinkCap: TimeInterval = 25
+    static let authReplyRecheckInterval: TimeInterval = 5
     private var authReplyDeadline: DispatchWorkItem?
     private(set) var consecutiveAuthReplyTimeouts = 0
+    /// When the frame awaiting its reply was sent, and which wait this is
+    /// (bumped whenever a wait starts or ends, so late pongs are ignored).
+    private var authFrameSentAt: Date?
+    private var authReplyWait = 0
+    /// The last wait ended at `authReplyLiveLinkCap`: the link answered pings
+    /// but the Head never answered the frame. Cleared by the next frame and
+    /// by a sign-in.
+    private(set) var authReplyCapReached = false
 
     // MARK: Outbound retry queue
     //
@@ -364,16 +383,10 @@ final class WebSocketClient: NSObject {
     }
 
     private func armAuthReplyDeadline() {
-        authReplyDeadline?.cancel()
-        let epoch = generation
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.generation == epoch, !self.isAuthenticated, self.state == .connected else { return }
-            self.consecutiveAuthReplyTimeouts += 1
-            KLog.d("⚠️ No auth reply within \(self.currentAuthReplyTimeout)s — replacing socket")
-            self.recover(reason: "auth_reply_timeout")
-        }
-        authReplyDeadline = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + currentAuthReplyTimeout, execute: work)
+        endAuthReplyWait()
+        authReplyCapReached = false
+        authFrameSentAt = Date()
+        scheduleAuthReplyCheck(after: currentAuthReplyTimeout)
     }
 
     /// The pending sign-in got its answer (challenge, ok or error). Other
@@ -387,7 +400,7 @@ final class WebSocketClient: NSObject {
         @unknown default: text = nil
         }
         guard let text, Self.isAuthReplyFrame(text) else { return }
-        authReplyDeadline?.cancel(); authReplyDeadline = nil
+        endAuthReplyWait()
     }
 
     static func isAuthReplyFrame(_ string: String) -> Bool {
@@ -404,8 +417,9 @@ final class WebSocketClient: NSObject {
         stableConnectionWorkItem = nil
         if value {
             phaseDeadline?.cancel(); phaseDeadline = nil
-            authReplyDeadline?.cancel(); authReplyDeadline = nil
+            endAuthReplyWait()
             consecutiveAuthReplyTimeouts = 0
+            authReplyCapReached = false
             flushOutboundQueue()
             scheduleStableConnectionReset()
         }
@@ -714,7 +728,7 @@ final class WebSocketClient: NSObject {
         pendingWrites = 0
         lastWriteCompletedAt = nil
         phaseDeadline?.cancel(); phaseDeadline = nil
-        authReplyDeadline?.cancel(); authReplyDeadline = nil
+        endAuthReplyWait()
         resumeProbeDeadline?.cancel(); resumeProbeDeadline = nil
         isAuthenticated = false
         stopPing()
@@ -722,6 +736,77 @@ final class WebSocketClient: NSObject {
         stableConnectionWorkItem?.cancel()
         stableConnectionWorkItem = nil
         cancelReconnect()
+    }
+}
+
+// MARK: - Late auth reply
+
+extension WebSocketClient {
+    private func endAuthReplyWait() {
+        authReplyDeadline?.cancel(); authReplyDeadline = nil
+        authReplyWait += 1
+        authFrameSentAt = nil
+    }
+
+    private func isCurrentAuthReplyWait(epoch: Int, wait: Int) -> Bool {
+        generation == epoch && authReplyWait == wait && !isAuthenticated && state == .connected
+    }
+
+    private func scheduleAuthReplyCheck(after delay: TimeInterval) {
+        let epoch = generation, wait = authReplyWait
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isCurrentAuthReplyWait(epoch: epoch, wait: wait) else { return }
+            self.checkLateAuthReply()
+        }
+        authReplyDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// The sign-in reply is late. A link that answers a ping is waited on (a
+    /// slow Head) up to `authReplyLiveLinkCap`; one that does not is replaced
+    /// at once.
+    private func checkLateAuthReply() {
+        guard let sentAt = authFrameSentAt, let probeTask = task else { return }
+        if Date().timeIntervalSince(sentAt) >= Self.authReplyLiveLinkCap {
+            authReplyCapReached = true
+            replaceForMissingAuthReply("⚠️ no auth reply within \(Int(Self.authReplyLiveLinkCap))s on a live link")
+            return
+        }
+        let epoch = generation, wait = authReplyWait
+        let noPong = DispatchWorkItem { [weak self] in
+            guard let self, self.isCurrentAuthReplyWait(epoch: epoch, wait: wait) else { return }
+            self.replaceForMissingAuthReply("⚠️ no auth reply and no pong within \(Int(Self.authReplyProbeTimeout))s")
+        }
+        authReplyDeadline = noPong
+        probeTask.sendPing { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self, self.isCurrentAuthReplyWait(epoch: epoch, wait: wait) else { return }
+                noPong.cancel()
+                if let error {
+                    self.replaceForMissingAuthReply("⚠️ auth link ping failed: \(error)")
+                    return
+                }
+                let remaining = Self.authReplyLiveLinkCap - Date().timeIntervalSince(sentAt)
+                KLog.d("⏳ Auth reply late but the link answers — waiting (\(Int(remaining))s left)")
+                self.scheduleAuthReplyCheck(after: max(0, min(Self.authReplyRecheckInterval, remaining)))
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.authReplyProbeTimeout, execute: noPong)
+    }
+
+    private func replaceForMissingAuthReply(_ why: String) {
+        consecutiveAuthReplyTimeouts += 1
+        KLog.d("\(why) — replacing socket")
+        recover(reason: "auth_reply_timeout")
+    }
+
+    /// A retryable sign-in frame awaits its reply, sent less than the cap
+    /// ago. Its link has not failed a ping: a failed or unanswered probe
+    /// replaces the socket at once, which ends the wait.
+    var isAwaitingAuthReplyWithinCap: Bool {
+        guard state == .connected, !isAuthenticated, authReplyDeadline != nil,
+              let sentAt = authFrameSentAt else { return false }
+        return Date().timeIntervalSince(sentAt) < Self.authReplyLiveLinkCap
     }
 }
 

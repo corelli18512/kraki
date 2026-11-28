@@ -70,6 +70,13 @@ final class EncryptionHandler {
     private let replayGuard = DeviceTrustReplayGuard()
     private var keyAvailabilityConfirmed = false
     private var cachedEncryptionKeyPair: (privateKey: SecKey, publicKey: SecKey)?
+    #if os(macOS)
+    /// `KeychainManager.keyPairGeneration` of the cached pair: a switch of
+    /// this process's keys (stored identity, process-local) after it was
+    /// cached must not leave decryption on the old key while auth registered
+    /// the new one.
+    private var cachedKeyPairGeneration = 0
+    #endif
 
     // MARK: Init
 
@@ -186,7 +193,11 @@ final class EncryptionHandler {
         let cryptoPayload = CryptoBlobPayload(blob: blob, keys: keys)
         let encryptionKey: (privateKey: SecKey, publicKey: SecKey)
         keyStateLock.lock()
-        let cached = cachedEncryptionKeyPair
+        var cached = cachedEncryptionKeyPair
+        #if os(macOS)
+        let generation = KeychainManager.keyPairGeneration
+        if cachedKeyPairGeneration != generation { cached = nil }
+        #endif
         keyStateLock.unlock()
         if let cached {
             encryptionKey = cached
@@ -194,6 +205,9 @@ final class EncryptionHandler {
             let loaded = try keychain.getOrCreateEncryptionKey()
             keyStateLock.lock()
             cachedEncryptionKeyPair = loaded
+            #if os(macOS)
+            cachedKeyPairGeneration = generation
+            #endif
             keyAvailabilityConfirmed = true
             keyStateLock.unlock()
             encryptionKey = loaded
