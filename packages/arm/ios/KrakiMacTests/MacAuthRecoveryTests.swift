@@ -291,6 +291,11 @@ final class MacAuthRecoveryTests: XCTestCase {
         relay.challengeMode = .fatal
         installSlowGh(delay: .milliseconds(800))
         app = try makeApp()
+        // Generate the process-local RSA-4096 keys now: under load that alone
+        // took longer than gh's 0.8 s, so the challenge's refusal arrived after
+        // the late token and cleared it, which is not the case this tests.
+        _ = try KeychainManager().getOrCreateSigningKey()
+        _ = try KeychainManager().getOrCreateEncryptionKey()
         let usedCLI = await app.attemptCLILogin()
         XCTAssertFalse(usedCLI, "fixture: the launch probe misses gh")
         app.connect()
