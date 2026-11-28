@@ -8,14 +8,21 @@ import XCTest
 @MainActor
 final class MacSessionSidebarRevealTests: XCTestCase {
     override func setUpWithError() throws {
+        // Saved before the skip: tearDown runs after a skipped setUp too.
+        savedRevealAnimation = SessionsSidebarView.revealAnimation
         try requireForegroundUITests()
         try super.setUpWithError()
+        // These tests check where the list ends up, not the animation; SwiftUI
+        // animations do not advance while the screen is locked or asleep.
+        SessionsSidebarView.revealAnimation = nil
     }
 
     private var windows: [NSWindow] = []
+    private var savedRevealAnimation: Animation?
     override func tearDown() {
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()
+        SessionsSidebarView.revealAnimation = savedRevealAnimation
         super.tearDown()
     }
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
@@ -46,8 +53,12 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         var selected: String?
         let binding = Binding(get: { selected }, set: { selected = $0 })
         let host = NSHostingView(rootView: SessionsSidebarView(selectedSessionId: binding).environment(app))
+        // Borderless: the Debug test host's launch step
+        // (MacAppDelegate.inflateAndCenterMainWindowOnce) resizes every titled
+        // window under 800 x 500 about 1.2 s after launch, which grew this
+        // 320 x 520 fixture to 1165 x 901 mid-test.
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 320, height: 520),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+                              styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
@@ -68,7 +79,7 @@ final class MacSessionSidebarRevealTests: XCTestCase {
     func testNewSessionBelowManyPinnedIsRevealedWithMinimalScroll() throws {
         let (app, sv) = try makeSidebar(pinned: 25)
         let visible = sv.contentView.bounds.height
-        let rowHeight = sv.documentView!.frame.height / 30
+        let rowHeight = try XCTUnwrap(sv.documentView).frame.height / 30
         XCTAssertLessThan(visible, rowHeight * 25, "fixture: pinned rows overflow the sidebar")
         XCTAssertEqual(sv.contentView.bounds.minY, 0, accuracy: 1)
         createNewSession(app)
@@ -77,6 +88,9 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         XCTAssertGreaterThan(offset, 0, "the new row is brought into view")
         XCTAssertLessThan(offset, rowTop - rowHeight, "not aligned to the top: pinned rows above stay in view")
         XCTAssertGreaterThanOrEqual(offset + visible, rowTop + rowHeight - 4, "the new row is fully visible")
+        // Minimal: the row's bottom lands at the viewport's bottom, no further
+        // (a centred or top-aligned reveal scrolls past it).
+        XCTAssertEqual(offset + visible, rowTop + rowHeight, accuracy: 4, "minimal scroll: the row ends at the bottom edge")
     }
 
     /// Deterministic form of the intermittent sidebar clipping: SwiftUI laid
