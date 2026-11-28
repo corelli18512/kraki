@@ -32,7 +32,7 @@ Principles:
 
 ### `outage.summary`: foreground outage
 Counts only outages while signed in, in the foreground, and not during an "open" process; deliberate background disconnects and sleep do not count.
-- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, `auth_reply_timeout` (a sent sign-in got no answer within 5 s, doubling to 20 s), etc. The same tags appear in `ws.state.source`.
+- `source`: how the client noticed. Values include `peer_closed` (with close code), `transport_error` (with NSError code), `ping_timeout`, `transport_silent`, `receive_failed`, `auth_reply_timeout` (a sent sign-in got no answer within 5 s, doubling to 20 s, and the link then did not answer a ping within 3 s; a link that answers is waited on up to 25 s after the sign-in was sent), etc. The same tags appear in `ws.state.source`.
 - Durations:
   - `detectMs`: last data received → outage detected (long for half-open connections)
   - `reconnectMs`: detected → re-authenticated

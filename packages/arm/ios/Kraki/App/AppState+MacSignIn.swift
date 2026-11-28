@@ -181,6 +181,9 @@ extension AppState {
         let missingToken = authManager?.cliGitHubToken == nil
         // A plain outage (no transport) with a token is the socket's job.
         guard transportOpen || missingToken else { return }
+        // The Head is still answering a sign-in on a link that answers pings:
+        // the socket waits for it up to its cap and replaces it itself.
+        if transportOpen, wsClient?.isWaitingForAuthReplyOnLiveLink == true { return }
         let backoff = min(authStuckThreshold * pow(2, Double(authRecoveryAttempts)), 60)
         let reference = max(since, lastAuthRecoveryAt ?? .distantPast)
         guard Date().timeIntervalSince(reference) >= backoff else { return }

@@ -331,7 +331,8 @@ final class MacAuthRecoveryTests: XCTestCase {
 
     /// Diag 10-19 (27.9 s) / 10-18 (15.9 s): an open socket that never
     /// answers the sign-in was only replaced by the 22 s liveness ping. Now a
-    /// retryable auth gets a fresh socket after `authReplyTimeout`.
+    /// retryable auth on a link that does not answer a ping either gets a
+    /// fresh socket after `authReplyTimeout` plus the ping's window.
     func testUnansweredSignInIsRetriedOnAFreshSocketWithinSeconds() async throws {
         relay.stalledTokenAuths = 1
         AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
@@ -345,7 +346,8 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(relay.methods, ["github_token", "github_token"])
         XCTAssertTrue(app.wsClient?.recoveryReasons.contains("auth_reply_timeout") == true)
         XCTAssertGreaterThanOrEqual(elapsed, WebSocketClient.authReplyTimeout - 0.5)
-        XCTAssertLessThan(elapsed, WebSocketClient.authReplyTimeout + 3, "not the 22 s liveness ping")
+        XCTAssertLessThan(elapsed, WebSocketClient.authReplyTimeout + WebSocketClient.authReplyProbeTimeout + 3,
+                          "not the 22 s liveness ping")
         XCTAssertEqual(app.wsClient?.consecutiveAuthReplyTimeouts, 0, "reset once signed in")
     }
 
@@ -572,5 +574,29 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertFalse(app.hasStoredCredentials)
         XCTAssertNil(app.authManager?.credentialSignInAt)
         XCTAssertFalse(app.authManager?.signsInWithStoredDevice ?? true)
+    }
+
+    // MARK: Slow Head on a live link
+
+    /// 11-27: the account service answered after 6.8–9.4 s and every 5 s
+    /// replacement (socket deadline, then the watchdog's stuck_unauthenticated)
+    /// threw away a sign-in the edge was still processing. While the link
+    /// answers pings neither replaces the socket; the sign-in completes on it.
+    func testWatchdogLeavesASlowSignInOnALiveLinkAlone() async throws {
+        relay.tokenReplyDelay = 8
+        AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
+        app = try makeApp()
+        app.authManager?.debugSetStoredDeviceId(nil)
+        // Keys first: RSA-4096 generation can block the main thread for
+        // seconds on a busy machine, delaying the auth frame and the first
+        // liveness pong past the watchdog's threshold.
+        _ = try KeychainManager().getOrCreateSigningKey()
+        _ = try KeychainManager().getOrCreateEncryptionKey()
+        app.authStuckThreshold = 4
+        _ = await app.attemptCLILogin()
+        try await waitUntil(15, "signed in") { app.connectionStatus == .connected }
+        XCTAssertEqual(relay.methods, ["github_token"])
+        XCTAssertNil(app.lastAuthRecoveryAt, "no stuck_unauthenticated recovery")
+        XCTAssertEqual(app.wsClient?.recoveryReasons ?? ["?"], [])
     }
 }
