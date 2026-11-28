@@ -53,6 +53,10 @@ export const SessionRow = memo(function SessionRow({
   const { t } = useTranslation(['sessions', 'common']);
   const navigate = useNavigate();
   const device = useStore((s) => s.devices.get(session.deviceId));
+  // Before this page load's auth_ok the persisted device list has no live
+  // presence: unknown (hollow ring), neither online nor offline.
+  const presenceKnown = useStore((s) => s.presenceKnown);
+  const deviceOnline = presenceKnown ? device?.online : undefined;
   const deviceAgents = useStore((s) => s.deviceAgents.get(session.deviceId));
   const livePreview = useStore((s) => s.sessionPreviews.get(session.id));
   const preview = livePreview ?? archived?.preview;
@@ -67,11 +71,11 @@ export const SessionRow = memo(function SessionRow({
 
   const entries = useOutbox((s) => s.entries);
   const connected = useStore((s) => s.status === 'connected');
-  const pending = archived ? undefined : sessionPendingPreview(entries, session.id, connected && device?.online !== false);
+  const pending = archived ? undefined : sessionPendingPreview(entries, session.id, connected && deviceOnline !== false);
   const draftText = collapseWhitespace(draft);
   const hasDraft = !pending && !!draftText;
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
-  const status = pending ? 'delivery' : resolveCardStatus(turnClosing ? 'active' : session.state, preview?.type, device?.online, hasDraft, compacting);
+  const status = pending ? 'delivery' : resolveCardStatus(turnClosing ? 'active' : session.state, preview?.type, deviceOnline, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
   // The live device name first: it follows renames.
   const machine = device?.name || session.deviceName;
@@ -116,7 +120,7 @@ export const SessionRow = memo(function SessionRow({
   const accessibleName = [
     title, pinned && t('row.pinned'), unread && t('row.unread'),
     pending ? DELIVERY_LABEL[pending.status] : STATUS_LABEL[status],
-    machine, previewText, time,
+    machine, narrow && machine && !presenceKnown && t('common:presence.unknown'), previewText, time,
   ].filter(Boolean).join(', ');
   const row = (
     <button
@@ -136,7 +140,7 @@ export const SessionRow = memo(function SessionRow({
       <span className="ksr-body">
         <span className="ksr-line1">
           <span className="ksr-title" dir="auto">{title}</span>
-          {narrow && device && !device.online && <span className="ksr-offline">{t('row.offline')}</span>}
+          {narrow && device && deviceOnline === false && <span className="ksr-offline">{t('row.offline')}</span>}
           {pinned && <Pin className="ksr-pin" aria-label={t('row.pinned')} />}
           <span className="ksr-spacer" />
           {unread && <span className="ksr-unread" role="img" aria-label={t('row.unread')} />}
@@ -145,7 +149,9 @@ export const SessionRow = memo(function SessionRow({
         {narrow ? <span className="ksr-line2">
           {machine && (
             <>
-              {narrow && <span className={`ksr-devdot ${device?.online ? 'is-online' : ''}`} />}
+              {narrow && (presenceKnown
+                ? <span className={`ksr-devdot ${deviceOnline ? 'is-online' : ''}`} />
+                : <span className="ksr-devdot is-unknown" role="img" aria-label={t('common:presence.unknown')} />)}
               <span className="ksr-machine">{machine}</span>
             </>
           )}

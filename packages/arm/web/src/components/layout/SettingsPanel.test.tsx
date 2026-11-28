@@ -217,6 +217,19 @@ describe('SettingsPanel native preferences parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(commands.removeDevice).toHaveBeenCalledWith('old');
   });
+  it('shows presence as unknown (hollow ring) until this page load\'s auth_ok, then online/offline dots', () => {
+    useStore.setState({ devices: new Map([
+      ['z', { id: 'z', name: 'Zulu', role: 'tentacle', online: true }],
+      ['a', { id: 'a', name: 'Alpha', role: 'tentacle', online: false }],
+    ]) });
+    const { container } = open(); tab('Devices');
+    expect(container.querySelectorAll('.k-presence-unknown')).toHaveLength(2);
+    expect(screen.getAllByRole('img', { name: 'Status unknown' })).toHaveLength(2);
+    expect(container.querySelector('.kp-offline-dot')).toBeNull();
+    act(() => { useStore.getState().setDevices([...useStore.getState().devices.values()]); });
+    expect(container.querySelector('.k-presence-unknown')).toBeNull();
+    expect(container.querySelectorAll('.kp-offline-dot')).toHaveLength(1);
+  });
   it('shows offline last-online metadata and sorts About diagnostics with offline suffixes', () => {
     useStore.setState({ devices: new Map([
       ['z', { id: 'z', name: 'Zulu', role: 'tentacle', online: true }],

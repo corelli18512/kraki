@@ -54,16 +54,22 @@ export function DevicePanel({
   const canRemove = builtInKnown && !device.online && !isCurrentDevice && device.id !== builtInId;
   const hasGreeting = models && models.length > 0;
 
-  const statusDot = device.online && hasGreeting
-    ? 'bg-emerald-400'
-    : device.online
-      ? 'animate-pulse bg-amber-400'
-      : 'bg-slate-400';
-  const statusLabel = device.online && hasGreeting
-    ? t('panel.online')
-    : device.online
-      ? t('panel.connecting')
-      : t('panel.offline');
+  // Before this page load's auth_ok the persisted presence is stale: unknown.
+  const presenceKnown = useStore((s) => s.presenceKnown);
+  const statusDot = !presenceKnown
+    ? 'k-presence-unknown'
+    : device.online && hasGreeting
+      ? 'bg-emerald-400'
+      : device.online
+        ? 'animate-pulse bg-amber-400'
+        : 'bg-slate-400';
+  const statusLabel = !presenceKnown
+    ? t('panel.unknown')
+    : device.online && hasGreeting
+      ? t('panel.online')
+      : device.online
+        ? t('panel.connecting')
+        : t('panel.offline');
 
   const handleRemove = () => {
     wsClient.removeDevice(device.id);

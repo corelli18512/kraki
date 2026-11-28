@@ -365,8 +365,23 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertEqual(app.wsClient?.consecutiveAuthReplyTimeouts, 0, "reset once signed in")
     }
 
-    /// While the first sign-in is pending the window says so; it never says
-    /// every device is offline.
+    /// "Signing in…" only for a genuine first sign-in; a Mac that signed in
+    /// before (stored device or CLI sign-in) is only connecting.
+    func testOnlyAGenuineFirstSignInSaysSigningIn() throws {
+        let fresh = try makeGraph()
+        fresh.hasStoredCredentials = false
+        XCTAssertNil(fresh.authManager?.cliGitHubToken)
+        XCTAssertEqual(fresh.connectingStatusText, "Signing in…")
+        fresh.authManager?.cliGitHubToken = "tok"
+        XCTAssertEqual(fresh.connectingStatusText, "Connecting…", "CLI sign-in")
+        fresh.authManager?.cliGitHubToken = nil
+        fresh.hasStoredCredentials = true
+        XCTAssertEqual(fresh.connectingStatusText, "Connecting…", "stored device")
+    }
+
+    /// While the first sign-in of this launch is pending the window says it is
+    /// connecting (the Mac signed in before: "Signing in…" would read as
+    /// signed out); it never says every device is offline.
     func testFirstSignInShowsNoticeAndUnknownPresence() async throws {
         relay.challengeMode = .hang
         AuthManager.debugCLICredentialLoader = { _ in nil }
@@ -375,7 +390,7 @@ final class MacAuthRecoveryTests: XCTestCase {
         app.connect()
         try await waitUntil(5, "challenge sent") { relay.methods == ["challenge"] }
         try await waitUntil(4, "notice shown") { app.connectionNotice != nil }
-        XCTAssertEqual(app.connectionNotice, "Signing in…")
+        XCTAssertEqual(app.connectionNotice, "Connecting…")
 
         let session = SessionInfo(id: "s1", deviceId: "d1", deviceName: "Mac", agent: "pi", model: "m",
                                   title: "t", state: .idle, mode: .auto, lastSeq: 1, readSeq: 1,

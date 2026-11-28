@@ -73,12 +73,15 @@ struct DeviceDetailView: View {
     }
 
     private var statusLabel: String {
+        // Not known before this launch's first sign-in (cached list).
+        if !appState.hasCompletedInitialConnect { return String(localized: "Unknown") }
         if appState.deviceStore.isOnlineAndGreeted(device.id) { return String(localized: "Online") }
         if device.online { return String(localized: "Connecting…") }
         return String(localized: "Offline")
     }
 
     private var statusColor: Color {
+        if !appState.hasCompletedInitialConnect { return .secondary }
         if appState.deviceStore.isOnlineAndGreeted(device.id) { return .green }
         if device.online { return .orange }
         return .gray

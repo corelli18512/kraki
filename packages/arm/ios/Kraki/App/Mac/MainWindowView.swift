@@ -336,7 +336,7 @@ struct MainWindowView: View {
     }
 
     private var authenticatedRoot: some View {
-        columnsLayout
+        columnsLayout.modifier(StartingComputerEnvironment()) // this Mac's sessions while it comes online
         .background(Color.surfacePrimary.ignoresSafeArea())
         .background(WindowChromeConfigurator(tint: Color.surfacePrimary))
         .background(

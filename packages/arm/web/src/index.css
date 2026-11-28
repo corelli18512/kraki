@@ -280,10 +280,14 @@ body {
   .animate-logo-reveal, .animate-fade-up, .animate-fade-up-d2, .animate-fade-up-d3 { animation: none; opacity: 1; }
 }
 
+/* A computer's presence before this page load's auth_ok: unknown, a hollow
+ * ring (the solid gray dot means offline). */
+.k-presence-unknown { box-sizing: border-box; border: 1px solid var(--color-text-muted); background: transparent; }
+
 /* Forced colours (Windows high contrast) replace backgrounds, which erased the
  * status dots (unread, online/offline): keep their own colours. */
 @media (forced-colors: active) {
-  .ksr-unread, .ksr-devdot, .ns-dot, .ksi-online-dot, .kp-offline-dot,
+  .ksr-unread, .ksr-devdot, .ns-dot, .ksi-online-dot, .kp-offline-dot, .k-presence-unknown,
   span.rounded-full.h-2.w-2, span.rounded-full.h-1\.5.w-1\.5, i.rounded-full.h-1\.5.w-1\.5 { forced-color-adjust: none; }
 }
 

@@ -98,7 +98,7 @@ export function SettingsPanel({
   inline?: boolean;
   className?: string;
 }) {
-  const { t } = useTranslation('settings');
+  const { t } = useTranslation(['settings', 'common']);
   const tabLabel = (name: SettingsTab) => t(`tabs.${tabKeys[name]}`);
   const { theme, setTheme } = useTheme();
   const state = useStore();
@@ -512,10 +512,15 @@ export function SettingsPanel({
           .map((d) => (
             <div key={d.id} className="kp-device">
               <div className="kp-row" style={{ gap: 10 }}>
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full${d.online ? '' : ' kp-offline-dot'}`}
-                  style={d.online ? { background: '#34D399' } : undefined}
-                />
+                {state.presenceKnown ? (
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full${d.online ? '' : ' kp-offline-dot'}`}
+                    style={d.online ? { background: '#34D399' } : undefined}
+                  />
+                ) : (
+                  // Before this page load's auth_ok the persisted presence is stale.
+                  <span className="h-2 w-2 shrink-0 rounded-full k-presence-unknown" role="img" aria-label={t('common:presence.unknown')} />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="kp-device-name flex font-medium"><DeviceNameEditor device={d} /></div>
                   <div className="kp-device-meta">

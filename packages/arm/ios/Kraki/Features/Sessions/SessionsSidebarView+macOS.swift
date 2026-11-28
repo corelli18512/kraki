@@ -242,6 +242,7 @@ private final class MacFirstMouseTapView: NSView {
 
 struct SessionsSidebarView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.startingComputerId) private var startingComputerId
 
     @Binding var selectedSessionId: String?
 
@@ -445,7 +446,8 @@ struct SessionsSidebarView: View {
             previewType: preview?.type,
             deviceOnline: appState.hasCompletedInitialConnect
                 ? appState.deviceStore.devices[session.deviceId]?.online : nil,
-            hasDraft: hasDraft
+            hasDraft: hasDraft,
+            deviceStarting: session.deviceId == startingComputerId
         )
         // Like the row: a draft replaces the last sent preview.
         return [status.accessibilityLabel(isDraft: hasDraft), hasDraft ? draft : preview?.displayText()]
@@ -505,6 +507,7 @@ private let macDraftAccent = Color(hex: 0xC65D5D)
 
 struct MacSidebarSessionRow: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.startingComputerId) private var startingComputerId
     let session: SessionInfo
     let isSelected: Bool
 
@@ -530,6 +533,7 @@ struct MacSidebarSessionRow: View {
             pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
             isDeliveryOnline: appState.isFullyOnline,
             presenceKnown: appState.hasCompletedInitialConnect,
+            deviceStarting: session.deviceId == startingComputerId,
             modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
         )
     }
@@ -616,6 +620,14 @@ struct MacSidebarSessionRow: View {
         HStack(spacing: 5) {
             MacSessionStatusGlyph(status: projection.status, hasDraft: projection.isDraft)
 
+            if projection.status == .starting {
+                // This Mac's service is going online (the menu bar says so too).
+                Text("starting")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.textMuted)
+                    .fixedSize()
+            }
+
             if let previewText = projection.previewText {
                 Text(previewText)
                     .font(.system(size: 11))
@@ -680,6 +692,8 @@ private struct MacSessionStatusGlyph: View {
                 Image(systemName: "wifi.slash")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.textMuted)
+            case .starting:
+                StartingStatusGlyph(color: Color.textMuted)
             case .agentMessage:
                 LucideIcon(.botMessageSquare,
                            size: SessionStatusGlyphMetrics.agentSize,

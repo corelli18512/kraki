@@ -113,6 +113,29 @@ extension TentacleCLIManager {
         )
     }
 
+    /// This Mac is on its way online: the launch check, the service starting,
+    /// or running but not on the relay yet (it then reads `.online` for
+    /// `relayDownGrace` before turning `.reconnecting`). Its own computer's
+    /// sessions read "starting" meanwhile, matching the menu bar's "going
+    /// online", instead of offline.
+    static func isComingOnline(_ status: MacOnlineStatus, relayState: String?) -> Bool {
+        switch status {
+        case .checking, .goingOnline: return true
+        case .online: return !relayStateIsUp(relayState)
+        default: return false
+        }
+    }
+
+    /// The device id of this Mac's own computer while it is coming online
+    /// (`isComingOnline`), else nil.
+    var startingComputerId: String? {
+        guard Self.isComingOnline(onlineStatus, relayState: relayState) else { return nil }
+        // Before the first status poll there is no config yet: read the id
+        // from the computer's files (only during this short window).
+        let id = configInfo?.deviceId ?? AppState.localTentacleId
+        return id?.isEmpty == false ? id : nil
+    }
+
     /// True when this app owns whether the Mac is online: the built-in
     /// service, running agents here. Only then does quitting go offline.
     var managesOnlinePresence: Bool {
@@ -156,6 +179,23 @@ extension TentacleCLIManager {
             KLog.diag("[Presence] offline at launch; going online")
             await startDaemon()
         }
+    }
+}
+
+extension EnvironmentValues {
+    /// `TentacleCLIManager.startingComputerId`, set by the main window for its
+    /// sidebar rows and composer.
+    @Entry var startingComputerId: String?
+}
+
+/// Hands this Mac's computer id to the main window's rows and composer while
+/// it is coming online. A modifier of its own: the status poll re-sets the
+/// manager every few seconds, which re-runs only this body.
+struct StartingComputerEnvironment: ViewModifier {
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
+
+    func body(content: Content) -> some View {
+        content.environment(\.startingComputerId, tentacleCLI.startingComputerId)
     }
 }
 

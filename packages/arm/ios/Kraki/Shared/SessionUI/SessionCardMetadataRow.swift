@@ -11,7 +11,8 @@ struct SessionCardMetadataRow: View {
     let font: Font
     let deviceColor: Color
     let modelColor: Color
-    var statusColor: Color? = nil
+    /// The computer's presence dot before its name (iOS cards); nil: no dot.
+    var presence: DevicePresence? = nil
 
     private var localizedEffort: String? {
         guard let effort, let level = ReasoningEffort(rawValue: effort) else { return effort }
@@ -24,12 +25,22 @@ struct SessionCardMetadataRow: View {
         }
     }
 
+    /// nil: the hollow ring of unknown presence.
+    static func dotColor(_ presence: DevicePresence) -> Color? {
+        switch presence {
+        case .unknown: return nil
+        case .online: return Color(hex: 0x34D399)
+        case .awaitingGreeting: return Color(hex: 0xFBBF24)
+        case .offline: return .gray
+        }
+    }
+
     var body: some View {
         SessionMetadataLayout(hasDevice: machineName != nil, hasModel: model?.isEmpty == false,
                               hasEffort: effort != nil) {
             HStack(spacing: 6) {
                 if let machineName {
-                    if let statusColor { Circle().fill(statusColor).frame(width: 6, height: 6) }
+                    if let presence { DevicePresenceDot(color: Self.dotColor(presence)) }
                     Text(machineName)
                         .foregroundStyle(deviceColor)
                         .fixedSize(horizontal: false, vertical: true)

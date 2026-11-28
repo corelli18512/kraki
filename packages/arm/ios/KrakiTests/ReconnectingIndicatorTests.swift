@@ -33,9 +33,9 @@ final class ReconnectingIndicatorTests: XCTestCase {
     }
 
     /// K-011: cold launch of a returning user while the relay cannot be
-    /// reached. The shell is up from cache; it must say it is signing in,
-    /// never blame the computer.
-    func testColdLaunchWithUnreachableRelaySaysSigningInAndBlamesNoComputer() throws {
+    /// reached. The shell is up from cache; it must say it is connecting (not
+    /// "Signing in…", which reads as signed out), never blame the computer.
+    func testColdLaunchWithUnreachableRelaySaysConnectingAndBlamesNoComputer() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-cold-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
@@ -44,7 +44,7 @@ final class ReconnectingIndicatorTests: XCTestCase {
         app.connectionStatus = .connecting
         settle(AppState.reconnectingIndicatorDelay + 0.3)
         XCTAssertTrue(app.showsReconnecting, "a sign-in that cannot complete is shown")
-        XCTAssertEqual(app.conversationTitleStatus(syncing: false), "Signing in…")
+        XCTAssertEqual(app.conversationTitleStatus(syncing: false), "Connecting…")
         app.connectionStatus = .disconnected // refused attempt between retries
         XCTAssertTrue(app.showsReconnecting)
 
@@ -60,6 +60,15 @@ final class ReconnectingIndicatorTests: XCTestCase {
         let unknown = SessionCardProjection.make(session: session, device: device, preview: nil, draft: nil,
                                                  presenceKnown: false)
         XCTAssertNotEqual(unknown.status, .offline)
+        // The card's dot: a hollow ring (unknown), not the solid gray of offline.
+        XCTAssertEqual(DevicePresence.resolve(online: unknown.deviceOnline, awaitingGreeting: false), .unknown)
+        XCTAssertNil(SessionCardMetadataRow.dotColor(.unknown), "nil color draws the hollow ring")
+        let known = SessionCardProjection.make(session: session, device: device, preview: nil, draft: nil,
+                                               presenceKnown: true)
+        XCTAssertEqual(DevicePresence.resolve(online: known.deviceOnline, awaitingGreeting: false), .offline)
+        XCTAssertNotNil(SessionCardMetadataRow.dotColor(.offline))
+        XCTAssertEqual(DevicePresence.resolve(online: true, awaitingGreeting: false), .online)
+        XCTAssertEqual(DevicePresence.resolve(online: true, awaitingGreeting: true), .awaitingGreeting)
         let store = SessionStore(persistenceEnabled: false)
         XCTAssertNotEqual(
             SessionTableController.fingerprint(for: session, store: store, device: device, isAwaitingGreeting: false,
@@ -70,5 +79,21 @@ final class ReconnectingIndicatorTests: XCTestCase {
 
         app.connectionStatus = .connected
         XCTAssertFalse(app.showsReconnecting)
+    }
+
+    /// "Signing in…" only for a genuine first sign-in (pairing, OAuth); a
+    /// returning user is only connecting, also after a cold start.
+    func testOnlyAGenuineFirstSignInSaysSigningIn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-first-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.hasCompletedInitialConnect = false
+        app.hasStoredCredentials = false
+        XCTAssertEqual(app.connectingStatusText, "Signing in…")
+        app.hasStoredCredentials = true
+        XCTAssertEqual(app.connectingStatusText, "Connecting…")
+        app.hasStoredCredentials = false
+        app.hasCompletedInitialConnect = true
+        XCTAssertEqual(app.connectingStatusText, "Connecting…")
     }
 }

@@ -57,8 +57,28 @@ struct DeviceListView: View {
 
     private var deviceList: some View {
         let sameName = Self.sameNameDeviceIds(tentacles)
+        // Before this launch's first sign-in nobody is known to be online or
+        // offline: one list without the Online/Offline groups.
+        let presenceKnown = appState.hasCompletedInitialConnect
         return List {
-            if !onlineDevices.isEmpty {
+            if !presenceKnown {
+                Section {
+                    ForEach(tentacles) { device in
+                        NavigationLink(value: DeviceNavID(id: device.id)) {
+                            DeviceRow(
+                                device: device,
+                                isSelf: device.id == appState.deviceId,
+                                hasGreeting: false,
+                                sharesName: sameName.contains(device.id)
+                            )
+                        }
+                    }
+                } footer: {
+                    sameNameHint(sameName)
+                }
+            }
+
+            if presenceKnown, !onlineDevices.isEmpty {
                 Section {
                     ForEach(onlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
@@ -77,7 +97,7 @@ struct DeviceListView: View {
                 }
             }
 
-            if !offlineDevices.isEmpty {
+            if presenceKnown, !offlineDevices.isEmpty {
                 Section {
                     ForEach(offlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
@@ -168,7 +188,9 @@ private struct DeviceRow: View {
     /// Another computer has the same name: show a short id to tell them apart.
     var sharesName = false
 
-    private var dotColor: Color {
+    /// nil: presence not known yet (no sign-in in this launch), a hollow ring.
+    private var dotColor: Color? {
+        if !appState.hasCompletedInitialConnect { return nil }
         // When the iOS client itself is not connected to the relay we
         // can't trust any device's online state — show everything in
         // warning orange to make the staleness visible.
@@ -180,9 +202,7 @@ private struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 8, height: 8)
+            DevicePresenceDot(color: dotColor, size: 8)
 
             Text(verbatim: device.name)
                 .font(.body)

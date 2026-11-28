@@ -79,6 +79,7 @@ const initialState = {
   user: null,
   sessions: new Map<string, WebSessionSummary>(),
   devices: new Map<string, DeviceSummary>(),
+  presenceKnown: false,
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
   cardHoldUntil: new Map<string, number>(),
@@ -363,6 +364,7 @@ export const useStore = create<Store>()(persist((set, get) => ({
   // app was offline must relabel its persisted sessions (as Swift does).
   // A computer we knew that is missing from the list was removed from the
   // account while this app was away: its sessions go too (K-317).
+  // The relay's list (auth_ok) also makes presence known (`presenceKnown`).
   setDevices: (devices) => {
     const listed = new Set(devices.map((d) => d.id));
     const removed = [...get().devices.keys()].filter((id) => !listed.has(id));
@@ -370,7 +372,7 @@ export const useStore = create<Store>()(persist((set, get) => ({
     set((state) => {
       let sessions = state.sessions;
       for (const device of devices) sessions = relabelSessions(sessions, device.id, device.name);
-      return { devices: new Map(devices.map((d) => [d.id, d])), sessions };
+      return { devices: new Map(devices.map((d) => [d.id, d])), sessions, presenceKnown: true };
     });
   },
 

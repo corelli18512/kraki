@@ -76,6 +76,7 @@
     "online": "在线",
     "connecting": "正在连接…",
     "offline": "离线",
+    "unknown": "状态未知",
     "thisDevice": "这台设备",
     "removeAction": "移除…",
     "identityError": "无法识别这台电脑。无法移除设备。",
